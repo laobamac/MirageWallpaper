@@ -1,0 +1,46 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 28, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "_clang-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_LINKER_TYPE": "LLD",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "macos-clang-release",
+      "displayName": "macOS · Homebrew Clang · Release",
+      "description": "SceneRenderer engine plus the standalone SceneViewer tool.",
+      "inherits": "_clang-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE":   "Release",
+        "CMAKE_C_COMPILER":   "/usr/local/opt/llvm/bin/clang",
+        "CMAKE_CXX_COMPILER": "/usr/local/opt/llvm/bin/clang++",
+        "CMAKE_LINKER_TYPE":  "DEFAULT",
+        "CMAKE_PREFIX_PATH":  "/usr/local;/opt/homebrew;/usr/local/opt/llvm;/opt/homebrew/opt/llvm;/usr/local/opt/molten-vk;/opt/homebrew/opt/molten-vk;/usr/local/opt/vulkan-loader;/opt/homebrew/opt/vulkan-loader;/usr/local/opt/vulkan-headers;/opt/homebrew/opt/vulkan-headers;/usr/local/opt/ffmpeg;/opt/homebrew/opt/ffmpeg;/usr/local/opt/glfw;/opt/homebrew/opt/glfw;/usr/local/opt/freetype;/opt/homebrew/opt/freetype;/usr/local/opt/lz4;/opt/homebrew/opt/lz4"
+      },
+      "environment": {
+        "PKG_CONFIG_PATH": "/usr/local/lib/pkgconfig:/usr/local/share/pkgconfig:/opt/homebrew/lib/pkgconfig:/opt/homebrew/share/pkgconfig:/usr/local/opt/freetype/lib/pkgconfig:/opt/homebrew/opt/freetype/lib/pkgconfig:/usr/local/opt/glfw/lib/pkgconfig:/opt/homebrew/opt/glfw/lib/pkgconfig:/usr/local/opt/vulkan-loader/lib/pkgconfig:/opt/homebrew/opt/vulkan-loader/lib/pkgconfig:/usr/local/opt/ffmpeg/lib/pkgconfig:/opt/homebrew/opt/ffmpeg/lib/pkgconfig:/usr/local/opt/llvm/lib/pkgconfig:/opt/homebrew/opt/llvm/lib/pkgconfig"
+      }
+    },
+    {
+      "name": "macos-clang-debug",
+      "displayName": "macOS · Homebrew Clang · Debug (SceneRenderer)",
+      "inherits": "macos-clang-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "macos-clang-release",    "configurePreset": "macos-clang-release" },
+    { "name": "macos-clang-debug",      "configurePreset": "macos-clang-debug" }
+  ]
+}
