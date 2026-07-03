@@ -26,13 +26,15 @@ VmaImageParameters::VmaImageParameters(VmaImageParameters&& o) noexcept
       view(std::move(o.view)),
       sampler(std::move(o.sampler)),
       extent(o.extent),
-      mipmap_level(o.mipmap_level) {}
+      mipmap_level(o.mipmap_level),
+      generation(o.generation) {}
 VmaImageParameters& VmaImageParameters::operator=(VmaImageParameters&& o) noexcept {
     handle       = std::move(o.handle);
     view         = std::move(o.view);
     sampler      = std::move(o.sampler);
     extent       = o.extent;
     mipmap_level = o.mipmap_level;
+    generation   = o.generation;
     return *this;
 }
 

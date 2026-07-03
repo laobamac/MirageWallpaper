@@ -51,6 +51,7 @@ struct ImageParameters {
     VkSampler   sampler {};
     VkExtent3D  extent {};
     uint32_t    mipmap_level { 1 };
+    uint64_t    generation { 0 };
 
     ImageParameters()  = default;
     ~ImageParameters() = default;
@@ -262,6 +263,7 @@ struct VmaImageParameters : NoCopy {
     vvk::Sampler   sampler;
     VkExtent3D     extent;
     unsigned       mipmap_level { 1 };
+    uint64_t       generation { 0 };
 
     VmaImageParameters();
     ~VmaImageParameters();
@@ -280,6 +282,7 @@ inline ImageParameters ToImageParameters(const VmaImageParameters& o) noexcept {
     out.sampler      = *o.sampler;
     out.extent       = o.extent;
     out.mipmap_level = o.mipmap_level;
+    out.generation   = o.generation;
     return out;
 }
 
@@ -395,6 +398,8 @@ public:
 
 private:
     std::optional<VmaImageParameters> CreateTex(TextureKey);
+    uint64_t                          nextImageGeneration();
+    void                              AssignImageGeneration(VmaImageParameters&);
     /* VIDEO-typed Image branch of CreateTex: registers a wavsen
      * VideoDecoder + stable RGBA8 VkImage and returns an ImageSlotsRef
      * pointing at that same VkImage so material binding is transparent. */
@@ -406,6 +411,7 @@ private:
     const Device&                m_device;
     Map<std::string, ImageSlots> m_tex_map;
     VideoDecodeOptions           m_video_decode_options;
+    uint64_t                     m_next_image_generation { 1 };
 
     /* Opaque pImpl for the active video-tex set. Defined inside
      * TextureCache.cpp to keep wavsen.video out of the public

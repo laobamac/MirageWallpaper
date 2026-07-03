@@ -422,6 +422,7 @@ ImageSlotsRef TextureCache::CreateTex(Image& image) {
                                    VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
             opt.has_value()) {
             image_paras = std::move(opt.value());
+            AssignImageGeneration(image_paras);
         } else
             break;
 
@@ -485,6 +486,7 @@ std::optional<VmaImageParameters> TextureCache::CreateTex(TextureKey tex_key) {
                                    tex_key.samples);
             opt.has_value()) {
             image_paras = std::move(opt.value());
+            AssignImageGeneration(image_paras);
         } else
             break;
 
@@ -739,6 +741,7 @@ ImageSlotsRef TextureCache::CreateVideoTex(Image& image) {
         return {};
     }
     slot->image = std::move(*img_opt);
+    AssignImageGeneration(slot->image);
 
     /* Pre-allocate a persistent staging buffer big enough for one RGBA
      * frame. Reused every pump cycle. */
@@ -1030,6 +1033,12 @@ bool TextureCache::UploadFontAtlasRegion(const std::string& key, const std::uint
 TextureCache::TextureCache(const Device& device): m_device(device) {}
 
 TextureCache::~TextureCache() {};
+
+uint64_t TextureCache::nextImageGeneration() { return m_next_image_generation++; }
+
+void TextureCache::AssignImageGeneration(VmaImageParameters& image) {
+    image.generation = nextImageGeneration();
+}
 
 void TextureCache::SetVideoDecodeOptions(VideoDecodeOptions options) {
     m_video_decode_options = std::move(options);
