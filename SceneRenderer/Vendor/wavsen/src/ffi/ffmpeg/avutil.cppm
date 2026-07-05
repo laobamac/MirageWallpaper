@@ -12,6 +12,9 @@ extern "C" {
 #include <libavutil/hwcontext.h>
 #include <libavutil/hwcontext_drm.h>
 #include <libavutil/hwcontext_vulkan.h>
+#if defined(__APPLE__)
+#include <libavutil/hwcontext_videotoolbox.h>
+#endif
 #if defined(WAVSEN_HAS_VAAPI)
 #include <libavutil/hwcontext_vaapi.h>
 #endif
@@ -101,6 +104,9 @@ using ::AV_PIX_FMT_NONE;
 using ::AV_PIX_FMT_RGBA;
 using ::AV_PIX_FMT_NV12;
 using ::AV_PIX_FMT_VULKAN;
+#if defined(__APPLE__)
+using ::AV_PIX_FMT_VIDEOTOOLBOX;
+#endif
 using ::AV_PIX_FMT_YUV420P;
 #if defined(WAVSEN_HAS_VAAPI)
 using ::AV_PIX_FMT_VAAPI;
@@ -117,6 +123,9 @@ using ::AVCOL_RANGE_MPEG;
 
 using ::AV_HWDEVICE_TYPE_VULKAN;
 using ::AV_HWDEVICE_TYPE_DRM;
+#if defined(__APPLE__)
+using ::AV_HWDEVICE_TYPE_VIDEOTOOLBOX;
+#endif
 #if defined(WAVSEN_HAS_VAAPI)
 using ::AV_HWDEVICE_TYPE_VAAPI;
 #endif
