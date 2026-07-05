@@ -156,7 +156,14 @@ extern "C" void* SceneRendererMacDesktopCreate(const SceneRendererMacDesktopConf
         [app setActivationPolicy:NSApplicationActivationPolicyAccessory];
         [app finishLaunching];
 
-        NSScreen* screen = NSScreen.mainScreen;
+        NSScreen* screen = nil;
+        if (config != nullptr && config->screen_index > 0) {
+            NSArray<NSScreen*>* screens = NSScreen.screens;
+            if (config->screen_index < screens.count) {
+                screen = screens[config->screen_index];
+            }
+        }
+        if (screen == nil) screen = NSScreen.mainScreen;
         if (screen == nil) return nullptr;
 
         auto* host     = new MacDesktopHost();

@@ -1,4 +1,4 @@
-add_executable(VideoWallpaper VideoWallpaper.mm)
+add_executable(VideoWallpaper VideoWallpaper.mm ControlChannel.m)
 
 target_link_libraries(VideoWallpaper PRIVATE
     VideoRendererEngine

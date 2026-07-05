@@ -138,6 +138,9 @@ void FinPass::setPresentLayout(VkImageLayout layout) { m_desc.present_layout = l
 void FinPass::setPresentQueueIndex(uint32_t i) { m_desc.present_queue_index = i; }
 void FinPass::setPresentFormat(VkFormat fmt) { m_desc.present_format = fmt; }
 void FinPass::setPresentCanTransferSrc(bool can) { m_desc.present_can_transfer_src = can; }
+void FinPass::setMetalFrameCallback(std::function<void(void*, uint32_t, uint32_t)> cb) {
+    m_desc.metal_frame_callback = std::move(cb);
+}
 bool FinPass::setResultRequest(std::optional<TextureRequest> request) {
     return SetTextureRequestIfChanged(m_desc.result_request, std::move(request));
 }
@@ -270,11 +273,18 @@ void FinPass::recordPresentDump(const Device& device, RenderingResources& rr) {
 }
 
 void FinPass::finishFrameDump(const Device& device) {
-    if (LiveMetalFrameRequested()) {
+    if (m_desc.metal_frame_callback || LiveMetalFrameRequested()) {
         if (void* texture = ExportMetalTexture(device, m_desc.vk_result); texture != nullptr) {
-            DispatchLiveMetalFrame(texture,
-                                   m_desc.vk_result.extent.width,
-                                   m_desc.vk_result.extent.height);
+            if (m_desc.metal_frame_callback) {
+                m_desc.metal_frame_callback(texture,
+                                            m_desc.vk_result.extent.width,
+                                            m_desc.vk_result.extent.height);
+            }
+            if (LiveMetalFrameRequested()) {
+                DispatchLiveMetalFrame(texture,
+                                       m_desc.vk_result.extent.width,
+                                       m_desc.vk_result.extent.height);
+            }
         }
     }
 

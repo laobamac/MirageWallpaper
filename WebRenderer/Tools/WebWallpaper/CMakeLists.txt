@@ -1,6 +1,6 @@
 # WebWallpaper — desktop wallpaper host.
 
-add_executable(WebWallpaper WebWallpaper.mm)
+add_executable(WebWallpaper WebWallpaper.mm ControlChannel.m)
 
 target_link_libraries(WebWallpaper PRIVATE
     WebRendererEngine

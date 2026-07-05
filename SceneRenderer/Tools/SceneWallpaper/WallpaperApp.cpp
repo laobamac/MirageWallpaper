@@ -1,4 +1,5 @@
 #include "../../Sources/SceneRenderer/Host/macOS/MacDesktopHost.h"
+#include "ControlChannel.h"
 
 #include <algorithm>
 #include <array>
@@ -40,10 +41,12 @@ struct Options {
     std::uint32_t             fps { 30 };
     std::uint32_t             input_hz { 60 };
     std::uint32_t             msaa { 1 };
+    std::uint32_t             screen { 0 };
     int                       run_seconds { 0 };
     bool                      valid_layer { false };
     bool                      graphviz { false };
     bool                      muted { false };
+    bool                      control_stdin { false };
 };
 
 struct AppState {
@@ -65,7 +68,9 @@ void PrintUsage(const char* argv0) {
         << "  -G, --graphviz              Emit graph.dot for the render graph\n"
         << "      --mouse-position X,Y    Initial normalized mouse position\n"
         << "      --input-hz N            Desktop mouse polling rate (default 60)\n"
+        << "      --screen N              Screen index to cover (default 0 = main)\n"
         << "      --muted                 Start with audio muted\n"
+        << "      --control-stdin         Accept live JSON control commands on stdin\n"
         << "      --run-seconds N         Exit after N seconds (test helper)\n";
 }
 
@@ -132,6 +137,11 @@ bool ParseArgs(int argc, char** argv, Options& out) {
             out.graphviz = true;
         } else if (arg == "--muted") {
             out.muted = true;
+        } else if (arg == "--control-stdin") {
+            out.control_stdin = true;
+        } else if (arg == "--screen") {
+            const char* value = require_value(i, arg);
+            if (value == nullptr || ! ParseUInt(value, out.screen)) return false;
         } else if (arg == "-f" || arg == "--fps") {
             const char* value = require_value(i, arg);
             if (value == nullptr || ! ParseUInt(value, out.fps)) return false;
@@ -252,8 +262,9 @@ int main(int argc, char** argv) {
     state.wallpaper = &wallpaper;
 
     SceneRendererMacDesktopConfig desktop_config {
-        .title    = "SceneRenderer Wallpaper",
-        .input_hz = options.input_hz,
+        .title        = "SceneRenderer Wallpaper",
+        .input_hz     = options.input_hz,
+        .screen_index = options.screen,
     };
     SceneRendererMacDesktopCallbacks callbacks {
         .mouse_move   = MouseMoveCallback,
@@ -325,8 +336,19 @@ int main(int argc, char** argv) {
         }).detach();
     }
 
+    // Live control channel: Mirage.app pipes JSON commands on stdin to drive
+    // property edits / pause / volume without restarting. EOF (parent died)
+    // stops the run loop so the wallpaper never outlives its owner.
+    std::optional<mirage::SceneControlChannel> control;
+    if (options.control_stdin) {
+        void* desktop = state.desktop;
+        control.emplace(wallpaper, [desktop]() { SceneRendererMacDesktopStop(desktop); });
+        control->start();
+    }
+
     const int ok = SceneRendererMacDesktopRun(state.desktop);
 
+    if (control) control->stop();
     SceneRendererSetLiveMetalFrameCallback(nullptr, nullptr);
     SceneRendererMacDesktopDestroy(state.desktop);
     state.desktop = nullptr;

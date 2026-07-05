@@ -118,6 +118,7 @@ struct VulkanRender::Impl {
 
     std::unique_ptr<FinPass> m_testpass { nullptr };
     ReDrawCB                 m_redraw_cb;
+    std::function<void(void*, uint32_t, uint32_t)> m_metal_frame_cb;
 
     std::unique_ptr<StagingBuffer> m_dyn_buf { nullptr };
 
@@ -281,6 +282,7 @@ bool VulkanRender::Impl::init(RenderInitInfo info) {
     if (m_inited) return true;
 
     m_redraw_cb = info.redraw_callback;
+    m_metal_frame_cb = std::move(info.metal_frame_callback);
     VkExtent2D extent { info.width, info.height };
     if (extent.width * extent.height < 500 * 500) {
         rstd_error("too small swapchain image size: {}x{}", extent.width, extent.height);
@@ -392,6 +394,7 @@ bool VulkanRender::Impl::init(RenderInitInfo info) {
 bool VulkanRender::Impl::initRes() {
     m_prepass = std::make_unique<PrePass>(PrePass::Desc {});
     m_finpass = std::make_unique<FinPass>(FinPass::Desc {});
+    m_finpass->setMetalFrameCallback(m_metal_frame_cb);
     if (m_with_surface) {
         // Surface mode: FinPass blits into the swapchain image, ending
         // it in PRESENT_SRC_KHR. Swapchain images use concurrent sharing if

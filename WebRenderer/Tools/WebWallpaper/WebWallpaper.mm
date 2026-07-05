@@ -20,6 +20,7 @@
 #import <AppKit/AppKit.h>
 #import <CoreGraphics/CGWindowLevel.h>
 
+#import "ControlChannel.h"
 #import "WallpaperManifest.h"
 #import "WebRendererEngine.h"
 #import "WRDesktopInputForwarder.h"
@@ -32,6 +33,7 @@ struct WallpaperArgs {
     int   screen = 0;
     int   runSeconds = 0;
     BOOL  diag = NO;
+    BOOL  controlStdin = NO;
 };
 
 static void PrintUsage(const char *argv0) {
@@ -42,6 +44,7 @@ static void PrintUsage(const char *argv0) {
         "  --volume 0..1          master volume (default 1.0)\n"
         "  --no-spectrum          disable audio-spectrum capture\n"
         "  --screen N             screen index to cover (default 0 = main)\n"
+        "  --control-stdin        accept live JSON control commands on stdin\n"
         "  --run-seconds N        exit after N seconds (test helper)\n"
         "  --diag                 test the click-forward path (synthetic click)\n"
         "  -h, --help             show this help\n",
@@ -69,6 +72,8 @@ static BOOL ParseArgs(int argc, char **argv, WallpaperArgs &out) {
             const char *v = take(i, arg); if (!v) return false; out.runSeconds = atoi(v);
         } else if (strcmp(arg, "--diag") == 0) {
             out.diag = YES;
+        } else if (strcmp(arg, "--control-stdin") == 0) {
+            out.controlStdin = YES;
         } else if (arg[0] == '-') {
             fprintf(stderr, "unknown option: %s\n", arg); return false;
         } else {
@@ -96,6 +101,7 @@ static BOOL ParseArgs(int argc, char **argv, WallpaperArgs &out) {
 @property (nonatomic, strong) NSWindow *window;
 @property (nonatomic, strong) WebRendererEngine *engine;
 @property (nonatomic, strong) WRDesktopInputForwarder *inputForwarder;
+@property (nonatomic, strong) MirageControlChannel *control;
 @end
 @implementation WebWallpaperAppDelegate
 @end
@@ -171,6 +177,39 @@ int main(int argc, char *argv[]) {
         // stay fully interactive with Finder / their owner).
         delegate.inputForwarder = [[WRDesktopInputForwarder alloc] initWithWebView:engine.webView screen:screen];
         [delegate.inputForwarder start];
+
+        // Live control channel: Mirage.app pipes JSON commands on stdin.
+        if (args.controlStdin) {
+            WebRendererEngine *eng = engine;
+            delegate.control = [[MirageControlChannel alloc]
+                initWithHandler:^(NSDictionary *cmd) {
+                    NSString *name = cmd[@"cmd"];
+                    id value = cmd[@"value"];
+                    if ([name isEqualToString:@"setProperty"]) {
+                        NSString *key = cmd[@"key"];
+                        if ([key isKindOfClass:[NSString class]] && value != nil) {
+                            // WE property listener expects {key:{value:...}}.
+                            [eng applyUserProperty:key value:@{@"value": value}];
+                        }
+                    } else if ([name isEqualToString:@"pause"]) {
+                        [eng setPaused:YES];
+                    } else if ([name isEqualToString:@"resume"] || [name isEqualToString:@"play"]) {
+                        [eng setPaused:NO];
+                    } else if ([name isEqualToString:@"volume"]) {
+                        if ([value isKindOfClass:[NSNumber class]]) [eng setVolume:[value floatValue]];
+                    } else if ([name isEqualToString:@"muted"]) {
+                        if ([value isKindOfClass:[NSNumber class]]) {
+                            [eng setVolume:[value boolValue] ? 0.0f : 1.0f];
+                        }
+                    } else if ([name isEqualToString:@"fps"]) {
+                        if ([value isKindOfClass:[NSNumber class]]) [eng setFrameRate:[value intValue]];
+                    }
+                }
+                onEOF:^{
+                    [NSApp terminate:nil];
+                }];
+            [delegate.control start];
+        }
 
         if (args.diag) {
             WKWebView *dw = engine.webView;

@@ -35,6 +35,8 @@ public:
         // forces blit (the safe default for unknown formats).
         VkFormat present_format { VK_FORMAT_UNDEFINED };
         bool     present_can_transfer_src { false };
+        std::function<void(void* mtl_texture, uint32_t width, uint32_t height)>
+            metal_frame_callback;
     };
 
     FinPass(const Desc&);
@@ -45,6 +47,7 @@ public:
     void                                      setPresentQueueIndex(uint32_t);
     void                                      setPresentFormat(VkFormat);
     void                                      setPresentCanTransferSrc(bool);
+    void                                      setMetalFrameCallback(std::function<void(void*, uint32_t, uint32_t)>);
     bool                                      setResultRequest(std::optional<TextureRequest>);
     std::vector<PassTextureRequestDiagnostic> textureRequestDiagnostics() const override;
     void                                      finishFrameDump(const Device&);

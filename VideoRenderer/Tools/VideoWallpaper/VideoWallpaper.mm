@@ -7,6 +7,7 @@
 #import <AppKit/AppKit.h>
 #import <CoreGraphics/CGWindowLevel.h>
 
+#import "ControlChannel.h"
 #import "VideoManifest.h"
 #import "VideoRendererEngine.h"
 
@@ -20,6 +21,7 @@ struct WallpaperArgs {
     BOOL muted = NO;
     int runSeconds = 0;
     VRVideoFillMode fillMode = VRVideoFillModeCover;
+    BOOL controlStdin = NO;
 };
 
 static void PrintUsage(const char *argv0) {
@@ -30,6 +32,7 @@ static void PrintUsage(const char *argv0) {
         "  --volume 0..1          audio volume (default 1.0)\n"
         "  --muted                start muted\n"
         "  --fill MODE            cover | contain | stretch (default cover)\n"
+        "  --control-stdin        accept live JSON control commands on stdin\n"
         "  --run-seconds N        exit after N seconds (test helper)\n"
         "  -h, --help             show this help\n",
         argv0);
@@ -74,6 +77,8 @@ static BOOL ParseArgs(int argc, char **argv, WallpaperArgs &out) {
             const char *v = take(i, arg); if (!v || !ParseFillMode(v, out.fillMode)) return NO;
         } else if (strcmp(arg, "--run-seconds") == 0) {
             const char *v = take(i, arg); if (!v) return NO; out.runSeconds = atoi(v);
+        } else if (strcmp(arg, "--control-stdin") == 0) {
+            out.controlStdin = YES;
         } else if (arg[0] == '-') {
             fprintf(stderr, "unknown option: %s\n", arg);
             return NO;
@@ -107,6 +112,7 @@ static BOOL ParseArgs(int argc, char **argv, WallpaperArgs &out) {
 @interface VideoWallpaperAppDelegate : NSObject <NSApplicationDelegate>
 @property (nonatomic, strong) NSWindow *window;
 @property (nonatomic, strong) VRVideoRendererEngine *engine;
+@property (nonatomic, strong) MirageControlChannel *control;
 @end
 
 @implementation VideoWallpaperAppDelegate
@@ -183,6 +189,35 @@ int main(int argc, char *argv[]) {
         window.contentView = engine;
         [window orderFrontRegardless];
         delegate.window = window;
+
+        // Live control channel: Mirage.app pipes JSON commands on stdin.
+        if (args.controlStdin) {
+            VRVideoRendererEngine *eng = engine;
+            delegate.control = [[MirageControlChannel alloc]
+                initWithHandler:^(NSDictionary *cmd) {
+                    NSString *name = cmd[@"cmd"];
+                    id value = cmd[@"value"];
+                    if ([name isEqualToString:@"pause"]) {
+                        [eng pause];
+                    } else if ([name isEqualToString:@"resume"] || [name isEqualToString:@"play"]) {
+                        [eng play];
+                    } else if ([name isEqualToString:@"volume"]) {
+                        if ([value isKindOfClass:[NSNumber class]]) [eng setVolume:[value floatValue]];
+                    } else if ([name isEqualToString:@"muted"]) {
+                        if ([value isKindOfClass:[NSNumber class]]) [eng setMuted:[value boolValue]];
+                    } else if ([name isEqualToString:@"fillmode"]) {
+                        if ([value isKindOfClass:[NSString class]]) {
+                            VRVideoFillMode mode;
+                            if (ParseFillMode([value UTF8String], mode)) [eng setFillMode:mode];
+                        }
+                    }
+                    // setProperty: video wallpapers have no live shader props; ignored.
+                }
+                onEOF:^{
+                    [NSApp terminate:nil];
+                }];
+            [delegate.control start];
+        }
 
         if (args.runSeconds > 0) {
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)args.runSeconds * NSEC_PER_SEC),

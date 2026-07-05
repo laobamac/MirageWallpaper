@@ -14,6 +14,7 @@ find_library(QUARTZCORE_FRAMEWORK QuartzCore REQUIRED)
 
 add_executable(SceneWallpaper
     WallpaperApp.cpp
+    ControlChannel.cpp
     ../../Sources/SceneRenderer/Host/macOS/MacDesktopHost.mm
     ../../Sources/SceneRenderer/Host/macOS/MacMetalDisplay.mm)
 

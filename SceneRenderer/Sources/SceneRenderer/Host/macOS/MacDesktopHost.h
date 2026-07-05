@@ -7,6 +7,7 @@ extern "C" {
 struct SceneRendererMacDesktopConfig {
     const char* title;
     std::uint32_t input_hz;
+    std::uint32_t screen_index; // 0 = main screen; N selects NSScreen.screens[N]
 };
 
 struct SceneRendererMacDesktopCallbacks {
