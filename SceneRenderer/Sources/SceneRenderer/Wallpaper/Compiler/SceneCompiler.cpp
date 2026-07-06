@@ -22,6 +22,7 @@ import sr.utils;
 import sr.scene;
 import sr.text;
 import sr.script;
+import sr.spec_texs;
 
 import sr.scene_uniform_updater;
 
@@ -872,8 +873,8 @@ bool UseCopyBackgroundShaderBlend(const wpscene::ImageObject& image) {
 
 void ApplyCopyBackgroundColorBlend(wpscene::Material& material, const wpscene::ImageObject& image) {
     if (! UseCopyBackgroundShaderBlend(image)) return;
-    material.combos["BLENDMODE"] = image.colorBlendMode;
-    material.blending            = "disabled";
+    material.combos[std::string(WE_CB_BLENDMODE)] = image.colorBlendMode;
+    material.blending                             = "disabled";
 }
 
 bool ParseEnabled(std::string_view str) { return str == "enabled"; }
@@ -891,7 +892,9 @@ void ParseSpecTexName(std::string& name, const wpscene::Material& wpmat, const W
     if (IsSpecTex(name)) {
         if (name == WE_FULL_FRAME_BUFFER) {
             name = SpecTex_Default;
-            if (wpmat.shader == "genericimage2" && ! exists(sinfo.combos, "BLENDMODE")) name = "";
+            if (wpmat.shader == "genericimage2" &&
+                ! exists(sinfo.combos, std::string(WE_CB_BLENDMODE)))
+                name = "";
             /*
             if(wpmat.shader == "genericparticle") {
                 name = "_rt_ParticleRefract";
@@ -965,8 +968,8 @@ bool LoadMaterial(fs::VFS& vfs, const wpscene::Material& wpmat, Scene* pScene, S
                 .src             = fs::GetFileContent(vfs, geom_path),
                 .preprocess_info = {},
             });
-            pWPShaderInfo->combos["GS_ENABLED"] = "1";
-            if (out_geometry_shader) *out_geometry_shader = true;
+            pWPShaderInfo->combos[std::string(WE_CB_GS_ENABLED)] = "1";
+            geometry_shader_enabled                              = true;
         }
     }
     sd_units.push_back({
@@ -1024,8 +1027,8 @@ bool LoadMaterial(fs::VFS& vfs, const wpscene::Material& wpmat, Scene* pScene, S
         bool        unsupported_reflection = sstart_with(name, WE_REFLECTION_PREFIX);
         ParseSpecTexName(name, wpmat, *pWPShaderInfo, *pScene);
         if (unsupported_reflection && name.empty()) {
-            pWPShaderInfo->combos["reflection"] = "0";
-            pWPShaderInfo->combos["REFLECTION"] = "0";
+            pWPShaderInfo->combos["reflection"]                  = "0";
+            pWPShaderInfo->combos[std::string(WE_CB_REFLECTION)] = "0";
         }
         material.textures.push_back(name);
         material.defines.push_back("g_Texture" + std::to_string(i));
@@ -1074,11 +1077,11 @@ bool LoadMaterial(fs::VFS& vfs, const wpscene::Material& wpmat, Scene* pScene, S
                 material.hasSprite = true;
                 const auto& f1     = texh.spriteAnim.GetCurFrame();
                 if (wpmat.shader == "genericparticle" || wpmat.shader == "genericropeparticle") {
-                    pWPShaderInfo->combos["SPRITESHEET"] = "1";
-                    pWPShaderInfo->combos["THICKFORMAT"] = "1";
+                    pWPShaderInfo->combos[std::string(WE_CB_SPRITESHEET)]  = "1";
+                    pWPShaderInfo->combos[std::string(WE_CB_THICK_FORMAT)] = "1";
                     if (algorism::IsPowOfTwo((u32)texh.width) &&
                         algorism::IsPowOfTwo((u32)texh.height)) {
-                        pWPShaderInfo->combos["SPRITESHEETBLENDNPOT"] = "1";
+                        pWPShaderInfo->combos[std::string(WE_CB_SPRITESHEETBLENDNPOT)] = "1";
                         resolution[2] = resolution[0] - resolution[0] % (int)f1.width;
                         resolution[3] = resolution[1] - resolution[1] % (int)f1.height;
                     }
@@ -1094,9 +1097,9 @@ bool LoadMaterial(fs::VFS& vfs, const wpscene::Material& wpmat, Scene* pScene, S
             materialShader.constValues[gResolution] = array_cast<float>(resolution);
         }
     }
-    if (exists(pWPShaderInfo->combos, "LIGHTING")) {
-        // pWPShaderInfo->combos["PRELIGHTING"] =
-        // pWPShaderInfo->combos.at("LIGHTING");
+    if (exists(pWPShaderInfo->combos, std::string(WE_CB_LIGHTING))) {
+        // pWPShaderInfo->combos[std::string(WE_CB_PRELIGHTING)] =
+        // pWPShaderInfo->combos.at(std::string(WE_CB_LIGHTING));
     }
 
     if (! MaterialProgramCompiler::CompileToSpv(
@@ -1605,9 +1608,9 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
                 fs::GetFileContent(vfs, "/assets/materials/util/effectpassthrough.json"), json))
             return;
         colorMat.FromJson(json);
-        colorMat.combos["BONECOUNT"] = 1;
-        colorMat.combos["BLENDMODE"] = wpimgobj.colorBlendMode;
-        colorMat.blending            = "disabled";
+        colorMat.combos[std::string(WE_CB_BONECOUNT)] = 1;
+        colorMat.combos[std::string(WE_CB_BLENDMODE)] = wpimgobj.colorBlendMode;
+        colorMat.blending                             = "disabled";
         colorEffect.materials.push_back(colorMat);
         wpimgobj.effects.push_back(colorEffect);
     }
@@ -2501,11 +2504,11 @@ void ParseParticleObj(ParseContext& context, wpscene::ParticleObject& wppartobj,
             (float)in_SegmentUVTimeOffset,
             (float)in_SegmentMaxCount,
         };
-        shaderInfo.combos["TRAILRENDERER"] = "1";
+        shaderInfo.combos[std::string(WE_CB_TRAILRENDERER)] = "1";
         // Only the authored "rope" renderer uses genericropeparticle's segment
         // layout. "*trail" renderers stay on genericparticle and need velocity
         // in TexCoordVec4C1 for ComputeParticleTrailTangents.
-        if (! render_rope) shaderInfo.combos["THICKFORMAT"] = "1";
+        if (! render_rope) shaderInfo.combos[std::string(WE_CB_THICK_FORMAT)] = "1";
     }
     if (render_rope) {
         // genericropeparticle.geom branches on TRAILSUBDIVISION when present;
@@ -3019,7 +3022,7 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
         material.name                = "text";
         material.textures            = { atlas_url };
         material.defines             = { "g_Texture0" };
-        material.blenmode            = BlendMode::Translucent;
+        material.blenmode            = BlendMode::Normal;
         material.customShader.shader = shader;
         sp_mesh->AddMaterial(std::move(material));
     }
@@ -3092,7 +3095,8 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
     // --- per-layer compose -------------------------------------------------
     // Render the glyphs into a private bbox-sized RT via an ortho camera
     // that maps text-mesh pixel coords 1:1 onto the RT, then composite that
-    // RT onto _rt_default with a Translucent fullscreen-quad pass.
+    // RT onto _rt_default with a Translucent fullscreen-quad pass. The glyph
+    // pass writes straight RGBA into ppong_a; composing applies alpha once.
     //
     // Two sibling nodes:
     //   * sp_node — text glyphs, layer camera, identity world transform,

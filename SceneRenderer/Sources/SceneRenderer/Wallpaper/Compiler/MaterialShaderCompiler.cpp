@@ -1804,8 +1804,10 @@ MaterialProgramCompiler::CompileMaterialShader(const nlohmann::json& material_js
     for (const auto& kv : combos_override) {
         r.info.combos[kv.first] = kv.second;
     }
-    if (r.info.combos.find("BLENDMODE") == r.info.combos.end()) r.info.combos["BLENDMODE"] = "0";
-    if (r.info.combos.find("BONECOUNT") == r.info.combos.end()) r.info.combos["BONECOUNT"] = "1";
+    if (r.info.combos.find(std::string(WE_CB_BLENDMODE)) == r.info.combos.end())
+        r.info.combos[std::string(WE_CB_BLENDMODE)] = "0";
+    if (r.info.combos.find(std::string(WE_CB_BONECOUNT)) == r.info.combos.end())
+        r.info.combos[std::string(WE_CB_BONECOUNT)] = "1";
 
     std::vector<WPShaderUnit> units;
     units.push_back({ ShaderType::VERTEX, std::move(vert_src), {} });
