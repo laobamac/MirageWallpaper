@@ -26,3 +26,5 @@ build-*
 /CMakeUserPresets.json
 /defaultprojects
 .DS_Store
+.claude
+.codex

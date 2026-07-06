@@ -287,10 +287,12 @@ class GlobalSettingsViewModel: ObservableObject {
         if isOnBattery() { actions.append(settings.laptopOnBattery) }
 
         let front = NSWorkspace.shared.frontmostApplication
-        let ownBundles: Set<String?> = ["com.apple.finder", Bundle.main.bundleIdentifier]
-        let isDesktopOrSelf = ownBundles.contains(front?.bundleIdentifier)
+        let isSelf = front?.bundleIdentifier == Bundle.main.bundleIdentifier
+        // Finder 同时托管桌面，仅当它没有任何可见真实窗口时
+        let isDesktopFinder = front?.bundleIdentifier == "com.apple.finder"
+            && !frontmostAppHasVisibleWindows()
 
-        if !isDesktopOrSelf {
+        if !isSelf && !isDesktopFinder {
             if frontAppIsFullscreen() {
                 actions.append(settings.otherApplicationFullscreen)
             } else {
@@ -361,6 +363,21 @@ class GlobalSettingsViewModel: ObservableObject {
                   let boundsDict = info[kCGWindowBounds as String] as? [String: Any],
                   let bounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary) else { continue }
             if bounds.width >= main.frame.width - 1 && bounds.height >= main.frame.height - 1 {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// 用于区分"Finder 作为桌面"与"Finder 打开了访达窗口"。
+    private func frontmostAppHasVisibleWindows() -> Bool {
+        guard let frontPid = NSWorkspace.shared.frontmostApplication?.processIdentifier else { return false }
+        let infoList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+        for info in infoList {
+            guard let pid = info[kCGWindowOwnerPID as String] as? pid_t, pid == frontPid,
+                  let boundsDict = info[kCGWindowBounds as String] as? [String: Any],
+                  let bounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary) else { continue }
+            if bounds.width > 0 && bounds.height > 0 {
                 return true
             }
         }
