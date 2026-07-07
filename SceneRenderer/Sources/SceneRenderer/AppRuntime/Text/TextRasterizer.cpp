@@ -88,11 +88,55 @@ std::shared_ptr<std::vector<std::byte>> ReadAll(const std::filesystem::path& pat
     return buf;
 }
 
+std::filesystem::path ResolveFontconfigCodepoint(std::uint32_t codepoint) {
+    if (! FcInit()) return {};
+
+    FcPattern* pat = FcPatternCreate();
+    if (pat == nullptr) return {};
+    FcCharSet* charset = FcCharSetCreate();
+    if (charset == nullptr) {
+        FcPatternDestroy(pat);
+        return {};
+    }
+    FcCharSetAddChar(charset, static_cast<FcChar32>(codepoint));
+    FcPatternAddCharSet(pat, FC_CHARSET, charset);
+    FcPatternAddBool(pat, FC_SCALABLE, FcTrue);
+    FcConfigSubstitute(nullptr, pat, FcMatchPattern);
+    FcDefaultSubstitute(pat);
+
+    FcResult   res   = FcResultNoMatch;
+    FcPattern* match = FcFontMatch(nullptr, pat, &res);
+    FcCharSetDestroy(charset);
+    FcPatternDestroy(pat);
+
+    if (match == nullptr || res != FcResultMatch) {
+        if (match != nullptr) FcPatternDestroy(match);
+        return {};
+    }
+
+    FcChar8*              file = nullptr;
+    std::filesystem::path out;
+    if (FcPatternGetString(match, FC_FILE, 0, &file) == FcResultMatch && file != nullptr) {
+        out = std::filesystem::path(reinterpret_cast<const char*>(file));
+    }
+    FcPatternDestroy(match);
+    return out;
+}
+
 } // namespace
 
 // -- FontFace -------------------------------------------------------------
 
 struct FontFace::Impl {
+    struct FallbackFace {
+        std::shared_ptr<std::vector<std::byte>> blob;
+        FT_Face                                 face { nullptr };
+
+        ~FallbackFace() {
+            if (face != nullptr) FT_Done_Face(face);
+        }
+    };
+
     std::shared_ptr<std::vector<std::byte>> blob;
     FT_Face                                 face { nullptr };
     std::uint32_t                           pixel_size { 0 };
@@ -107,7 +151,10 @@ struct FontFace::Impl {
     std::uint32_t pen_y { 0 };
     std::uint32_t shelf_h { 0 };
 
-    std::unordered_map<std::uint32_t, GlyphInfo> glyphs;
+    std::unordered_map<std::uint32_t, GlyphInfo>                   glyphs;
+    std::unordered_map<std::string, std::unique_ptr<FallbackFace>> fallback_faces;
+    std::unordered_map<std::uint32_t, FT_Face>                     fallback_by_codepoint;
+    std::unordered_set<std::uint32_t>                              fallback_misses;
 
     // Pixel-coord rects pushed by Populate() — drained once per frame by
     // the renderer to vkCmdCopyBufferToImage just the changed regions.
@@ -164,6 +211,52 @@ struct FontFace::Impl {
         return true;
     }
 
+    FT_Face ResolveFallbackFace(std::uint32_t codepoint) {
+        if (auto it = fallback_by_codepoint.find(codepoint); it != fallback_by_codepoint.end()) {
+            return it->second;
+        }
+        if (fallback_misses.count(codepoint) != 0) return nullptr;
+
+        auto path = ResolveFontconfigCodepoint(codepoint);
+        if (path.empty()) {
+            fallback_misses.insert(codepoint);
+            return nullptr;
+        }
+
+        std::string key = path.string();
+        auto        it  = fallback_faces.find(key);
+        if (it == fallback_faces.end()) {
+            auto bytes = ReadAll(path);
+            if (! bytes) {
+                fallback_misses.insert(codepoint);
+                return nullptr;
+            }
+
+            auto       fallback = std::make_unique<FallbackFace>();
+            FT_Library lib      = FtLibrary::Get().handle();
+            if (lib == nullptr ||
+                FT_New_Memory_Face(lib,
+                                   reinterpret_cast<const FT_Byte*>(bytes->data()),
+                                   static_cast<FT_Long>(bytes->size()),
+                                   0,
+                                   &fallback->face) != 0 ||
+                FT_Set_Pixel_Sizes(fallback->face, 0, pixel_size) != 0) {
+                fallback_misses.insert(codepoint);
+                return nullptr;
+            }
+            fallback->blob = std::move(bytes);
+            it             = fallback_faces.emplace(std::move(key), std::move(fallback)).first;
+        }
+
+        FT_Face fallback_face = it->second->face;
+        if (fallback_face == nullptr || FT_Get_Char_Index(fallback_face, codepoint) == 0) {
+            fallback_misses.insert(codepoint);
+            return nullptr;
+        }
+        fallback_by_codepoint.emplace(codepoint, fallback_face);
+        return fallback_face;
+    }
+
     void Blit(std::uint32_t x, std::uint32_t y, std::uint32_t w, std::uint32_t h,
               const std::uint8_t* src, std::uint32_t pitch) {
         for (std::uint32_t row = 0; row < h; ++row) {
@@ -215,11 +308,22 @@ void FontFace::Populate(std::span<const std::uint32_t> codepoints) {
     for (std::uint32_t codepoint : codepoints) {
         if (impl.glyphs.find(codepoint) != impl.glyphs.end()) continue;
 
-        FT_UInt glyph_index = FT_Get_Char_Index(impl.face, codepoint);
-        if (FT_Load_Glyph(impl.face, glyph_index, FT_LOAD_RENDER | FT_LOAD_TARGET_NORMAL) != 0) {
+
+        FT_Face render_face = impl.face;
+        FT_UInt glyph_index = FT_Get_Char_Index(render_face, codepoint);
+        if (glyph_index == 0) {
+            render_face = impl.ResolveFallbackFace(codepoint);
+            glyph_index = render_face != nullptr ? FT_Get_Char_Index(render_face, codepoint) : 0;
+        }
+        if (glyph_index == 0) {
+            impl.glyphs.emplace(codepoint, GlyphInfo {});
             continue;
         }
-        FT_GlyphSlot g = impl.face->glyph;
+
+        if (FT_Load_Glyph(render_face, glyph_index, FT_LOAD_RENDER | FT_LOAD_TARGET_NORMAL) != 0) {
+            continue;
+        }
+        FT_GlyphSlot g = render_face->glyph;
         GlyphInfo    gi {};
         gi.pixel_w   = g->bitmap.width;
         gi.pixel_h   = g->bitmap.rows;

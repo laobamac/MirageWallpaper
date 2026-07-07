@@ -80,10 +80,11 @@ static TexNode::Desc createTexDesc(std::string path) {
 } // namespace sr::rg
 
 static void TraverseNode(const std::function<void(SceneNode*)>& func, SceneNode* node,
-                         const Set<i32>* skip_subtree_ids = nullptr) {
-    if (skip_subtree_ids != nullptr && skip_subtree_ids->count(node->ID()) != 0) return;
+                         const Set<const SceneNode*>* skip_subtrees = nullptr) {
+    if (skip_subtrees != nullptr && skip_subtrees->count(static_cast<const SceneNode*>(node)) != 0)
+        return;
     func(node);
-    for (auto& child : node->GetChildren()) TraverseNode(func, child.as_ptr(), skip_subtree_ids);
+    for (auto& child : node->GetChildren()) TraverseNode(func, child.as_ptr(), skip_subtrees);
 }
 
 static void CheckAndSetSprite(Scene& scene, vulkan::CustomShaderPass::Desc& desc,
@@ -271,25 +272,32 @@ static void ToGraphPass(SceneNode* node, std::string_view output, i32 imgId, Ext
     if (imgeff != nullptr && imgeff->HasRuntimeVisibleEffect()) loadEffect(imgeff);
 }
 
-// Bottom-up collect: identify SceneNode subtrees whose every node is in
-// `elidable_layer_ids` and not in `linked_ids` (i.e. nothing in the subtree
-// needs to emit). Returns true when this subtree is fully skippable; only
-// then is `node->ID()` added to `out_skip` so the emit walk can short-circuit
-// at the root of the skippable subtree without descending. Does NOT mutate
-// the scene tree — the tree topology is frozen after parse handoff (see the
-// invariant on SceneNode in Scene.cppm).
+// Bottom-up collect: identify SceneNode subtrees whose every node can be
+// elided without losing a link source. Visibility-hidden ancestors also hide
+// anonymous/generated descendants such as particle children, so the skip set
+// is keyed by node pointer instead of WE layer id.
+
+
+
 static bool CollectEmitSkipSubtrees(SceneNode* node, Scene& scene, const Set<i32>& linked_ids,
-                                    Set<i32>& out_skip) {
+                                    Set<const SceneNode*>& out_skip,
+                                    bool                   visibility_hidden_ancestor = false) {
+    const i32  nid    = node->ID();
+    const bool linked = nid >= 0 && linked_ids.count(nid) != 0;
+    const bool visibility_hidden_self =
+        nid >= 0 && scene.visibility_elidable_layer_ids.count(nid) != 0 && ! linked;
+    const bool visibility_hidden = visibility_hidden_ancestor || visibility_hidden_self;
+
     bool all_children_skippable = true;
     for (auto& c : node->GetChildren()) {
-        if (! CollectEmitSkipSubtrees(c.as_ptr(), scene, linked_ids, out_skip))
+        if (! CollectEmitSkipSubtrees(c.as_ptr(), scene, linked_ids, out_skip, visibility_hidden))
             all_children_skippable = false;
     }
-    const i32  nid = node->ID();
+
     const bool self_skippable =
-        scene.elidable_layer_ids.count(nid) != 0 && linked_ids.count(nid) == 0;
+        ! linked && (visibility_hidden || (nid >= 0 && scene.elidable_layer_ids.count(nid) != 0));
     if (self_skippable && all_children_skippable) {
-        out_skip.insert(nid);
+        out_skip.insert(node);
         return true;
     }
     return false;
@@ -352,8 +360,8 @@ std::unique_ptr<rg::RenderGraph> sr::sceneToRenderGraph(Scene& scene) {
     // identity passthrough layers) when nothing in the subtree links anything.
     // Most corpora have ~25x more elidable layers than link-referenced ones;
     // the skip set lets the emit walk short-circuit without mutating the tree.
-    Set<i32> emit_skip_subtree_ids;
-    CollectEmitSkipSubtrees(scene.sceneGraph.as_ptr(), scene, linked_ids, emit_skip_subtree_ids);
+    Set<const SceneNode*> emit_skip_subtrees;
+    CollectEmitSkipSubtrees(scene.sceneGraph.as_ptr(), scene, linked_ids, emit_skip_subtrees);
 
     // Pass B: emit passes. For elidable layers with a link consumer, route
     // into a private `_rt_link_<id>` RT instead of `_rt_default`; elidable
@@ -387,7 +395,7 @@ std::unique_ptr<rg::RenderGraph> sr::sceneToRenderGraph(Scene& scene) {
             }
         },
         scene.sceneGraph.as_ptr(),
-        &emit_skip_subtree_ids);
+        &emit_skip_subtrees);
 
     // Emit global post-process passes after the main scene-graph traversal.
     // Each step is either a CustomShaderPass (built on the synthetic node's
