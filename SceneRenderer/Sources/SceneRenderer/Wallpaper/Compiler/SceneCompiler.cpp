@@ -3537,10 +3537,10 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
     }
     {
         SceneMaterial material;
-        material.name                = "text";
-        material.textures            = { atlas_url };
-        material.defines             = { "g_Texture0" };
-        material.blenmode            = BlendMode::Normal;
+        material.name     = "text";
+        material.textures = { atlas_url };
+        material.defines  = { "g_Texture0" };
+        material.blenmode = copy_background_seed ? BlendMode::Translucent : BlendMode::Normal;
         material.customShader.shader = shader;
         sp_mesh->AddMaterial(std::move(material));
     }
