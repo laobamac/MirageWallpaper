@@ -3639,11 +3639,10 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
     const float                    object_w = obj.size[0] > 0.0f ? obj.size[0] : text_bbox_w;
     const float                    object_h = obj.size[1] > 0.0f ? obj.size[1] : text_bbox_h;
     const text::TextGeometryPolicy geometry_policy {
-        .frame_width        = object_w,
-        .frame_height       = object_h,
-        .dynamic            = wants_dynamic_text,
-        .has_effect         = has_text_effect,
-        .effect_frame_bound = obj.copybackground,
+        .frame_width  = object_w,
+        .frame_height = object_h,
+        .dynamic      = wants_dynamic_text,
+        .has_effect   = has_text_effect,
     };
     const auto initial_geometry = text::ResolveTextGeometry(geometry_policy, layouter->Metrics());
     const auto [initial_layer_w, initial_layer_h] = TextLayerExtent(initial_geometry);

@@ -861,10 +861,9 @@ TextGeometry ResolveTextGeometry(const TextGeometryPolicy& policy,
     const float src_bbox_w  = src_w + 2.0f * pad;
     const float src_bbox_h  = src_h + 2.0f * pad;
 
-    const float dynamic_w = std::max({ src_bbox_w, text_bbox_w, frame_w * 3.0f, 1024.0f });
-    const float dynamic_h = std::max({ src_bbox_h, text_bbox_h, frame_h * 2.0f, 256.0f });
-    const bool  dynamic_effect_can_overflow =
-        policy.dynamic && policy.has_effect && ! policy.effect_frame_bound;
+    const float dynamic_w      = std::max({ src_bbox_w, text_bbox_w, frame_w * 3.0f, 1024.0f });
+    const float dynamic_h      = std::max({ src_bbox_h, text_bbox_h, frame_h * 2.0f, 256.0f });
+    const bool  dynamic_effect = policy.dynamic && policy.has_effect;
 
     const float rt_max_w = policy.dynamic ? (! policy.has_effect ? dynamic_w : frame_w)
                                           : (policy.has_effect ? frame_w : src_bbox_w);
@@ -885,7 +884,7 @@ TextGeometry ResolveTextGeometry(const TextGeometryPolicy& policy,
         return out;
     }
 
-    if (dynamic_effect_can_overflow) {
+    if (dynamic_effect) {
         out.draw_width          = std::max(frame_w, src_bbox_w);
         out.draw_height         = frame_h;
         out.uv_source_width     = out.draw_width;

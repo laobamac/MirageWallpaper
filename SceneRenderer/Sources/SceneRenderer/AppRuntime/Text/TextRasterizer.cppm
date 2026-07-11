@@ -218,7 +218,6 @@ struct TextGeometryPolicy {
     float frame_height { 1.0f };
     bool  dynamic { false };
     bool  has_effect { false };
-    bool  effect_frame_bound { false };
 };
 
 struct TextGeometry {
