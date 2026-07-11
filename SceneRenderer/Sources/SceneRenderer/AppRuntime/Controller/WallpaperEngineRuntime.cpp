@@ -1004,7 +1004,13 @@ void SceneRenderController::on(RenderDraw&&) {
             m_scene->TickMaterialShaderAnimations();
             m_scene->TickTransformUpdaters();
             if (m_scene->ConsumeRenderGraphDirty()) {
-                rebuildRenderGraph(vulkan::RenderGraphResourceRetention::KeepSceneTextures, false);
+                // An elided layer can own an embedded video. Once script makes
+                // another such layer visible, retaining the old scene textures
+                // would keep its decoder running even though no pass samples it.
+                const auto retention = m_scene->ConsumeSceneTextureReleaseRequired()
+                                           ? vulkan::RenderGraphResourceRetention::ReleaseSceneTextures
+                                           : vulkan::RenderGraphResourceRetention::KeepSceneTextures;
+                rebuildRenderGraph(retention, false);
             }
         }
         m_scene->paritileSys->Emitt();
@@ -1054,6 +1060,7 @@ void SceneRenderController::rebuildRenderGraph(vulkan::RenderGraphResourceRetent
     m_render->UpdateCameraFillMode(*m_scene, m_fillmode);
     consumeDirtyEventsCoveredByGraphRebuild();
     (void)m_scene->ConsumeRenderGraphDirty();
+    (void)m_scene->ConsumeSceneTextureReleaseRequired();
 }
 
 void SceneRenderController::consumeDirtyEventsCoveredByGraphRebuild() {

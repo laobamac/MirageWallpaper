@@ -1756,7 +1756,18 @@ JSValue NodeGetVisible(JSContext* ctx, JSValueConst this_val) {
 }
 JSValue NodeSetVisible(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
     auto* n = GetLayerNode(this_val);
-    if (n) n->SetVisible(JS_ToBool(ctx, val) != 0);
+    if (! n) return JS_UNDEFINED;
+    const bool visible = JS_ToBool(ctx, val) != 0;
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    // A layer which was hidden while compiling may have no render-graph pass
+    // and no lazy video texture yet.  Visibility changes therefore belong to
+    // Scene, not to the bare node: Scene updates its elision set and requests
+    // a graph rebuild before the next draw.
+    if (host && host->scene) {
+        host->scene->SetNodeVisible(*n, visible);
+    } else {
+        n->SetVisible(visible);
+    }
     return JS_UNDEFINED;
 }
 JSValue NodeGetAlpha(JSContext* ctx, JSValueConst this_val) {
