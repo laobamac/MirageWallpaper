@@ -378,6 +378,8 @@ struct EngineHostState {
         double                                point_size { 1.0 };
         std::function<void(std::string_view)> set_horizontal;
         std::function<void(std::string_view)> set_vertical;
+        std::function<double()>               get_point_size;
+        std::function<void(double)>           set_point_size;
     };
     std::unordered_map<sr::SceneNode*, TextAlignHooks> text_align_hooks;
     JsRuntime::BoneIndexResolver                        bone_index_resolver;
@@ -1869,9 +1871,24 @@ JSValue NodeGetPointSize(JSContext* ctx, JSValueConst this_val) {
     if (! n) return JS_NewFloat64(ctx, 1.0);
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
     auto  it   = host->text_align_hooks.find(n);
-    if (it != host->text_align_hooks.end()) return JS_NewFloat64(ctx, it->second.point_size);
+    if (it != host->text_align_hooks.end()) {
+        if (it->second.get_point_size) return JS_NewFloat64(ctx, it->second.get_point_size());
+        return JS_NewFloat64(ctx, it->second.point_size);
+    }
     auto* mesh = n->Mesh();
     return JS_NewFloat64(ctx, mesh == nullptr ? 1.0 : mesh->PointSize());
+}
+JSValue NodeSetPointSize(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+    auto* n = GetLayerNode(this_val);
+    if (! n) return JS_UNDEFINED;
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    auto  it   = host->text_align_hooks.find(n);
+    if (it == host->text_align_hooks.end()) return JS_UNDEFINED;
+    double point_size = it->second.point_size;
+    if (JS_ToFloat64(ctx, &point_size, val) < 0 || ! std::isfinite(point_size)) return JS_UNDEFINED;
+    it->second.point_size = point_size;
+    if (it->second.set_point_size) it->second.set_point_size(point_size);
+    return JS_UNDEFINED;
 }
 
 // --- methods ----------------------------------------------------------------
@@ -2256,7 +2273,7 @@ const JSCFunctionListEntry s_layer_proto_funcs[] = {
     JS_CGETSET_DEF("name", NodeGetNameValue, NodeSetIgnore),
     JS_CGETSET_DEF("verticalalign", NodeGetVAlign, NodeSetVAlign),
     JS_CGETSET_DEF("horizontalalign", NodeGetHAlign, NodeSetHAlign),
-    JS_CGETSET_DEF("pointsize", NodeGetPointSize, NodeSetIgnore),
+    JS_CGETSET_DEF("pointsize", NodeGetPointSize, NodeSetPointSize),
     JS_CFUNC_DEF("getParent", 0, NodeGetParent),
     JS_CFUNC_DEF("getTransformMatrix", 0, NodeGetTransformMatrix),
     JS_CFUNC_DEF("getChildren", 0, NodeGetChildren),
@@ -2692,7 +2709,9 @@ void JsRuntime::RegisterTextSetter(sr::SceneNode*                       node,
 void JsRuntime::RegisterTextAlignSetters(sr::SceneNode* node, std::string horizontal,
                                          std::string vertical, double point_size,
                                          std::function<void(std::string_view)> set_horizontal,
-                                         std::function<void(std::string_view)> set_vertical) {
+                                         std::function<void(std::string_view)> set_vertical,
+                                         std::function<double()>               get_point_size,
+                                         std::function<void(double)>           set_point_size) {
     if (node == nullptr) return;
     m_impl->host.text_align_hooks[node] = EngineHostState::TextAlignHooks {
         .horizontal     = std::move(horizontal),
@@ -2700,6 +2719,8 @@ void JsRuntime::RegisterTextAlignSetters(sr::SceneNode* node, std::string horizo
         .point_size     = point_size,
         .set_horizontal = std::move(set_horizontal),
         .set_vertical   = std::move(set_vertical),
+        .get_point_size = std::move(get_point_size),
+        .set_point_size = std::move(set_point_size),
     };
 }
 

@@ -452,6 +452,13 @@ std::array<i32, 2> TextLayerExtent(const text::TextGeometry& geometry) {
     };
 }
 
+std::uint32_t TextPointSizeToPx(float point_size) {
+    constexpr float kPointsizeToPx = 4.0f;
+    if (! std::isfinite(point_size) || point_size <= 0.0f) return 1;
+    auto px = static_cast<std::uint32_t>(std::round(point_size * kPointsizeToPx));
+    return std::clamp<std::uint32_t>(px, 1, 1024);
+}
+
 std::array<i32, 2> TextEffectFboExtent(const text::TextGeometry& geometry, std::uint32_t scale,
                                        std::uint32_t fit) {
     if (fit > 0) {
@@ -3378,7 +3385,21 @@ TextRenderImageParser& EnsureTextImageParser(Scene& scene) {
     auto  wrapped     = std::make_unique<TextRenderImageParser>(std::move(inner));
     auto* raw         = wrapped.get();
     scene.imageParser = std::move(wrapped);
-    return *raw;
+       return *raw;
+}
+
+bool EnsureTextAtlas(Scene& scene, text::FontFace& face) {
+    const std::string& atlas_url = face.AtlasUrl();
+    if (scene.textures.contains(atlas_url)) return true;
+    auto atlas_img = text::BuildAtlasImage(face, atlas_url);
+    if (! atlas_img) return false;
+    EnsureTextImageParser(scene).Register(atlas_url, atlas_img);
+    SceneTexture stex;
+    stex.url                  = atlas_url;
+    stex.sample               = atlas_img->header.sample;
+    scene.textures[atlas_url] = stex;
+    face.ClearDirtyRects();
+    return true;
 }
 
 void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
@@ -3390,8 +3411,10 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
     MarkHiddenLinkSource(context, obj.id);
 
     // --- determine initial text + whether a script binding will rewrite it
-    auto text_binding_it = obj.field_bindings.scripts.find("text");
-    bool has_text_script = (text_binding_it != obj.field_bindings.scripts.end());
+    auto text_binding_it      = obj.field_bindings.scripts.find("text");
+    bool has_text_script      = (text_binding_it != obj.field_bindings.scripts.end());
+    auto pointsize_binding_it = obj.field_bindings.scripts.find("pointsize");
+    bool has_pointsize_script = (pointsize_binding_it != obj.field_bindings.scripts.end());
     // Scripts can also drive `text` indirectly: a script attached to any
     // other field (commonly `visible`) writes `thisLayer.text = "..."` from
     // its update() side-effect (e.g. workshop 2283810443's clock). Transform
@@ -3407,9 +3430,9 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
             }
         }
     }
-    bool wants_dynamic_text =
-        has_text_script || has_indirect_text_script || context.scene_layer_text_writes;
-    bool has_text_effect = false;
+    bool wants_dynamic_text = has_text_script || has_indirect_text_script || has_pointsize_script ||
+                              context.scene_layer_text_writes;
+    bool has_text_effect    = false;
     for (const auto& effect : obj.effects) {
         if (effect.visible || ! effect.visible_user.empty()) {
             has_text_effect = true;
@@ -3468,11 +3491,7 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
         return;
     }
 
-    // --- pointsize → px (empirical 4× — see earlier comment).
-    constexpr float kPointsizeToPx = 4.0f;
-    std::uint32_t   px = static_cast<std::uint32_t>(std::round(obj.pointsize * kPointsizeToPx));
-    if (px < 1) px = 1;
-    if (px > 1024) px = 1024;
+    std::uint32_t px = TextPointSizeToPx(obj.pointsize);
 
     auto& font_cache = text::EnsureSceneFontCache(*context.scene);
     auto* face       = font_cache.GetFace(resolved.bytes, px);
@@ -3507,18 +3526,9 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
     // Subsequent glyph adds emit dirty rects which the renderer re-uploads
     // each frame via TextureCache::PumpFontAtlases.
     const std::string& atlas_url = face->AtlasUrl();
-    if (! context.scene->textures.contains(atlas_url)) {
-        auto atlas_img = text::BuildAtlasImage(*face, atlas_url);
-        if (! atlas_img) {
-            rstd_error("text '{}': atlas snapshot failed", obj.name);
-            return;
-        }
-        EnsureTextImageParser(*context.scene).Register(atlas_url, atlas_img);
-        SceneTexture stex;
-        stex.url                           = atlas_url;
-        stex.sample                        = atlas_img->header.sample;
-        context.scene->textures[atlas_url] = stex;
-        face->ClearDirtyRects();
+    if (! EnsureTextAtlas(*context.scene, *face)) {
+        rstd_error("text '{}': atlas snapshot failed", obj.name);
+        return;
     }
 
     // --- mesh capacity. Static text exactly fits its initial layout;
@@ -3598,20 +3608,27 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
 
     auto layouter = std::make_shared<text::TextLayouter>(face, sp_mesh, style, peak_quads);
     layouter->SetText(s_text);
+    auto current_text       = std::make_shared<std::string>(s_text);
+    auto current_point_size = std::make_shared<double>(obj.pointsize);
 
-    float text_w        = layouter->TextWidth();
-    float text_h        = layouter->TextHeight();
-    float text_source_w = layouter->SourceWidth();
-    float text_source_h = layouter->SourceHeight();
+    auto  initial_metrics = layouter->Metrics();
+    float text_w          = initial_metrics.text_width;
+    float text_h          = initial_metrics.text_height;
+    float text_source_w   = initial_metrics.source_width;
+    float text_source_h   = initial_metrics.source_height;
     if (text_w <= 0.0f || text_h <= 0.0f) {
         // Empty seed (scripted-only text). Fake a 1×1 bbox so SceneNode /
         // parallax setup still works; the runtime actuator scales the
         // compose node to actual text dims each tick.
-        text_w = 1.0f;
-        text_h = 1.0f;
+        initial_metrics.text_width  = 1.0f;
+        initial_metrics.text_height = 1.0f;
+        text_w                      = initial_metrics.text_width;
+        text_h                      = initial_metrics.text_height;
     }
-    if (text_source_w <= 0.0f) text_source_w = text_w;
-    if (text_source_h <= 0.0f) text_source_h = text_h;
+    if (text_source_w <= 0.0f) initial_metrics.source_width = text_w;
+    if (text_source_h <= 0.0f) initial_metrics.source_height = text_h;
+    text_source_w = initial_metrics.source_width;
+    text_source_h = initial_metrics.source_height;
 
     auto sp_node = rstd::sync::Arc<SceneNode>::make(
         Vector3f(obj.origin.data()), Vector3f(obj.scale.data()), Vector3f(obj.angles.data()));
@@ -3662,10 +3679,11 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
     const float                    object_w = obj.size[0] > 0.0f ? obj.size[0] : text_bbox_w;
     const float                    object_h = obj.size[1] > 0.0f ? obj.size[1] : text_bbox_h;
     const text::TextGeometryPolicy geometry_policy {
-        .frame_width  = object_w,
-        .frame_height = object_h,
-        .dynamic      = wants_dynamic_text,
-        .has_effect   = has_text_effect,
+        .frame_width        = object_w,
+        .frame_height       = object_h,
+        .dynamic            = wants_dynamic_text,
+        .has_effect         = has_text_effect,
+        .preserve_text_bbox = has_bg || obj.copybackground,
     };
     const auto initial_geometry = text::ResolveTextGeometry(geometry_policy, layouter->Metrics());
     const auto [initial_layer_w, initial_layer_h] = TextLayerExtent(initial_geometry);
@@ -4002,27 +4020,21 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
         compose_ptr->SetTranslate(pos);
     };
 
-    // Per-frame compose-quad rebuild: world card sized to current text
-    // bbox; UVs subsample the central text region of ppong_a (since the
-    // ortho is layer-sized but glyphs occupy only text-bbox in the
-    // middle).
+
+    // Per-frame compose-quad rebuild: world card sized to current visible
+    // source bbox. The quad offset keeps glyphs at their logical text-box
+    // position after the private RT path centers them for UV cropping.
+
     auto rebuild_compose = [compose_hold,
                             anchor_state,
                             apply_text_anchor,
                             runtime_targets,
                             sp_mesh,
                             geometry_policy,
-                            text_padding =
-                                style.padding](float tw, float th, float source_w, float source_h) {
-        auto*      compose_ptr    = compose_hold.get();
-        const auto geometry       = text::ResolveTextGeometry(geometry_policy,
-                                                              text::TextLayoutMetrics {
-                                                                  .text_width    = tw,
-                                                                  .text_height   = th,
-                                                                  .source_width  = source_w,
-                                                                  .source_height = source_h,
-                                                                  .padding       = text_padding,
-                                                              });
+                            text_padding = style.padding](text::TextLayoutMetrics metrics) {
+        auto* compose_ptr         = compose_hold.get();
+        metrics.padding           = text_padding;
+        const auto geometry       = text::ResolveTextGeometry(geometry_policy, metrics);
         const bool target_changed = runtime_targets->Apply(geometry);
         anchor_state->width       = geometry.draw_width;
         anchor_state->height      = geometry.draw_height;
@@ -4030,8 +4042,11 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
         apply_text_anchor();
         const float                 hx = geometry.draw_width * 0.5f;
         const float                 hy = geometry.draw_height * 0.5f;
+        const float                 cx = geometry.draw_offset_x;
+        const float                 cy = geometry.draw_offset_y;
         const std::array<float, 12> pos {
-            -hx, -hy, 0.0f, -hx, +hy, 0.0f, +hx, -hy, 0.0f, +hx, +hy, 0.0f,
+            cx - hx, cy - hy, 0.0f, cx - hx, cy + hy, 0.0f,
+            cx + hx, cy - hy, 0.0f, cx + hx, cy + hy, 0.0f,
         };
         const float u_half =
             0.5f * std::min(1.0f, geometry.uv_source_width / float(runtime_targets->layer_w));
@@ -4055,7 +4070,7 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
             if (sp_mesh) sp_mesh->SetLayoutDirty();
         }
     };
-    rebuild_compose(text_w, text_h, text_source_w, text_source_h);
+       rebuild_compose(initial_metrics);
 
     auto apply_text_origin = [anchor_state, apply_text_anchor](const script::ScriptValue& value) {
         Vector3f current = anchor_state->origin;
@@ -4076,17 +4091,49 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
     auto set_halign = [layouter, rebuild_compose, anchor_state](std::string_view align) {
         anchor_state->horizontal = std::string(align);
         layouter->SetHorizontalAlign(align);
-        rebuild_compose(layouter->TextWidth(),
-                        layouter->TextHeight(),
-                        layouter->SourceWidth(),
-                        layouter->SourceHeight());
+        rebuild_compose(layouter->Metrics());
     };
     auto set_valign = [anchor_state, apply_text_anchor](std::string_view align) {
         anchor_state->vertical = std::string(align);
         apply_text_anchor();
     };
+    auto set_pointsize = [scene          = context.scene.get(),
+                          font_cache_ptr = &font_cache,
+                          font_blob      = resolved.bytes,
+                          sp_mesh,
+                          layouter,
+                          rebuild_compose,
+                          current_text,
+                          current_point_size](double next_point_size) {
+        if (scene == nullptr || font_cache_ptr == nullptr || ! std::isfinite(next_point_size) ||
+            next_point_size <= 0.0) {
+            return;
+        }
+        auto* next_face = font_cache_ptr->GetFace(
+            font_blob, TextPointSizeToPx(static_cast<float>(next_point_size)));
+        if (next_face == nullptr) return;
+        next_face->Populate(text::DecodeUtf8(*current_text));
+        if (! EnsureTextAtlas(*scene, *next_face)) return;
+        *current_point_size = next_point_size;
+        if (auto* mat = sp_mesh->Material()) {
+            (void)scene->SetMaterialTextureSlot(*mat, 0, next_face->AtlasUrl());
+        }
+        layouter->SetFace(next_face);
+        rebuild_compose(layouter->Metrics());
+    };
 
     if (! context.script_scene) context.script_scene = std::make_unique<script::ScriptScene>();
+    context.script_scene->runtime().RegisterTextAlignSetters(
+        compose_node.as_ptr(),
+        anchor_state->horizontal,
+        anchor_state->vertical,
+        obj.pointsize,
+        set_halign,
+        set_valign,
+        [current_point_size]() {
+            return *current_point_size;
+        },
+        set_pointsize);
     context.script_scene->runtime().RegisterTextAlignSetters(compose_node.as_ptr(),
                                                              anchor_state->horizontal,
                                                              anchor_state->vertical,
@@ -4107,13 +4154,11 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
     // re-rasterises new codepoints, lays them out, and rebuilds the
     // compose quad to the new text dims. Runs on the render thread, which
     // is also the JS thread — no synchronization needed.
-    auto set_text = [layouter, face, rebuild_compose](std::string_view s) {
-        face->Populate(text::DecodeUtf8(s));
+    auto set_text = [layouter, rebuild_compose, current_text](std::string_view s) {
+        *current_text = std::string(s);
+        if (auto* active_face = layouter->Face()) active_face->Populate(text::DecodeUtf8(s));
         layouter->SetText(s);
-        rebuild_compose(layouter->TextWidth(),
-                        layouter->TextHeight(),
-                        layouter->SourceWidth(),
-                        layouter->SourceHeight());
+        rebuild_compose(layouter->Metrics());
     };
     if (has_text_script) {
         const auto& sb = text_binding_it->second;
@@ -4131,6 +4176,27 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
                 fs,
                 [set_text](const script::ScriptValue& v) {
                     if (auto* p = std::get_if<script::StringValue>(&v)) set_text(p->s);
+                },
+            });
+        }
+    }
+    if (has_pointsize_script) {
+        const auto& sb = pointsize_binding_it->second;
+        if (! context.script_scene) context.script_scene = std::make_unique<script::ScriptScene>();
+        auto&       ss  = *context.script_scene;
+        std::string sha = utils::genSha1(std::span<const char>(sb.source));
+        auto*       fs  = ss.runtime().MakeFieldScript(sb.source,
+                                                       sha,
+                                                       script::FieldKind::Scalar,
+                                                       sb.properties,
+                                                       sb.initial_value,
+                                                       compose_node.as_ptr());
+        if (fs) {
+            ss.AddActuator({
+                fs,
+                [set_pointsize](const script::ScriptValue& v) {
+                    auto scalar = ScriptValueAsFloat(v);
+                    if (scalar) set_pointsize(*scalar);
                 },
             });
         }
