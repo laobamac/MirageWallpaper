@@ -2452,6 +2452,22 @@ public:
     Map<std::string, std::vector<std::function<void(float, float, float)>>> text_color_user_index;
     Map<std::string, std::vector<std::function<void(float)>>>              text_alpha_user_index;
 
+    // Materials whose text atlas was swapped this edit (pointsize change picks a
+    // new FontFace → new atlas texture). SetMaterialTextureSlot only mutates the
+    // slot; the GPU descriptor is rebound via refreshPreparedMaterialTextures.
+    // set_pointsize queues the changed material here; RenderSetUserProperty
+    // drains it so the new atlas actually binds — otherwise glyphs sample the
+    // old atlas with new-layout UVs and shatter.
+    std::vector<SceneMaterialId> pending_text_texture_refresh;
+    void QueueTextTextureRefresh(SceneMaterialId id) {
+        pending_text_texture_refresh.push_back(id);
+    }
+    std::vector<SceneMaterialId> TakeTextTextureRefresh() {
+        std::vector<SceneMaterialId> out;
+        out.swap(pending_text_texture_refresh);
+        return out;
+    }
+
     struct MaterialTextureUserBinding {
         SceneMaterial* material { nullptr };
         uint32_t       slot { 0 };

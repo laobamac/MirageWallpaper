@@ -4256,7 +4256,14 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
         if (! EnsureTextAtlas(*scene, *next_face)) return;
         *current_point_size = next_point_size;
         if (auto* mat = sp_mesh->Material()) {
-            (void)scene->SetMaterialTextureSlot(*mat, 0, next_face->AtlasUrl());
+            auto mutation = scene->SetMaterialTextureSlot(*mat, 0, next_face->AtlasUrl());
+            // The slot swap alone doesn't rebind the GPU descriptor. Queue the
+            // changed material so RenderSetUserProperty rebinds the new atlas;
+            // without this the mesh gets new-layout UVs while the GPU still
+            // samples the old atlas → glyphs shatter on size change.
+            if (mutation.changed && mutation.material.has_value()) {
+                scene->QueueTextTextureRefresh(*mutation.material);
+            }
         }
         layouter->SetFace(next_face);
         rebuild_compose(layouter->Metrics());

@@ -1230,6 +1230,12 @@ void SceneRenderController::on(RenderSetUserProperty&& m) {
         m_scene->ApplyUserImageEffectVisibilityBindings(key, m.property) || requires_graph_rebuild;
     requires_graph_rebuild = requires_graph_rebuild || shader_combo_requires_graph;
 
+    // Pointsize edits swap the text atlas (new FontFace → new atlas texture);
+    // fold those materials into the texture-refresh set so the new atlas binds.
+    for (auto material : m_scene->TakeTextTextureRefresh()) {
+        PushUniqueMaterialId(texture_materials, material);
+    }
+
     if (! texture_materials.empty() && renderInited() && m_rg && ! requires_graph_rebuild) {
         m_render_scene = ExtractRenderSceneSnapshot(*m_scene);
         if (! m_render->refreshPreparedMaterialTextures(
