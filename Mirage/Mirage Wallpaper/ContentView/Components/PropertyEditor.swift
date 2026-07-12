@@ -8,15 +8,14 @@ import SwiftUI
 import WebKit
 import UniformTypeIdentifiers
 
-// MARK: - 属性面板
+// MARK: - Property panel
 
-// 忠实还原 Wallpaper Engine 的自定义侧栏：全部属性类型、条件显隐（JS 表达式）、
-// 官方本地化、真 HTML 标签（内联图片 / 可点链接 / 居中 / 大字 / 颜色）。
+// Faithful Wallpaper Engine customization sidebar: every property type,
+// condition-driven show/hide, official localization, and real HTML labels.
 struct PropertyEditor: View {
     @EnvironmentObject var wallpaperViewModel: WallpaperViewModel
     let wallpaper: WEWallpaper
 
-    // condition 求值器：每个面板一份，随取值刷新上下文。
     @StateObject private var conditions = ConditionStore()
 
     private var allProperties: [String: WEProjectProperty] {
@@ -27,7 +26,6 @@ struct PropertyEditor: View {
         wallpaper.project.general?.properties?.sorted ?? []
     }
 
-    // 经 condition 过滤后的可见属性。
     private var visibleProperties: [(key: String, property: WEProjectProperty)] {
         sortedProperties.filter { conditions.isVisible($0.property.condition) }
     }
@@ -62,10 +60,9 @@ struct PropertyEditor: View {
     }
 }
 
-// 把 condition 求值器包成 ObservableObject，取值变化时触发面板重算可见性。
+// Wraps the evaluator so value changes re-run condition visibility.
 final class ConditionStore: ObservableObject {
     private let evaluator = WEConditionEvaluator()
-    // 变化计数，用来在取值更新后驱动依赖它的视图刷新。
     @Published private(set) var generation = 0
 
     func update(properties: [String: WEProjectProperty], overrides: [String: WEPropertyValue]) {
@@ -74,12 +71,12 @@ final class ConditionStore: ObservableObject {
     }
 
     func isVisible(_ condition: String?) -> Bool {
-        _ = generation // 建立依赖
+        _ = generation // establish dependency
         return evaluator.evaluate(condition)
     }
 }
 
-// MARK: - 单条属性
+// MARK: - Property row
 
 struct PropertyRow: View {
     @EnvironmentObject var wallpaperViewModel: WallpaperViewModel
@@ -94,8 +91,6 @@ struct PropertyRow: View {
 
     private var rawText: String { property.displayText(fallbackKey: key) }
 
-    // 标签：含真 HTML（图片 / 链接 / 居中 / 大字 / 颜色）时用 WKWebView 忠实渲染；
-    // 纯文本 / 轻量格式则用原生 Text，避免为每一行都背上 WebKit。
     @ViewBuilder
     private func labelView(lineLimit: Int? = nil, expand: Bool = true) -> some View {
         if WEHTML.isRich(rawText) {
@@ -212,12 +207,12 @@ struct PropertyRow: View {
         }
     }
 
-    // 只显示满足自身 condition 的下拉选项（WE 每个 option 也可带 condition）。
+    // Options whose own condition passes (WE allows per-option conditions).
     private var visibleOptions: [WEProjectPropertyOption] {
         (property.options ?? []).filter { conditions.isVisible($0.condition) }
     }
 
-    // MARK: 文件 / 目录 / 贴图选择
+    // MARK: File / directory / texture pickers
 
     private enum PickKind { case file, directory }
 
@@ -256,7 +251,7 @@ struct PropertyRow: View {
         panel.canChooseDirectories = kind == .directory
         panel.allowsMultipleSelection = false
         if kind == .file, property.propertyType != .file {
-            panel.allowedContentTypes = [.image] // scenetexture：限图片
+            panel.allowedContentTypes = [.image] // scenetexture: images only
         }
         if panel.runModal() == .OK, let url = panel.url {
             wallpaperViewModel.setProperty(key: key, value: .string(url.path))

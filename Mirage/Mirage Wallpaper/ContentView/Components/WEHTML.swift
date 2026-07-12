@@ -7,22 +7,16 @@
 import SwiftUI
 import WebKit
 
-// MARK: - WE 标签 HTML
-
-// Wallpaper Engine 的属性 / 分组 / 文本标签用 HTML 描述。分两类处理：
-//   · 富内容（含 <img> 图片 / <a> 链接 / <table> 等）→ 用 WKWebView 忠实渲染，
-//     支持远程图片异步加载、点击链接跳浏览器、居中 / 大字 / 颜色。
-//   · 轻量内容（纯文本，或仅 <b>/<br>/<font> 之类）→ 归一成纯文本用原生 Text，
-//     不为此背上 WebKit，避免几十行都塞 webview 造成卡顿。
+// WE labels are HTML. Rich content (images / links / tables) is rendered
+// faithfully with WKWebView; everything else is flattened to plain text so most
+// rows stay native and cheap.
 enum WEHTML {
-    // 判定是否需要「真 HTML」渲染：出现图片 / 链接 / 表格 / 居中等结构化标签。
     static func isRich(_ raw: String) -> Bool {
         let s = raw.replacingOccurrences(of: "＜", with: "<").replacingOccurrences(of: "＞", with: ">")
         return s.range(of: "<\\s*(img|a|table|center|iframe|video)\\b",
                        options: [.regularExpression, .caseInsensitive]) != nil
     }
 
-    // 把标签清洗成纯文本（供非富内容用）。
     static func plain(_ raw: String) -> String {
         var s = raw
             .replacingOccurrences(of: "＜", with: "<")
@@ -34,7 +28,7 @@ enum WEHTML {
         rx("<\\s*br\\s*/?>", "\n")
         rx("<\\s*/?\\s*(p|div|center)\\s*>", "\n")
         rx("<[^>]*>", "")
-        rx("<\\s*/?\\s*[a-zA-Z][^<]*$", "")
+        rx("<\\s*/?\\s*[a-zA-Z][^<]*$", "")            // truncated trailing tag
         rx("(?m)^[ \\t]*/?(?:center|big|small|strong|font|span|div|sub|sup|b|i|u|p|a)[ \\t]*>[ \\t]*$", "")
         s = decodeEntities(s)
         rx("[ \\t]+", " ")
@@ -86,11 +80,10 @@ enum WEHTML {
     }
 }
 
-// MARK: - 富 HTML 渲染（WKWebView）
-
-// 用一个 WKWebView 忠实渲染 WE 富文本标签：透明背景、跟随系统配色与字体、图片
-// 自适应宽度并异步加载、点击链接跳系统浏览器。禁用 webview 自身滚动，靠 JS 测高
-// 自适应，把滚轮转发给外层 SwiftUI ScrollView，避免吞滚动。
+// Renders rich WE HTML with a WKWebView: transparent, follows system
+// colors/fonts, images fit width and load async, links open in the browser.
+// Self-scrolling is disabled; height is measured via JS and the wheel is
+// forwarded to the enclosing ScrollView.
 struct RichHTMLText: View {
     let html: String
     @State private var height: CGFloat = 24
@@ -114,7 +107,6 @@ private struct RichHTMLWebView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
-        config.suppressesIncrementalRendering = false
         let webView = PassThroughWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
         webView.setValue(false, forKey: "drawsBackground")
@@ -131,7 +123,6 @@ private struct RichHTMLWebView: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     private static func wrap(_ body: String) -> String {
-        // 归一全角尖括号，套上跟随系统配色 / 字体的样式。
         let normalized = body
             .replacingOccurrences(of: "＜", with: "<")
             .replacingOccurrences(of: "＞", with: ">")
@@ -166,7 +157,7 @@ private struct RichHTMLWebView: NSViewRepresentable {
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             measure(webView)
-            // 远程图片解码后高度会变，二次测量补一次。
+            // Remote images change height after decode; re-measure once.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak webView] in
                 guard let webView else { return }
                 self.measure(webView)

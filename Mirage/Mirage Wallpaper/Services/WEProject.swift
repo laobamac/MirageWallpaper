@@ -175,20 +175,11 @@ struct WEProjectProperty: Codable, Equatable, Hashable {
     }
 }
 
-// MARK: - Wallpaper Engine 文案本地化
+// MARK: - Localization
 
-// Wallpaper Engine 的内置属性 / 分组标签常写成本地化 key（如
-// `ui_editor_properties_opacity`），词表在 WE 主程序内部，工坊资源里没有。
-// 这里内置一份常用 key → 中文 的映射；未命中时不再原样显示 `ui_` 乱码，
-// 而是剥掉已知前缀、下划线转空格、单词首字母大写，回退成可读英文标签。
-// MARK: - Wallpaper Engine 文案本地化
-
-// Wallpaper Engine 的属性 / 分组 / 选项标签常写成本地化 key（如
-// `ui_editor_properties_opacity`）。这里加载官方词表 `ui_zh-chs.json`（随 app 打包，
-// 3000+ 条），把 key 解析成简体中文；命中不了的 `ui_` key 回退成可读文本，其余
-// （作者自定义文本 / HTML）原样返回。
+// Resolves WE `ui_*` label keys via the bundled official ui_zh-chs.json.
+// Unmatched ui_ keys degrade to readable text; everything else is returned as-is.
 enum WELocalization {
-    // 官方词表，懒加载一次。
     private static let table: [String: String] = {
         guard let url = Bundle.main.url(forResource: "ui_zh-chs", withExtension: "json"),
               let data = try? Data(contentsOf: url),
@@ -205,13 +196,11 @@ enum WELocalization {
     static func resolve(_ raw: String) -> String {
         let key = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if key.isEmpty { return raw }
-        // 非本地化 key（作者自定义文本、HTML 等）原样返回。
         guard key.hasPrefix("ui_") else { return raw }
         if let mapped = table[key] { return mapped }
         return humanize(key)
     }
 
-    // 已知前缀，命中不了词表时剥离并转成可读文本。
     private static let prefixes: [String] = [
         "ui_editor_script_snippet_",
         "ui_editor_properties_",
@@ -342,9 +331,8 @@ struct WEProject: Codable, Equatable, Hashable {
 
     var normalizedType: WallpaperKind { WallpaperKind(rawType: type) }
 
-    // 作者信息：WE 本地 project.json 通常没有 author 字段，作者名常写进标题
-    // （形如 `[作者名]…`）或简介（`作者：X` / `by X`）。这里尽力提取，取不到
-    // 时返回 nil，由 UI 决定回退文案（而不是一律显示“未知作者”）。
+    // WE project.json rarely has an author field; derive it from the title
+    // (`[name]…`) or description (`作者：X` / `by X`). nil when nothing matches.
     var resolvedAuthor: String? {
         if let a = author?.trimmingCharacters(in: .whitespacesAndNewlines), !a.isEmpty {
             return a
@@ -357,7 +345,6 @@ struct WEProject: Codable, Equatable, Hashable {
     }
 
     private static func extractBracketAuthor(_ s: String) -> String? {
-        // 匹配开头的 [作者] 或 【作者】。
         let pattern = "^\\s*[\\[【]([^\\]】]{1,40})[\\]】]"
         guard let r = s.range(of: pattern, options: .regularExpression) else { return nil }
         let inside = s[r].dropFirst().dropLast().trimmingCharacters(in: .whitespaces)
