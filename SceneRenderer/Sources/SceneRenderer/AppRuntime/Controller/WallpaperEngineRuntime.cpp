@@ -2,6 +2,8 @@ module;
 
 #include <rstd/macro.hpp>
 
+#include <ctime>
+
 module sr.scene_wallpaper;
 import sr.types;
 import sr.utils;
@@ -196,6 +198,27 @@ bool ParseFloatList(std::string_view s, std::vector<float>& out) {
         }
     }
     return ! out.empty();
+}
+
+// Local wall-clock time of day as a 0..1 fraction (0 = midnight, 0.5 = noon).
+// Wallpaper Engine's `engine.timeOfDay` is exactly this: scripts multiply by
+// 24 to recover the hour. Uses the host's local timezone via localtime so
+// day/night scenes track the user's actual clock.
+float LocalTimeOfDay() {
+    const std::time_t now = std::time(nullptr);
+    std::tm           tm_local {};
+#if defined(_WIN32)
+    localtime_s(&tm_local, &now);
+#else
+    localtime_r(&now, &tm_local);
+#endif
+    const float seconds = static_cast<float>(tm_local.tm_hour) * 3600.0f +
+                          static_cast<float>(tm_local.tm_min) * 60.0f +
+                          static_cast<float>(tm_local.tm_sec);
+    float frac = seconds / 86400.0f;
+    if (! std::isfinite(frac) || frac < 0.0f) frac = 0.0f;
+    if (frac > 1.0f) frac = 1.0f;
+    return frac;
 }
 
 // Coerce a project.json property entry into a ShaderValue. Returns ok=false
@@ -952,6 +975,7 @@ void SceneRenderController::on(RenderDraw&&) {
             fi.canvas_h  = static_cast<float>(m_scene->ortho[1]);
             fi.screen_w  = fi.canvas_w;
             fi.screen_h  = fi.canvas_h;
+            fi.time_of_day = LocalTimeOfDay();
             {
                 auto pos    = m_mouse_pos.load();
                 fi.cursor_x = pos[0];
