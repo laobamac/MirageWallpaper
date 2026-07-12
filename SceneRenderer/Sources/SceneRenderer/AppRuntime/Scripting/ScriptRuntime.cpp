@@ -433,6 +433,11 @@ struct FieldScript::Impl {
     // Per-script cursor-inside-bbox state used to edge-detect
     // cursorEnter / cursorLeave between frames.
     bool cursor_inside { false };
+    // Buttons whose press landed on this node. While a button is captured the
+    // node keeps receiving cursorMove / cursorUp even after the cursor leaves
+    // its bbox, so a drag survives fast pointer motion and release-outside —
+    // matching Wallpaper Engine's pointer-capture behaviour.
+    uint32_t captured_buttons { 0 };
     // Pre-spawned SceneNode clones available to thisScene.createLayer.
     // Populated by WireFieldScripts for audio-bar style scripts; popped
     // from the front each createLayer call.
@@ -2634,26 +2639,30 @@ void JsRuntime::TickAll() {
     for (auto& fs : m_impl->scripts) {
         auto* I = fs->m_impl.get();
         if (! I->alive || ! I->node) continue;
-        const bool now_inside = in_window && HitTestNode(I->node, cursor);
+        const bool over_node   = in_window && HitTestNode(I->node, cursor);
+        // Captured buttons keep the node "engaged" for move/up even when the
+        // cursor has moved off its bbox mid-drag.
+        const bool now_inside  = over_node || I->captured_buttons != 0;
         BindThisLayer(
             ctx, JS_IsUndefined(I->wrapped_layer) ? m_impl->host.default_layer : I->wrapped_layer);
         m_impl->host.active_field_script = fs.get();
-        if (now_inside != I->cursor_inside) {
+        if (over_node != I->cursor_inside) {
             InvokeEventCallback(ctx,
                                 I->module_ns,
-                                now_inside ? "cursorEnter" : "cursorLeave",
+                                over_node ? "cursorEnter" : "cursorLeave",
                                 ensure_ev(-1),
                                 m_impl.get(),
                                 I->sha);
-            I->cursor_inside = now_inside;
+            I->cursor_inside = over_node;
         }
         if (now_inside) {
             InvokeEventCallback(
                 ctx, I->module_ns, "cursorMove", ensure_ev(-1), m_impl.get(), I->sha);
         }
-        if (btn_pressed && now_inside) {
+        if (btn_pressed && over_node) {
             for (int b = 0; b < 3; ++b) {
                 if (btn_pressed & (1u << b)) {
+                    I->captured_buttons |= (1u << b);
                     InvokeEventCallback(
                         ctx, I->module_ns, "cursorDown", ensure_ev(b), m_impl.get(), I->sha);
                     InvokeEventCallback(
@@ -2661,13 +2670,18 @@ void JsRuntime::TickAll() {
                 }
             }
         }
-        if (btn_release && now_inside) {
+        // Release fires for any button captured by this node, regardless of
+        // whether the cursor is still over it — so a drag released off-target
+        // still ends.
+        if (btn_release) {
+            const uint32_t ending = btn_release & I->captured_buttons;
             for (int b = 0; b < 3; ++b) {
-                if (btn_release & (1u << b)) {
+                if (ending & (1u << b)) {
                     InvokeEventCallback(
                         ctx, I->module_ns, "cursorUp", ensure_ev(b), m_impl.get(), I->sha);
                 }
             }
+            I->captured_buttons &= ~btn_release;
         }
     }
     if (! JS_IsUndefined(ev_shared)) JS_FreeValue(ctx, ev_shared);
