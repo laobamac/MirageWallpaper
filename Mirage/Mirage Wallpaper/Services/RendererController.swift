@@ -263,6 +263,22 @@ final class RendererController {
             if !stderrStr.isEmpty {
                 NSLog("[Mirage] 渲染器 stderr:\n\(stderrStr)")
             }
+            // 捕获信号详情: 如果进程因信号退出，status 的高位包含信号编号
+            let signalNum = status & 0x7F
+            let coreDumped = (status & 0x80) != 0
+            if reason == .uncaughtSignal {
+                let sigName: String
+                switch signalNum {
+                case 4:  sigName = "SIGILL(4)"
+                case 6:  sigName = "SIGABRT(6)"
+                case 8:  sigName = "SIGFPE(8)"
+                case 10: sigName = "SIGBUS(10)"
+                case 11: sigName = "SIGSEGV(11)"
+                case 13: sigName = "SIGPIPE(13)"
+                default: sigName = "SIGNAL(\(signalNum))"
+                }
+                NSLog("[Mirage] 渲染器信号退出: \(sigName) core=\(coreDumped) 屏幕=\(screenIndex)")
+            }
             NSLog("[Mirage] 渲染器退出 (屏幕=\(screenIndex), 状态=\(status), 原因=\(reason.rawValue))")
             self.queue.async {
                 if let current = self.running[screenIndex], current === handle {
