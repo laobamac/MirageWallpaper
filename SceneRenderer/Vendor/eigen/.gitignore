@@ -8,8 +8,8 @@ save
 *.old
 *.gmo
 *.qm
-core
-core.*
+/core
+/core.*
 *.bak
 *~
 *build*
