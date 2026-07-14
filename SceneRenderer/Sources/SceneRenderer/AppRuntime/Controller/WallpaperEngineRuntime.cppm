@@ -97,6 +97,10 @@ public:
 
     bool waitVulkanInited(uint32_t timeout_ms);
 
+    // Returns true once the render controller has received and stored a scene
+    // (i.e. loadScene → RenderSetScene round-trip is complete).
+    bool sceneReady() const;
+
     VkInstance       vkInstance() const;
     VkPhysicalDevice vkPhysicalDevice() const;
     VkDevice         vkDevice() const;
