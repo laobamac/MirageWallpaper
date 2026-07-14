@@ -7,7 +7,10 @@
 #include <charconv>
 #include <chrono>
 #include <cmath>
+#include <csignal>
 #include <cstdlib>
+#include <cstring>
+#include <execinfo.h>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -23,6 +26,38 @@ import rstd.cppstd;
 import rstd.log;
 import sr.scene_wallpaper;
 import sr.utils;
+
+// Crash handler: print backtrace on fatal signals
+namespace {
+void CrashHandler(int sig) {
+    const char* name = "UNKNOWN";
+    switch (sig) {
+    case SIGSEGV: name = "SIGSEGV"; break;
+    case SIGABRT: name = "SIGABRT"; break;
+    case SIGBUS:  name = "SIGBUS";  break;
+    case SIGILL:  name = "SIGILL";  break;
+    case SIGFPE:  name = "SIGFPE";  break;
+    }
+    std::cerr << "[SceneWallpaper] CRASH: signal " << sig << " (" << name << ")" << std::endl;
+    void* callstack[64];
+    int frames = backtrace(callstack, 64);
+    char** symbols = backtrace_symbols(callstack, frames);
+    std::cerr << "[SceneWallpaper] Backtrace (" << frames << " frames):" << std::endl;
+    for (int i = 0; i < frames; ++i) {
+        std::cerr << "  " << i << ": " << (symbols[i] ? symbols[i] : "???") << std::endl;
+    }
+    free(symbols);
+    std::cerr << std::flush;
+    std::_Exit(128 + sig);
+}
+void InstallCrashHandler() {
+    signal(SIGSEGV, CrashHandler);
+    signal(SIGABRT, CrashHandler);
+    signal(SIGBUS,  CrashHandler);
+    signal(SIGILL,  CrashHandler);
+    signal(SIGFPE,  CrashHandler);
+}
+} // namespace
 
 extern "C" void SceneRendererSetLiveMetalFrameCallback(
     void (*cb)(void*, std::uint32_t, std::uint32_t, void*), void* userdata);
@@ -275,6 +310,8 @@ int main(int argc, char** argv) {
     rstd::log::set_logger(logger);
     rstd::log::set_max_level(logger.filter());
 
+    InstallCrashHandler();
+
     Options options;
     if (! ParseArgs(argc, argv, options)) return 1;
 
@@ -363,6 +400,29 @@ int main(int argc, char** argv) {
     // Live control channel: Mirage.app pipes JSON commands on stdin to drive
     // property edits / pause / volume without restarting. EOF (parent died)
     // stops the run loop so the wallpaper never outlives its owner.
+    //
+    // Wait for Vulkan init AND scene load to finish before starting the stdin
+    // control thread — otherwise a race between RenderInit/LoadScene message
+    // dispatch and a premature stdin EOF (triggering NSApp stop / cleanup) can
+    // cause "Sender::acquire on null" panics in the mpsc channel layer.
+    if (! wallpaper.waitVulkanInited(5000)) {
+        std::cerr << "Vulkan initialization timed out\n";
+        SceneRendererMacDesktopDestroy(state.desktop);
+        return 1;
+    }
+    {
+        using clock   = std::chrono::steady_clock;
+        auto deadline = clock::now() + std::chrono::seconds(5);
+        while (clock::now() < deadline) {
+            if (wallpaper.sceneReady()) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        if (! wallpaper.sceneReady()) {
+            std::cerr << "Scene load timed out\n";
+            SceneRendererMacDesktopDestroy(state.desktop);
+            return 1;
+        }
+    }
     std::optional<mirage::SceneControlChannel> control;
     if (options.control_stdin) {
         void* desktop = state.desktop;

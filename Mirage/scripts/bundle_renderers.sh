@@ -4,17 +4,23 @@ set -euo pipefail
 APP="${1:?用法: bundle_renderers.sh <Mirage.app> [SimpleRenderer根]}"
 ROOT="${2:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 
+# 共享的 CMake preset 命名约定。
+source "$ROOT/scripts/preset.sh"
+
 CONTENTS="$APP/Contents"
 FRAMEWORKS="$CONTENTS/Frameworks"
 RESOURCES="$CONTENTS/Resources"
 RENDERERS="$RESOURCES/Renderers"
 VK_ICD_DIR="$RENDERERS/vulkan/icd.d"
 
-SCENE_BIN="$ROOT/SceneRenderer/build/macos-clang-release/Tools/SceneWallpaper/SceneWallpaper"
+SCENE_PRESET="$(scene_preset release)"
+SCENE_BIN="$ROOT/SceneRenderer/build/$SCENE_PRESET/Tools/SceneWallpaper/SceneWallpaper"
 WEB_BIN="$ROOT/WebRenderer/build/release/Tools/WebWallpaper/WebWallpaper"
 VIDEO_BIN="$ROOT/VideoRenderer/build/release/Tools/VideoWallpaper/VideoWallpaper"
 ASSETS_DIR="$ROOT/assets"
-MOLTENVK="/usr/local/opt/molten-vk/lib/libMoltenVK.dylib"
+
+BREW_PREFIX="$(brew --prefix)"
+MOLTENVK="$BREW_PREFIX/opt/molten-vk/lib/libMoltenVK.dylib"
 
 echo "[bundle] App:  $APP"
 echo "[bundle] Root: $ROOT"

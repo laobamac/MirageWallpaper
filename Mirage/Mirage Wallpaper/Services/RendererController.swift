@@ -25,6 +25,8 @@ final class RendererProcess {
     let wallpaper: WEWallpaper
     let screenIndex: Int
     private(set) var isTerminated = false
+    /// Temporary files associated with this renderer process, cleaned up on stop().
+    var tempFiles: [URL] = []
 
     init(process: Process, stdinPipe: Pipe, wallpaper: WEWallpaper, screenIndex: Int) {
         self.process = process
@@ -35,13 +37,18 @@ final class RendererProcess {
 
     func send(_ command: [String: Any]) {
         guard !isTerminated, process.isRunning else { return }
-        guard let data = try? JSONSerialization.data(withJSONObject: command, options: []) else { return }
+        guard let data = try? JSONSerialization.data(withJSONObject: command, options: []) else {
+            NSLog("[Mirage] 无法序列化控制指令: \(command)")
+            return
+        }
         var line = data
         line.append(0x0A)
         let handle = stdinPipe.fileHandleForWriting
         do {
             try handle.write(contentsOf: line)
-        } catch { }
+        } catch {
+            NSLog("[Mirage] 发送控制指令失败 (屏幕=\(screenIndex)): \(error.localizedDescription)")
+        }
     }
 
     func stop() {
@@ -50,6 +57,11 @@ final class RendererProcess {
         send(["cmd": "quit"])
         let handle = stdinPipe.fileHandleForWriting
         try? handle.close()
+        // Remove temporary files associated with this renderer session.
+        for url in tempFiles {
+            try? FileManager.default.removeItem(at: url)
+        }
+        tempFiles.removeAll()
         let proc = process
         DispatchQueue.global().asyncAfter(deadline: .now() + 1.5) {
             if proc.isRunning { proc.terminate() }
@@ -70,14 +82,14 @@ struct RenderOptions {
     var userProperties: [String: WEProjectProperty] = [:]
 }
 
-// 子进程通过 stdin 接收 JSON 行控制指令。
+// Subprocess control: the renderer receives JSON-line commands via stdin.
 final class RendererController {
     private var running: [Int: RendererProcess] = [:]
     private let queue = DispatchQueue(label: "cn.laobamac.Mirage.renderer")
 
     var onProcessExit: ((Int, Bool) -> Void)?
 
-    // MARK: 二进制与资源定位
+    // MARK: Binary and resource resolution
 
     private var resourcesDir: URL {
         Bundle.main.resourceURL ?? Bundle.main.bundleURL
@@ -87,13 +99,52 @@ final class RendererController {
         resourcesDir.appending(path: "Renderers")
     }
 
+    // MARK: Architecture and build preset mapping
+
+    /// CPU architecture of the host: `"arm64"` or `"x86_64"`.
+    /// Used at development time to locate the correct CMake build output directory.
+    private static var hostArch: String {
+        var info = utsname()
+        guard uname(&info) == 0 else { return "x86_64" }
+        let machine = withUnsafePointer(to: &info.machine) {
+            $0.withMemoryRebound(to: CChar.self, capacity: Int(_SYS_NAMELEN)) { String(cString: $0) }
+        }
+        return machine
+    }
+
+    /// CMake preset naming convention: `macos-{arch}-clang-{config}`.
+    private static func sceneRendererPreset(config: String = "release") -> String {
+        "macos-\(hostArch)-clang-\(config)"
+    }
+
+    /// Homebrew prefix paths, ordered by current architecture preference.
+    private static var brewPrefixes: [URL] {
+        hostArch == "arm64"
+            ? [URL(fileURLWithPath: "/opt/homebrew"), URL(fileURLWithPath: "/usr/local")]
+            : [URL(fileURLWithPath: "/usr/local"), URL(fileURLWithPath: "/opt/homebrew")]
+    }
+
+    // Derive the project root from this source file's compile-time path.
+    // Used as a dev fallback to locate build artifacts without hardcoding
+    // an absolute directory.
+    private static let projectRoot: URL = {
+        // #filePath is a compile-time constant pointing to this file:
+        //   Mirage/Mirage Wallpaper/Services/RendererController.swift
+        let srcURL = URL(fileURLWithPath: #filePath)
+        // Walk up: .../Services → .../Mirage Wallpaper → .../Mirage → repo root
+        return srcURL
+            .deletingLastPathComponent() // RendererController.swift → Services
+            .deletingLastPathComponent() // Services → Mirage Wallpaper
+            .deletingLastPathComponent() // Mirage Wallpaper → Mirage
+            .deletingLastPathComponent() // Mirage → repo root
+    }()
+
     private static let devFallback: [WallpaperKind: URL] = {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let root = home.appending(path: "Desktop/SimpleRenderer")
+        let preset = sceneRendererPreset()
         return [
-            .scene: root.appending(path: "SceneRenderer/build/macos-clang-release/Tools/SceneWallpaper/SceneWallpaper"),
-            .web:   root.appending(path: "WebRenderer/build/release/Tools/WebWallpaper/WebWallpaper"),
-            .video: root.appending(path: "VideoRenderer/build/release/Tools/VideoWallpaper/VideoWallpaper"),
+            .scene: projectRoot.appending(path: "SceneRenderer/build/\(preset)/Tools/SceneWallpaper/SceneWallpaper"),
+            .web:   projectRoot.appending(path: "WebRenderer/build/release/Tools/WebWallpaper/WebWallpaper"),
+            .video: projectRoot.appending(path: "VideoRenderer/build/release/Tools/VideoWallpaper/VideoWallpaper"),
         ]
     }()
 
@@ -115,18 +166,21 @@ final class RendererController {
     private var sceneAssetsDir: URL {
         let bundled = resourcesDir.appending(path: "assets")
         if FileManager.default.fileExists(atPath: bundled.path) { return bundled }
-        return FileManager.default.homeDirectoryForCurrentUser
-            .appending(path: "Desktop/SimpleRenderer/assets")
+        return Self.projectRoot.appending(path: "assets")
     }
 
     private var moltenVKICD: URL? {
         let bundled = renderersDir.appending(path: "vulkan/icd.d/MoltenVK_icd.json")
         if FileManager.default.fileExists(atPath: bundled.path) { return bundled }
-        let brew = URL(fileURLWithPath: "/usr/local/etc/vulkan/icd.d/MoltenVK_icd.json")
-        return FileManager.default.fileExists(atPath: brew.path) ? brew : nil
+        let icdSuffix = "etc/vulkan/icd.d/MoltenVK_icd.json"
+        for prefix in Self.brewPrefixes {
+            let path = prefix.appending(path: icdSuffix)
+            if FileManager.default.fileExists(atPath: path.path) { return path }
+        }
+        return nil
     }
 
-    // MARK: 启动 / 切换 / 停止
+    // MARK: Launch / switch / stop
 
     @discardableResult
     func render(_ wallpaper: WEWallpaper, on screenIndex: Int = 0, options: RenderOptions) -> Bool {
@@ -147,14 +201,14 @@ final class RendererController {
 
         switch wallpaper.kind {
         case .scene:
-            args += [sceneAssetsDir.path, wallpaper.resolvedEntryURL.path]
+            let assetsPath = sceneAssetsDir.path
+            let pkgPath = wallpaper.resolvedEntryURL.path
+            NSLog("[Mirage] 场景参数: assets=\(assetsPath) exists=\(FileManager.default.fileExists(atPath: assetsPath)) pkg=\(pkgPath) exists=\(FileManager.default.fileExists(atPath: pkgPath))")
+            args += [assetsPath, pkgPath]
             args += ["--fps", String(options.fps)]
             args += ["--screen", String(screenIndex)]
             args += ["--control-stdin"]
             if options.muted { args += ["--muted"] }
-            if let propsFile = writeUserPropertiesFile(options.userProperties, for: wallpaper) {
-                args += ["--user-properties", propsFile.path]
-            }
             if let icd = moltenVKICD {
                 env["VK_ICD_FILENAMES"] = icd.path
                 env["VK_DRIVER_FILES"] = icd.path
@@ -192,17 +246,48 @@ final class RendererController {
         proc.environment = env
 
         let stdinPipe = Pipe()
+        let stderrPipe = Pipe()
         proc.standardInput = stdinPipe
         proc.standardOutput = FileHandle.standardOutput
-        proc.standardError = FileHandle.standardError
+        proc.standardError = stderrPipe
 
         let handle = RendererProcess(process: proc, stdinPipe: stdinPipe, wallpaper: wallpaper, screenIndex: screenIndex)
 
+        // Register the temp props file for cleanup when the process stops.
+        if let propsFile = writeUserPropertiesFile(options.userProperties, for: wallpaper) {
+            args += ["--user-properties", propsFile.path]
+            handle.tempFiles.append(propsFile)
+        }
+
         proc.terminationHandler = { [weak self] p in
             guard let self else { return }
+            let status = p.terminationStatus
+            let reason = p.terminationReason
+            let stderrData = try? stderrPipe.fileHandleForReading.readToEnd()
+            let stderrStr = stderrData.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+            if !stderrStr.isEmpty {
+                NSLog("[Mirage] 渲染器 stderr:\n\(stderrStr)")
+            }
+            // Decode the signal from the exit status: the low 7 bits hold the signal number.
+            let signalNum = status & 0x7F
+            let coreDumped = (status & 0x80) != 0
+            if reason == .uncaughtSignal {
+                let sigName: String
+                switch signalNum {
+                case 4:  sigName = "SIGILL(4)"
+                case 6:  sigName = "SIGABRT(6)"
+                case 8:  sigName = "SIGFPE(8)"
+                case 10: sigName = "SIGBUS(10)"
+                case 11: sigName = "SIGSEGV(11)"
+                case 13: sigName = "SIGPIPE(13)"
+                default: sigName = "SIGNAL(\(signalNum))"
+                }
+                NSLog("[Mirage] 渲染器信号退出: \(sigName) core=\(coreDumped) 屏幕=\(screenIndex)")
+            }
+            NSLog("[Mirage] 渲染器退出 (屏幕=\(screenIndex), 状态=\(status), 原因=\(reason.rawValue))")
             self.queue.async {
                 if let current = self.running[screenIndex], current === handle {
-                    let abnormal = p.terminationStatus != 0 && !handle.isTerminated
+                    let abnormal = status != 0 && !handle.isTerminated
                     self.running[screenIndex] = nil
                     DispatchQueue.main.async { self.onProcessExit?(screenIndex, abnormal) }
                 }
@@ -258,7 +343,7 @@ final class RendererController {
         }
     }
 
-    // MARK: 实时控制（广播到所有屏，或指定屏）
+    // MARK: Live control (broadcast or per-screen)
 
     private func forEach(_ screenIndex: Int?, _ body: (RendererProcess) -> Void) {
         queue.sync {
@@ -304,7 +389,7 @@ final class RendererController {
         }
     }
 
-    // MARK: 属性 → 指令 / 文件
+    // MARK: Property → command / file
 
     private static func propertyCommand(key: String, property: WEProjectProperty) -> [String: Any] {
         var cmd: [String: Any] = ["cmd": "setProperty", "key": key]
@@ -317,7 +402,8 @@ final class RendererController {
         case .slider:
             cmd["value"] = property.value.doubleValue
         case .scenetexture, .file:
-            // 贴图 / 文件替换类：渲染器按 scenetexture 语义实时换图。
+            // Texture / file replacement: the renderer swaps the texture at runtime
+            // using the "scenetexture" wire type.
             cmd["type"] = "scenetexture"
             cmd["value"] = property.value.stringValue
         case .combo, .textinput, .text, .group, .directory, .usershortcut, .unknown:

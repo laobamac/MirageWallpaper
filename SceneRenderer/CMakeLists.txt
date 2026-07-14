@@ -19,8 +19,12 @@ if(APPLE)
     set(WAVSEN_AUDIO_BACKEND "coreaudio" CACHE STRING "Core Audio backend on macOS" FORCE)
     # MoltenVK as the Vulkan ICD. Hint Vulkan::Vulkan to the brew loader.
     if(NOT DEFINED ENV{VULKAN_SDK} AND NOT DEFINED CMAKE_PREFIX_PATH)
-        # Brew default install prefix on Intel Macs.
-        list(APPEND CMAKE_PREFIX_PATH /usr/local /opt/homebrew)
+        # Prefer the Homebrew prefix matching the host architecture.
+        if(CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
+            list(APPEND CMAKE_PREFIX_PATH /opt/homebrew /usr/local)
+        else()
+            list(APPEND CMAKE_PREFIX_PATH /usr/local /opt/homebrew)
+        endif()
     endif()
 endif()
 

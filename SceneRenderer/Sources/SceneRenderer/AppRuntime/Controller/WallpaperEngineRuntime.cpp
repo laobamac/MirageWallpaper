@@ -936,6 +936,7 @@ public:
     vulkan::VulkanRender* render() const { return m_render.get(); }
 
     bool renderInited() const { return m_render->inited(); }
+    bool sceneReady() const { return m_scene != nullptr; }
 
     void setMousePos(double x, double y) { m_mouse_pos.store(std::array { (float)x, (float)y }); }
 
@@ -1767,6 +1768,10 @@ bool SceneWallpaper::waitVulkanInited(uint32_t timeout_ms) {
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
     return rh->renderInited();
+}
+
+bool SceneWallpaper::sceneReady() const {
+    return m_runtime->renderController()->sceneReady();
 }
 
 VkInstance SceneWallpaper::vkInstance() const {

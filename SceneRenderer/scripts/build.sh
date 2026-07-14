@@ -28,6 +28,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+ROOT_DIR="$(cd "$PROJECT_DIR/.." && pwd)"
+
+# Shared CMake preset naming convention.
+source "$ROOT_DIR/scripts/preset.sh"
+
 cd "$PROJECT_DIR"
 
 # --- terminal colors (disabled when not a TTY) ---
@@ -67,16 +72,19 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help) usage; exit 0 ;;
         configure|build|all|clean) ACTION="$1"; shift ;;
-        release|debug) POSITIONAL_PRESET="macos-clang-$1"; shift ;;
+        release|debug)
+            POSITIONAL_PRESET="$(scene_preset "$1")"
+            shift ;;
         *) die "unknown argument: $1 (try --help)" ;;
     esac
 done
 
 # --- preset resolution ---
-PRESET="${BUILD_PRESET:-${POSITIONAL_PRESET:-macos-clang-release}}"
+DEFAULT_PRESET="$(scene_preset release)"
+PRESET="${BUILD_PRESET:-${POSITIONAL_PRESET:-$DEFAULT_PRESET}}"
 case "$PRESET" in
-    macos-clang-release|macos-clang-debug) ;;
-    *) die "unknown preset: $PRESET (expected macos-clang-release or macos-clang-debug)" ;;
+    macos-clang-release|macos-clang-debug|macos-arm64-clang-release|macos-arm64-clang-debug) ;;
+    *) die "unknown preset: $PRESET (expected macos-clang-release, macos-clang-debug, macos-arm64-clang-release, or macos-arm64-clang-debug)" ;;
 esac
 BUILD_DIR="$PROJECT_DIR/build/$PRESET"
 

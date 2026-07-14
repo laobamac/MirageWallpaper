@@ -16,8 +16,8 @@
     },
     {
       "name": "macos-clang-release",
-      "displayName": "macOS · Homebrew Clang · Release",
-      "description": "SceneRenderer engine plus standalone viewer and macOS wallpaper tools.",
+      "displayName": "macOS · Homebrew Clang · Release (x86_64)",
+      "description": "SceneRenderer engine plus standalone viewer and macOS wallpaper tools (Intel).",
       "inherits": "_clang-base",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE":   "Release",
@@ -33,15 +33,43 @@
     },
     {
       "name": "macos-clang-debug",
-      "displayName": "macOS · Homebrew Clang · Debug (SceneRenderer)",
+      "displayName": "macOS · Homebrew Clang · Debug (x86_64)",
       "inherits": "macos-clang-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "macos-arm64-clang-release",
+      "displayName": "macOS · Homebrew Clang · Release (arm64)",
+      "description": "SceneRenderer engine plus standalone viewer and macOS wallpaper tools (Apple Silicon).",
+      "inherits": "_clang-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE":   "Release",
+        "CMAKE_C_COMPILER":   "/opt/homebrew/opt/llvm/bin/clang",
+        "CMAKE_CXX_COMPILER": "/opt/homebrew/opt/llvm/bin/clang++",
+        "CMAKE_LINKER_TYPE":  "DEFAULT",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "14.2",
+        "CMAKE_OSX_ARCHITECTURES": "arm64",
+        "CMAKE_PREFIX_PATH":  "/opt/homebrew;/opt/homebrew/opt/llvm;/opt/homebrew/opt/molten-vk;/opt/homebrew/opt/vulkan-loader;/opt/homebrew/opt/vulkan-headers;/opt/homebrew/opt/ffmpeg;/opt/homebrew/opt/glfw;/opt/homebrew/opt/freetype;/opt/homebrew/opt/lz4"
+      },
+      "environment": {
+        "PKG_CONFIG_PATH": "/opt/homebrew/lib/pkgconfig:/opt/homebrew/share/pkgconfig:/opt/homebrew/opt/freetype/lib/pkgconfig:/opt/homebrew/opt/glfw/lib/pkgconfig:/opt/homebrew/opt/vulkan-loader/lib/pkgconfig:/opt/homebrew/opt/ffmpeg/lib/pkgconfig:/opt/homebrew/opt/llvm/lib/pkgconfig"
+      }
+    },
+    {
+      "name": "macos-arm64-clang-debug",
+      "displayName": "macOS · Homebrew Clang · Debug (arm64)",
+      "inherits": "macos-arm64-clang-release",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug"
       }
     }
   ],
   "buildPresets": [
-    { "name": "macos-clang-release",    "configurePreset": "macos-clang-release" },
-    { "name": "macos-clang-debug",      "configurePreset": "macos-clang-debug" }
+    { "name": "macos-clang-release",       "configurePreset": "macos-clang-release" },
+    { "name": "macos-clang-debug",         "configurePreset": "macos-clang-debug" },
+    { "name": "macos-arm64-clang-release", "configurePreset": "macos-arm64-clang-release" },
+    { "name": "macos-arm64-clang-debug",   "configurePreset": "macos-arm64-clang-debug" }
   ]
 }
