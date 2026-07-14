@@ -1,0 +1,96 @@
+name: Build macOS App
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and package
+    runs-on: macos-15-intel
+    timeout-minutes: 180
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Validate build secret
+        shell: bash
+        env:
+          MIRAGE_STEAM_WEB_API_KEY: ${{ secrets.MIRAGE_STEAM_WEB_API_KEY }}
+        run: |
+          if [[ ! "$MIRAGE_STEAM_WEB_API_KEY" =~ ^[A-Fa-f0-9]{32}$ ]]; then
+            echo "::error::Repository secret MIRAGE_STEAM_WEB_API_KEY is missing or invalid."
+            exit 1
+          fi
+
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          brew install cmake ninja pkg-config llvm molten-vk vulkan-loader \
+            vulkan-headers glfw freetype fontconfig lz4 ffmpeg
+
+      - name: Build renderers
+        shell: bash
+        run: |
+          ./SceneRenderer/scripts/build.sh release
+          ./WebRenderer/scripts/build.sh release
+          ./VideoRenderer/scripts/build.sh release
+
+      - name: Build app bundle
+        shell: bash
+        env:
+          MIRAGE_STEAM_WEB_API_KEY: ${{ secrets.MIRAGE_STEAM_WEB_API_KEY }}
+        run: ./Mirage/scripts/build.sh Release
+
+      - name: Verify app bundle
+        shell: bash
+        run: |
+          test -d "Mirage/dist/Mirage.app"
+          test -x "Mirage/dist/Mirage.app/Contents/Resources/Renderers/SceneWallpaper"
+          test -x "Mirage/dist/Mirage.app/Contents/Resources/Renderers/WebWallpaper"
+          test -x "Mirage/dist/Mirage.app/Contents/Resources/Renderers/VideoWallpaper"
+          codesign --verify --deep --strict "Mirage/dist/Mirage.app"
+          built_in_key="$(/usr/libexec/PlistBuddy -c 'Print :MirageSteamWebAPIKey' \
+            "Mirage/dist/Mirage.app/Contents/Info.plist")"
+          [[ "$built_in_key" =~ ^[A-Fa-f0-9]{32}$ ]]
+
+      - name: Package app
+        id: package
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            version="$GITHUB_REF_NAME"
+          else
+            version="${GITHUB_SHA:0:7}"
+          fi
+          package="Mirage-${version}-macOS-x86_64.zip"
+          ditto -c -k --sequesterRsrc --keepParent \
+            "Mirage/dist/Mirage.app" "Mirage/dist/$package"
+          shasum -a 256 "Mirage/dist/$package" > "Mirage/dist/$package.sha256"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "package=$package" >> "$GITHUB_OUTPUT"
+
+      - name: Upload package
+        uses: actions/upload-artifact@v7
+        with:
+          name: Mirage-${{ steps.package.outputs.version }}-macOS-x86_64
+          path: |
+            Mirage/dist/${{ steps.package.outputs.package }}
+            Mirage/dist/${{ steps.package.outputs.package }}.sha256
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
