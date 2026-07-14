@@ -17,8 +17,9 @@ build
 .idea
 .cache
 cmake-build-debug
-build-*
+/build-*
 /dist
+/Mirage/dist/
 /workshop
 /rstd
 /Vendor/rstd
@@ -28,6 +29,6 @@ build-*
 .DS_Store
 .claude
 .codex
-SteamWebAPI.swift
+.secrets/
 xcuserdata
 .reasonix

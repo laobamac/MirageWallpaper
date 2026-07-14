@@ -8,11 +8,39 @@ ROOT="$(cd "$PROJ_DIR/.." && pwd)"
 BUILD_DIR="$PROJ_DIR/build"
 PROJECT="$PROJ_DIR/Mirage Wallpaper.xcodeproj"
 SCHEME="Mirage Wallpaper"
+TARGET_ARCH="${MIRAGE_ARCH:-x86_64}"
+STEAM_API_KEY="${MIRAGE_STEAM_WEB_API_KEY:-}"
+LOCAL_SECRET="$ROOT/.secrets/steam_web_api_key"
+TEMP_XCCONFIG=""
+
+if [ -z "$STEAM_API_KEY" ] && [ -f "$LOCAL_SECRET" ]; then
+    IFS= read -r STEAM_API_KEY < "$LOCAL_SECRET"
+fi
+
+XCCONFIG_ARGS=()
+if [ -n "$STEAM_API_KEY" ]; then
+    [[ "$STEAM_API_KEY" =~ ^[A-Fa-f0-9]{32}$ ]] || {
+        echo "[build] Steam Web API Key 必须是 32 位十六进制字符" >&2
+        exit 1
+    }
+    TEMP_XCCONFIG="$(mktemp -t mirage-secrets)"
+    chmod 600 "$TEMP_XCCONFIG"
+    printf 'MIRAGE_STEAM_WEB_API_KEY = %s\n' "$STEAM_API_KEY" > "$TEMP_XCCONFIG"
+    XCCONFIG_ARGS=(-xcconfig "$TEMP_XCCONFIG")
+else
+    echo "[build] 未提供内置 Steam Web API Key；App 仍可构建，用户需在设置中填写自己的 Key" >&2
+fi
+
+cleanup() {
+    [ -z "$TEMP_XCCONFIG" ] || rm -f "$TEMP_XCCONFIG"
+}
+trap cleanup EXIT
 
 echo "[build] 编译 ($CONFIG)..."
-xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration "$CONFIG" \
+xcodebuild "${XCCONFIG_ARGS[@]}" -project "$PROJECT" -scheme "$SCHEME" -configuration "$CONFIG" \
     -destination 'platform=macOS' \
     -derivedDataPath "$BUILD_DIR/DD" \
+    ARCHS="$TARGET_ARCH" ONLY_ACTIVE_ARCH=YES \
     CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=YES \
     build | tail -3
 
