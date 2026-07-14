@@ -134,7 +134,7 @@ jobs:
             exit 1
           fi
 
-          # 删除同架构的旧 pre-release（保留其他架构的 pre-release）。
+          # Remove old pre-releases for the same architecture (keep others).
           while IFS=$'\t' read -r release_id old_release_tag; do
             [[ -z "$release_id" ]] && continue
             gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/$release_id"

@@ -1,15 +1,17 @@
 #!/bin/bash
-# 共享的 CMake preset 命名约定。
-# SceneRenderer 使用 `macos-{arch}-clang-{config}` 格式。
-# 本文件由 Mirage/scripts/build.sh、Mirage/scripts/bundle_renderers.sh
-# 和 SceneRenderer/scripts/build.sh 共同 source。
+# Shared CMake preset naming convention.
+# SceneRenderer uses `macos-{arch}-clang-{config}` format.
+# This file is sourced by:
+#   Mirage/scripts/build.sh
+#   Mirage/scripts/bundle_renderers.sh
+#   SceneRenderer/scripts/build.sh
 #
-# 使用方式：
-#   source "${SCRIPT_DIR}/../../scripts/preset.sh"   # 从 Mirage/scripts/ 下
-#   source "${SCRIPT_DIR}/../scripts/preset.sh"      # 从 SceneRenderer/scripts/ 下
+# Usage:
+#   source "${SCRIPT_DIR}/../../scripts/preset.sh"   # from Mirage/scripts/
+#   source "${SCRIPT_DIR}/../scripts/preset.sh"      # from SceneRenderer/scripts/
 #
-# 导出函数：
-#   scene_preset [config]   → 输出 "macos-arm64-clang-release" 或 "macos-clang-release"
+# Exported function:
+#   scene_preset [config]   → prints e.g. "macos-arm64-clang-release" or "macos-clang-release"
 
 scene_preset() {
     local config="${1:-release}"

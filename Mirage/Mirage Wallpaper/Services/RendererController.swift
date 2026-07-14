@@ -25,7 +25,7 @@ final class RendererProcess {
     let wallpaper: WEWallpaper
     let screenIndex: Int
     private(set) var isTerminated = false
-    /// 与本次渲染关联的临时文件，在 stop() 时清理。
+    /// Temporary files associated with this renderer process, cleaned up on stop().
     var tempFiles: [URL] = []
 
     init(process: Process, stdinPipe: Pipe, wallpaper: WEWallpaper, screenIndex: Int) {
@@ -57,7 +57,7 @@ final class RendererProcess {
         send(["cmd": "quit"])
         let handle = stdinPipe.fileHandleForWriting
         try? handle.close()
-        // 清理关联的临时文件。
+        // Remove temporary files associated with this renderer session.
         for url in tempFiles {
             try? FileManager.default.removeItem(at: url)
         }
@@ -82,14 +82,14 @@ struct RenderOptions {
     var userProperties: [String: WEProjectProperty] = [:]
 }
 
-// 子进程通过 stdin 接收 JSON 行控制指令。
+// Subprocess control: the renderer receives JSON-line commands via stdin.
 final class RendererController {
     private var running: [Int: RendererProcess] = [:]
     private let queue = DispatchQueue(label: "cn.laobamac.Mirage.renderer")
 
     var onProcessExit: ((Int, Bool) -> Void)?
 
-    // MARK: 二进制与资源定位
+    // MARK: Binary and resource resolution
 
     private var resourcesDir: URL {
         Bundle.main.resourceURL ?? Bundle.main.bundleURL
@@ -99,10 +99,10 @@ final class RendererController {
         resourcesDir.appending(path: "Renderers")
     }
 
-    // MARK: 架构与构建预设映射
+    // MARK: Architecture and build preset mapping
 
-    /// 当前主机 CPU 架构标签：`"arm64"` 或 `"x86_64"`。
-    /// 用于在开发模式下定位对应架构的 CMake 构建输出目录。
+    /// CPU architecture of the host: `"arm64"` or `"x86_64"`.
+    /// Used at development time to locate the correct CMake build output directory.
     private static var hostArch: String {
         var info = utsname()
         guard uname(&info) == 0 else { return "x86_64" }
@@ -112,29 +112,31 @@ final class RendererController {
         return machine
     }
 
-    /// CMake preset 命名约定：`macos-{arch}-clang-{config}`。
+    /// CMake preset naming convention: `macos-{arch}-clang-{config}`.
     private static func sceneRendererPreset(config: String = "release") -> String {
         "macos-\(hostArch)-clang-\(config)"
     }
 
-    /// Homebrew 前缀路径，按当前架构优先排序。
+    /// Homebrew prefix paths, ordered by current architecture preference.
     private static var brewPrefixes: [URL] {
         hostArch == "arm64"
             ? [URL(fileURLWithPath: "/opt/homebrew"), URL(fileURLWithPath: "/usr/local")]
             : [URL(fileURLWithPath: "/usr/local"), URL(fileURLWithPath: "/opt/homebrew")]
     }
 
-    // 编译时获取本文件的源码路径，用于推导项目根目录（开发回退用）
+    // Derive the project root from this source file's compile-time path.
+    // Used as a dev fallback to locate build artifacts without hardcoding
+    // an absolute directory.
     private static let projectRoot: URL = {
-        // #filePath 是编译时常量，指向 RendererController.swift 的源码路径
-        // Mirage/Mirage Wallpaper/Services/RendererController.swift
+        // #filePath is a compile-time constant pointing to this file:
+        //   Mirage/Mirage Wallpaper/Services/RendererController.swift
         let srcURL = URL(fileURLWithPath: #filePath)
-        // .../Services → .../Mirage Wallpaper → .../Mirage → 仓库根目录
+        // Walk up: .../Services → .../Mirage Wallpaper → .../Mirage → repo root
         return srcURL
             .deletingLastPathComponent() // RendererController.swift → Services
             .deletingLastPathComponent() // Services → Mirage Wallpaper
             .deletingLastPathComponent() // Mirage Wallpaper → Mirage
-            .deletingLastPathComponent() // Mirage → 仓库根目录
+            .deletingLastPathComponent() // Mirage → repo root
     }()
 
     private static let devFallback: [WallpaperKind: URL] = {
@@ -178,7 +180,7 @@ final class RendererController {
         return nil
     }
 
-    // MARK: 启动 / 切换 / 停止
+    // MARK: Launch / switch / stop
 
     @discardableResult
     func render(_ wallpaper: WEWallpaper, on screenIndex: Int = 0, options: RenderOptions) -> Bool {
@@ -248,7 +250,7 @@ final class RendererController {
 
         let handle = RendererProcess(process: proc, stdinPipe: stdinPipe, wallpaper: wallpaper, screenIndex: screenIndex)
 
-        // 注册临时文件以便在进程停止时清理。
+        // Register the temp props file for cleanup when the process stops.
         if let propsFile = writeUserPropertiesFile(options.userProperties, for: wallpaper) {
             args += ["--user-properties", propsFile.path]
             handle.tempFiles.append(propsFile)
@@ -263,7 +265,7 @@ final class RendererController {
             if !stderrStr.isEmpty {
                 NSLog("[Mirage] 渲染器 stderr:\n\(stderrStr)")
             }
-            // 捕获信号详情: 如果进程因信号退出，status 的高位包含信号编号
+            // Decode the signal from the exit status: the low 7 bits hold the signal number.
             let signalNum = status & 0x7F
             let coreDumped = (status & 0x80) != 0
             if reason == .uncaughtSignal {
@@ -330,7 +332,7 @@ final class RendererController {
         queue.sync { Array(running.keys).sorted() }
     }
 
-    // MARK: 实时控制（广播到所有屏，或指定屏）
+    // MARK: Live control (broadcast or per-screen)
 
     private func forEach(_ screenIndex: Int?, _ body: (RendererProcess) -> Void) {
         queue.sync {
@@ -376,7 +378,7 @@ final class RendererController {
         }
     }
 
-    // MARK: 属性 → 指令 / 文件
+    // MARK: Property → command / file
 
     private static func propertyCommand(key: String, property: WEProjectProperty) -> [String: Any] {
         var cmd: [String: Any] = ["cmd": "setProperty", "key": key]
@@ -389,7 +391,8 @@ final class RendererController {
         case .slider:
             cmd["value"] = property.value.doubleValue
         case .scenetexture, .file:
-            // 贴图 / 文件替换类：渲染器按 scenetexture 语义实时换图。
+            // Texture / file replacement: the renderer swaps the texture at runtime
+            // using the "scenetexture" wire type.
             cmd["type"] = "scenetexture"
             cmd["value"] = property.value.stringValue
         case .combo, .textinput, .text, .group, .directory, .usershortcut, .unknown:

@@ -30,7 +30,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 ROOT_DIR="$(cd "$PROJECT_DIR/.." && pwd)"
 
-# 共享的 CMake preset 命名约定。
+# Shared CMake preset naming convention.
 source "$ROOT_DIR/scripts/preset.sh"
 
 cd "$PROJECT_DIR"
