@@ -23,7 +23,7 @@ import SwiftUI
 // 即使被调用也不会向窗口传播约束更新请求。
 class StableHostingView<Content: View>: NSHostingView<Content> {
 
-    override init(rootView: Content) {
+    required init(rootView: Content) {
         super.init(rootView: rootView)
         // 关键: 使用 autoresizing 而非 Auto Layout
         // 这样 NSHostingView 内部的 setNeedsUpdateConstraints 不会
