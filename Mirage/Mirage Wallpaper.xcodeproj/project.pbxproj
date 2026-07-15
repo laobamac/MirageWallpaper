@@ -6,9 +6,48 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		A100000B0000000000000000 /* MirageScreenSaver.saver in Copy Screen Savers */ = {isa = PBXBuildFile; fileRef = A10000010000000000000000 /* MirageScreenSaver.saver */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		A100000C0000000000000000 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 5EC47E6E2A2DB2E600120CCC /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A10000060000000000000000;
+			remoteInfo = MirageScreenSaver;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		A100000A0000000000000000 /* Copy Screen Savers */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "Screen Savers";
+			dstSubfolderSpec = 7;
+			files = (
+				A100000B0000000000000000 /* MirageScreenSaver.saver in Copy Screen Savers */,
+			);
+			name = "Copy Screen Savers";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
 		5EC47E762A2DB2E600120CCC /* Mirage Wallpaper.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Mirage Wallpaper.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		A10000010000000000000000 /* MirageScreenSaver.saver */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MirageScreenSaver.saver; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		A100000E0000000000000000 /* Exceptions for Mirage Screen Saver */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = A10000060000000000000000 /* MirageScreenSaver */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		BB52C0202FFC254D00C34DE3 /* Mirage Wallpaper */ = {
@@ -16,10 +55,25 @@
 			path = "Mirage Wallpaper";
 			sourceTree = "<group>";
 		};
+		A10000020000000000000000 /* Mirage Screen Saver */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				A100000E0000000000000000 /* Exceptions for Mirage Screen Saver */,
+			);
+			path = "Mirage Screen Saver";
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		5EC47E732A2DB2E600120CCC /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A10000030000000000000000 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -33,6 +87,7 @@
 			isa = PBXGroup;
 			children = (
 				BB52C0202FFC254D00C34DE3 /* Mirage Wallpaper */,
+				A10000020000000000000000 /* Mirage Screen Saver */,
 				5EC47E772A2DB2E600120CCC /* Products */,
 			);
 			sourceTree = "<group>";
@@ -41,6 +96,7 @@
 			isa = PBXGroup;
 			children = (
 				5EC47E762A2DB2E600120CCC /* Mirage Wallpaper.app */,
+				A10000010000000000000000 /* MirageScreenSaver.saver */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -55,10 +111,12 @@
 				5EC47E722A2DB2E600120CCC /* Sources */,
 				5EC47E732A2DB2E600120CCC /* Frameworks */,
 				5EC47E742A2DB2E600120CCC /* Resources */,
+				A100000A0000000000000000 /* Copy Screen Savers */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				A100000D0000000000000000 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				BB52C0202FFC254D00C34DE3 /* Mirage Wallpaper */,
@@ -67,6 +125,26 @@
 			productName = Mirage;
 			productReference = 5EC47E762A2DB2E600120CCC /* Mirage Wallpaper.app */;
 			productType = "com.apple.product-type.application";
+		};
+		A10000060000000000000000 /* MirageScreenSaver */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A10000090000000000000000 /* Build configuration list for PBXNativeTarget "MirageScreenSaver" */;
+			buildPhases = (
+				A10000050000000000000000 /* Sources */,
+				A10000030000000000000000 /* Frameworks */,
+				A10000040000000000000000 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				A10000020000000000000000 /* Mirage Screen Saver */,
+			);
+			name = MirageScreenSaver;
+			productName = MirageScreenSaver;
+			productReference = A10000010000000000000000 /* MirageScreenSaver.saver */;
+			productType = "com.apple.product-type.bundle";
 		};
 /* End PBXNativeTarget section */
 
@@ -99,6 +177,7 @@
 			projectRoot = "";
 			targets = (
 				5EC47E752A2DB2E600120CCC /* Mirage Wallpaper */,
+				A10000060000000000000000 /* MirageScreenSaver */,
 			);
 		};
 /* End PBXProject section */
@@ -111,10 +190,32 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A10000040000000000000000 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A100000D0000000000000000 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A10000060000000000000000 /* MirageScreenSaver */;
+			targetProxy = A100000C0000000000000000 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin PBXSourcesBuildPhase section */
 		5EC47E722A2DB2E600120CCC /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A10000050000000000000000 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -347,6 +448,68 @@
 			};
 			name = Release;
 		};
+		A10000070000000000000000 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = x86_64;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				EXCLUDED_SOURCE_FILE_NAMES = Info.plist;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "Mirage Screen Saver/Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.2;
+				MARKETING_VERSION = 1.0.0;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = cn.laobamac.Mirage.ScreenSaver;
+				PRODUCT_MODULE_NAME = MirageScreenSaver;
+				PRODUCT_NAME = MirageScreenSaver;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+				WRAPPER_EXTENSION = saver;
+			};
+			name = Debug;
+		};
+		A10000080000000000000000 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = x86_64;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				EXCLUDED_SOURCE_FILE_NAMES = Info.plist;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "Mirage Screen Saver/Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.2;
+				MARKETING_VERSION = 1.0.0;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = cn.laobamac.Mirage.ScreenSaver;
+				PRODUCT_MODULE_NAME = MirageScreenSaver;
+				PRODUCT_NAME = MirageScreenSaver;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+				WRAPPER_EXTENSION = saver;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -364,6 +527,15 @@
 			buildConfigurations = (
 				5EC47EA12A2DB2E700120CCC /* Debug */,
 				5EC47EA22A2DB2E700120CCC /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A10000090000000000000000 /* Build configuration list for PBXNativeTarget "MirageScreenSaver" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A10000070000000000000000 /* Debug */,
+				A10000080000000000000000 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

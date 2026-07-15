@@ -140,6 +140,14 @@ class WallpaperViewModel: ObservableObject {
         guard currentWallpaper.isValid,
               let data = try? JSONEncoder().encode(runtime) else { return }
         UserDefaults.standard.set(data, forKey: runtimeKey(for: currentWallpaper))
+        if ScreenSaverManager.shared.configuredWallpaperID() == currentWallpaper.id {
+            try? ScreenSaverManager.shared.configure(
+                with: currentWallpaper,
+                runtime: runtime,
+                properties: effectiveProperties(for: currentWallpaper),
+                fps: Int(AppDelegate.shared.globalSettingsViewModel.settings.fps)
+            )
+        }
     }
 
     // MARK: 属性合并

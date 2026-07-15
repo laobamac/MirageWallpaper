@@ -161,5 +161,6 @@ enum SettingsToolbarIdentifiers {
     static let performance = NSToolbarItem.Identifier(rawValue: "performance")
     static let general = NSToolbarItem.Identifier(rawValue: "general")
     static let plugins = NSToolbarItem.Identifier(rawValue: "plugins")
+    static let screenSaver = NSToolbarItem.Identifier(rawValue: "screenSaver")
     static let about = NSToolbarItem.Identifier(rawValue: "about")
 }

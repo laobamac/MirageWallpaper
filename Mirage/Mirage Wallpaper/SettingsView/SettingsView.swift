@@ -25,9 +25,13 @@ extension AppDelegate {
     @objc func jumpToPlugins() {
         self.globalSettingsViewModel.selection = 2
     }
+
+    @objc func jumpToScreenSaver() {
+        self.globalSettingsViewModel.selection = 3
+    }
     
     @objc func jumpToAbout() {
-        self.globalSettingsViewModel.selection = 3
+        self.globalSettingsViewModel.selection = 4
     }
 }
 
@@ -45,6 +49,8 @@ struct SettingsView: View {
                 case 2:
                     PluginsPage(globalSettings: viewModel)
                 case 3:
+                    ScreenSaverPage(globalSettings: viewModel)
+                case 4:
                     AboutUsView()
                 default:
                     fatalError()
@@ -84,15 +90,15 @@ struct SettingsView: View {
 
 extension AppDelegate: NSToolbarDelegate {
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [SettingsToolbarIdentifiers.performance, SettingsToolbarIdentifiers.general, SettingsToolbarIdentifiers.plugins, SettingsToolbarIdentifiers.about]
+        [SettingsToolbarIdentifiers.performance, SettingsToolbarIdentifiers.general, SettingsToolbarIdentifiers.plugins, SettingsToolbarIdentifiers.screenSaver, SettingsToolbarIdentifiers.about]
     }
         
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [SettingsToolbarIdentifiers.performance, SettingsToolbarIdentifiers.general, SettingsToolbarIdentifiers.plugins, SettingsToolbarIdentifiers.about]
+        [SettingsToolbarIdentifiers.performance, SettingsToolbarIdentifiers.general, SettingsToolbarIdentifiers.plugins, SettingsToolbarIdentifiers.screenSaver, SettingsToolbarIdentifiers.about]
     }
     
     func toolbarSelectableItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [SettingsToolbarIdentifiers.performance, SettingsToolbarIdentifiers.general, SettingsToolbarIdentifiers.plugins, SettingsToolbarIdentifiers.about]
+        [SettingsToolbarIdentifiers.performance, SettingsToolbarIdentifiers.general, SettingsToolbarIdentifiers.plugins, SettingsToolbarIdentifiers.screenSaver, SettingsToolbarIdentifiers.about]
     }
     
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier, willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
@@ -113,6 +119,11 @@ extension AppDelegate: NSToolbarDelegate {
             toolbarItem.action = #selector(jumpToPlugins)
             toolbarItem.image = NSImage(systemSymbolName: "puzzlepiece.extension", accessibilityDescription: nil)
             toolbarItem.label = "插件"
+
+        case SettingsToolbarIdentifiers.screenSaver:
+            toolbarItem.action = #selector(jumpToScreenSaver)
+            toolbarItem.image = NSImage(systemSymbolName: "sparkles.tv", accessibilityDescription: nil)
+            toolbarItem.label = "屏保"
             
         case SettingsToolbarIdentifiers.about:
             toolbarItem.action = #selector(jumpToAbout)
