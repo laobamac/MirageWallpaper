@@ -19,8 +19,8 @@ struct FRShowOnly: OptionSet {
         ("广受好评", "trophy.fill"),
         ("我的收藏", "heart.fill"),
         ("移动端兼容", "iphone.gen3"),
-        ("音频响应", ""),
-        ("可自定义", "")
+        ("音频响应", "waveform.path.ecg"),
+        ("可自定义", "slider.horizontal.3")
     ]
     
     static let approved             = FRShowOnly(rawValue: 1 << 0)

@@ -95,6 +95,8 @@ static void BuildWindows(HostDelegate *delegate, RMLayout *layout, int screenInd
 
         RMSkinView *view = [[RMSkinView alloc] initWithSkin:skin];
         view.draggable = entry.draggable;
+        view.useBlur = skin.useBlur;
+        if (skin.blurTint) view.blurTint = skin.blurTint;
 
         // Determine whether the layout position is trustworthy.
         // Rainmeter formulas such as "(#WORKAREAWIDTH#/2-416)" are not
@@ -159,6 +161,14 @@ static void BuildWindows(HostDelegate *delegate, RMLayout *layout, int screenInd
         window.hasShadow = NO;
         window.movableByWindowBackground = NO;   // dragging handled by the view
         window.releasedWhenClosed = NO;
+        // NSVisualEffectView with `BehindWindow` blending is intentionally not
+        // used here: it requires the window to have a real (non-clear) backdrop
+        // to sample, and a borderless `clearColor` window has nothing to blur —
+        // in that case the view renders as a solid light-gray rectangle, which
+        // shows through any skin area that has no explicit fill (i.e. a
+        // transparent widget hole), producing the abnormal "frosted" blocks.
+        // Skins are expected to paint their own backgrounds (via Shape /
+        // SolidColor / Image); anything else leaves the desktop visible.
         window.contentView = view;
 
         [window orderFrontRegardless];

@@ -9,6 +9,8 @@
 #include <sys/param.h>
 #include <ifaddrs.h>
 #include <net/if.h>
+#include <IOKit/ps/IOPSKeys.h>
+#include <IOKit/ps/IOPowerSources.h>
 
 #pragma mark - Substitute rule
 
@@ -21,11 +23,17 @@
 
 #pragma mark - Base
 
-@interface RMMeasure ()
+@interface RMMeasure () {
+    // Previous state of each If*/IfCondition test, for edge-triggered firing.
+    BOOL _aboveState, _belowState, _equalState;
+    BOOL _condState[16];
+    BOOL _condPrimed;
+}
 @property (nonatomic, copy)   NSString *rawType;
 @property (nonatomic, strong) NSArray<RMSubstituteRule *> *substitutes;
 @property (nonatomic, assign) BOOL regexpSubstitute;
 @property (nonatomic, strong, nullable) NSDictionary *conditionOptions;
+@property (nonatomic, assign) BOOL ifConditionMode;   // 1 = level-triggered (fire every update)
 @end
 
 // Forward declarations of the concrete measure classes.
@@ -37,6 +45,9 @@
 @interface RMMeasureUptime : RMMeasure @end
 @interface RMMeasureNet    : RMMeasure @end
 @interface RMMeasureNowPlaying : RMMeasure @end
+@interface RMMeasureBattery    : RMMeasure @end
+@interface RMMeasureSysInfo    : RMMeasure @end
+@interface RMMeasureProcess    : RMMeasure @end
 @interface RMMeasureStub   : RMMeasure @end
 
 @implementation RMMeasure
@@ -60,6 +71,11 @@
              [t isEqualToString:@"netin"] ||
              [t isEqualToString:@"netout"])                cls = [RMMeasureNet class];
     else if ([t isEqualToString:@"nowplaying"])            cls = [RMMeasureNowPlaying class];
+    else if ([t isEqualToString:@"battery"] ||
+             [t isEqualToString:@"power"])                 cls = [RMMeasureBattery class];
+    else if ([t isEqualToString:@"sysinfo"])               cls = [RMMeasureSysInfo class];
+    else if ([t isEqualToString:@"process"] ||
+             [t isEqualToString:@"advancedcpu"])            cls = [RMMeasureProcess class];
     else                                                   cls = [RMMeasureStub class];
 
     RMMeasure *m = [[cls alloc] init];
@@ -109,6 +125,7 @@
 // Read If*Action / IfCondition / IfTrue/FalseAction options into a cached dict.
 - (void)readConditionOptions {
     RMConfigParser *cp = self.parser;
+    RMIniSection *sec = [cp.ini sectionNamed:self.name];
     NSMutableDictionary *cond = [NSMutableDictionary dictionary];
     NSDictionary *kmap = @{
         @"IfAboveValue":@"aboveVal", @"IfAboveAction":@"aboveAct",
@@ -117,10 +134,34 @@
         @"IfMatchAction":@"matchAct",
     };
     for (NSString *k in kmap) {
-        NSString *v = [[cp.ini sectionNamed:self.name] valueForKey:k];
+        NSString *v = [sec valueForKey:k];
         if (v.length) cond[kmap[k]] = v;
     }
+    // IfCondition / IfCondition2 ... with IfTrueAction / IfFalseAction.
+    NSMutableArray<NSDictionary *> *ifConds = [NSMutableArray array];
+    for (int i = 1; i <= 16; i++) {
+        NSString *cKey = (i == 1) ? @"IfCondition" : [NSString stringWithFormat:@"IfCondition%d", i];
+        NSString *tKey = (i == 1) ? @"IfTrueAction" : [NSString stringWithFormat:@"IfTrueAction%d", i];
+        NSString *fKey = (i == 1) ? @"IfFalseAction" : [NSString stringWithFormat:@"IfFalseAction%d", i];
+        NSString *c = [sec valueForKey:cKey];
+        if (c.length == 0) { if (i > 1) break; else continue; }
+        NSMutableDictionary *d = [NSMutableDictionary dictionary];
+        d[@"cond"] = c;
+        NSString *t = [sec valueForKey:tKey]; if (t.length) d[@"true"] = t;
+        NSString *f = [sec valueForKey:fKey]; if (f.length) d[@"false"] = f;
+        [ifConds addObject:d];
+    }
+    if (ifConds.count) cond[@"ifConds"] = ifConds;
+
+    // IfConditionMode=1 fires the action on every update the condition holds;
+    // the Rainmeter default (0) fires only once when the condition becomes true.
+    self.ifConditionMode = [cp readBool:self.name key:@"IfConditionMode" default:NO];
+
     _conditionOptions = cond.count ? cond : nil;
+    // Reset edge-trigger state so the first update after (re)load re-evaluates.
+    _aboveState = _belowState = _equalState = NO;
+    for (int i = 0; i < 16; i++) _condState[i] = NO;
+    _condPrimed = NO;
 }
 
 - (void)readSubclassOptions { /* override */ }
@@ -140,27 +181,67 @@
 - (void)fireConditionActions {
     if (_conditionOptions.count == 0 || self.executeAction == nil) return;
     double v = self.value;
+    // Wrap bare !bang strings in [] so RMBangs.splitGroups can parse them, then
+    // execute. `level` == YES means IfConditionMode: fire every update.
+    BOOL level = self.ifConditionMode;
     auto fire = ^(NSString *raw) {
         if (raw.length == 0) return;
-        // Wrap bare !bang strings in [] so RMBangs.splitGroups can parse them.
         NSString *wrapped = ([raw hasPrefix:@"["] ? raw
                               : [NSString stringWithFormat:@"[%@]", raw]);
         self.executeAction(wrapped);
     };
+    // Edge-triggered helper: fire `act` only when `now` transitions NO->YES
+    // (unless level-triggered). Updates *state BEFORE firing so a re-entrant
+    // tick triggered by the action (e.g. !Update) sees the new state and does
+    // not recurse infinitely.
+    auto edge = ^(BOOL now, BOOL *state, NSString *act) {
+        BOOL prev = *state;
+        *state = now;
+        if (now && (level || !prev)) fire(act);
+    };
+
     NSString *aboveValS = _conditionOptions[@"aboveVal"];
     NSString *belowValS = _conditionOptions[@"belowVal"];
     NSString *equalValS = _conditionOptions[@"equalVal"];
     if (aboveValS.length) {
         double t = [RMConfigParser evaluateNumber:aboveValS default:0];
-        if (v > t) fire(_conditionOptions[@"aboveAct"]);
+        edge(v > t, &_aboveState, _conditionOptions[@"aboveAct"]);
     }
     if (belowValS.length) {
         double t = [RMConfigParser evaluateNumber:belowValS default:0];
-        if (v < t) fire(_conditionOptions[@"belowAct"]);
+        edge(v < t, &_belowState, _conditionOptions[@"belowAct"]);
     }
     if (equalValS.length) {
         double t = [RMConfigParser evaluateNumber:equalValS default:0];
-        if (fabs(v - t) < 0.001) fire(_conditionOptions[@"equalAct"]);
+        edge(fabs(v - t) < 0.001, &_equalState, _conditionOptions[@"equalAct"]);
+    }
+
+    // IfCondition formulas: evaluate each, fire True/False action on transition.
+    NSArray<NSDictionary *> *ifConds = _conditionOptions[@"ifConds"];
+    if (ifConds.count) {
+        RMConfigParser *cp = self.parser;
+        RMMathVariableResolver resolver = ^BOOL(NSString *name, double *out) {
+            if (cp.measureValueResolver) return cp.measureValueResolver(name, out);
+            return NO;
+        };
+        BOOL primed = _condPrimed;
+        for (NSUInteger i = 0; i < ifConds.count && i < 16; i++) {
+            NSDictionary *d = ifConds[i];
+            NSString *expanded = [cp expand:d[@"cond"]];
+            double r = 0;
+            BOOL truth = NO;
+            if ([RMMathParser parse:expanded variableResolver:resolver result:&r]) truth = (r != 0);
+            BOOL prev = _condState[i];
+            _condState[i] = truth;
+            // Only fire on transition (or every update in level mode); when the
+            // condition state hasn't been primed yet, treat the first evaluation
+            // as a transition so initial True/False actions run once.
+            BOOL changed = (!primed) || (truth != prev);
+            if (level || changed) {
+                fire(truth ? d[@"true"] : d[@"false"]);
+            }
+        }
+        _condPrimed = YES;
     }
 }
 
@@ -436,12 +517,74 @@ static NSString *RMTranslateTimeFormat(NSString *fmt) {
     }
     self.value = up;
 }
-- (nullable NSString *)rawString {
+
+// Substitute Rainmeter's printf-style Uptime format placeholders. Pattern:
+//   %N!type! → Nth time component (1=total-seconds, 2=minutes, 3=hours, 4=days),
+//   printed as the type 'i' (integer) with the optional suffix that follows.
+// Anything else is left as a literal.
+- (NSString *)formatUptimeWithTemplate:(NSString *)fmt {
     long s = (long)self.value;
-    long d = s / 86400; s %= 86400;
-    long h = s / 3600;  s %= 3600;
-    long m = s / 60;    long sec = s % 60;
-    return [NSString stringWithFormat:@"%ldd %ldh %ldm %lds", d, h, m, sec];
+    long sec = s % 60;
+    long min = (s / 60) % 60;
+    long hr  = (s / 3600) % 24;
+    long day = s / 86400;
+    NSMutableString *out = [NSMutableString string];
+    NSUInteger i = 0, n = fmt.length;
+    while (i < n) {
+        unichar c = [fmt characterAtIndex:i];
+        if (c != '%') { [out appendFormat:@"%C", c]; i++; continue; }
+        // Parse %N!type! — N is digit, type is alphanumeric.
+        if (i + 1 >= n) { [out appendFormat:@"%C", c]; i++; continue; }
+        unichar nc = [fmt characterAtIndex:i + 1];
+        if (nc < '0' || nc > '9') { [out appendFormat:@"%C", c]; i++; continue; }
+        int nVal = nc - '0';
+        NSUInteger j = i + 2;
+        // Skip type specifier: alphanumeric until '!' or end.
+        NSUInteger typeEnd = j;
+        while (typeEnd < n) {
+            unichar tc = [fmt characterAtIndex:typeEnd];
+            if (tc == '!') break;
+            if (!((tc >= 'a' && tc <= 'z') || (tc >= 'A' && tc <= 'Z'))) break;
+            typeEnd++;
+        }
+        if (typeEnd >= n) { [out appendFormat:@"%C", c]; i++; continue; }
+        // typeEnd points at '!'. Read literal suffix after '!'.
+        NSUInteger suffixEnd = typeEnd + 1;
+        if (suffixEnd < n && [fmt characterAtIndex:suffixEnd] == '!') suffixEnd++;
+        // Skip the value to use: nVal 1=sec, 2=min, 3=hr, 4=day.
+        long comp = 0;
+        switch (nVal) {
+            case 1: comp = s; break;     // total seconds
+            case 2: comp = min; break;
+            case 3: comp = hr; break;
+            case 4: comp = day; break;
+            case 5: comp = sec; break;    // alias
+            default: comp = 0; break;
+        }
+        [out appendFormat:@"%ld", comp];
+        // Append any suffix that was not part of the %N!type! syntax.
+        // (Rainmeter's %4!i!d %3!i!h leaves the "d" / "h" outside the placeholder.)
+        if (suffixEnd < n && [fmt characterAtIndex:suffixEnd] != ' ') {
+            // Heuristic: copy a single literal char as the suffix.
+            [out appendFormat:@"%C", [fmt characterAtIndex:suffixEnd]];
+            i = suffixEnd + 1;
+        } else {
+            i = suffixEnd;
+        }
+    }
+    return out;
+}
+
+- (nullable NSString *)rawString {
+    if (_format.length == 0) {
+        // No custom format: default to "Xd Yh Zm Ws".
+        long s = (long)self.value;
+        long d = s / 86400; s %= 86400;
+        long h = s / 3600;  s %= 3600;
+        long m = s / 60;    long sec = s % 60;
+        return [NSString stringWithFormat:@"%ldd %ldh %ldm %lds", d, h, m, sec];
+    }
+    return [self formatUptimeWithTemplate:_format];
 }
 @end
 
@@ -500,6 +643,159 @@ static NSString *RMTranslateTimeFormat(NSString *fmt) {
     if ([_playerType isEqualToString:@"PROGRESS"]) return @"0";
     // TITLE / ARTIST / ALBUM / COVER / etc. → empty (skin Substitute maps it).
     return @"";
+}
+@end
+
+#pragma mark - Battery / Power
+
+@implementation RMMeasureBattery {
+    BOOL _isString;
+    NSString *_type; // percent / lifetime / status / acline / mhz
+}
+- (BOOL)isStringMeasure { return _isString; }
+- (void)readSubclassOptions {
+    NSString *ps = [self.parser readString:self.name key:@"PowerState" default:@"PERCENT"];
+    _type = ps.uppercaseString;
+    _isString = [_type isEqualToString:@"STATUS"] || [_type isEqualToString:@"ACLINE"];
+    self.maxValue = 100;
+}
+- (void)updateValue {
+    // Use IOKit to read battery info. Fall back to 100% if no battery.
+    CFTypeRef blob = IOPSCopyPowerSourcesInfo();
+    CFArrayRef list = IOPSCopyPowerSourcesList(blob);
+    double pct = 100, lifetime = -1;
+    BOOL charging = NO, present = NO;
+    if (list && CFArrayGetCount(list) > 0) {
+        for (CFIndex i = 0; i < CFArrayGetCount(list); i++) {
+            CFTypeRef ps = CFArrayGetValueAtIndex(list, i);
+            CFDictionaryRef dict = IOPSGetPowerSourceDescription(blob, ps);
+            if (dict == NULL) continue;
+            present = YES;
+            CFNumberRef cur = (CFNumberRef)CFDictionaryGetValue(dict, CFSTR("Current Capacity"));
+            CFNumberRef max = (CFNumberRef)CFDictionaryGetValue(dict, CFSTR("Max Capacity"));
+            if (cur && max) {
+                int c = 0, m = 0;
+                CFNumberGetValue(cur, kCFNumberIntType, &c);
+                CFNumberGetValue(max, kCFNumberIntType, &m);
+                if (m > 0) pct = (double)c / (double)m * 100.0;
+            }
+            CFBooleanRef ac = (CFBooleanRef)CFDictionaryGetValue(dict, CFSTR("Is Charging"));
+            if (ac) charging = CFBooleanGetValue(ac);
+            CFNumberRef time = (CFNumberRef)CFDictionaryGetValue(dict, CFSTR("Time to Empty"));
+            if (time) CFNumberGetValue(time, kCFNumberIntType, &lifetime);
+            if (!charging && lifetime < 0) {
+                CFNumberRef full = (CFNumberRef)CFDictionaryGetValue(dict, CFSTR("Time to Full Charge"));
+                if (full) CFNumberGetValue(full, kCFNumberIntType, &lifetime);
+            }
+        }
+    }
+    if (list) CFRelease(list);
+    CFRelease(blob);
+    if (!present) { self.value = 100; self.maxValue = 100; return; }
+    self.value = pct;
+    self.maxValue = 100;
+}
+- (nullable NSString *)rawString {
+    if (!_isString) return nil;
+    if ([_type isEqualToString:@"STATUS"]) {
+        if (self.value >= 99) return @"Full";
+        if (self.value > 20)  return @"Discharging";
+        return @"Low";
+    }
+    if ([_type isEqualToString:@"ACLINE"]) {
+        return self.value >= 99 ? @"AC Line" : @"Battery";
+    }
+    return nil;
+}
+@end
+
+#pragma mark - SysInfo
+
+@implementation RMMeasureSysInfo {
+    BOOL _isString;
+    NSString *_dataType; // HOST_NAME, USER_NAME, OS_VERSION, OS_BITS, COMPUTER_NAME, etc.
+}
+- (BOOL)isStringMeasure { return _isString; }
+- (void)readSubclassOptions {
+    _dataType = [[self.parser readString:self.name key:@"SysInfoType" default:@"HOST_NAME"] uppercaseString];
+    _isString = YES;
+}
+- (void)updateValue { self.value = 0; }
+- (nullable NSString *)rawString {
+    if ([_dataType isEqualToString:@"HOST_NAME"])       return NSProcessInfo.processInfo.hostName ?: @"";
+    if ([_dataType isEqualToString:@"USER_NAME"] ||
+        [_dataType isEqualToString:@"COMPUTER_NAME"])   return NSFullUserName();
+    if ([_dataType isEqualToString:@"OS_VERSION"])      return NSProcessInfo.processInfo.operatingSystemVersionString ?: @"";
+    if ([_dataType isEqualToString:@"OS_BITS"])         return @"64";
+    if ([_dataType isEqualToString:@"OS_ARCHITECTURE"]) return @"arm64";
+    if ([_dataType isEqualToString:@"DATE"])            return [NSDateFormatter localizedStringFromDate:[NSDate date] dateStyle:NSDateFormatterShortStyle timeStyle:NSDateFormatterNoStyle];
+    if ([_dataType isEqualToString:@"TIME"])            return [NSDateFormatter localizedStringFromDate:[NSDate date] dateStyle:NSDateFormatterNoStyle timeStyle:NSDateFormatterShortStyle];
+    return @"";
+}
+@end
+
+#pragma mark - Process (top CPU/memory process)
+
+@implementation RMMeasureProcess {
+    NSString *_processName;
+    NSString *_counter; // % Processor Time, Working Set - Private, ID Process
+    int _processId;
+    BOOL _topProcess; // if true, find the top process; otherwise use ProcessName
+}
+- (BOOL)isStringMeasure { return _processName.length > 0; }
+- (void)readSubclassOptions {
+    _processName = [self.parser readString:self.name key:@"ProcessName" default:nil];
+    _processId   = [self.parser readInt:self.name key:@"ProcessID" default:-1];
+    _counter     = ([self.parser readString:self.name key:@"Counter" default:@"% Processor Time"]).uppercaseString;
+    _topProcess  = [self.parser readBool:self.name key:@"TopProcess" default:NO];
+    self.maxValue = 100;
+}
+- (void)updateValue {
+    // Top process discovery via NSTask: use `ps` to find the highest-CPU process.
+    // This is a best-effort approximation on macOS.
+    if (_topProcess) {
+        // Use `ps -eo pid,pcpu,rss,comm -r` sorted by CPU.
+        NSTask *task = [[NSTask alloc] init];
+        task.launchPath = @"/bin/ps";
+        task.arguments = @[@"-eo", @"pid,pcpu,rss,comm", @"-r"];
+        NSPipe *pipe = [NSPipe pipe];
+        task.standardOutput = pipe;
+        task.standardError = [NSFileHandle fileHandleWithNullDevice];
+        @try {
+            [task launch];
+            [task waitUntilExit];
+            NSData *data = [[pipe fileHandleForReading] readDataToEndOfFile];
+            NSString *output = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+            NSArray *lines = [output componentsSeparatedByString:@"\n"];
+            if (lines.count >= 2) {
+                // First non-header line (index 1) is the top process.
+                NSString *topLine = lines[1];
+                // Parse: pid pcpu rss comm
+                NSScanner *sc = [NSScanner scannerWithString:topLine];
+                int pid = 0; double cpu = 0; long long rss = 0;
+                [sc scanInt:&pid];
+                [sc scanDouble:&cpu];
+                [sc scanLongLong:&rss];
+                NSString *comm = [topLine substringFromIndex:sc.scanLocation];
+                comm = [comm stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+                if ([_counter containsString:@"PROCESSOR"]) {
+                    self.value = cpu;
+                } else if ([_counter containsString:@"WORKING"] || [_counter containsString:@"MEMORY"]) {
+                    self.value = (double)rss;
+                    self.maxValue = (double)NSProcessInfo.processInfo.physicalMemory;
+                } else {
+                    self.value = cpu;
+                }
+                self.maxValue = 100;
+                _processName = comm;
+            }
+        } @catch (NSException *e) { self.value = 0; }
+    } else {
+        self.value = 0;
+    }
+}
+- (nullable NSString *)rawString {
+    return _processName ?: @"";
 }
 @end
 

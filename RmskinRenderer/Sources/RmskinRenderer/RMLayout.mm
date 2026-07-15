@@ -1,5 +1,6 @@
 #import "RMLayout.h"
 #import "RMIniFile.h"
+#import "RMConfigParser.h"
 #import "RMLog.h"
 
 @implementation RMLayoutEntry
@@ -7,6 +8,7 @@
 
 @implementation RMLayout {
     RMIniFile *_rmskin;
+    RMConfigParser *_posParser; // for expanding #Var# in layout position values
 }
 
 - (nullable instancetype)initWithThemeDirectory:(NSString *)dir {
@@ -30,6 +32,13 @@
         _version  = [s valueForKey:@"Version"];
         _loadType = [s valueForKey:@"LoadType"];
         _load     = [s valueForKey:@"Load"];
+
+        _posParser = [RMConfigParser new];
+        _posParser.resourcesPath = @"";
+        _posParser.rootConfigPath = @"";
+        _posParser.skinsPath = _skinsPath;
+        _posParser.currentPath = _themeDirectory;
+        _posParser.currentConfig = @"";
     }
     return self;
 }
@@ -71,8 +80,32 @@ static BOOL RMPositionLooksUnresolved(NSString *_Nullable raw, CGFloat parsedVal
 }
 
 - (NSArray<RMLayoutEntry *> *)layoutEntries {
+    NSArray<RMLayoutEntry *> *entries = [self layoutEntriesForLoad:self.load];
+
+    // If the layout has very few entries (e.g. a _Setup wizard-only layout),
+    // try the main layout (same name without _Setup suffix) as a fallback.
+    if (entries.count <= 1 && [self.load hasSuffix:@"_Setup"]) {
+        NSString *mainLoad = [self.load substringToIndex:self.load.length - 6];
+        NSString *mainPath = [[[_themeDirectory stringByAppendingPathComponent:@"Layouts"]
+                               stringByAppendingPathComponent:mainLoad]
+                              stringByAppendingPathComponent:@"Rainmeter.ini"];
+        if ([[NSFileManager defaultManager] fileExistsAtPath:mainPath]) {
+            RMLogDebug(@"setup layout has few entries; falling back to main layout: %@", mainLoad);
+            NSArray<RMLayoutEntry *> *mainEntries = [self layoutEntriesForLoad:mainLoad];
+            if (mainEntries.count > 0) return mainEntries;
+        }
+    }
+    return entries;
+}
+
+- (NSString *)expandLayoutValue:(NSString *)raw {
+    if (raw.length == 0) return raw;
+    return [_posParser expand:raw];
+}
+
+- (NSArray<RMLayoutEntry *> *)layoutEntriesForLoad:(NSString *)loadName {
     NSString *layoutIni = [[[_themeDirectory stringByAppendingPathComponent:@"Layouts"]
-                            stringByAppendingPathComponent:self.load ?: @""]
+                            stringByAppendingPathComponent:loadName ?: @""]
                            stringByAppendingPathComponent:@"Rainmeter.ini"];
     RMIniFile *ini = [RMIniFile new];
     if (![ini parseContentsOfFile:layoutIni]) {
@@ -91,14 +124,14 @@ static BOOL RMPositionLooksUnresolved(NSString *_Nullable raw, CGFloat parsedVal
         if (e == nil) continue;
 
         CGFloat wx, wy, ax, ay;
-        NSString *rawWX = [sec valueForKey:@"WindowX"];
-        NSString *rawWY = [sec valueForKey:@"WindowY"];
+        NSString *rawWX = [self expandLayoutValue:[sec valueForKey:@"WindowX"]];
+        NSString *rawWY = [self expandLayoutValue:[sec valueForKey:@"WindowY"]];
         e.windowXPercent = RMParsePositionValue(rawWX, &wx); e.windowX = wx;
         e.windowYPercent = RMParsePositionValue(rawWY, &wy); e.windowY = wy;
         e.windowXUnresolved = RMPositionLooksUnresolved(rawWX, wx, e.windowXPercent);
         e.windowYUnresolved = RMPositionLooksUnresolved(rawWY, wy, e.windowYPercent);
-        e.anchorXPercent = RMParsePositionValue([sec valueForKey:@"AnchorX"], &ax); e.anchorX = ax;
-        e.anchorYPercent = RMParsePositionValue([sec valueForKey:@"AnchorY"], &ay); e.anchorY = ay;
+        e.anchorXPercent = RMParsePositionValue([self expandLayoutValue:[sec valueForKey:@"AnchorX"]], &ax); e.anchorX = ax;
+        e.anchorYPercent = RMParsePositionValue([self expandLayoutValue:[sec valueForKey:@"AnchorY"]], &ay); e.anchorY = ay;
 
         NSString *drag = [sec valueForKey:@"Draggable"];
         e.draggable = drag == nil ? YES : ([drag integerValue] != 0);

@@ -221,12 +221,20 @@ class GlobalSettingsViewModel: ObservableObject {
         let appService = SMAppService.mainApp
         do {
             if added {
-                try appService.register()
+                if appService.status != .enabled {
+                    try appService.register()
+                }
             } else {
-                try appService.unregister()
+                if appService.status == .enabled {
+                    try appService.unregister()
+                }
             }
         } catch {
-            print(error)
+            NSLog("[Mirage] Login Item 操作失败: \(error.localizedDescription)")
+            // 如果注册失败，将设置回退以保持 UI 一致
+            DispatchQueue.main.async { [weak self] in
+                self?.settings.autoStart = appService.status == .enabled
+            }
         }
     }
     

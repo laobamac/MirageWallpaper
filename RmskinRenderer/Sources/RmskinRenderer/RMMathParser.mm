@@ -235,7 +235,30 @@ struct Eval {
     double parsePrimary() {
         skip();
         if (p >= end) { ok = false; return 0; }
-        if (*p == '(') { ++p; double v = parseTernary(); skip(); if (p < end && *p == ')') ++p; else ok = false; return v; }
+
+        // Empty parens "()" → return 0 (same as Rainmeter).
+        if (*p == '(') {
+            ++p;
+            skip();
+            if (p < end && *p == ')') { ++p; return 0; }
+            double v = parseTernary();
+            skip();
+            if (p < end && *p == ')') ++p; else ok = false;
+            return v;
+        }
+
+        // Leading binary operator where a primary/operand is expected (e.g.
+        // "(/2+1)" after an undefined #Var# expanded to empty). Rainmeter
+        // treats the missing operand as 0 so the rest of the expression parses
+        // normally — 0 / 2 + 1 = 1.
+        if (*p == '*' || *p == '/' || *p == '%' || *p == '^' ||
+            *p == '|' || *p == '&' || *p == '?' || *p == ':' || *p == ',') {
+            return 0;
+        }
+        // Two-char operators whose first char could also appear at start.
+        if (p + 1 < end) {
+            if ((*p == '<' && p[1] == '<') || (*p == '>' && p[1] == '>')) return 0;
+        }
 
         if (isalpha((unsigned char)*p) || *p == '_') {
             const char *s = p;

@@ -26,6 +26,16 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, assign, readonly) BOOL dynamicWindowSize;
 @property (nonatomic, assign, readonly) NSSize contentSize;
 
+// YES when the skin uses a FrostedGlass plugin measure, or declares Blur=1 /
+// BlurRegion in [Rainmeter] (Rainmeter's built-in frosted-glass backdrop).
+// When YES, the widget window samples the desktop behind it and renders a
+// blurred tinted backdrop.
+@property (nonatomic, assign, readonly) BOOL useBlur;
+
+// Optional tint color for the blur backdrop, set via BlurTint=R,G,B,A in
+// [Rainmeter] (light themes use a white tint, dark themes use black).
+@property (nonatomic, strong, readonly, nullable) NSColor *blurTint;
+
 @property (nonatomic, copy, nullable) NSString *mouseScrollUpAction;
 @property (nonatomic, copy, nullable) NSString *mouseScrollDownAction;
 
@@ -54,6 +64,12 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)handleMouseUpAt:(NSPoint)point rightButton:(BOOL)rightButton;
 - (void)handleScrollUp:(BOOL)up;
 
+// Track hover: fires MouseOverAction / MouseLeaveAction on enter/leave of each
+// meter. Call handleMouseMoveAt: on move and handleMouseExit when the pointer
+// leaves the widget entirely.
+- (void)handleMouseMoveAt:(NSPoint)point;
+- (void)handleMouseExit;
+
 // Execute a bang-action string like "[!SetVariable X 1][!Refresh]".
 - (void)executeActions:(NSString *)actions;
 
@@ -65,6 +81,8 @@ NS_ASSUME_NONNULL_BEGIN
 // Look-ups.
 - (nullable RMMeter *)meterNamed:(NSString *)name;
 - (nullable RMMeasure *)measureNamed:(NSString *)name;
+- (NSArray<RMMeter *> *)metersInGroup:(NSString *)group;
+- (NSArray<RMMeasure *> *)measuresInGroup:(NSString *)group;
 
 @end
 

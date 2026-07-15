@@ -89,6 +89,14 @@ static NSString *RMStripMatchingQuotes(NSString *value);
         RMLogWarn(@"cannot decode ini text: %@", path);
         return NO;
     }
+    // Strip a leading BOM (U+FEFF). The NSUTF16LittleEndian/BigEndian decoders
+    // keep the byte-order mark as the first character, which would otherwise
+    // prevent the file's first "[Section]" header from being recognised — and
+    // for single-section include files (e.g. a lone "[Variables]") that means
+    // the entire file is silently dropped.
+    if (text.length > 0 && [text characterAtIndex:0] == 0xFEFF) {
+        text = [text substringFromIndex:1];
+    }
     return [self parseString:text];
 }
 

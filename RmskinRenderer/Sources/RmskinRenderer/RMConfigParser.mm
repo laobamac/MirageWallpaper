@@ -1,6 +1,7 @@
 #import "RMConfigParser.h"
 #import "RMMathParser.h"
 #import "RMLog.h"
+#import <AppKit/AppKit.h>
 
 @implementation RMConfigParser {
     NSMutableDictionary<NSString *, NSString *> *_variables;   // UPPER -> raw value
@@ -104,6 +105,24 @@
     if ([upper isEqualToString:@"ROOTCONFIGPATH"]) return [self.rootConfigPath hasSuffix:@"/"] ? self.rootConfigPath : [self.rootConfigPath stringByAppendingString:@"/"];
     if ([upper isEqualToString:@"SKINSPATH"])    return [self.skinsPath hasSuffix:@"/"] ? self.skinsPath : [self.skinsPath stringByAppendingString:@"/"];
     if ([upper isEqualToString:@"CRLF"])         return @"\n";
+    // Built-in monitor variables (macOS primary screen).
+    if ([upper isEqualToString:@"WORKAREAX"] ||
+        [upper isEqualToString:@"WORKAREAY"] ||
+        [upper isEqualToString:@"WORKAREAWIDTH"] ||
+        [upper isEqualToString:@"WORKAREAHEIGHT"] ||
+        [upper isEqualToString:@"SCREENAREAWIDTH"] ||
+        [upper isEqualToString:@"SCREENAREAHEIGHT"]) {
+        NSScreen *screen = NSScreen.screens.firstObject;
+        if (screen == nil) return @"0";
+        NSRect visible = screen.visibleFrame;
+        NSRect full    = screen.frame;
+        if ([upper isEqualToString:@"WORKAREAX"])        return [NSString stringWithFormat:@"%g", NSMinX(visible)];
+        if ([upper isEqualToString:@"WORKAREAY"])        return [NSString stringWithFormat:@"%g", NSMinY(visible)];
+        if ([upper isEqualToString:@"WORKAREAWIDTH"])    return [NSString stringWithFormat:@"%g", NSWidth(visible)];
+        if ([upper isEqualToString:@"WORKAREAHEIGHT"])   return [NSString stringWithFormat:@"%g", NSHeight(visible)];
+        if ([upper isEqualToString:@"SCREENAREAWIDTH"])  return [NSString stringWithFormat:@"%g", NSWidth(full)];
+        if ([upper isEqualToString:@"SCREENAREAHEIGHT"]) return [NSString stringWithFormat:@"%g", NSHeight(full)];
+    }
     return nil;
 }
 
@@ -192,7 +211,25 @@
         NSString *token = [s substringWithRange:NSMakeRange(i + 1, close - i - 1)];
         // Resolve nested tokens first.
         token = [self expandSectionVariables:token];
-        NSString *resolved = self.sectionVariableResolver(token);
+        NSString *resolved = nil;
+
+        // Handle new-style section variable prefixes locally so they work even
+        // before the sectionVariableResolver block is installed.
+        if (token.length > 0) {
+            unichar prefix = [token characterAtIndex:0];
+            if (prefix == L'#') {
+                // [#VariableName] — direct variable lookup.
+                NSString *varName = [token substringFromIndex:1];
+                resolved = [self variableForName:varName];
+            } else if (prefix == L'$') {
+                // [$Config:Key] — cross-skin reference, not supported.
+                resolved = nil;
+            }
+        }
+
+        if (resolved == nil && self.sectionVariableResolver) {
+            resolved = self.sectionVariableResolver(token);
+        }
         if (resolved != nil) {
             [out appendString:resolved];
         } else {

@@ -3,6 +3,7 @@
 #import "RMConfigParser.h"
 #import "RMMathParser.h"
 #import "RMMeter.h"
+#import "RMMeasure.h"
 #import "RMLog.h"
 
 @implementation RMBangs
@@ -63,13 +64,47 @@
         NSArray<NSString *> *toks = [self tokenize:group];
         if (toks.count == 0) continue;
         NSString *bang = toks[0];
-        if (![bang hasPrefix:@"!"]) continue;
+        if (![bang hasPrefix:@"!"]) {
+            // A non-bang group is a "run" action: a program, file or URL, e.g.
+            // ["https://example.com"] or ["C:\App.exe" -flag]. Handle what makes
+            // sense on macOS; Windows-only targets are skipped gracefully.
+            [self runCommandGroup:toks onSkin:skin];
+            continue;
+        }
         NSString *rawName = [bang substringFromIndex:1].lowercaseString;
         // "!RainmeterShowMeter" is an old alias for "!ShowMeter" etc.
         NSString *name = rawName;
         if ([name hasPrefix:@"rainmeter"]) name = [name substringFromIndex:9];
         [self run:name args:toks onSkin:skin];
     }
+}
+
+// Open a URL/file target on macOS. Windows-specific paths (drive letters,
+// %env%, shell:) have no macOS equivalent and are ignored.
++ (void)runCommandGroup:(NSArray<NSString *> *)toks onSkin:(RMSkin *)skin {
+    NSString *target = [skin.parser expand:toks.firstObject];
+    target = [target stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+    if (target.length == 0) return;
+    NSString *low = target.lowercaseString;
+    // Web / mail / custom URL schemes.
+    if ([low hasPrefix:@"http://"] || [low hasPrefix:@"https://"] ||
+        [low hasPrefix:@"mailto:"] || [low hasPrefix:@"ftp://"]) {
+        NSURL *u = [NSURL URLWithString:target];
+        if (u) [[NSWorkspace sharedWorkspace] openURL:u];
+        return;
+    }
+    // Windows-isms we cannot honour on macOS.
+    if ([low hasPrefix:@"shell:"] || [target rangeOfString:@"%"].location != NSNotFound ||
+        (target.length >= 2 && [target characterAtIndex:1] == ':')) {
+        RMLogDebug(@"skip non-macOS command: %@", target);
+        return;
+    }
+    // A path that actually exists on disk: open it.
+    if ([[NSFileManager defaultManager] fileExistsAtPath:target]) {
+        [[NSWorkspace sharedWorkspace] openFile:target];
+        return;
+    }
+    RMLogDebug(@"unresolved command: %@", target);
 }
 
 + (void)run:(NSString *)name args:(NSArray<NSString *> *)toks onSkin:(RMSkin *)skin {
@@ -110,17 +145,42 @@
     } else if ([name isEqualToString:@"update"]) {
         [skin tick];
         [skin requestRedraw];
+    } else if ([name isEqualToString:@"updatemeter"] ||
+               [name isEqualToString:@"updatemeasure"]) {
+        // We update the whole skin on tick; a targeted update just redraws.
+        [skin requestRedraw];
+    } else if ([name isEqualToString:@"updatemetergroup"] ||
+               [name isEqualToString:@"updatemeasuregroup"]) {
+        [skin requestRedraw];
     } else if ([name isEqualToString:@"hidemeter"] || [name isEqualToString:@"hide"]) {
-        RMMeter *m = [skin meterNamed:argAt(1)];
-        m.hidden = YES; [skin requestRedraw];
+        for (NSUInteger i = 1; i < toks.count; i++) {
+            RMMeter *m = [skin meterNamed:argAt(i)]; m.hidden = YES;
+        }
+        [skin requestRedraw];
     } else if ([name isEqualToString:@"showmeter"] || [name isEqualToString:@"show"]) {
-        RMMeter *m = [skin meterNamed:argAt(1)];
-        m.hidden = NO; [skin requestRedraw];
+        for (NSUInteger i = 1; i < toks.count; i++) {
+            RMMeter *m = [skin meterNamed:argAt(i)]; m.hidden = NO;
+        }
+        [skin requestRedraw];
     } else if ([name isEqualToString:@"togglemeter"] || [name isEqualToString:@"toggle"]) {
         RMMeter *m = [skin meterNamed:argAt(1)];
         m.hidden = !m.hidden; [skin requestRedraw];
+    } else if ([name isEqualToString:@"hidemetergroup"]) {
+        for (RMMeter *m in [skin metersInGroup:argAt(1)]) m.hidden = YES;
+        [skin requestRedraw];
+    } else if ([name isEqualToString:@"showmetergroup"]) {
+        for (RMMeter *m in [skin metersInGroup:argAt(1)]) m.hidden = NO;
+        [skin requestRedraw];
+    } else if ([name isEqualToString:@"togglemetergroup"]) {
+        for (RMMeter *m in [skin metersInGroup:argAt(1)]) m.hidden = !m.hidden;
+        [skin requestRedraw];
     } else if ([name isEqualToString:@"setoption"]) {
         [skin setOption:argAt(2) value:[cp expand:argAt(3)] forSection:argAt(1)];
+        [skin requestRedraw];
+    } else if ([name isEqualToString:@"setoptiongroup"]) {
+        for (RMMeter *m in [skin metersInGroup:argAt(1)]) {
+            [skin setOption:argAt(2) value:[cp expand:argAt(3)] forSection:m.name];
+        }
         [skin requestRedraw];
     } else if ([name isEqualToString:@"execute"]) {
         // !Execute groups nested bang groups: re-enter with the remaining args joined.
@@ -130,6 +190,53 @@
             if (i + 1 < toks.count) [inner appendString:@" "];
         }
         [self execute:inner onSkin:skin];
+    } else if ([name isEqualToString:@"disablemeasure"]) {
+        for (NSUInteger i = 1; i < toks.count; i++) {
+            RMMeasure *ms = [skin measureNamed:argAt(i)]; ms.disabled = YES;
+        }
+        [skin tick]; [skin requestRedraw];
+    } else if ([name isEqualToString:@"enablemeasure"]) {
+        for (NSUInteger i = 1; i < toks.count; i++) {
+            RMMeasure *ms = [skin measureNamed:argAt(i)]; ms.disabled = NO;
+        }
+        [skin tick]; [skin requestRedraw];
+    } else if ([name isEqualToString:@"togglemeasure"]) {
+        RMMeasure *ms = [skin measureNamed:argAt(1)];
+        ms.disabled = !ms.disabled; [skin tick]; [skin requestRedraw];
+    } else if ([name isEqualToString:@"disablemeasuregroup"]) {
+        for (RMMeasure *m in [skin measuresInGroup:argAt(1)]) m.disabled = YES;
+        [skin tick]; [skin requestRedraw];
+    } else if ([name isEqualToString:@"enablemeasuregroup"]) {
+        for (RMMeasure *m in [skin measuresInGroup:argAt(1)]) m.disabled = NO;
+        [skin tick]; [skin requestRedraw];
+    } else if ([name isEqualToString:@"togglemeasuregroup"]) {
+        for (RMMeasure *m in [skin measuresInGroup:argAt(1)]) m.disabled = !m.disabled;
+        [skin tick]; [skin requestRedraw];
+    } else if ([name isEqualToString:@"setclip"]) {
+        [skin requestRedraw];
+    } else if ([name isEqualToString:@"commandmeasure"] ||
+               [name isEqualToString:@"pluginbang"] ||
+               [name isEqualToString:@"setwindowposition"] ||
+               [name isEqualToString:@"move"] ||
+               [name isEqualToString:@"zpos"] ||
+               [name isEqualToString:@"snapedges"] ||
+               [name isEqualToString:@"draggable"] ||
+               [name isEqualToString:@"keeponscreen"] ||
+               [name isEqualToString:@"clickthrough"] ||
+               [name isEqualToString:@"activateconfig"] ||
+               [name isEqualToString:@"deactivateconfig"] ||
+               [name isEqualToString:@"toggleconfig"] ||
+               [name isEqualToString:@"skincustommenu"] ||
+               [name isEqualToString:@"setwallpaper"] ||
+               [name isEqualToString:@"settransparency"] ||
+               [name isEqualToString:@"setwindowtransparency"] ||
+               [name isEqualToString:@"setanchor"] ||
+               [name hasPrefix:@"fade"] ||
+               [name hasPrefix:@"showfade"] || [name hasPrefix:@"hidefade"] ||
+               [name isEqualToString:@"toggle"]) {
+        // Window/config/plugin management bangs that have no effect in the
+        // standalone floating-widget host; accepted so actions don't error.
+        [skin requestRedraw];
     } else {
         RMLogDebug(@"unhandled bang: %@", name);
     }

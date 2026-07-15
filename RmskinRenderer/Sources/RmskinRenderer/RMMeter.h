@@ -54,6 +54,18 @@ NS_ASSUME_NONNULL_BEGIN
 // Mouse actions (raw bang strings), executed by RMSkin on click.
 @property (nonatomic, copy, nullable) NSString *leftMouseUpAction;
 @property (nonatomic, copy, nullable) NSString *rightMouseUpAction;
+@property (nonatomic, copy, nullable) NSString *middleMouseUpAction;
+@property (nonatomic, copy, nullable) NSString *mouseOverAction;
+@property (nonatomic, copy, nullable) NSString *mouseLeaveAction;
+// Transient hover state used to fire MouseOver/MouseLeave on transitions.
+@property (nonatomic, assign) BOOL hovered;
+
+// Container (Rainmeter "Container=MeterX"): the meter is drawn with its
+// origin shifted to MeterX's frame, then clipped to MeterX's frame. We
+// resolve and apply the shift in RMSkin.drawInBounds; individual meter
+// draw methods just use `self.x`/`self.y` as if the container's origin
+// were the widget root.
+@property (nonatomic, copy, nullable) NSString *container;
 
 + (nullable RMMeter *)meterWithType:(NSString *)type
                                name:(NSString *)name
@@ -74,6 +86,9 @@ NS_ASSUME_NONNULL_BEGIN
 
 // Draw into the current AppKit graphics context (flipped, top-left origin).
 - (void)draw;
+
+// Read and return an affine transform ("a;b;c;d;tx;ty") or nil.
+- (nullable NSAffineTransform *)transformationMatrix;
 
 @property (nonatomic, assign, readonly) NSRect frame;   // {x,y,w,h}
 
