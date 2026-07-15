@@ -92,6 +92,16 @@ private final class MirageWallpaperSchemeHandler: NSObject, WKURLSchemeHandler {
         self.overlays = overlays
     }
 
+    private func sendFile(_ candidate: URL, for requestURL: URL, task: WKURLSchemeTask) -> Bool {
+        guard let data = try? Data(contentsOf: candidate) else { return false }
+        let mime = UTType(filenameExtension: candidate.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
+        let response = URLResponse(url: requestURL, mimeType: mime, expectedContentLength: data.count, textEncodingName: nil)
+        task.didReceive(response)
+        task.didReceive(data)
+        task.didFinish()
+        return true
+    }
+
     func webView(_ webView: WKWebView, start urlSchemeTask: WKURLSchemeTask) {
         guard let requestURL = urlSchemeTask.request.url,
               let relative = requestURL.path.removingPercentEncoding?.trimmingCharacters(in: CharacterSet(charactersIn: "/")),
@@ -99,18 +109,29 @@ private final class MirageWallpaperSchemeHandler: NSObject, WKURLSchemeHandler {
             urlSchemeTask.didFailWithError(URLError(.badURL))
             return
         }
+
+        if relative == "__mirage_local",
+           let requestedPath = URLComponents(url: requestURL, resolvingAgainstBaseURL: false)?
+            .queryItems?.first(where: { $0.name == "path" })?.value,
+           (requestedPath as NSString).isAbsolutePath {
+            let candidate = URL(fileURLWithPath: requestedPath).standardizedFileURL.resolvingSymlinksInPath()
+            for rootURL in overlays + [base] {
+                let root = rootURL.standardizedFileURL.resolvingSymlinksInPath()
+                if candidate.path == root.path || candidate.path.hasPrefix(root.path + "/") {
+                    if sendFile(candidate, for: requestURL, task: urlSchemeTask) { return }
+                    break
+                }
+            }
+            urlSchemeTask.didFailWithError(URLError(.fileDoesNotExist))
+            return
+        }
+
         let roots = relative.lowercased() == "project.json" ? [base] : overlays + [base]
         for root in roots {
             let normalizedRoot = root.standardizedFileURL.resolvingSymlinksInPath()
             let candidate = normalizedRoot.appendingPathComponent(relative).standardizedFileURL.resolvingSymlinksInPath()
             guard candidate.path.hasPrefix(normalizedRoot.path + "/") else { continue }
-            guard let data = try? Data(contentsOf: candidate) else { continue }
-            let mime = UTType(filenameExtension: candidate.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
-            let response = URLResponse(url: requestURL, mimeType: mime, expectedContentLength: data.count, textEncodingName: nil)
-            urlSchemeTask.didReceive(response)
-            urlSchemeTask.didReceive(data)
-            urlSchemeTask.didFinish()
-            return
+            if sendFile(candidate, for: requestURL, task: urlSchemeTask) { return }
         }
         urlSchemeTask.didFailWithError(URLError(.fileDoesNotExist))
     }
@@ -129,13 +150,13 @@ final class MirageScreenSaverView: ScreenSaverView {
     private var configuration: MirageSaverConfiguration?
     private var sceneLibrary: MirageSceneLibrary?
     private var sceneEngine: UnsafeMutableRawPointer?
+    private var didLoadWallpaper = false
 
     override init?(frame: NSRect, isPreview: Bool) {
         super.init(frame: frame, isPreview: isPreview)
         autoresizingMask = [.width, .height]
         wantsLayer = true
         layer?.backgroundColor = NSColor.black.cgColor
-        loadWallpaper()
     }
 
     required init?(coder: NSCoder) {
@@ -143,7 +164,11 @@ final class MirageScreenSaverView: ScreenSaverView {
         autoresizingMask = [.width, .height]
         wantsLayer = true
         layer?.backgroundColor = NSColor.black.cgColor
-        loadWallpaper()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil { loadWallpaper() }
     }
 
     deinit {
@@ -154,6 +179,8 @@ final class MirageScreenSaverView: ScreenSaverView {
     }
 
     private func loadWallpaper() {
+        guard !didLoadWallpaper, window != nil else { return }
+        didLoadWallpaper = true
         guard let configuration = MirageSaverConfiguration.load() else {
             showMessage("请先在 Mirage 设置中选择屏保壁纸")
             return
@@ -186,9 +213,15 @@ final class MirageScreenSaverView: ScreenSaverView {
         setenv("VK_DRIVER_FILES", icd.path, 1)
         let data = (try? JSONSerialization.data(withJSONObject: configuration.rawProperties)) ?? Data("{}".utf8)
         let json = String(data: data, encoding: .utf8) ?? "{}"
-        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
-        let width = UInt32(max(bounds.width * scale, 500))
-        let height = UInt32(max(bounds.height * scale, 500))
+        // ScreenSaverView uses logical points while Vulkan renders pixels.
+        // Ask AppKit for this view's actual backing rect so mixed-DPI displays
+        // and System Settings' preview both retain the correct aspect ratio.
+        let backingSize = convertToBacking(bounds).size
+        let backingWidth = max(backingSize.width, 1)
+        let backingHeight = max(backingSize.height, 1)
+        let previewScale = max(1, 500 / min(backingWidth, backingHeight))
+        let width = UInt32(min(ceil(backingWidth * previewScale), 8192))
+        let height = UInt32(min(ceil(backingHeight * previewScale), 8192))
         let viewPointer = Unmanaged.passUnretained(self).toOpaque()
         let engine = assets.path.withCString { assetsPath in
             configuration.entryURL.path.withCString { packagePath in
@@ -237,6 +270,72 @@ final class MirageScreenSaverView: ScreenSaverView {
         (function(){
           window.wallpaperEngine_paused=false;
           window.chrome=window.chrome||{runtime:{}};
+          function __mirageLocalAssetURL(raw){
+            if(typeof raw!=='string'||raw.slice(0,5).toLowerCase()!=='file:')return raw;
+            try{
+              var u=new URL(raw),p=decodeURIComponent(u.pathname||'');
+              while(p.length>1&&p.charAt(0)==='/'&&p.charAt(1)==='/')p=p.slice(1);
+              return 'mirage-wallpaper://wallpaper/__mirage_local?path='+encodeURIComponent(p);
+            }catch(e){return raw;}
+          }
+          function __mirageRewriteCssURLs(value){
+            if(typeof value!=='string')return value;
+            return value.replace(/file:[^'")]+/gi,function(url){return __mirageLocalAssetURL(url.trim());});
+          }
+          function __mirageWrapCssProperty(name){
+            try{
+              var d=Object.getOwnPropertyDescriptor(CSSStyleDeclaration.prototype,name);
+              if(d&&d.get&&d.set)Object.defineProperty(CSSStyleDeclaration.prototype,name,{
+                configurable:d.configurable,enumerable:d.enumerable,get:d.get,
+                set:function(v){d.set.call(this,__mirageRewriteCssURLs(v));}
+              });
+            }catch(e){}
+          }
+          ['background','backgroundImage','cssText'].forEach(__mirageWrapCssProperty);
+          try{
+            var nativeSetProperty=CSSStyleDeclaration.prototype.setProperty;
+            CSSStyleDeclaration.prototype.setProperty=function(name,value,priority){
+              return nativeSetProperty.call(this,name,__mirageRewriteCssURLs(value),priority);
+            };
+          }catch(e){}
+          function __mirageWrapURLProperty(proto,name){
+            try{
+              var d=Object.getOwnPropertyDescriptor(proto,name);
+              if(d&&d.get&&d.set)Object.defineProperty(proto,name,{
+                configurable:d.configurable,enumerable:d.enumerable,get:d.get,
+                set:function(v){d.set.call(this,__mirageLocalAssetURL(v));}
+              });
+            }catch(e){}
+          }
+          [[HTMLImageElement.prototype,'src'],[HTMLMediaElement.prototype,'src'],
+           [HTMLSourceElement.prototype,'src']].forEach(function(x){__mirageWrapURLProperty(x[0],x[1]);});
+          try{
+            var nativeSetAttribute=Element.prototype.setAttribute;
+            Element.prototype.setAttribute=function(name,value){
+              var n=String(name).toLowerCase();
+              if(n==='src'||n==='poster')value=__mirageLocalAssetURL(value);
+              else if(n==='style')value=__mirageRewriteCssURLs(value);
+              return nativeSetAttribute.call(this,name,value);
+            };
+          }catch(e){}
+          function __mirageRewriteElementAsset(element,name){
+            try{
+              var value=element.getAttribute(name);
+              if(!value||value.toLowerCase().indexOf('file:')<0)return;
+              var rewritten=name==='style'?__mirageRewriteCssURLs(value):__mirageLocalAssetURL(value);
+              if(rewritten!==value)nativeSetAttribute.call(element,name,rewritten);
+            }catch(e){}
+          }
+          function __mirageInstallLocalAssetObserver(){
+            if(!document.documentElement||window.__mirageLocalAssetObserver)return;
+            var observer=new MutationObserver(function(records){
+              records.forEach(function(record){__mirageRewriteElementAsset(record.target,record.attributeName);});
+            });
+            observer.observe(document.documentElement,{subtree:true,attributes:true,attributeFilter:['style','src','poster']});
+            window.__mirageLocalAssetObserver=observer;
+          }
+          if(document.documentElement)__mirageInstallLocalAssetObserver();
+          document.addEventListener('DOMContentLoaded',__mirageInstallLocalAssetObserver,{once:true});
           var retry=window.setTimeout.bind(window);
           var listeners=[];
           window.wallpaperRegisterAudioListener=function(cb){if(typeof cb==='function')listeners.push(cb);};
@@ -294,6 +393,7 @@ final class MirageScreenSaverView: ScreenSaverView {
 
     override func startAnimation() {
         super.startAnimation()
+        loadWallpaper()
         player?.play()
         webView?.evaluateJavaScript("window.wallpaperEngine_paused=false;if(window.wallpaperPropertyListener&&window.wallpaperPropertyListener.setPaused)window.wallpaperPropertyListener.setPaused(false);")
         if let sceneEngine { sceneLibrary?.setPaused(sceneEngine, 0) }
