@@ -25,23 +25,43 @@ class StableHostingView<Content: View>: NSHostingView<Content> {
 
     required init(rootView: Content) {
         super.init(rootView: rootView)
-        // 关键: 使用 autoresizing 而非 Auto Layout
-        // 这样 NSHostingView 内部的 setNeedsUpdateConstraints 不会
-        // 触发窗口级别的约束更新 pass
         translatesAutoresizingMaskIntoConstraints = true
     }
 
     @available(*, unavailable)
     required dynamic init?(coder: NSCoder) { fatalError() }
 
-    // 拦截任何试图切换回 Auto Layout 的行为
-    override var translatesAutoresizingMaskIntoConstraints: Bool {
-        get { true }
-        set { /* 强制保持 true，忽略外部设置 */ }
+    // ===== 彻底切断约束循环 =====
+    //
+    // 堆栈分析显示循环路径:
+    //   NSWindow display cycle → updateConstraintsForSubtreeIfNeeded
+    //   → NSHostingView.updateConstraints() [frame 15-16]
+    //   → 内部 defer 闭包调用子视图 updateConstraints [frame 14]
+    //   → _prepareForTwoPassConstraintsUpdateIfNeeded [frame 13]
+    //   → setNeedsUpdateConstraints: [frame 12]
+    //   → _informContainerThatSubviewsNeedUpdateConstraints 向上传播
+    //   → 窗口再次标记需要约束更新 → 循环
+    //
+    // 解决: 完全不调用 super.updateConstraints()。
+    // 我们使用 autoresizingMask 管理布局，不需要 Auto Layout 约束。
+    // NSHostingView 会通过自身的 layout()/draw() 正确渲染 SwiftUI 内容，
+    // 约束系统并非其渲染的必要条件。
+
+    // 彻底跳过 NSHostingView 的 updateConstraints 实现。
+    // NSHostingView.updateConstraints() 内部会触发子视图约束更新，
+    // 子视图再次标记 setNeedsUpdateConstraints，形成无限循环。
+    // 我们跳过它，只保留 NSView 的基础实现来满足 AppKit 协议。
+    override func updateConstraints() {
+        // 跳过 NSHostingView 的实现，直接调用 NSView 的版本
+        // NSView.updateConstraints() 只是一个空壳/标记已更新
+        let sel = #selector(NSView.updateConstraints)
+        if let imp = NSView.instanceMethod(for: sel) {
+            typealias Fn = @convention(c) (AnyObject, Selector) -> Void
+            let fn = unsafeBitCast(imp, to: Fn.self)
+            fn(self, sel)
+        }
     }
 
-    // 覆盖 intrinsicContentSize 返回 noIntrinsicMetric
-    // 防止 Auto Layout 系统根据 SwiftUI 内容尺寸创建约束
     override var intrinsicContentSize: NSSize {
         NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric)
     }
