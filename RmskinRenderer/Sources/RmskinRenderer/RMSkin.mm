@@ -22,12 +22,14 @@
     NSImage  *_bgImage;
     int       _backgroundMode;
     NSColor  *_blurTint;
+    int       _defaultUpdateDivider;
 
     // Reentrancy guards: a bang fired from within tick/reload (e.g. !Update,
     // !Refresh triggered by an IfAction) must not recursively re-enter the
     // same pipeline, which would otherwise overflow the stack.
     BOOL      _ticking;
     BOOL      _reloading;
+    BOOL      _hasFiredRefreshAction;
 }
 
 - (nullable instancetype)initWithSkinFile:(NSString *)skinFile
@@ -142,6 +144,7 @@
         [mt readOptions];
     }
     for (RMMeasure *m in pendingMeasures) {
+        m.defaultUpdateDivider = _defaultUpdateDivider;
         [m readOptions];
     }
 
@@ -199,6 +202,13 @@
     _updateInterval = MAX(ms, 16) / 1000.0;
     _dynamicWindowSize = [cp readBool:@"Rainmeter" key:@"DynamicWindowSize" default:NO];
     _backgroundMode = [cp readInt:@"Rainmeter" key:@"BackgroundMode" default:0];
+    _defaultUpdateDivider = [cp readInt:@"Rainmeter" key:@"DefaultUpdateDivider" default:1];
+    if (_defaultUpdateDivider < 1) _defaultUpdateDivider = 1;
+
+    // OnRefreshAction: fired once after skin loads/reloads.
+    self.onRefreshAction = [cp readString:@"Rainmeter" key:@"OnRefreshAction" default:nil];
+    // OnUpdateAction: fired every update tick (Rainmeter's OnUpdateAction).
+    self.onUpdateAction  = [cp readString:@"Rainmeter" key:@"OnUpdateAction"  default:nil];
 
     // Blur=1 enables Rainmeter's built-in FrostedGlass-style backdrop.
     // We treat it the same as a FrostedGlass plugin measure: capture the
@@ -314,7 +324,21 @@
     // while a tick is already running — that path caused unbounded recursion.
     if (_ticking) return;
     _ticking = YES;
+
+    // Fire OnRefreshAction on the first tick after reload.
+    if (!_hasFiredRefreshAction) {
+        _hasFiredRefreshAction = YES;
+        if (self.onRefreshAction.length) {
+            [self executeActions:self.onRefreshAction];
+        }
+    }
+
     for (RMMeasure *m in _measures) [m update];
+
+    // OnUpdateAction fires every tick after measures are updated.
+    if (self.onUpdateAction.length) {
+        [self executeActions:self.onUpdateAction];
+    }
 
     RMMeter *prev = nil;
     CGFloat maxX = 0, maxY = 0;

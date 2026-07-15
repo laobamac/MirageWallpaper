@@ -298,4 +298,93 @@
     }
 }
 
+#pragma mark - File persistence
+
+// Write/update a key=value line in a section of a Rainmeter .ini file on disk.
+// Attempts a minimal in-place edit: if the key already exists in the target
+// section, the line is replaced; otherwise the key is appended at the end of
+// the section. Skips write if the file cannot be read or written.
++ (void)writeKey:(NSString *)key
+          value:(NSString *)value
+        section:(NSString *)section
+         toFile:(NSString *)filePath {
+    if (key.length == 0 || section.length == 0 || filePath.length == 0) return;
+
+    NSFileManager *fm = [NSFileManager defaultManager];
+    if (![fm fileExistsAtPath:filePath]) return;
+
+    NSError *err = nil;
+    NSString *content = [NSString stringWithContentsOfFile:filePath
+                                                 encoding:NSUTF8StringEncoding
+                                                    error:&err];
+    if (err) {
+        // Try Latin-1 fallback.
+        content = [NSString stringWithContentsOfFile:filePath
+                                           encoding:NSISOLatin1StringEncoding
+                                              error:&err];
+    }
+    if (err || content == nil) {
+        RMLogWarn(@"WriteKeyValue: cannot read %@: %@", filePath, err);
+        return;
+    }
+
+    NSArray<NSString *> *lines = [content componentsSeparatedByString:@"\n"];
+    NSMutableArray<NSString *> *newLines = [NSMutableArray new];
+    BOOL inTargetSection = NO;
+    BOOL wroteKey = NO;
+    NSString *sectionHeader = [NSString stringWithFormat:@"[%@]", section];
+
+    for (NSUInteger i = 0; i < lines.count; i++) {
+        NSString *line = lines[i];
+        NSString *trimmed = [line stringByTrimmingCharactersInSet:
+                             [NSCharacterSet whitespaceCharacterSet]];
+
+        // Detect section boundaries.
+        if ([trimmed hasPrefix:@"["] && [trimmed hasSuffix:@"]"]) {
+            // If we were in the target section and didn't write the key, append it.
+            if (inTargetSection && !wroteKey) {
+                [newLines addObject:[NSString stringWithFormat:@"%@=%@", key, value]];
+                wroteKey = YES;
+            }
+            inTargetSection = [trimmed caseInsensitiveCompare:sectionHeader] == NSOrderedSame;
+            [newLines addObject:line];
+            continue;
+        }
+
+        // Inside the target section: replace or skip existing key.
+        if (inTargetSection) {
+            NSRange eq = [line rangeOfString:@"="];
+            if (eq.location != NSNotFound) {
+                NSString *lineKey = [[line substringToIndex:eq.location]
+                    stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+                if ([lineKey caseInsensitiveCompare:key] == NSOrderedSame) {
+                    [newLines addObject:[NSString stringWithFormat:@"%@=%@", key, value]];
+                    wroteKey = YES;
+                    continue;
+                }
+            }
+        }
+        [newLines addObject:line];
+    }
+
+    // If the target section was the last one and key wasn't written, append.
+    if (inTargetSection && !wroteKey) {
+        [newLines addObject:[NSString stringWithFormat:@"%@=%@", key, value]];
+        wroteKey = YES;
+    }
+
+    // If the section doesn't exist at all, append it at the end.
+    if (!wroteKey) {
+        [newLines addObject:@""];
+        [newLines addObject:sectionHeader];
+        [newLines addObject:[NSString stringWithFormat:@"%@=%@", key, value]];
+    }
+
+    NSString *output = [newLines componentsJoinedByString:@"\n"];
+    [output writeToFile:filePath atomically:YES encoding:NSUTF8StringEncoding error:&err];
+    if (err) {
+        RMLogWarn(@"WriteKeyValue: write failed %@: %@", filePath, err);
+    }
+}
+
 @end

@@ -28,6 +28,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, assign) BOOL   disabled;
 @property (nonatomic, assign) BOOL   invert;
 @property (nonatomic, assign) int    updateDivider;
+@property (nonatomic, assign) int    defaultUpdateDivider;  // fallback from [Rainmeter] DefaultUpdateDivider
 @property (nonatomic, assign) int    updateCounter;
 @property (nonatomic, copy, nullable) NSString *group;
 

@@ -214,10 +214,19 @@
 
 - (void)installBlurEffect {
     if (_blurEffectView != nil) return;
+
+    // NSVisualEffectView must be placed as the window's contentView with
+    // RMSkinView on top of it — not as a subview of RMSkinView (which would
+    // cover drawRect output). We insert a new layer: window.contentView =
+    // effectView, effectView contains self (the skin view).
+    NSWindow *win = self.window;
+    if (win == nil) return;
+
     _blurEffectView = [[NSVisualEffectView alloc] initWithFrame:self.bounds];
     _blurEffectView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     _blurEffectView.blendingMode = NSVisualEffectBlendingModeBehindWindow;
     _blurEffectView.state = NSVisualEffectStateActive;
+    _blurEffectView.wantsLayer = YES;
 
     // Choose material based on tint.
     CGFloat r = 0, g = 0, b = 0, a = 0;
@@ -229,14 +238,17 @@
         ? NSVisualEffectMaterialLight
         : NSVisualEffectMaterialHUDWindow;
 
-    _blurEffectView.wantsLayer = YES;
-    _blurEffectView.alphaValue = 1.0;
-    [self addSubview:_blurEffectView positioned:NSWindowBelow relativeTo:nil];
+    // Reparent: remove self from window, set effectView as contentView,
+    // then add self back on top of the effectView.
+    [self removeFromSuperview];
+    _blurEffectView.frame = NSMakeRect(0, 0, win.frame.size.width, win.frame.size.height);
+    win.contentView = _blurEffectView;
+    self.frame = _blurEffectView.bounds;
+    self.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    [_blurEffectView addSubview:self];
 
-    // The window must not be fully transparent for the effect to sample
-    // desktop content — set it to a near-transparent color instead of clear.
-    NSWindow *win = self.window;
-    if (win && [win.backgroundColor isEqual:[NSColor clearColor]]) {
+    // Near-transparent background so the compositor can sample behind.
+    if ([win.backgroundColor isEqual:[NSColor clearColor]]) {
         win.backgroundColor = [NSColor colorWithCalibratedWhite:0 alpha:0.001];
     }
 }

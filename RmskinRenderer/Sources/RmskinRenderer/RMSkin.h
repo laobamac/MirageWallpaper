@@ -39,6 +39,22 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, copy, nullable) NSString *mouseScrollUpAction;
 @property (nonatomic, copy, nullable) NSString *mouseScrollDownAction;
 
+// Skin-level actions (Rainmeter [Rainmeter] section equivalents).
+@property (nonatomic, copy, nullable) NSString *onRefreshAction;
+@property (nonatomic, copy, nullable) NSString *onUpdateAction;
+
+// Window management properties (driven by !SetTransparency, !ClickThrough, !Fade).
+// Setting these triggers the view to update its window accordingly.
+@property (nonatomic, assign) CGFloat windowAlpha;       // 0..1, 1=opaque
+@property (nonatomic, assign) BOOL    clickThrough;      // window ignores mouse events
+@property (nonatomic, assign) NSTimeInterval fadeDuration; // seconds for fade animation
+@property (nonatomic, assign) NSPoint  windowPosition;   // set via !Move
+
+// Callbacks installed by RMSkinView / RMSkinWallpaper host.
+@property (nonatomic, copy, nullable) void (^onWindowAlphaChanged)(CGFloat alpha, NSTimeInterval duration);
+@property (nonatomic, copy, nullable) void (^onClickThroughChanged)(BOOL clickThrough);
+@property (nonatomic, copy, nullable) void (^onWindowPositionChanged)(NSPoint pos);
+
 // skinFile:   absolute path of the config's .ini
 // resources:  #@# target (root config's @Resources)
 // rootConfig: skin root folder (contains @Resources)

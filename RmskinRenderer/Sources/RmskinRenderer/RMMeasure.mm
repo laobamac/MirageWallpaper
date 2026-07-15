@@ -110,6 +110,7 @@
         _minValue = 0;
         _maxValue = 1;
         _updateDivider = 1;
+        _defaultUpdateDivider = 1;
         _updateCounter = 0;
     }
     return self;

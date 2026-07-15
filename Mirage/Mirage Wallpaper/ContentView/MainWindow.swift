@@ -7,6 +7,30 @@
 import Cocoa
 import SwiftUI
 
+// MARK: - 防约束循环的 NSHostingView 子类
+// SwiftUI 的 NSHostingView 在 hitTest 期间会 flush graph transactions，
+// 触发 setNeedsUpdateConstraints，与窗口的 display cycle 产生无限循环。
+// 通过节流 updateConstraints 调用频率来打断循环。
+class StableHostingView<Content: View>: NSHostingView<Content> {
+    private var isUpdatingConstraints = false
+
+    override func updateConstraints() {
+        guard !isUpdatingConstraints else { return }
+        isUpdatingConstraints = true
+        super.updateConstraints()
+        isUpdatingConstraints = false
+    }
+
+    // 在 display cycle 期间抑制约束更新请求向上传播
+    override var needsUpdateConstraints: Bool {
+        get { super.needsUpdateConstraints }
+        set {
+            guard !isUpdatingConstraints else { return }
+            super.needsUpdateConstraints = newValue
+        }
+    }
+}
+
 class MainWindowController: NSWindowController, NSWindowDelegate {
     override var window: NSWindow! {
         get {
@@ -32,21 +56,12 @@ class MainWindowController: NSWindowController, NSWindowDelegate {
         self.window.isMovableByWindowBackground = true
         self.window.contentMinSize = NSSize(width: 1000, height: 640)
 
-        // 使用中间容器 NSView，让 NSHostingView 通过 autoresizing 填充，
-        // 避免 NSHostingView 直接作为 contentView 时其内部约束与窗口约束系统循环冲突
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: 1029, height: 669))
-        container.autoresizesSubviews = true
-
-        let hostingView = NSHostingView(rootView: ContentView(
+        let hostingView = StableHostingView(rootView: ContentView(
                 viewModel: AppDelegate.shared.contentViewModel,
                 wallpaperViewModel: AppDelegate.shared.wallpaperViewModel
             ).environmentObject(AppDelegate.shared.globalSettingsViewModel)
         )
-        hostingView.frame = container.bounds
-        hostingView.autoresizingMask = [.width, .height]
-        container.addSubview(hostingView)
-
-        self.window.contentView = container
+        self.window.contentView = hostingView
     }
     
     required init?(coder: NSCoder) {
