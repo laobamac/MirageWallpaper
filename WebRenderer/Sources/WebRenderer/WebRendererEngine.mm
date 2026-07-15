@@ -21,6 +21,75 @@ static NSString *const kShimJS = @"\
   /* Chrome-compat: many WE wallpapers were authored against Chromium and \
      feature-sniff for window.chrome. WebKit lacks it; stub it. */\
   try { window.chrome = window.chrome || { runtime: {} }; } catch(e) {}\
+  /* WE exposes file properties as filesystem paths. Legacy wallpapers often \
+     prepend file:/// in page script, which WKWebView blocks for a custom-scheme \
+     document. Rewrite those subresources through the allow-listed handler. */\
+  function __wr_localAssetURL(raw){\
+    if(typeof raw!=='string'||raw.slice(0,5).toLowerCase()!=='file:')return raw;\
+    try {\
+      var u=new URL(raw),p=decodeURIComponent(u.pathname||'');\
+      while(p.length>1&&p.charAt(0)==='/'&&p.charAt(1)==='/')p=p.slice(1);\
+      return 'we-wallpaper://wallpaper/__mirage_local?path='+encodeURIComponent(p);\
+    } catch(e) { return raw; }\
+  }\
+  function __wr_rewriteCssURLs(value){\
+    if(typeof value!=='string')return value;\
+    return value.replace(/file:[^'\")]+/gi,function(url){return __wr_localAssetURL(url.trim());});\
+  }\
+  function __wr_wrapCssProperty(name){\
+    try {\
+      var d=Object.getOwnPropertyDescriptor(CSSStyleDeclaration.prototype,name);\
+      if(d&&d.get&&d.set)Object.defineProperty(CSSStyleDeclaration.prototype,name,{\
+        configurable:d.configurable,enumerable:d.enumerable,get:d.get,\
+        set:function(v){d.set.call(this,__wr_rewriteCssURLs(v));}\
+      });\
+    } catch(e) {}\
+  }\
+  ['background','backgroundImage','cssText'].forEach(__wr_wrapCssProperty);\
+  try {\
+    var __wr_nativeSetProperty=CSSStyleDeclaration.prototype.setProperty;\
+    CSSStyleDeclaration.prototype.setProperty=function(name,value,priority){\
+      return __wr_nativeSetProperty.call(this,name,__wr_rewriteCssURLs(value),priority);\
+    };\
+  } catch(e) {}\
+  function __wr_wrapURLProperty(proto,name){\
+    try {\
+      var d=Object.getOwnPropertyDescriptor(proto,name);\
+      if(d&&d.get&&d.set)Object.defineProperty(proto,name,{\
+        configurable:d.configurable,enumerable:d.enumerable,get:d.get,\
+        set:function(v){d.set.call(this,__wr_localAssetURL(v));}\
+      });\
+    } catch(e) {}\
+  }\
+  [[HTMLImageElement.prototype,'src'],[HTMLMediaElement.prototype,'src'],\
+   [HTMLSourceElement.prototype,'src']].forEach(function(x){__wr_wrapURLProperty(x[0],x[1]);});\
+  try {\
+    var __wr_nativeSetAttribute=Element.prototype.setAttribute;\
+    Element.prototype.setAttribute=function(name,value){\
+      var n=String(name).toLowerCase();\
+      if(n==='src'||n==='poster')value=__wr_localAssetURL(value);\
+      else if(n==='style')value=__wr_rewriteCssURLs(value);\
+      return __wr_nativeSetAttribute.call(this,name,value);\
+    };\
+  } catch(e) {}\
+  function __wr_rewriteElementAsset(element,name){\
+    try {\
+      var value=element.getAttribute(name);\
+      if(!value||value.toLowerCase().indexOf('file:')<0)return;\
+      var rewritten=name==='style'?__wr_rewriteCssURLs(value):__wr_localAssetURL(value);\
+      if(rewritten!==value)__wr_nativeSetAttribute.call(element,name,rewritten);\
+    } catch(e) {}\
+  }\
+  function __wr_installLocalAssetObserver(){\
+    if(!document.documentElement||window.__wr_localAssetObserver)return;\
+    var observer=new MutationObserver(function(records){\
+      records.forEach(function(record){__wr_rewriteElementAsset(record.target,record.attributeName);});\
+    });\
+    observer.observe(document.documentElement,{subtree:true,attributes:true,attributeFilter:['style','src','poster']});\
+    window.__wr_localAssetObserver=observer;\
+  }\
+  if(document.documentElement)__wr_installLocalAssetObserver();\
+  document.addEventListener('DOMContentLoaded',__wr_installLocalAssetObserver,{once:true});\
   window.wallpaperEngine_paused = false;\
   var __streams = [];\
   window.wallpaperRegisterAudioStream = function(el){\

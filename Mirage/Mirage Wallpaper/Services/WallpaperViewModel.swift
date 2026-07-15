@@ -160,7 +160,12 @@ class WallpaperViewModel: ObservableObject {
                 result[key] = prop
             }
         }
-        if w.kind == .scene, !w.assetOverlayDirectories.isEmpty {
+        // A workshop preset may store file/directory values relative to its
+        // own overlay (for example "files/background.jpg"). Resolve those
+        // for both scene and web dependencies: many legacy web wallpapers
+        // prepend file:/// themselves and therefore cannot use a bare path
+        // relative to the dependency's entry page.
+        if !w.assetOverlayDirectories.isEmpty {
             let baseProperties = loadBaseProperties(for: w)
             let presetKeys = Set(w.project.preset?.keys.map { $0 } ?? [])
             for (key, var property) in result where property.propertyType == .file ||

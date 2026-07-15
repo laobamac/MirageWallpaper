@@ -80,13 +80,40 @@ static NSString *MIMEForExtension(NSString *ext) {
     return [self safePathForRelative:relative inDirectory:_baseDirectory];
 }
 
+- (nullable NSString *)resolvedLocalPathForURL:(NSURL *)url {
+    NSURLComponents *components = [NSURLComponents componentsWithURL:url
+                                               resolvingAgainstBaseURL:NO];
+    NSString *requestedPath = nil;
+    for (NSURLQueryItem *item in components.queryItems ?: @[]) {
+        if ([item.name isEqualToString:@"path"] && item.value.length > 0) {
+            requestedPath = item.value;
+            break;
+        }
+    }
+    if (requestedPath.length == 0 || ![requestedPath isAbsolutePath]) return nil;
+
+    NSString *candidate = [[requestedPath stringByStandardizingPath] stringByResolvingSymlinksInPath];
+    NSArray<NSString *> *roots = [(_overlayDirectories ?: @[]) arrayByAddingObject:_baseDirectory ?: @""];
+    for (NSString *directory in roots) {
+        NSString *root = [[directory stringByStandardizingPath] stringByResolvingSymlinksInPath];
+        if (root.length == 0) continue;
+        if ([candidate isEqualToString:root] ||
+            [candidate hasPrefix:[root stringByAppendingString:@"/"]]) {
+            return candidate;
+        }
+    }
+    return nil;
+}
+
 #pragma mark - WKURLSchemeHandler
 
 - (void)webView:(WKWebView *)webView startURLSchemeTask:(id<WKURLSchemeTask>)task {
     (void)webView;
     NSString *rawPath = task.request.URL.path ?: @"";
     NSString *rel = [rawPath stringByRemovingPercentEncoding] ?: rawPath;
-    NSString *filePath = [self resolvedPathForRelative:rel];
+    NSString *filePath = [rel isEqualToString:@"/__mirage_local"]
+        ? [self resolvedLocalPathForURL:task.request.URL]
+        : [self resolvedPathForRelative:rel];
 
     if (filePath == nil) { [self respondNotFound:task]; return; }
 
