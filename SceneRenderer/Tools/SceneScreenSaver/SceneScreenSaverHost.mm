@@ -6,7 +6,8 @@
 extern "C" void* SceneRendererMacMetalDisplayCreateForNSView(void* ns_view);
 extern "C" void SceneRendererMacMetalDisplayDestroy(void* handle);
 extern "C" void SceneRendererMacMetalDisplayDraw(void* handle, void* texture,
-                                                   std::uint32_t width, std::uint32_t height);
+                                                 std::uint32_t width, std::uint32_t height,
+                                                 void (*presented)(void*), void* userdata);
 
 @interface MirageSaverHostReference : NSObject
 @property(nonatomic, assign) void* host;
@@ -57,7 +58,8 @@ extern "C" void MirageSceneSaverHostPresent(void* handle, void* texture,
         if (current == nullptr) return;
         current->scheduled.store(false);
         SceneRendererMacMetalDisplayDraw(current->display, current->texture.load(),
-                                          current->width.load(), current->height.load());
+                                         current->width.load(), current->height.load(), nullptr,
+                                         nullptr);
     });
 }
 

@@ -12,6 +12,7 @@
 //   {"cmd":"fps","value":30}
 //   {"cmd":"fillmode","value":"cover"|"contain"|"stretch"}
 //   {"cmd":"speed","value":1.0}
+//   {"cmd":"activate"}              // reveal a deferred-show window
 //   {"cmd":"quit"}
 //
 // The reader runs on its own std::thread; sr::SceneWallpaper's setters post
@@ -38,8 +39,11 @@ class SceneControlChannel {
 public:
     // on_quit is invoked (from the reader thread) when a {"cmd":"quit"} arrives
     // or stdin hits EOF. It should stop the desktop run loop.
-    SceneControlChannel(sr::SceneWallpaper& wallpaper, std::function<void()> on_quit)
-        : m_wallpaper(wallpaper), m_on_quit(std::move(on_quit)) {}
+    SceneControlChannel(sr::SceneWallpaper& wallpaper, std::function<void()> on_quit,
+                        std::function<void()> on_activate = {})
+        : m_wallpaper(wallpaper),
+          m_on_quit(std::move(on_quit)),
+          m_on_activate(std::move(on_activate)) {}
 
     ~SceneControlChannel() { stop(); }
 
@@ -54,10 +58,10 @@ public:
     void stop() {
         m_running.store(false);
         if (m_thread.joinable()) {
-            // The reader is blocked on getline(stdin); detach so shutdown never
-            // hangs waiting for a line that may never come. The process is
-            // exiting anyway.
-            m_thread.detach();
+            // readLoop polls stdin with a short timeout, so shutdown can join
+            // safely instead of leaving a detached thread holding references
+            // to this channel and SceneWallpaper during teardown.
+            m_thread.join();
         }
     }
 
@@ -67,6 +71,7 @@ private:
 
     sr::SceneWallpaper&   m_wallpaper;
     std::function<void()> m_on_quit;
+    std::function<void()> m_on_activate;
     std::atomic<bool>     m_running { false };
     std::thread           m_thread;
 };

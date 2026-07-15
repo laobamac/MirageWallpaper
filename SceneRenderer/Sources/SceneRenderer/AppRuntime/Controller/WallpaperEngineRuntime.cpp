@@ -803,6 +803,27 @@ bool ApplyUserPropertyToNodeVisibility(Scene& scene, const std::string& key, con
     return scene.ApplyUserNodeVisibilityBindings(key, prop);
 }
 
+void ApplyUserPropertyBeforeFirstGraph(Scene& scene, const std::string& key, const Json& prop) {
+    sr::script::SetSceneUserProperty(scene, key, prop);
+    ApplyUserPropertyToClear(scene, key, prop);
+    ApplyUserPropertyToShaderUniforms(scene, key, prop);
+    (void)ApplyUserPropertyToMaterialTextures(scene, key, prop);
+    (void)ApplyUserPropertyToShaderCombos(scene, key, prop);
+    ApplyUserPropertyToImageColor(scene, key, prop);
+    ApplyUserPropertyToImageAlpha(scene, key, prop);
+    ApplyUserPropertyToText(scene, key, prop);
+    ApplyUserPropertyToPointSize(scene, key, prop);
+    ApplyUserPropertyToTextColor(scene, key, prop);
+    ApplyUserPropertyToTextAlpha(scene, key, prop);
+    ApplyUserPropertyToParticles(scene, key, prop);
+    ApplyUserPropertyToSoundVolume(scene, key, prop);
+    ApplyUserPropertyToCameraParallax(scene, key, prop);
+    ApplyUserPropertyToCameraShake(scene, key, prop);
+    ApplyUserPropertyToCameraPath(scene, key, prop);
+    (void)ApplyUserPropertyToNodeVisibility(scene, key, prop);
+    (void)scene.ApplyUserImageEffectVisibilityBindings(key, prop);
+}
+
 void MergeProjectUserProperties(const std::filesystem::path& project_dir, rstd::json::Map& out) {
     const auto    project_path = project_dir / "project.json";
     std::ifstream is(project_path);
@@ -891,6 +912,7 @@ public:
 
 private:
     void loadScene();
+    void publishPreparedScene();
 
     bool m_inited { false };
 
@@ -903,6 +925,11 @@ private:
     UserPropertyDiagnosticCallback               m_user_property_diagnostic_cb;
     ClearColorCallback                           m_clear_color_cb;
     uint64_t                                     m_audio_pause_generation { 0 };
+    uint64_t                                     m_config_generation { 0 };
+    uint64_t                                     m_prepared_scene_generation { 0 };
+    uint64_t                                     m_submitted_scene_generation { 0 };
+    bool                                         m_render_ready { false };
+    std::shared_ptr<Scene>                       m_prepared_scene;
 
     msgloop::MessageLoop<MainMsg>          m_main_loop;
     msgloop::MessageLoop<RenderMsg>        m_render_loop;
@@ -936,7 +963,7 @@ public:
     vulkan::VulkanRender* render() const { return m_render.get(); }
 
     bool renderInited() const { return m_render->inited(); }
-    bool sceneReady() const { return m_scene != nullptr; }
+    bool sceneReady() const { return m_scene_ready.load(std::memory_order_acquire); }
 
     void setMousePos(double x, double y) { m_mouse_pos.store(std::array { (float)x, (float)y }); }
 
@@ -990,6 +1017,7 @@ private:
 
     std::unique_ptr<vulkan::VulkanRender> m_render { std::make_unique<vulkan::VulkanRender>() };
     std::shared_ptr<Scene>                m_scene { nullptr };
+    std::atomic<bool>                     m_scene_ready { false };
     RenderSceneSnapshot                   m_render_scene;
     std::unique_ptr<rg::RenderGraph>      m_rg { nullptr };
     float                                 m_speed { 1.0f };
@@ -1204,8 +1232,10 @@ void SceneRenderController::refreshPreparedMaterialDirtyEvents() {
 }
 
 void SceneRenderController::on(RenderSetScene&& m) {
+    m_scene_ready.store(false, std::memory_order_release);
     m_scene = std::move(m.scene);
     rebuildRenderGraph(vulkan::RenderGraphResourceRetention::ReleaseSceneTextures, true);
+    m_scene_ready.store(m_scene != nullptr && m_render->readyToDraw(), std::memory_order_release);
 }
 
 void SceneRenderController::on(RenderSetSpeed&& m) { m_speed = m.speed; }
@@ -1301,7 +1331,7 @@ void SceneRenderController::on(RenderSetMediaStatus&& m) {
 }
 
 void SceneRenderController::on(RenderInit&& m) {
-    m_render->init(std::move(*m.info));
+    const bool initialized = m_render->init(std::move(*m.info));
 
     // Subscribe to ExSwapchain ready/extent/format changes. The
     // callback runs on the render thread (sync for Local, from
@@ -1324,7 +1354,7 @@ void SceneRenderController::on(RenderInit&& m) {
     }
 
     // inited, callback to load scene
-    if (m_main_tx) (void)m_main_tx->send(MainMsg { MainLoadScene {} });
+    if (initialized && m_main_tx) (void)m_main_tx->send(MainMsg { MainLoadScene {} });
 }
 
 void SceneRenderController::on(RenderSwapchainReady&& m) {
@@ -1355,21 +1385,37 @@ void SceneRenderController::on(RenderRequestPreparedPassDiagnostics&& m) {
 // ---- SceneRuntimeController message handlers --------------------------------
 
 void SceneRuntimeController::on(MainLoadScene&&) {
-    if (m_render_controller->renderInited()) {
-        loadScene();
-    }
+    // This message is emitted only after VulkanRender::init succeeds. Keep a
+    // main-loop-owned readiness bit instead of reading VulkanRender::m_inited
+    // across threads, then publish a scene that may already have finished CPU
+    // preparation in parallel.
+    m_render_ready = true;
+    publishPreparedScene();
 }
 
 void SceneRuntimeController::on(MainConfigure&& m) {
     m_config          = std::move(m.config);
     m_user_properties = NormalizeUserProperties(m_config.user_properties);
+    ++m_config_generation;
+    // Preserve zero as the "not configured" sentinel after wraparound.
+    if (m_config_generation == 0) {
+        ++m_config_generation;
+        m_prepared_scene_generation     = 0;
+        m_submitted_scene_generation    = 0;
+    }
+    m_prepared_scene.reset();
+    m_prepared_scene_generation = 0;
     on(MainSetFps { m_config.fps });
     on(MainSetVolume { m_config.volume });
     on(MainSetVolumeScale { 1.0f });
     on(MainSetMuted { m_config.muted });
     on(MainSetFillMode { m_config.fill_mode });
     on(MainSetSpeed { m_config.speed });
-    on(MainLoadScene {});
+
+    // MainConfigure and RenderInit run on separate message loops. Start the
+    // VFS/scene/image-header work immediately so it overlaps Vulkan/MoltenVK
+    // initialization; publishPreparedScene is the single join point.
+    loadScene();
 }
 
 void SceneRuntimeController::on(MainSetFps&& m) {
@@ -1410,8 +1456,16 @@ void SceneRuntimeController::on(MainSetUserProperty&& m) {
                                     prop.clone());
     m_user_properties.insert(::alloc::string::String::make(rstd::cppstd::as_str(property)),
                              prop.clone());
-    (void)m_render_loop.sender().send(
-        RenderMsg { RenderSetUserProperty { property, std::move(prop) } });
+    if (m_prepared_scene && m_prepared_scene_generation == m_config_generation &&
+        m_submitted_scene_generation != m_config_generation) {
+        // A property arriving while Vulkan is still initializing must update
+        // the private prepared Scene; sending it to the render loop now would
+        // be consumed before RenderSetScene and silently lost.
+        ApplyUserPropertyBeforeFirstGraph(*m_prepared_scene, property, prop);
+    } else {
+        (void)m_render_loop.sender().send(
+            RenderMsg { RenderSetUserProperty { property, std::move(prop) } });
+    }
 }
 
 void SceneRuntimeController::on(MainSetFirstFrameCallback&& m) {
@@ -1545,12 +1599,16 @@ void SceneRuntimeController::loadScene() {
         // branch above would skip start and silence all BGM. start() is a
         // no-op if the device isn't inited (e.g. muted) or already running.
         if (! m_config.muted) m_sound_manager->play();
+        // Apply initial bindings while the parsed Scene is still private to
+        // this preparation loop. The VFS must be attached first for shader
+        // combo and text asset resolution. Doing this before RenderSetScene
+        // keeps the initial render graph to a single build.
+        scene->vfs.reset(pVfs.release());
         m_user_properties.iter().for_each([&](auto entry) {
             auto [entry_key, entry_value] = entry;
             auto        key                = rstd::cppstd::to_string(entry_key->as_str());
             const auto& prop               = *entry_value;
-            ApplyUserPropertyToClear(*scene, key, prop);
-            sr::script::SetSceneUserProperty(*scene, key, prop);
+            ApplyUserPropertyBeforeFirstGraph(*scene, key, prop);
         });
         if (! m_config.cache_dir.empty() && scene) {
             std::filesystem::path ls_dir =
@@ -1560,8 +1618,6 @@ void SceneRuntimeController::loadScene() {
             std::string ls_file = (ls_dir / (scene_id + ".json")).native();
             sr::script::SetScenePersistence(*scene, std::move(ls_file));
         }
-        scene->vfs.reset(pVfs.release());
-
         // Surface the parsed clear color before the scene is shipped
         // off to the render thread; downstream callers use it to keep
         // letterbox/background fill aligned with the scene.
@@ -1571,18 +1627,22 @@ void SceneRuntimeController::loadScene() {
         }
     }
 
+    m_prepared_scene            = std::move(scene);
+    m_prepared_scene_generation = m_config_generation;
+    publishPreparedScene();
+}
+
+void SceneRuntimeController::publishPreparedScene() {
+    if (! m_render_ready || ! m_prepared_scene ||
+        m_prepared_scene_generation != m_config_generation ||
+        m_submitted_scene_generation == m_config_generation)
+        return;
+
+    auto scene = std::exchange(m_prepared_scene, nullptr);
+    m_submitted_scene_generation = m_config_generation;
+
     auto rtx = m_render_loop.sender();
-    (void)rtx.send(RenderMsg { RenderSetScene { scene } });
-    // First-frame default push: now that the render thread owns the scene,
-    // replay every collected user property (project.json defaults + any
-    // mutations the host already pushed during scene load) so the shader
-    // cbuffer matches what the host UI displays.
-    m_user_properties.iter().for_each([&](auto entry) {
-        auto [entry_key, entry_value] = entry;
-        auto        key               = rstd::cppstd::to_string(entry_key->as_str());
-        const auto& prop              = *entry_value;
-        (void)rtx.send(RenderMsg { RenderSetUserProperty { rstd::move(key), prop.clone() } });
-    });
+    (void)rtx.send(RenderMsg { RenderSetScene { std::move(scene) } });
     // draw first frame
     (void)rtx.send(RenderMsg { RenderDraw {} });
 }

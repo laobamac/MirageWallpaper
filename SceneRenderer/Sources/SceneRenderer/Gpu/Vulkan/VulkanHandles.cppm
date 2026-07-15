@@ -283,6 +283,7 @@ struct DeviceDispatch : InstanceDispatch {
     PFN_vkCreateGraphicsPipelines                vkCreateGraphicsPipelines {};
     PFN_vkCreateImage                            vkCreateImage {};
     PFN_vkCreateImageView                        vkCreateImageView {};
+    PFN_vkCreatePipelineCache                    vkCreatePipelineCache {};
     PFN_vkCreatePipelineLayout                   vkCreatePipelineLayout {};
     PFN_vkCreateQueryPool                        vkCreateQueryPool {};
     PFN_vkCreateRenderPass                       vkCreateRenderPass {};
@@ -301,6 +302,7 @@ struct DeviceDispatch : InstanceDispatch {
     PFN_vkDestroyFramebuffer                     vkDestroyFramebuffer {};
     PFN_vkDestroyImage                           vkDestroyImage {};
     PFN_vkDestroyImageView                       vkDestroyImageView {};
+    PFN_vkDestroyPipelineCache                   vkDestroyPipelineCache {};
     PFN_vkDestroyPipeline                        vkDestroyPipeline {};
     PFN_vkDestroyPipelineLayout                  vkDestroyPipelineLayout {};
     PFN_vkDestroyQueryPool                       vkDestroyQueryPool {};
@@ -320,6 +322,7 @@ struct DeviceDispatch : InstanceDispatch {
     PFN_vkGetFenceStatus                         vkGetFenceStatus {};
     PFN_vkGetImageMemoryRequirements             vkGetImageMemoryRequirements {};
     PFN_vkGetImageSubresourceLayout              vkGetImageSubresourceLayout {};
+    PFN_vkGetPipelineCacheData                   vkGetPipelineCacheData {};
     PFN_vkExportMetalObjectsEXT                  vkExportMetalObjectsEXT {};
     PFN_vkGetImageDrmFormatModifierPropertiesEXT vkGetImageDrmFormatModifierPropertiesEXT {};
     PFN_vkGetPipelineExecutablePropertiesKHR     vkGetPipelineExecutablePropertiesKHR {};
@@ -613,8 +616,20 @@ public:
     VkResult CreateCommandPool(const VkCommandPoolCreateInfo& ci, CommandPool&) const;
     VkResult CreateDescriptorSetLayout(const VkDescriptorSetLayoutCreateInfo& ci,
                                        DescriptorSetLayout&) const noexcept;
-    VkResult CreateGraphicsPipeline(const VkGraphicsPipelineCreateInfo& ci,
-                                    Pipeline&) const noexcept;
+    VkResult CreateGraphicsPipeline(const VkGraphicsPipelineCreateInfo& ci, Pipeline&,
+                                    VkPipelineCache cache = VK_NULL_HANDLE) const noexcept;
+
+    VkResult CreatePipelineCache(const VkPipelineCacheCreateInfo& ci,
+                                 VkPipelineCache* cache) const noexcept {
+        return dld->vkCreatePipelineCache(handle, &ci, nullptr, cache);
+    }
+    void DestroyPipelineCache(VkPipelineCache cache) const noexcept {
+        if (cache != VK_NULL_HANDLE) dld->vkDestroyPipelineCache(handle, cache, nullptr);
+    }
+    VkResult GetPipelineCacheData(VkPipelineCache cache, std::size_t* size,
+                                  void* data) const noexcept {
+        return dld->vkGetPipelineCacheData(handle, cache, size, data);
+    }
 
     VkResult CreateRenderPass(const VkRenderPassCreateInfo& ci, RenderPass&) const noexcept;
 

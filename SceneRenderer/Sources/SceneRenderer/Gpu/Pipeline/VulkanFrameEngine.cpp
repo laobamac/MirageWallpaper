@@ -3,6 +3,7 @@ module;
 
 #include "vvk/macros.hpp"
 
+#include <atomic>
 #include <unistd.h>
 #include <vulkan/vulkan.h>
 
@@ -592,8 +593,8 @@ struct VulkanRender::Impl {
     std::size_t                     m_next_upload_cmd { 0 };
     vvk::CommandBuffer              m_render_cmd;
 
-    bool m_with_surface { false };
-    bool m_inited { false };
+    bool              m_with_surface { false };
+    std::atomic<bool> m_inited { false };
 
     // MSAA sample count for the screen RT only. 1bit = disabled.
     // Resolved against device's framebufferColorSampleCounts in init().
@@ -612,6 +613,7 @@ VulkanRender::VulkanRender(): pImpl(std::make_unique<Impl>()) {}
 VulkanRender::~VulkanRender() {};
 
 bool VulkanRender::inited() const { return pImpl->m_inited; }
+bool VulkanRender::readyToDraw() const { return pImpl->m_inited && pImpl->m_program.loaded; }
 
 VkInstance VulkanRender::vkInstance() const {
     if (! pImpl->m_inited) return VK_NULL_HANDLE;

@@ -18,6 +18,7 @@ struct MacMetalDisplay {
     id<MTLCommandQueue>       queue { nil };
     id<MTLRenderPipelineState> pipeline { nil };
     id<MTLSamplerState>       sampler { nil };
+    dispatch_group_t          warmup_group { nil };
 };
 
 NSString* ShaderSource() {
@@ -39,17 +40,13 @@ NSString* ShaderSource() {
             "}\n";
 }
 
-bool EnsurePipeline(MacMetalDisplay* display, id<MTLTexture> source_texture) {
-    if (display == nullptr || source_texture == nil) return false;
-    id<MTLDevice> device = source_texture.device;
-    if (device == nil) return false;
-    if (display->pipeline != nil && display->device == device) return true;
+bool BuildPipeline(MacMetalDisplay* display, id<MTLDevice> device) {
+    if (display == nullptr || device == nil) return false;
+    display->pipeline = nil;
+    display->sampler  = nil;
+    display->queue    = nil;
 
     display->device = device;
-    display->layer.device = device;
-    display->layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
-    display->layer.framebufferOnly = YES;
-    display->layer.opaque = YES;
 
     display->queue = [device newCommandQueue];
     if (display->queue == nil) return false;
@@ -84,6 +81,22 @@ bool EnsurePipeline(MacMetalDisplay* display, id<MTLTexture> source_texture) {
     return display->sampler != nil;
 }
 
+bool EnsurePipeline(MacMetalDisplay* display, id<MTLTexture> source_texture) {
+    if (display == nullptr || source_texture == nil) return false;
+    if (display->warmup_group != nil) {
+        dispatch_group_wait(display->warmup_group, DISPATCH_TIME_FOREVER);
+        display->warmup_group = nil;
+    }
+    id<MTLDevice> device = source_texture.device;
+    if (device == nil) return false;
+    display->layer.device = device;
+    display->layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+    display->layer.framebufferOnly = YES;
+    display->layer.opaque = YES;
+    if (display->pipeline != nil && display->device == device) return true;
+    return BuildPipeline(display, device);
+}
+
 void UpdateDrawableSize(MacMetalDisplay* display) {
     if (display == nullptr || display->layer == nil) return;
     NSView* view = display->view;
@@ -111,6 +124,22 @@ extern "C" void* SceneRendererMacMetalDisplayCreateForNSView(void* ns_view) {
     content_view.wantsLayer = YES;
     content_view.layer = display->layer;
     UpdateDrawableSize(display);
+
+    // Shader source compilation used to happen synchronously on the very first
+    // scene frame. Prewarm it on a background queue while Vulkan, the VFS and
+    // the scene graph initialize. EnsurePipeline joins only if that work has
+    // not completed by the time the first exported texture arrives.
+    if (id<MTLDevice> default_device = MTLCreateSystemDefaultDevice()) {
+        display->layer.device = default_device;
+        display->layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+        display->layer.framebufferOnly = YES;
+        display->layer.opaque = YES;
+        display->warmup_group = dispatch_group_create();
+        dispatch_group_async(display->warmup_group,
+                             dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+          BuildPipeline(display, default_device);
+        });
+    }
     return display;
 }
 
@@ -126,10 +155,15 @@ extern "C" void* SceneRendererMacMetalDisplayCreate(GLFWwindow* window) {
 extern "C" void SceneRendererMacMetalDisplayDestroy(void* handle) {
     auto* display = static_cast<MacMetalDisplay*>(handle);
     if (display == nullptr) return;
+    if (display->warmup_group != nil) {
+        dispatch_group_wait(display->warmup_group, DISPATCH_TIME_FOREVER);
+        display->warmup_group = nil;
+    }
     delete display;
 }
 
-extern "C" void SceneRendererMacMetalDisplayDraw(void* handle, void* texture, uint32_t, uint32_t) {
+extern "C" void SceneRendererMacMetalDisplayDraw(void* handle, void* texture, uint32_t, uint32_t,
+                                                 void (*presented)(void*), void* userdata) {
     auto* display = static_cast<MacMetalDisplay*>(handle);
     if (display == nullptr || texture == nullptr) return;
 
@@ -154,6 +188,14 @@ extern "C" void SceneRendererMacMetalDisplayDraw(void* handle, void* texture, ui
     [encoder setFragmentSamplerState:display->sampler atIndex:0];
     [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     [encoder endEncoding];
+    if (presented != nullptr) {
+        // addPresentedHandler is the first point at which the drawable has
+        // actually been presented, rather than merely encoded or committed.
+        id strong_userdata = userdata != nullptr ? (__bridge id)userdata : nil;
+        [drawable addPresentedHandler:^(id<MTLDrawable>) {
+          presented((__bridge void*)strong_userdata);
+        }];
+    }
     [command_buffer presentDrawable:drawable];
     [command_buffer commit];
 }

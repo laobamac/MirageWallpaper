@@ -1,4 +1,6 @@
 module;
+#include <mutex>
+#include <unordered_map>
 export module sr.pkg.parse:wp_tex_image_parser;
 import sr.types;
 import rstd.cppstd;
@@ -96,6 +98,10 @@ public:
     ImageHeader            ParseHeader(const std::string&) override;
 
 private:
-    fs::VFS* m_vfs;
+    ImageHeader ParseHeaderUncached(const std::string&);
+
+    fs::VFS*                                   m_vfs;
+    std::mutex                                 m_header_cache_mutex;
+    std::unordered_map<std::string, ImageHeader> m_header_cache;
 };
 } // namespace sr

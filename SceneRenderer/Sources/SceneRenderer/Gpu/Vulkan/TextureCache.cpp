@@ -10,6 +10,7 @@ module;
 
 #include <cmath>
 #include <limits>
+#include <unordered_set>
 #include <unistd.h>
 
 module sr.vulkan;
@@ -83,62 +84,6 @@ VkSamplerCreateInfo GenSamplerInfo(TextureKey key) {
                                        .borderColor      = VK_BORDER_COLOR_INT_OPAQUE_BLACK,
                                        .unnormalizedCoordinates = (false) };
     return sampler_info;
-}
-
-VkResult TransImgLayout(const vvk::Queue& queue, vvk::CommandBuffer& cmd,
-                        const ImageParameters& image, VkImageLayout layout) {
-    VkResult result;
-    do {
-        result = cmd.Begin(VkCommandBufferBeginInfo {
-            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-            .pNext = nullptr,
-            .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-        });
-        if (result != VK_SUCCESS) break;
-
-        VkImageSubresourceRange subresourceRange {
-            .aspectMask     = layout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
-                                  ? VK_IMAGE_ASPECT_DEPTH_BIT
-                                  : VK_IMAGE_ASPECT_COLOR_BIT,
-            .baseMipLevel   = 0,
-            .levelCount     = VK_REMAINING_MIP_LEVELS,
-            .baseArrayLayer = 0,
-            .layerCount     = VK_REMAINING_ARRAY_LAYERS,
-        };
-        const bool    depth_layout = layout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-        VkAccessFlags dst_access   = depth_layout ? VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
-                                                        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT
-                                                  : VK_ACCESS_MEMORY_READ_BIT;
-        VkPipelineStageFlags dst_stage = depth_layout
-                                             ? VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
-                                                   VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT
-                                             : VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-        {
-            VkImageMemoryBarrier out_bar {
-                .sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-                .pNext            = nullptr,
-                .srcAccessMask    = {},
-                .dstAccessMask    = dst_access,
-                .oldLayout        = VK_IMAGE_LAYOUT_UNDEFINED,
-                .newLayout        = layout,
-                .image            = image.handle,
-                .subresourceRange = subresourceRange,
-            };
-            cmd.PipelineBarrier(
-                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, dst_stage, VK_DEPENDENCY_BY_REGION_BIT, out_bar);
-        }
-        result = cmd.End();
-        if (result != VK_SUCCESS) break;
-
-        VkSubmitInfo sub_info {
-            .sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-            .pNext              = nullptr,
-            .commandBufferCount = 1,
-            .pCommandBuffers    = cmd.address(),
-        };
-        result = queue.Submit(sub_info);
-    } while (false);
-    return result;
 }
 
 std::optional<vvk::DeviceMemory> AllocateMemory(const vvk::Device& device, vvk::PhysicalDevice gpu,
@@ -248,113 +193,39 @@ CreateImage(const Device& device, VkExtent3D extent, u32 miplevel, VkFormat form
     return std::nullopt;
 }
 
-inline VkResult CopyImageData(std::span<const BufferParameters> in_bufs,
-                              std::span<const VkExtent3D> in_exts, const vvk::Queue& queue,
-                              vvk::CommandBuffer& cmd, const ImageParameters& image) {
-    VkResult result;
-    do {
-        result = cmd.Begin(VkCommandBufferBeginInfo {
-            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-            .pNext = nullptr,
-            .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-        });
-        if (result != VK_SUCCESS) break;
-
-        VkImageSubresourceRange subresourceRange {
-            .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
-            .baseMipLevel   = 0,
-            .levelCount     = (uint32_t)in_bufs.size(),
-            .baseArrayLayer = 0,
-            .layerCount     = 1,
-        };
-        {
-            VkImageMemoryBarrier in_bar {
-                .sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-                .pNext            = nullptr,
-                .srcAccessMask    = VK_ACCESS_MEMORY_WRITE_BIT,
-                .dstAccessMask    = VK_ACCESS_TRANSFER_WRITE_BIT,
-                .oldLayout        = VK_IMAGE_LAYOUT_UNDEFINED,
-                .newLayout        = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                .image            = image.handle,
-                .subresourceRange = subresourceRange,
-            };
-            cmd.PipelineBarrier(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                                VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                VK_DEPENDENCY_BY_REGION_BIT,
-                                in_bar);
-        }
-        VkBufferImageCopy copy {
-            .imageSubresource =
-                VkImageSubresourceLayers {
-                    .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
-                    .baseArrayLayer = 0,
-                    .layerCount     = 1,
-                },
-        };
-        for (usize i = 0; i < in_bufs.size(); i++) {
-            copy.imageSubresource.mipLevel = (u32)i;
-            copy.imageExtent               = in_exts[i];
-            cmd.CopyBufferToImage(
-                in_bufs[i].handle, image.handle, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, copy);
-        }
-        {
-            VkImageMemoryBarrier out_bar {
-                .sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-                .pNext            = nullptr,
-                .srcAccessMask    = VK_ACCESS_TRANSFER_WRITE_BIT,
-                .dstAccessMask    = VK_ACCESS_SHADER_READ_BIT,
-                .oldLayout        = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                .newLayout        = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                .image            = image.handle,
-                .subresourceRange = subresourceRange,
-            };
-            cmd.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                                VK_DEPENDENCY_BY_REGION_BIT,
-                                out_bar);
-        }
-        result = cmd.End();
-        if (result != VK_SUCCESS) break;
-
-        VkSubmitInfo sub_info {
-            .sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-            .pNext              = nullptr,
-            .commandBufferCount = 1,
-            .pCommandBuffers    = cmd.address(),
-        };
-        result = queue.Submit(sub_info);
-    } while (false);
-    return result;
-}
-
 void RecordQueuedImageUpload(vvk::CommandBuffer& cmd, const ImageParameters& image,
                              VkBuffer buffer, VkDeviceSize buffer_offset,
                              VkOffset3D image_offset, VkExtent3D image_extent,
-                             VkImageLayout old_layout, VkImageLayout final_layout) {
+                             VkImageLayout old_layout, VkImageLayout final_layout,
+                             std::uint32_t mip_level) {
     if (image.handle == VK_NULL_HANDLE || buffer == VK_NULL_HANDLE || image_extent.width == 0 ||
         image_extent.height == 0)
         return;
 
     VkImageSubresourceRange range {
         .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
-        .baseMipLevel   = 0,
+        .baseMipLevel   = mip_level,
         .levelCount     = 1,
         .baseArrayLayer = 0,
         .layerCount     = 1,
     };
     VkImageMemoryBarrier to_xfer {
         .sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-        .srcAccessMask    = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
-                          VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT,
+        .srcAccessMask    = old_layout == VK_IMAGE_LAYOUT_UNDEFINED
+                                ? 0u
+                                : VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                                      VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT,
         .dstAccessMask    = VK_ACCESS_TRANSFER_WRITE_BIT,
         .oldLayout        = old_layout,
         .newLayout        = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
         .image            = image.handle,
         .subresourceRange = range,
     };
-    cmd.PipelineBarrier(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-                            VK_PIPELINE_STAGE_TRANSFER_BIT |
-                            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+    cmd.PipelineBarrier(old_layout == VK_IMAGE_LAYOUT_UNDEFINED
+                            ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
+                            : VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                  VK_PIPELINE_STAGE_TRANSFER_BIT |
+                                  VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                         VK_PIPELINE_STAGE_TRANSFER_BIT,
                         VK_DEPENDENCY_BY_REGION_BIT,
                         to_xfer);
@@ -364,7 +235,7 @@ void RecordQueuedImageUpload(vvk::CommandBuffer& cmd, const ImageParameters& ima
         .imageSubresource =
             VkImageSubresourceLayers {
                 .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
-                .mipLevel       = 0,
+                .mipLevel       = mip_level,
                 .baseArrayLayer = 0,
                 .layerCount     = 1,
             },
@@ -389,6 +260,70 @@ void RecordQueuedImageUpload(vvk::CommandBuffer& cmd, const ImageParameters& ima
                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                         VK_DEPENDENCY_BY_REGION_BIT,
                         to_shader);
+}
+
+void RecordQueuedImageInitialization(vvk::CommandBuffer& cmd, const ImageParameters& image,
+                                     VkImageLayout final_layout, VkImageAspectFlags aspect,
+                                     bool clear_color) {
+    if (image.handle == VK_NULL_HANDLE) return;
+
+    const VkImageLayout intermediate =
+        clear_color ? VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL : final_layout;
+    VkAccessFlags dst_access = 0;
+    VkPipelineStageFlags dst_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+    if (clear_color) {
+        dst_access = VK_ACCESS_TRANSFER_WRITE_BIT;
+        dst_stage  = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    } else if (final_layout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) {
+        dst_access = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                     VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        dst_stage = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                    VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+    } else if (final_layout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
+        dst_access = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        dst_stage  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    } else {
+        dst_access = VK_ACCESS_SHADER_READ_BIT;
+        dst_stage  = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    }
+
+    VkImageSubresourceRange range {
+        .aspectMask     = aspect,
+        .baseMipLevel   = 0,
+        .levelCount     = image.mipmap_level,
+        .baseArrayLayer = 0,
+        .layerCount     = 1,
+    };
+    VkImageMemoryBarrier initialize {
+        .sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .srcAccessMask    = 0,
+        .dstAccessMask    = dst_access,
+        .oldLayout        = VK_IMAGE_LAYOUT_UNDEFINED,
+        .newLayout        = intermediate,
+        .image            = image.handle,
+        .subresourceRange = range,
+    };
+    cmd.PipelineBarrier(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                        dst_stage,
+                        VK_DEPENDENCY_BY_REGION_BIT,
+                        initialize);
+
+    if (! clear_color) return;
+    VkClearColorValue clear { .float32 = { 0.0f, 0.0f, 0.0f, 1.0f } };
+    cmd.ClearColorImage(image.handle, intermediate, &clear, range);
+    VkImageMemoryBarrier ready {
+        .sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .srcAccessMask    = VK_ACCESS_TRANSFER_WRITE_BIT,
+        .dstAccessMask    = VK_ACCESS_SHADER_READ_BIT,
+        .oldLayout        = intermediate,
+        .newLayout        = final_layout,
+        .image            = image.handle,
+        .subresourceRange = range,
+    };
+    cmd.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
+                        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                        VK_DEPENDENCY_BY_REGION_BIT,
+                        ready);
 }
 } // namespace
 
@@ -447,8 +382,12 @@ ImageSlotsRef TextureCache::CreateTex(Image& image) {
     }
 
     ImageSlots img_slots;
-
-    if (! m_tex_cmd) allocateCmd();
+    const auto pending_begin = m_pending_uploads.size();
+    auto fail = [&]() -> ImageSlotsRef {
+        m_pending_uploads.erase(m_pending_uploads.begin() + (std::ptrdiff_t)pending_begin,
+                                m_pending_uploads.end());
+        return {};
+    };
 
     img_slots.slots.resize(image.slots.size());
 
@@ -460,7 +399,7 @@ ImageSlotsRef TextureCache::CreateTex(Image& image) {
         auto  mipmap_levels = image_slot.mipmaps.size();
 
         // check data
-        if (! image_slot) return {};
+        if (! image_slot) return fail();
         VkSamplerCreateInfo sampler_info {
             .sType                   = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
             .pNext                   = nullptr,
@@ -491,45 +430,38 @@ ImageSlotsRef TextureCache::CreateTex(Image& image) {
             opt.has_value()) {
             image_paras = std::move(opt.value());
             AssignImageGeneration(image_paras);
-        } else
-            break;
-
-        std::vector<VmaBufferParameters> stage_bufs;
-        std::vector<VkExtent3D>          extents;
+        } else {
+            return fail();
+        }
 
         for (usize j = 0; j < image_slot.mipmaps.size(); j++) {
             auto&               image_data = image_slot.mipmaps[j];
-            VmaBufferParameters buf;
-            (void)CreateStagingBuffer(m_device.vma_allocator(), (u32)image_data.size, buf);
+            if (image_data.size == 0 || image_data.data == nullptr || image_data.width <= 0 ||
+                image_data.height <= 0) {
+                return fail();
+            }
+            PendingImageUpload up {};
+            if (! CreateStagingBuffer(
+                    m_device.vma_allocator(), (u32)image_data.size, up.owned_stage)) {
+                return fail();
+            }
             {
                 void* v_data;
-                VVK_CHECK(buf.handle.MapMemory(&v_data));
+                VVK_CHECK(up.owned_stage.handle.MapMemory(&v_data));
                 std::memcpy(v_data, image_data.data.get(), (u32)image_data.size);
-                buf.handle.UnMapMemory();
+                up.owned_stage.handle.UnMapMemory();
             }
-            stage_bufs.emplace_back(std::move(buf));
-            extents.push_back(VkExtent3D { (u32)image_data.width, (u32)image_data.height, 1 });
+            up.image         = ToImageParameters(image_paras);
+            up.buffer        = *up.owned_stage.handle;
+            up.image_extent  = VkExtent3D { (u32)image_data.width, (u32)image_data.height, 1 };
+            up.old_layout    = VK_IMAGE_LAYOUT_UNDEFINED;
+            up.final_layout  = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            up.mip_level     = (std::uint32_t)j;
+            m_pending_uploads.push_back(std::move(up));
         }
-
-        CopyImageData(transform<VmaBufferParameters>(stage_bufs,
-                                                     [](BufferParameters e) {
-                                                         return e;
-                                                     }),
-                      extents,
-                      m_device.graphics_queue().handle,
-                      m_tex_cmd,
-                      ToImageParameters(image_paras));
-
-        m_device.handle().WaitIdle();
     }
     m_tex_map[image.key] = std::move(img_slots);
     return m_tex_map[image.key];
-}
-
-void TextureCache::allocateCmd() {
-    const auto& pool = m_device.cmd_pool();
-    VVK_CHECK(pool.Allocate(1, VK_COMMAND_BUFFER_LEVEL_PRIMARY, m_tex_cmds));
-    m_tex_cmd = vvk::CommandBuffer(m_tex_cmds[0], m_device.handle().Dispatch());
 }
 
 std::optional<VmaImageParameters> TextureCache::CreateTex(TextureKey tex_key) {
@@ -558,20 +490,20 @@ std::optional<VmaImageParameters> TextureCache::CreateTex(TextureKey tex_key) {
         } else
             break;
 
-        // Single-sample images settle in SHADER_READ_ONLY (sampled by other
-        // passes). MSAA twin is never sampled — pre-transition to
-        // COLOR_ATTACHMENT_OPTIMAL so the first render pass with LoadOp=LOAD
-        // doesn't see UNDEFINED on a non-DONT_CARE attachment.
-        if (! m_tex_cmd) allocateCmd();
-        TransImgLayout(m_device.graphics_queue().handle,
-                       m_tex_cmd,
-                       ToImageParameters(image_paras),
-                       depth_usage ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
-                       : tex_key.samples == VK_SAMPLE_COUNT_1_BIT
-                           ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                           : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-
-        VVK_CHECK_ACT(break, m_device.handle().WaitIdle());
+        // Defer the transition into the first frame command buffer. All graph
+        // resources are prepared before that buffer is recorded, so this
+        // removes one queue submit + vkDeviceWaitIdle per render target while
+        // preserving the exact layout expected by the first pass.
+        const VkImageLayout initial_layout =
+            depth_usage ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+            : tex_key.samples == VK_SAMPLE_COUNT_1_BIT
+                ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        m_pending_initializations.push_back(PendingImageInitialization {
+            .image        = ToImageParameters(image_paras),
+            .final_layout = initial_layout,
+            .aspect       = depth_usage ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT,
+        });
         return image_paras;
     } while (false);
     return std::nullopt;
@@ -855,8 +787,6 @@ ImageSlotsRef TextureCache::CreateVideoTex(Image& image) {
         m_video_registry          = std::make_unique<VideoRegistry>();
         m_video_registry->options = m_video_decode_options;
     }
-    if (! m_tex_cmd) allocateCmd();
-
     /* Pull the IBinaryStream back out of the opaque shared_ptr<void>
      * the parser stored. The cast is safe because TextureAssetDecoder is
      * the only writer and always populates with shared_ptr<IBinaryStream>
@@ -910,56 +840,15 @@ ImageSlotsRef TextureCache::CreateVideoTex(Image& image) {
     slot->image = std::move(*img_opt);
     AssignImageGeneration(slot->image);
 
-    /* 2) Initial layout: UNDEFINED → TRANSFER_DST → clear black →
-     * SHADER_READ_ONLY. Mirrors the one-shot pattern used by the
-     * existing TransImgLayout / CopyImageData helpers in this file. */
-    {
-        ImageParameters ip = ToImageParameters(slot->image);
-        VVK_CHECK(m_tex_cmd.Begin(VkCommandBufferBeginInfo {
-            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-            .pNext = nullptr,
-            .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-        }));
-        VkImageSubresourceRange range {
-            .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
-            .baseMipLevel   = 0,
-            .levelCount     = 1,
-            .baseArrayLayer = 0,
-            .layerCount     = 1,
-        };
-        VkImageMemoryBarrier to_xfer {
-            .sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-            .srcAccessMask    = 0,
-            .dstAccessMask    = VK_ACCESS_TRANSFER_WRITE_BIT,
-            .oldLayout        = VK_IMAGE_LAYOUT_UNDEFINED,
-            .newLayout        = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            .image            = ip.handle,
-            .subresourceRange = range,
-        };
-        m_tex_cmd.PipelineBarrier(
-            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, to_xfer);
-        VkClearColorValue clear { .float32 = { 0.0f, 0.0f, 0.0f, 1.0f } };
-        m_tex_cmd.ClearColorImage(ip.handle, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, range);
-        VkImageMemoryBarrier to_shader {
-            .sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-            .srcAccessMask    = VK_ACCESS_TRANSFER_WRITE_BIT,
-            .dstAccessMask    = VK_ACCESS_SHADER_READ_BIT,
-            .oldLayout        = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            .newLayout        = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            .image            = ip.handle,
-            .subresourceRange = range,
-        };
-        m_tex_cmd.PipelineBarrier(
-            VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, to_shader);
-        VVK_CHECK(m_tex_cmd.End());
-        VkSubmitInfo si {
-            .sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-            .commandBufferCount = 1,
-            .pCommandBuffers    = m_tex_cmd.address(),
-        };
-        VVK_CHECK(m_device.graphics_queue().handle.Submit(si));
-        VVK_CHECK(m_device.handle().WaitIdle());
-    }
+    /* 2) Initial layout + black clear is recorded with the first frame. This
+     * keeps the video image valid before its decoder produces output without
+     * forcing a standalone queue submit and full-device wait. */
+    m_pending_initializations.push_back(PendingImageInitialization {
+        .image        = ToImageParameters(slot->image),
+        .final_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        .aspect       = VK_IMAGE_ASPECT_COLOR_BIT,
+        .clear_color  = true,
+    });
 
     /* 3) Open the decoder. The factory hands out a fresh
      * PkgRangedInputStream per trial; the captured shared_ptr keeps the
@@ -1315,16 +1204,35 @@ void TextureCache::Clear() {
     ClearTransientGraphResources();
     if (m_video_registry) m_video_registry->slots.clear();
     m_video_activity_epoch = 0;
+    m_pending_initializations.clear();
     m_pending_uploads.clear();
     m_recorded_uploads.clear();
 }
 
 void TextureCache::ClearTransientGraphResources() {
+    // Pending transitions store non-owning VkImage handles. Remove only those
+    // belonging to transient render targets before their VmaImage owners are
+    // destroyed; imported texture/video initializations remain valid across a
+    // graph-only rebuild.
+    std::unordered_set<VkImage> transient_images;
+    transient_images.reserve(m_query_texs.size());
+    for (const auto& query : m_query_texs) {
+        if (query) transient_images.insert(ToImageParameters(query->image).handle);
+    }
+    std::erase_if(m_pending_initializations, [&](const auto& init) {
+        return transient_images.contains(init.image.handle);
+    });
     m_query_map.clear();
     m_query_texs.clear();
 }
 
 void TextureCache::RecordPendingUploads(vvk::CommandBuffer& cmd) {
+    for (const auto& init : m_pending_initializations) {
+        RecordQueuedImageInitialization(
+            cmd, init.image, init.final_layout, init.aspect, init.clear_color);
+    }
+    m_pending_initializations.clear();
+
     if (m_pending_uploads.empty()) return;
     for (const auto& up : m_pending_uploads) {
         RecordQueuedImageUpload(cmd,
@@ -1334,7 +1242,8 @@ void TextureCache::RecordPendingUploads(vvk::CommandBuffer& cmd) {
                                 up.image_offset,
                                 up.image_extent,
                                 up.old_layout,
-                                up.final_layout);
+                                up.final_layout,
+                                up.mip_level);
     }
     std::move(m_pending_uploads.begin(),
               m_pending_uploads.end(),
@@ -1343,6 +1252,12 @@ void TextureCache::RecordPendingUploads(vvk::CommandBuffer& cmd) {
 }
 
 void TextureCache::ReleaseRecordedUploads() { m_recorded_uploads.clear(); }
+
+std::optional<ImageSlotsRef> TextureCache::FindImported(std::string_view key) const {
+    auto it = m_tex_map.find(std::string(key));
+    if (it == m_tex_map.end()) return std::nullopt;
+    return ImageSlotsRef(it->second);
+}
 
 std::optional<ImageParameters> TextureCache::Query(std::string_view key, TextureKey content_hash,
                                                    bool persist) {

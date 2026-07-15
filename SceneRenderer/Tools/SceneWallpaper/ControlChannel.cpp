@@ -1,8 +1,11 @@
 #include "ControlChannel.h"
 
+#include <cerrno>
 #include <cstdio>
 #include <iostream>
+#include <poll.h>
 #include <string>
+#include <unistd.h>
 
 import sr.json;
 import rstd.cppstd;
@@ -107,6 +110,8 @@ void SceneControlChannel::dispatchLine(const char* line) {
             auto number = (*value)->as_f64();
             if (number.is_some()) m_wallpaper.setSpeed(static_cast<float>(*number));
         }
+    } else if (cmd == "activate") {
+        if (m_on_activate) m_on_activate();
     } else if (cmd == "quit") {
         m_running.store(false);
         if (m_on_quit) m_on_quit();
@@ -114,14 +119,42 @@ void SceneControlChannel::dispatchLine(const char* line) {
 }
 
 void SceneControlChannel::readLoop() {
-    std::string line;
+    std::string pending;
+    char        buffer[4096];
     while (m_running.load()) {
-        if (! std::getline(std::cin, line)) {
-            // EOF or error: the parent closed the pipe (or died). Exit cleanly.
+        pollfd input {
+            .fd      = STDIN_FILENO,
+            .events  = POLLIN | POLLHUP,
+            .revents = 0,
+        };
+        int ready;
+        do {
+            ready = ::poll(&input, 1, 100);
+        } while (ready < 0 && errno == EINTR && m_running.load());
+        if (! m_running.load()) break;
+        if (ready == 0) continue;
+        if (ready < 0 || (input.revents & (POLLERR | POLLNVAL)) != 0) break;
+        if ((input.revents & (POLLIN | POLLHUP)) == 0) continue;
+
+        const ssize_t count = ::read(STDIN_FILENO, buffer, sizeof(buffer));
+        if (count < 0 && errno == EINTR) continue;
+        if (count <= 0) {
+            // Match getline semantics: accept one final command without a
+            // newline before treating EOF as parent termination.
+            if (! pending.empty()) dispatchLine(pending.c_str());
             break;
         }
-        if (line.empty()) continue;
-        dispatchLine(line.c_str());
+        pending.append(buffer, (std::size_t)count);
+        for (std::size_t newline; (newline = pending.find('\n')) != std::string::npos;) {
+            std::string line = pending.substr(0, newline);
+            pending.erase(0, newline + 1);
+            if (! line.empty() && line.back() == '\r') line.pop_back();
+            if (! line.empty()) dispatchLine(line.c_str());
+            if (! m_running.load()) break;
+        }
+        // Commands are tiny JSON objects. Bound an unterminated/malformed
+        // stream so a broken parent cannot grow the renderer indefinitely.
+        if (pending.size() > 1024 * 1024) pending.clear();
     }
     if (m_running.exchange(false)) {
         // Reached here via EOF (not an explicit quit) — still tell the host.

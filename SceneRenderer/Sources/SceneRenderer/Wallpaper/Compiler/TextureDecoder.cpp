@@ -392,6 +392,23 @@ std::shared_ptr<Image> TextureAssetDecoder::Parse(const std::string& name) {
 }
 
 ImageHeader TextureAssetDecoder::ParseHeader(const std::string& name) {
+    // External media art can change in place, so it deliberately bypasses the
+    // cache. Packaged .tex metadata is immutable for the Scene lifetime and is
+    // requested repeatedly by scene validation and graph planning.
+    if (ResolveExternalImagePath(name)) return ParseHeaderUncached(name);
+    {
+        std::lock_guard lock(m_header_cache_mutex);
+        if (auto it = m_header_cache.find(name); it != m_header_cache.end()) return it->second;
+    }
+    auto header = ParseHeaderUncached(name);
+    {
+        std::lock_guard lock(m_header_cache_mutex);
+        m_header_cache.insert_or_assign(name, header);
+    }
+    return header;
+}
+
+ImageHeader TextureAssetDecoder::ParseHeaderUncached(const std::string& name) {
     ImageHeader header;
     // External media-art image: probe via stbi_info so the validator
     // sees real dimensions without a full Parse().

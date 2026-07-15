@@ -22,21 +22,51 @@ enum FillMode: String, CaseIterable, Codable, Identifiable {
 final class RendererProcess {
     let process: Process
     let stdinPipe: Pipe
+    let stdoutPipe: Pipe?
+    let stderrPipe: Pipe
     let wallpaper: WEWallpaper
     let screenIndex: Int
-    private(set) var isTerminated = false
-    /// Temporary files associated with this renderer process, cleaned up on stop().
+    let generation: UInt64
+    var desiredVolume: Float
+    var desiredMuted: Bool
+    var desiredPaused = false
+
+    private let stateLock = NSLock()
+    private var terminated = false
+    private var stdoutBuffer = Data()
+
+    var isTerminated: Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return terminated
+    }
+
+    /// Temporary files associated with this renderer process, cleaned up after exit.
     var tempFiles: [URL] = []
 
-    init(process: Process, stdinPipe: Pipe, wallpaper: WEWallpaper, screenIndex: Int) {
+    init(process: Process, stdinPipe: Pipe, stdoutPipe: Pipe?, stderrPipe: Pipe,
+         wallpaper: WEWallpaper, screenIndex: Int, generation: UInt64,
+         desiredVolume: Float, desiredMuted: Bool) {
         self.process = process
         self.stdinPipe = stdinPipe
+        self.stdoutPipe = stdoutPipe
+        self.stderrPipe = stderrPipe
         self.wallpaper = wallpaper
         self.screenIndex = screenIndex
+        self.generation = generation
+        self.desiredVolume = desiredVolume
+        self.desiredMuted = desiredMuted
     }
 
     func send(_ command: [String: Any]) {
-        guard !isTerminated, process.isRunning else { return }
+        write(command, allowAfterStop: false)
+    }
+
+    private func write(_ command: [String: Any], allowAfterStop: Bool) {
+        stateLock.lock()
+        let canWrite = (allowAfterStop || !terminated) && process.isRunning
+        stateLock.unlock()
+        guard canWrite else { return }
         guard let data = try? JSONSerialization.data(withJSONObject: command, options: []) else {
             NSLog("[Mirage] 无法序列化控制指令: \(command)")
             return
@@ -52,16 +82,20 @@ final class RendererProcess {
     }
 
     func stop() {
-        guard !isTerminated else { return }
-        isTerminated = true
-        send(["cmd": "quit"])
+        stateLock.lock()
+        guard !terminated else {
+            stateLock.unlock()
+            return
+        }
+        terminated = true
+        stateLock.unlock()
+
+        // The graceful quit must be written after marking the handle stopped,
+        // so no later live-control command can race it. Use the private bypass
+        // instead of send(), whose normal guard intentionally rejects it.
+        write(["cmd": "quit"], allowAfterStop: true)
         let handle = stdinPipe.fileHandleForWriting
         try? handle.close()
-        // Remove temporary files associated with this renderer session.
-        for url in tempFiles {
-            try? FileManager.default.removeItem(at: url)
-        }
-        tempFiles.removeAll()
         let proc = process
         DispatchQueue.global().asyncAfter(deadline: .now() + 1.5) {
             if proc.isRunning { proc.terminate() }
@@ -69,6 +103,53 @@ final class RendererProcess {
                 if proc.isRunning { kill(proc.processIdentifier, SIGKILL) }
             }
         }
+    }
+
+    func startReadingOutput(onEvent: @escaping ([String: Any]) -> Void) {
+        stdoutPipe?.fileHandleForReading.readabilityHandler = { [weak self] file in
+            let data = file.availableData
+            if data.isEmpty {
+                file.readabilityHandler = nil
+                return
+            }
+            self?.consumeStdout(data, onEvent: onEvent)
+        }
+        stderrPipe.fileHandleForReading.readabilityHandler = { file in
+            let data = file.availableData
+            if data.isEmpty {
+                file.readabilityHandler = nil
+                return
+            }
+            if let text = String(data: data, encoding: .utf8), !text.isEmpty {
+                NSLog("[Mirage] 渲染器 stderr: \(text)")
+            }
+        }
+    }
+
+    private func consumeStdout(_ data: Data, onEvent: ([String: Any]) -> Void) {
+        stateLock.lock()
+        stdoutBuffer.append(data)
+        var lines: [Data] = []
+        while let newline = stdoutBuffer.firstIndex(of: 0x0A) {
+            lines.append(Data(stdoutBuffer[..<newline]))
+            stdoutBuffer.removeSubrange(...newline)
+        }
+        stateLock.unlock()
+
+        for line in lines where !line.isEmpty {
+            guard let object = try? JSONSerialization.jsonObject(with: line),
+                  let event = object as? [String: Any] else { continue }
+            onEvent(event)
+        }
+    }
+
+    func cleanupAfterExit() {
+        stdoutPipe?.fileHandleForReading.readabilityHandler = nil
+        stderrPipe.fileHandleForReading.readabilityHandler = nil
+        for url in tempFiles {
+            try? FileManager.default.removeItem(at: url)
+        }
+        tempFiles.removeAll()
     }
 }
 
@@ -85,7 +166,13 @@ struct RenderOptions {
 // Subprocess control: the renderer receives JSON-line commands via stdin.
 final class RendererController {
     private var running: [Int: RendererProcess] = [:]
+    private var candidates: [Int: RendererProcess] = [:]
+    private var generations: [Int: UInt64] = [:]
     private let queue = DispatchQueue(label: "cn.laobamac.Mirage.renderer")
+    // The renderer's Vulkan and scene-load guards are 30 seconds each. Keep
+    // the old wallpaper alive slightly longer so a slow-but-valid cold start
+    // can still complete without exposing the desktop.
+    private static let sceneStartupTimeout: TimeInterval = 75
 
     var onProcessExit: ((Int, Bool) -> Void)?
 
@@ -195,7 +282,23 @@ final class RendererController {
         }
         NSLog("[Mirage] 启动渲染器: \(binary.path) 屏幕=\(screenIndex)")
 
-        stop(on: screenIndex)
+        // Scene wallpapers have a real first-frame protocol. Keep the active
+        // renderer alive while its transparent candidate prepares. Other
+        // renderer kinds retain their existing immediate-switch behaviour.
+        let deferredScene = wallpaper.kind == .scene
+        var supersededCandidate: RendererProcess?
+        var replacedActive: RendererProcess?
+        let generation: UInt64 = queue.sync {
+            let next = (generations[screenIndex] ?? 0) &+ 1
+            generations[screenIndex] = next
+            supersededCandidate = candidates.removeValue(forKey: screenIndex)
+            if !deferredScene {
+                replacedActive = running.removeValue(forKey: screenIndex)
+            }
+            return next
+        }
+        supersededCandidate?.stop()
+        replacedActive?.stop()
 
         let proc = Process()
         proc.executableURL = binary
@@ -211,8 +314,9 @@ final class RendererController {
             args += [assetsPath, pkgPath]
             args += ["--fps", String(options.fps)]
             args += ["--screen", String(screenIndex)]
-            args += ["--control-stdin"]
-            if options.muted { args += ["--muted"] }
+            // Candidates stay transparent and silent until Metal confirms a
+            // presented frame and Mirage explicitly activates them.
+            args += ["--control-stdin", "--deferred-show", "--muted"]
             if let icd = moltenVKICD {
                 env["VK_ICD_FILENAMES"] = icd.path
                 env["VK_DRIVER_FILES"] = icd.path
@@ -247,12 +351,26 @@ final class RendererController {
         }
 
         let stdinPipe = Pipe()
+        let stdoutPipe = deferredScene ? Pipe() : nil
         let stderrPipe = Pipe()
         proc.standardInput = stdinPipe
-        proc.standardOutput = FileHandle.standardOutput
+        if let stdoutPipe {
+            proc.standardOutput = stdoutPipe
+        } else {
+            proc.standardOutput = FileHandle.standardOutput
+        }
         proc.standardError = stderrPipe
 
-        let handle = RendererProcess(process: proc, stdinPipe: stdinPipe, wallpaper: wallpaper, screenIndex: screenIndex)
+        let handle = RendererProcess(
+            process: proc,
+            stdinPipe: stdinPipe,
+            stdoutPipe: stdoutPipe,
+            stderrPipe: stderrPipe,
+            wallpaper: wallpaper,
+            screenIndex: screenIndex,
+            generation: generation,
+            desiredVolume: options.volume,
+            desiredMuted: options.muted)
 
         if wallpaper.kind == .scene,
            let propsFile = writeUserPropertiesFile(options.userProperties, for: wallpaper) {
@@ -264,14 +382,13 @@ final class RendererController {
         proc.environment = env
 
         proc.terminationHandler = { [weak self] p in
-            guard let self else { return }
+            // Process retains its termination handler. Drop that edge as soon
+            // as it fires so the closure's RendererProcess capture cannot
+            // keep a completed renderer alive indefinitely.
+            p.terminationHandler = nil
             let status = p.terminationStatus
             let reason = p.terminationReason
-            let stderrData = try? stderrPipe.fileHandleForReading.readToEnd()
-            let stderrStr = stderrData.flatMap { String(data: $0, encoding: .utf8) } ?? ""
-            if !stderrStr.isEmpty {
-                NSLog("[Mirage] 渲染器 stderr:\n\(stderrStr)")
-            }
+            handle.cleanupAfterExit()
             // Decode the signal from the exit status: the low 7 bits hold the signal number.
             let signalNum = status & 0x7F
             let coreDumped = (status & 0x80) != 0
@@ -289,10 +406,18 @@ final class RendererController {
                 NSLog("[Mirage] 渲染器信号退出: \(sigName) core=\(coreDumped) 屏幕=\(screenIndex)")
             }
             NSLog("[Mirage] 渲染器退出 (屏幕=\(screenIndex), 状态=\(status), 原因=\(reason.rawValue))")
+            guard let self else { return }
             self.queue.async {
-                if let current = self.running[screenIndex], current === handle {
-                    let abnormal = status != 0 && !handle.isTerminated
+                let wasActive = self.running[screenIndex] === handle
+                let wasCandidate = self.candidates[screenIndex] === handle
+                if wasActive {
                     self.running[screenIndex] = nil
+                }
+                if wasCandidate {
+                    self.candidates[screenIndex] = nil
+                }
+                if wasActive || wasCandidate {
+                    let abnormal = status != 0 && !handle.isTerminated
                     DispatchQueue.main.async { self.onProcessExit?(screenIndex, abnormal) }
                 }
             }
@@ -302,29 +427,106 @@ final class RendererController {
             try proc.run()
         } catch {
             NSLog("[Mirage] 启动渲染器失败: \(error)")
+            handle.cleanupAfterExit()
             return false
         }
 
-        queue.sync { running[screenIndex] = handle }
+        var accepted = false
+        queue.sync {
+            // A renderer can fail immediately after Process.run() succeeds.
+            // Never register an already-dead handle after its termination
+            // callback has raced past the controller queue.
+            guard generations[screenIndex] == generation, proc.isRunning else { return }
+            if deferredScene {
+                candidates[screenIndex] = handle
+            } else {
+                running[screenIndex] = handle
+            }
+            accepted = true
+        }
+        guard accepted else {
+            handle.stop()
+            return false
+        }
+
+        handle.startReadingOutput { [weak self, weak handle] event in
+            guard let self, let handle else { return }
+            self.handleLifecycleEvent(event, from: handle)
+        }
 
         applyInitialProperties(options.userProperties, to: handle)
+        if deferredScene {
+            queue.asyncAfter(deadline: .now() + Self.sceneStartupTimeout) { [weak self, weak handle] in
+                guard let self, let handle,
+                      self.candidates[screenIndex] === handle else { return }
+                self.candidates[screenIndex] = nil
+                handle.stop()
+                NSLog("[Mirage] 场景首帧超时，保留旧壁纸 (屏幕=\(screenIndex), generation=\(generation))")
+                DispatchQueue.main.async { self.onProcessExit?(screenIndex, true) }
+            }
+        }
         return true
     }
 
-    func stop(on screenIndex: Int) {
-        queue.sync {
-            if let proc = running[screenIndex] {
-                proc.stop()
-                running[screenIndex] = nil
+    private func handleLifecycleEvent(_ message: [String: Any], from handle: RendererProcess) {
+        guard let event = message["event"] as? String else { return }
+        let elapsed = (message["elapsed_ms"] as? NSNumber)?.intValue
+        queue.async { [weak self, weak handle] in
+            guard let self, let handle,
+                  self.candidates[handle.screenIndex] === handle,
+                  self.generations[handle.screenIndex] == handle.generation else { return }
+
+            switch event {
+            case "vulkan-ready", "scene-ready":
+                if let elapsed {
+                    NSLog("[Mirage] 场景启动阶段 \(event): \(elapsed)ms 屏幕=\(handle.screenIndex)")
+                }
+
+            case "first-frame-presented":
+                if let elapsed {
+                    NSLog("[Mirage] 场景候选首帧已显示: \(elapsed)ms 屏幕=\(handle.screenIndex)")
+                }
+                handle.send(["cmd": "activate"])
+
+            case "activated":
+                let previous = self.running.updateValue(handle, forKey: handle.screenIndex)
+                self.candidates[handle.screenIndex] = nil
+                // The candidate is visibly covering the old window before the
+                // old process is stopped, so switching never exposes desktop
+                // or a black placeholder. Unmute only after the old audio is
+                // on its way out.
+                previous?.stop()
+                handle.send(["cmd": "volume", "value": handle.desiredVolume])
+                handle.send(["cmd": "muted", "value": handle.desiredMuted])
+                handle.send(["cmd": handle.desiredPaused ? "pause" : "resume"])
+                NSLog("[Mirage] 场景切换完成 (屏幕=\(handle.screenIndex), generation=\(handle.generation))")
+
+            default:
+                break
             }
         }
     }
 
-    func stopAll() {
-        queue.sync {
-            for (_, proc) in running { proc.stop() }
-            running.removeAll()
+    func stop(on screenIndex: Int) {
+        let handles: [RendererProcess] = queue.sync {
+            generations[screenIndex] = (generations[screenIndex] ?? 0) &+ 1
+            return [running.removeValue(forKey: screenIndex),
+                    candidates.removeValue(forKey: screenIndex)].compactMap { $0 }
         }
+        handles.forEach { $0.stop() }
+    }
+
+    func stopAll() {
+        let handles: [RendererProcess] = queue.sync {
+            let result = Array(running.values) + Array(candidates.values)
+            for screen in Set(running.keys).union(candidates.keys) {
+                generations[screen] = (generations[screen] ?? 0) &+ 1
+            }
+            running.removeAll()
+            candidates.removeAll()
+            return result
+        }
+        handles.forEach { $0.stop() }
     }
 
     func isRendering(on screenIndex: Int) -> Bool {
@@ -341,7 +543,7 @@ final class RendererController {
 
     var processIdentifiers: Set<pid_t> {
         queue.sync {
-            Set(running.values.compactMap { handle in
+            Set((Array(running.values) + Array(candidates.values)).compactMap { handle in
                 handle.process.isRunning ? handle.process.processIdentifier : nil
             })
         }
@@ -349,30 +551,76 @@ final class RendererController {
 
     // MARK: Live control (broadcast or per-screen)
 
-    private func forEach(_ screenIndex: Int?, _ body: (RendererProcess) -> Void) {
+    private func forEach(_ screenIndex: Int?, includeCandidates: Bool = true,
+                         _ body: (RendererProcess) -> Void) {
         queue.sync {
             if let s = screenIndex {
                 if let p = running[s] { body(p) }
+                if includeCandidates, let p = candidates[s] { body(p) }
             } else {
                 for (_, p) in running { body(p) }
+                if includeCandidates {
+                    for (_, p) in candidates { body(p) }
+                }
             }
         }
     }
 
     func setVolume(_ volume: Float, on screenIndex: Int? = nil) {
-        forEach(screenIndex) { $0.send(["cmd": "volume", "value": volume]) }
+        forEach(screenIndex) {
+            $0.desiredVolume = volume
+            $0.send(["cmd": "volume", "value": volume])
+        }
     }
 
     func setMuted(_ muted: Bool, on screenIndex: Int? = nil) {
-        forEach(screenIndex) { $0.send(["cmd": "muted", "value": muted]) }
+        // A scene candidate must remain silent until activation. Remember the
+        // latest policy for it, but only send the live mute command to active
+        // renderers.
+        queue.sync {
+            if let screenIndex {
+                candidates[screenIndex]?.desiredMuted = muted
+                if let active = running[screenIndex] {
+                    active.desiredMuted = muted
+                    active.send(["cmd": "muted", "value": muted])
+                }
+            } else {
+                for candidate in candidates.values { candidate.desiredMuted = muted }
+                for active in running.values {
+                    active.desiredMuted = muted
+                    active.send(["cmd": "muted", "value": muted])
+                }
+            }
+        }
     }
 
     func pause(on screenIndex: Int? = nil) {
-        forEach(screenIndex) { $0.send(["cmd": "pause"]) }
+        updatePaused(true, on: screenIndex)
     }
 
     func resume(on screenIndex: Int? = nil) {
-        forEach(screenIndex) { $0.send(["cmd": "resume"]) }
+        updatePaused(false, on: screenIndex)
+    }
+
+    private func updatePaused(_ paused: Bool, on screenIndex: Int?) {
+        // Pausing a candidate before its first frame would prevent the
+        // presentation handshake from ever completing. Defer that state until
+        // activation, just like unmuting.
+        queue.sync {
+            if let screenIndex {
+                candidates[screenIndex]?.desiredPaused = paused
+                if let active = running[screenIndex] {
+                    active.desiredPaused = paused
+                    active.send(["cmd": paused ? "pause" : "resume"])
+                }
+            } else {
+                for candidate in candidates.values { candidate.desiredPaused = paused }
+                for active in running.values {
+                    active.desiredPaused = paused
+                    active.send(["cmd": paused ? "pause" : "resume"])
+                }
+            }
+        }
     }
 
     func setFps(_ fps: Int, on screenIndex: Int? = nil) {
@@ -435,7 +683,7 @@ final class RendererController {
         }
         guard let data = try? JSONSerialization.data(withJSONObject: obj, options: []) else { return nil }
         let tmp = FileManager.default.temporaryDirectory
-            .appending(path: "mirage_props_\(abs(wallpaper.id.hashValue)).json")
+            .appending(path: "mirage_props_\(abs(wallpaper.id.hashValue))_\(UUID().uuidString).json")
         do {
             try data.write(to: tmp, options: .atomic)
             return tmp

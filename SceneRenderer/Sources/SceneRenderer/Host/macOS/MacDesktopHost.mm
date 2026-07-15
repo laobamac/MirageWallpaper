@@ -10,7 +10,8 @@
 extern "C" void* SceneRendererMacMetalDisplayCreateForNSView(void* ns_view);
 extern "C" void  SceneRendererMacMetalDisplayDestroy(void* handle);
 extern "C" void  SceneRendererMacMetalDisplayDraw(void* handle, void* texture, std::uint32_t width,
-                                                  std::uint32_t height);
+                                                  std::uint32_t height,
+                                                  void (*presented)(void*), void* userdata);
 
 // --- media-status routing --------------------------------------------------
 //
@@ -65,6 +66,9 @@ struct MacDesktopHost {
     std::atomic<std::uint32_t>       pending_width { 0 };
     std::atomic<std::uint32_t>       pending_height { 0 };
     std::atomic<bool>                present_scheduled { false };
+    std::atomic<bool>                first_frame_presented { false };
+    std::atomic<bool>                activation_requested { false };
+    std::atomic<bool>                activation_confirmed { false };
 };
 
 // Resolve the target NSScreen fresh from the current screen list. Returns the
@@ -141,7 +145,29 @@ void SchedulePresent(MacDesktopHost* host) {
           const std::uint32_t width = h->pending_width.load();
           const std::uint32_t height = h->pending_height.load();
           if (texture != nullptr && width > 0 && height > 0) {
-              SceneRendererMacMetalDisplayDraw(h->metal_display, texture, width, height);
+              SceneRendererMacMetalDisplayDraw(
+                  h->metal_display,
+                  texture,
+                  width,
+                  height,
+                  [](void* userdata) {
+                    SRHostRef* presented_ref = (__bridge SRHostRef*)userdata;
+                    MacDesktopHost* presented_host =
+                        static_cast<MacDesktopHost*>(presented_ref.hostPtr);
+                    if (presented_host == nullptr) return;
+                    if (! presented_host->first_frame_presented.exchange(true) &&
+                        presented_host->callbacks.first_frame_presented != nullptr) {
+                        presented_host->callbacks.first_frame_presented(
+                            presented_host->callbacks.userdata);
+                    }
+                    if (presented_host->activation_requested.load() &&
+                        ! presented_host->activation_confirmed.exchange(true) &&
+                        presented_host->callbacks.activated != nullptr) {
+                        presented_host->callbacks.activated(
+                            presented_host->callbacks.userdata);
+                    }
+                  },
+                  (__bridge void*)ref);
           }
       }
       h->present_scheduled.store(false);
@@ -205,8 +231,10 @@ extern "C" void* SceneRendererMacDesktopCreate(const SceneRendererMacDesktopConf
         window.collectionBehavior    = NSWindowCollectionBehaviorCanJoinAllSpaces |
                                     NSWindowCollectionBehaviorStationary |
                                     NSWindowCollectionBehaviorIgnoresCycle;
-        window.opaque                = YES;
-        window.backgroundColor       = NSColor.blackColor;
+        const bool deferred_show     = config != nullptr && config->deferred_show;
+        window.opaque                = deferred_show ? NO : YES;
+        window.backgroundColor       = deferred_show ? NSColor.clearColor : NSColor.blackColor;
+        window.alphaValue            = deferred_show ? 0.0 : 1.0;
         window.hasShadow             = NO;
         window.ignoresMouseEvents    = YES;
         window.releasedWhenClosed    = NO;
@@ -298,6 +326,24 @@ extern "C" void SceneRendererMacDesktopStop(void*) { StopApplicationOnMainThread
 extern "C" void SceneRendererMacDesktopWake(void*) {
     dispatch_async(dispatch_get_main_queue(), ^{
     });
+}
+
+extern "C" void SceneRendererMacDesktopActivate(void* handle) {
+    auto* host = static_cast<MacDesktopHost*>(handle);
+    if (host == nullptr) return;
+    auto activate = ^{
+      if (host->window == nil) return;
+      host->window.backgroundColor = NSColor.blackColor;
+      host->window.opaque          = YES;
+      host->window.alphaValue      = 1.0;
+      [host->window orderFrontRegardless];
+      host->activation_requested.store(true);
+    };
+    if (NSThread.isMainThread) {
+        activate();
+    } else {
+        dispatch_sync(dispatch_get_main_queue(), activate);
+    }
 }
 
 extern "C" void SceneRendererMacDesktopPresent(void* handle, void* texture, std::uint32_t width,

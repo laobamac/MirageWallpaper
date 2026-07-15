@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -86,12 +87,26 @@ struct Options {
     bool                      graphviz { false };
     bool                      muted { false };
     bool                      control_stdin { false };
+    bool                      deferred_show { false };
 };
 
 struct AppState {
     sr::SceneWallpaper* wallpaper { nullptr };
     void*               desktop { nullptr };
+    std::chrono::steady_clock::time_point started_at { std::chrono::steady_clock::now() };
 };
+
+void EmitLifecycleEvent(const AppState* state, std::string_view event) {
+    static std::mutex output_mutex;
+    const auto elapsed = state == nullptr
+                             ? 0
+                             : std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   std::chrono::steady_clock::now() - state->started_at)
+                                   .count();
+    std::lock_guard lock(output_mutex);
+    std::cout << "{\"event\":\"" << event << "\",\"elapsed_ms\":" << elapsed << "}\n"
+              << std::flush;
+}
 
 void PrintUsage(const char* argv0) {
     std::cerr
@@ -110,6 +125,7 @@ void PrintUsage(const char* argv0) {
         << "      --screen N              Screen index to cover (default 0 = main)\n"
         << "      --muted                 Start with audio muted\n"
         << "      --control-stdin         Accept live JSON control commands on stdin\n"
+        << "      --deferred-show         Keep the window transparent until activated\n"
         << "      --run-seconds N         Exit after N seconds (test helper)\n";
 }
 
@@ -193,6 +209,8 @@ bool ParseArgs(int argc, char** argv, Options& out) {
             out.muted = true;
         } else if (arg == "--control-stdin") {
             out.control_stdin = true;
+        } else if (arg == "--deferred-show") {
+            out.deferred_show = true;
         } else if (arg == "--screen") {
             const char* value = require_value(i, arg);
             if (value == nullptr || ! ParseUInt(value, out.screen)) return false;
@@ -298,6 +316,16 @@ void MouseEnterCallback(int entered, void* userdata) {
     state->wallpaper->mouseEnter(entered != 0);
 }
 
+void FirstFramePresentedCallback(void* userdata) {
+    auto* state = static_cast<AppState*>(userdata);
+    EmitLifecycleEvent(state, "first-frame-presented");
+}
+
+void ActivatedCallback(void* userdata) {
+    auto* state = static_cast<AppState*>(userdata);
+    EmitLifecycleEvent(state, "activated");
+}
+
 std::uint32_t ClampRenderExtent(std::uint32_t value, std::uint32_t fallback) {
     if (value == 0) value = fallback;
     return std::clamp<std::uint32_t>(value, 500u, 65535u);
@@ -326,12 +354,15 @@ int main(int argc, char** argv) {
         .title        = "SceneRenderer Wallpaper",
         .input_hz     = options.input_hz,
         .screen_index = options.screen,
+        .deferred_show = options.deferred_show,
     };
     SceneRendererMacDesktopCallbacks callbacks {
         .mouse_move   = MouseMoveCallback,
         .mouse_button = MouseButtonCallback,
         .mouse_enter  = MouseEnterCallback,
         .closed       = nullptr,
+        .first_frame_presented = FirstFramePresentedCallback,
+        .activated    = ActivatedCallback,
         .userdata     = &state,
     };
     state.desktop = SceneRendererMacDesktopCreate(&desktop_config, callbacks);
@@ -405,14 +436,15 @@ int main(int argc, char** argv) {
     // control thread — otherwise a race between RenderInit/LoadScene message
     // dispatch and a premature stdin EOF (triggering NSApp stop / cleanup) can
     // cause "Sender::acquire on null" panics in the mpsc channel layer.
-    if (! wallpaper.waitVulkanInited(5000)) {
+    if (! wallpaper.waitVulkanInited(30000)) {
         std::cerr << "Vulkan initialization timed out\n";
         SceneRendererMacDesktopDestroy(state.desktop);
         return 1;
     }
+    EmitLifecycleEvent(&state, "vulkan-ready");
     {
         using clock   = std::chrono::steady_clock;
-        auto deadline = clock::now() + std::chrono::seconds(5);
+        auto deadline = clock::now() + std::chrono::seconds(30);
         while (clock::now() < deadline) {
             if (wallpaper.sceneReady()) break;
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
@@ -423,10 +455,14 @@ int main(int argc, char** argv) {
             return 1;
         }
     }
+    EmitLifecycleEvent(&state, "scene-ready");
     std::optional<mirage::SceneControlChannel> control;
     if (options.control_stdin) {
         void* desktop = state.desktop;
-        control.emplace(wallpaper, [desktop]() { SceneRendererMacDesktopStop(desktop); });
+        control.emplace(
+            wallpaper,
+            [desktop]() { SceneRendererMacDesktopStop(desktop); },
+            [desktop]() { SceneRendererMacDesktopActivate(desktop); });
         control->start();
     }
 

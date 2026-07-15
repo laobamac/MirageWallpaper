@@ -120,6 +120,9 @@ public:
 
     ExSwapchain* exSwapchain() const;
     bool         inited() const;
+    // Called on the render thread after compileRenderGraph; unlike inited(),
+    // this includes successful render-program preparation.
+    bool         readyToDraw() const;
 
     /* Tick all registered video-tex decoders. No-op when no scene
      * texture has been recognised as a VIDEO container. Invoked from
