@@ -18,10 +18,12 @@ class MainWindowController: NSWindowController, NSWindowDelegate {
     }
     
     override init(window: NSWindow?) {
-        super.init(window: NSWindow(
+        let win = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1029, height: 669),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
-            backing: .buffered, defer: false))
+            backing: .buffered, defer: false)
+        win.isRestorable = false
+        super.init(window: win)
         self.window.delegate = self
         self.window.isReleasedWhenClosed = false
         self.window.title = "Mirage \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0")"
@@ -35,8 +37,7 @@ class MainWindowController: NSWindowController, NSWindowDelegate {
                 wallpaperViewModel: AppDelegate.shared.wallpaperViewModel
             ).environmentObject(AppDelegate.shared.globalSettingsViewModel)
         )
-        hostingView.translatesAutoresizingMaskIntoConstraints = true
-        hostingView.autoresizingMask = [.width, .height]
+        hostingView.translatesAutoresizingMaskIntoConstraints = false
         self.window.contentView = hostingView
     }
     
@@ -62,10 +63,9 @@ class MainWindowController: NSWindowController, NSWindowDelegate {
     func windowDidResignMain(_ notification: Notification) { }
     
     func windowDidBecomeKey(_ notification: Notification) {
+        // 延迟到下一个 runloop 周期，避免在 display cycle 中触发约束更新循环
         DispatchQueue.main.async {
-            withAnimation {
-                AppDelegate.shared.contentViewModel.isStaging = true
-            }
+            AppDelegate.shared.contentViewModel.isStaging = true
         }
     }
 }

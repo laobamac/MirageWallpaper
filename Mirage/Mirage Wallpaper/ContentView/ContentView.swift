@@ -28,8 +28,8 @@ struct ContentView: View {
     var body: some View {
         ZStack {
             HSplitView {
-                if viewModel.isStaging {
-                    VStack(spacing: 5) {
+                VStack(spacing: 5) {
+                    if viewModel.isStaging {
                         TopTabBar(contentViewModel: viewModel)
                         ProjectFeedbackBanner()
                         switch viewModel.topTabBarSelection {
@@ -42,7 +42,6 @@ struct ContentView: View {
                                 }
                                 .frame(width: viewModel.isFilterReveal ? 225 : 0)
                                 .opacity(viewModel.isFilterReveal ? 1 : 0)
-                                .animation(.spring(), value: viewModel.isFilterReveal)
 
                                 WallpaperExplorer(contentViewModel: viewModel, wallpaperViewModel: wallpaperViewModel)
                                     .onDrop(of: [.fileURL], delegate: viewModel)
@@ -79,7 +78,6 @@ struct ContentView: View {
                                 }
                                 .frame(width: viewModel.isFilterReveal ? 225 : 0)
                                 .opacity(viewModel.isFilterReveal ? 1 : 0)
-                                .animation(.spring(), value: viewModel.isFilterReveal)
 
                                 WidgetExplorer(viewModel: rmskinViewModel)
                                     .padding(.leading, viewModel.isFilterReveal ? 10 : 0)
@@ -92,7 +90,6 @@ struct ContentView: View {
                                 WorkshopFilterSidebar(workshopViewModel: workshopViewModel)
                                     .frame(width: viewModel.isFilterReveal ? 225 : 0)
                                     .opacity(viewModel.isFilterReveal ? 1 : 0)
-                                    .animation(.spring(), value: viewModel.isFilterReveal)
 
                                 WorkshopView(
                                     workshopViewModel: workshopViewModel,
@@ -102,12 +99,14 @@ struct ContentView: View {
                             }
                             .animation(.default, value: viewModel.isFilterReveal)
                         default:
-                            fatalError()
+                            EmptyView()
                         }
                         ExplorerBottomBar()
                     }
-                    .padding()
+                }
+                .padding()
 
+                if viewModel.isStaging {
                     if viewModel.topTabBarSelection == 0 {
                         WallpaperPreview(contentViewModel: viewModel, wallpaperViewModel: wallpaperViewModel)
                             .frame(maxWidth: 320)

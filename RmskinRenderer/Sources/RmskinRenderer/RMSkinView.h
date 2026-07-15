@@ -19,16 +19,16 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, strong, readonly) RMSkin *skin;
 @property (nonatomic, assign) BOOL draggable;      // move window on drag
 
-// Frosted-glass background: when YES, the view samples the desktop behind the
-// widget's window and renders a blurred, dark-tinted version underneath the
-// meters (the macOS equivalent of Windows' Acrylic effect). The screenshot is
-// taken once at view creation; resizing the window re-captures.
+// Frosted-glass background: when YES, reads the macOS desktop wallpaper image
+// via NSWorkspace, crops it to the widget's screen region, applies a Gaussian
+// blur, and composites a tint overlay behind the meters. No screen capture
+// (CGWindowListCreateImage) — uses the static wallpaper file directly.
 @property (nonatomic, assign) BOOL useBlur;
 @property (nonatomic, assign) CGFloat blurRadius;     // CIGaussianBlur radius, default 22
 @property (nonatomic, strong, nullable) NSColor *blurTint; // dark overlay color, default rgba(0,0,0,0.5)
 
-// Force re-capture of the desktop behind the window. Call after moving the
-// window or when the wallpaper has changed.
+// Force re-render of the blur backdrop. Call after moving the window or when
+// the wallpaper has changed.
 - (void)refreshBlurBackground;
 
 // Desired top-left position of the widget on the target screen, in AppKit

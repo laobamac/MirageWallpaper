@@ -11,8 +11,7 @@
     NSSize  _lastContentSize;
     BOOL    _hasPerformedInitialLayout;
     NSTrackingArea *_trackingArea;
-    NSImageView *_blurImageView;
-    BOOL    _hasPerformedBlurCapture;
+    NSVisualEffectView *_blurEffectView;
 }
 
 - (instancetype)initWithSkin:(RMSkin *)skin {
@@ -200,133 +199,82 @@
     [self.skin handleMouseExit];
 }
 
-#pragma mark - Frosted-glass background
-
-// Capture the desktop content behind this view's window. Uses
-// CGWindowListCreateImage to grab on-screen pixels beneath the window level,
-// which captures the wallpaper (and any other windows that happen to be
-// behind us — these typically aren't there because we sit at desktop level).
-- (NSImage *)captureBackgroundForBlur {
-    NSWindow *win = self.window;
-    if (win == nil) return nil;
-    NSRect winFrame = win.frame;
-    CGFloat sx = winFrame.origin.x;
-    CGFloat sy = winFrame.origin.y;
-    CGFloat sw = winFrame.size.width;
-    CGFloat sh = winFrame.size.height;
-    if (sw < 1 || sh < 1) return nil;
-
-    // CGWindowListCreateImage uses bottom-left coordinates; the window's
-    // `frame` is in screen coordinates (bottom-left origin), so it matches.
-    CGImageRef cg = CGWindowListCreateImage(CGRectMake(sx, sy, sw, sh),
-                                            kCGWindowListOptionOnScreenBelowWindow,
-                                            kCGNullWindowID,
-                                            kCGWindowImageDefault);
-    if (cg == NULL) return nil;
-    NSSize size = NSMakeSize(CGImageGetWidth(cg), CGImageGetHeight(cg));
-    NSImage *img = [[NSImage alloc] initWithCGImage:cg size:size];
-    CGImageRelease(cg);
-    return img;
-}
-
-// Apply CIGaussianBlur to an NSImage and return a new NSImage at the same size.
-- (NSImage *)applyBlur:(NSImage *)src radius:(CGFloat)radius {
-    NSLog(@"[Rmskin] applyBlur NEW CODE (imageByClampingToExtent)");
-    if (src == nil) return nil;
-    CGImageRef cg = [src CGImageForProposedRect:NULL context:nil hints:nil];
-    if (cg == NULL) return nil;
-    CIImage *ci = [CIImage imageWithCGImage:cg];
-    // Remember the original extent so we can crop the (expanded) blurred output
-    // back to the source dimensions.
-    CGRect srcExtent = ci.extent;
-    CIFilter *blur = [CIFilter filterWithName:@"CIGaussianBlur"];
-    // Clamp the input to its extent so the blur samples edge pixels instead of
-    // transparent black, keeping the borders from darkening/fading.
-    [blur setValue:[ci imageByClampingToExtent] forKey:kCIInputImageKey];
-    [blur setValue:@(radius) forKey:kCIInputRadiusKey];
-    CIImage *out = blur.outputImage;
-    if (out == nil) return nil;
-    CIContext *ctx = [CIContext context];
-    CGImageRef outCg = [ctx createCGImage:out fromRect:srcExtent];
-    if (outCg == NULL) return nil;
-    NSSize outSize = NSMakeSize(CGImageGetWidth(outCg), CGImageGetHeight(outCg));
-    NSImage *result = [[NSImage alloc] initWithCGImage:outCg size:outSize];
-    CGImageRelease(outCg);
-    return result;
-}
-
-// Composite the tint colour on top of the blurred image and return a single
-// NSImage suitable for direct drawing as a backdrop.
-- (NSImage *)compositeTint:(NSImage *)src color:(NSColor *)tint {
-    if (src == nil) return nil;
-    NSSize sz = src.size;
-    NSImage *result = [[NSImage alloc] initWithSize:sz];
-    [result lockFocus];
-    [src drawInRect:NSMakeRect(0, 0, sz.width, sz.height)
-           fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1.0];
-    [tint setFill];
-    NSRectFillUsingOperation(NSMakeRect(0, 0, sz.width, sz.height), NSCompositingOperationSourceOver);
-    [result unlockFocus];
-    return result;
-}
+#pragma mark - Frosted-glass background (NSVisualEffectView)
 
 - (void)setUseBlur:(BOOL)useBlur {
     if (_useBlur == useBlur) return;
     _useBlur = useBlur;
     if (useBlur) {
-        [self refreshBlurBackground];
+        [self installBlurEffect];
     } else {
-        [_blurImageView removeFromSuperview];
-        _blurImageView = nil;
+        [_blurEffectView removeFromSuperview];
+        _blurEffectView = nil;
+    }
+}
+
+- (void)installBlurEffect {
+    if (_blurEffectView != nil) return;
+    _blurEffectView = [[NSVisualEffectView alloc] initWithFrame:self.bounds];
+    _blurEffectView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    _blurEffectView.blendingMode = NSVisualEffectBlendingModeBehindWindow;
+    _blurEffectView.state = NSVisualEffectStateActive;
+
+    // Choose material based on tint.
+    CGFloat r = 0, g = 0, b = 0, a = 0;
+    NSColor *tint = self.blurTint;
+    if (tint) {
+        [[tint colorUsingColorSpace:NSColorSpace.sRGBColorSpace] getRed:&r green:&g blue:&b alpha:&a];
+    }
+    _blurEffectView.material = ((r + g + b) > 1.5 && a > 0.3)
+        ? NSVisualEffectMaterialLight
+        : NSVisualEffectMaterialHUDWindow;
+
+    _blurEffectView.wantsLayer = YES;
+    _blurEffectView.alphaValue = 1.0;
+    [self addSubview:_blurEffectView positioned:NSWindowBelow relativeTo:nil];
+
+    // The window must not be fully transparent for the effect to sample
+    // desktop content — set it to a near-transparent color instead of clear.
+    NSWindow *win = self.window;
+    if (win && [win.backgroundColor isEqual:[NSColor clearColor]]) {
+        win.backgroundColor = [NSColor colorWithCalibratedWhite:0 alpha:0.001];
     }
 }
 
 - (void)refreshBlurBackground {
     if (!_useBlur) return;
-    NSWindow *win = self.window;
-    if (win == nil) {
-        // Defer until we have a window.
-        _hasPerformedBlurCapture = NO;
-        return;
-    }
-    NSImage *captured = [self captureBackgroundForBlur];
-    if (captured == nil) return;
-    NSImage *blurred = [self applyBlur:captured radius:self.blurRadius];
-    if (blurred == nil) return;
-    NSImage *backdrop = [self compositeTint:blurred color:self.blurTint ?: [NSColor colorWithSRGBRed:0 green:0 blue:0 alpha:0.5]];
-    if (backdrop == nil) return;
-    if (_blurImageView == nil) {
-        _blurImageView = [[NSImageView alloc] initWithFrame:self.bounds];
-        _blurImageView.imageScaling = NSImageScaleProportionallyUpOrDown;
-        _blurImageView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-    }
-    _blurImageView.image = backdrop;
-    _blurImageView.frame = self.bounds;
-    if (_blurImageView.superview == nil) {
-        [self addSubview:_blurImageView positioned:NSWindowBelow relativeTo:nil];
-    }
-    _hasPerformedBlurCapture = YES;
+    if (_blurEffectView == nil) [self installBlurEffect];
 }
 
-// Re-capture when the window's frame changes (e.g. after move/resize).
 - (void)viewDidMoveToWindow {
     [super viewDidMoveToWindow];
-    // The blur capture is handled in resizeToContent (after the window has
-    // been sized and positioned). Doing it here would race with the
-    // positioning logic in RmskinWallpaper and capture the wrong area.
+    // Install the blur effect now that we have a window.
+    if (_useBlur && _blurEffectView == nil) {
+        [self installBlurEffect];
+    }
 }
 
 - (void)setFrame:(NSRect)frameRect {
     [super setFrame:frameRect];
-    if (self.useBlur && _blurImageView) {
-        _blurImageView.frame = self.bounds;
-    }
+    if (_blurEffectView) _blurEffectView.frame = self.bounds;
 }
 
 - (void)setFrameSize:(NSSize)newSize {
     [super setFrameSize:newSize];
-    if (self.useBlur && _blurImageView) {
-        _blurImageView.frame = self.bounds;
+    if (_blurEffectView) _blurEffectView.frame = self.bounds;
+}
+
+- (void)setBlurTint:(NSColor *)blurTint {
+    if (_blurTint == blurTint || [_blurTint isEqual:blurTint]) return;
+    _blurTint = blurTint;
+    if (_useBlur && _blurEffectView != nil) {
+        CGFloat r = 0, g = 0, b = 0, a = 0;
+        if (blurTint) {
+            [[blurTint colorUsingColorSpace:NSColorSpace.sRGBColorSpace] getRed:&r green:&g blue:&b alpha:&a];
+        }
+        _blurEffectView.material = ((r + g + b) > 1.5 && a > 0.3)
+            ? NSVisualEffectMaterialLight
+            : NSVisualEffectMaterialHUDWindow;
     }
 }
 

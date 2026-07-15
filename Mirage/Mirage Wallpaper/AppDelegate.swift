@@ -128,6 +128,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             backing: .buffered, defer: false)
         self.settingsWindow.title = "设置"
         self.settingsWindow.isReleasedWhenClosed = false
+        self.settingsWindow.isRestorable = false
         self.settingsWindow.toolbarStyle = .preference
         self.settingsWindow.delegate = self
 

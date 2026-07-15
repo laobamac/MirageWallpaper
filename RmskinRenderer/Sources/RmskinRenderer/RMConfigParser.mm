@@ -65,6 +65,7 @@
                 if (!incPath.isAbsolutePath) {
                     incPath = [fileDir stringByAppendingPathComponent:incRaw];
                 }
+
                 _includeDepth++;
                 [self mergeFile:incPath relativeDir:fileDir];
                 _includeDepth--;
@@ -88,6 +89,7 @@
         if ([key.uppercaseString hasPrefix:@"@INCLUDE"]) continue;
         [self setVariable:key value:[vars valueForKey:key] ?: @""];
     }
+
 }
 
 #pragma mark - Variables

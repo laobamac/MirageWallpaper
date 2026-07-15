@@ -351,6 +351,7 @@ static double RMRelativeValue(RMMeasure *m) {
         if (self.w <= 0) self.w = _image.size.width;
         if (self.h <= 0) self.h = _image.size.height;
     }
+
 }
 - (void)draw {
     [self fillBackgroundIfNeeded];

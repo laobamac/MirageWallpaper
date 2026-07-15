@@ -48,6 +48,13 @@
 @interface RMMeasureBattery    : RMMeasure @end
 @interface RMMeasureSysInfo    : RMMeasure @end
 @interface RMMeasureProcess    : RMMeasure @end
+@interface RMMeasureWebParser  : RMMeasure @end
+@interface RMMeasureRunCommand : RMMeasure @end
+@interface RMMeasureFolderInfo : RMMeasure @end
+@interface RMMeasureRegistry   : RMMeasure @end
+@interface RMMeasureRecycleManager : RMMeasure @end
+@interface RMMeasureWiFiStatus : RMMeasure @end
+@interface RMMeasureString     : RMMeasure @end
 @interface RMMeasureStub   : RMMeasure @end
 
 @implementation RMMeasure
@@ -76,6 +83,18 @@
     else if ([t isEqualToString:@"sysinfo"])               cls = [RMMeasureSysInfo class];
     else if ([t isEqualToString:@"process"] ||
              [t isEqualToString:@"advancedcpu"])            cls = [RMMeasureProcess class];
+    else if ([t isEqualToString:@"webparser"])              cls = [RMMeasureWebParser class];
+    else if ([t isEqualToString:@"runcommand"])             cls = [RMMeasureRunCommand class];
+    else if ([t isEqualToString:@"folderinfo"])             cls = [RMMeasureFolderInfo class];
+    else if ([t isEqualToString:@"registry"])               cls = [RMMeasureRegistry class];
+    else if ([t isEqualToString:@"recyclemanager"])         cls = [RMMeasureRecycleManager class];
+    else if ([t isEqualToString:@"wifistatus"])             cls = [RMMeasureWiFiStatus class];
+    else if ([t isEqualToString:@"string"])                 cls = [RMMeasureString class];
+    else if ([t isEqualToString:@"script"])                 cls = [RMMeasureStub class];  // Lua: not yet implemented
+    else if ([t isEqualToString:@"plugin"])                 cls = [RMMeasureStub class];  // Plugin: not yet implemented
+    else if ([t isEqualToString:@"coretemp"] ||
+             [t isEqualToString:@"speedfan"] ||
+             [t isEqualToString:@"inputtext"])              cls = [RMMeasureStub class];  // Windows-specific
     else                                                   cls = [RMMeasureStub class];
 
     RMMeasure *m = [[cls alloc] init];
@@ -802,6 +821,50 @@ static NSString *RMTranslateTimeFormat(NSString *fmt) {
 #pragma mark - Stub (WebParser / Plugin / unsupported)
 
 @implementation RMMeasureStub
+- (BOOL)isStringMeasure { return YES; }
+- (nullable NSString *)rawString { return @""; }
+- (void)updateValue { self.value = 0; }
+@end
+
+#pragma mark - Stub implementations for Windows-only / unimplemented measure types
+
+@implementation RMMeasureWiFiStatus
+- (BOOL)isStringMeasure { return YES; }
+- (nullable NSString *)rawString { return @"N/A"; }
+- (void)updateValue { self.value = 0; }
+@end
+
+@implementation RMMeasureFolderInfo
+- (BOOL)isStringMeasure { return YES; }
+- (nullable NSString *)rawString { return @""; }
+- (void)updateValue { self.value = 0; }
+@end
+
+@implementation RMMeasureRecycleManager
+- (BOOL)isStringMeasure { return YES; }
+- (nullable NSString *)rawString { return @"0 B"; }
+- (void)updateValue { self.value = 0; }
+@end
+
+@implementation RMMeasureRegistry
+- (BOOL)isStringMeasure { return YES; }
+- (nullable NSString *)rawString { return @""; }
+- (void)updateValue { self.value = 0; }
+@end
+
+@implementation RMMeasureRunCommand
+- (BOOL)isStringMeasure { return YES; }
+- (nullable NSString *)rawString { return @""; }
+- (void)updateValue { self.value = 0; }
+@end
+
+@implementation RMMeasureString
+- (BOOL)isStringMeasure { return YES; }
+- (nullable NSString *)rawString { return @""; }
+- (void)updateValue { self.value = 0; }
+@end
+
+@implementation RMMeasureWebParser
 - (BOOL)isStringMeasure { return YES; }
 - (nullable NSString *)rawString { return @""; }
 - (void)updateValue { self.value = 0; }

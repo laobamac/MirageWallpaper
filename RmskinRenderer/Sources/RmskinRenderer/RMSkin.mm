@@ -329,14 +329,6 @@
         prev = mt;
     }
     _contentSize = NSMakeSize(ceil(maxX), ceil(maxY));
-    // The background image (Rainmeter section [Rainmeter] Background=…)
-    // is drawn in `drawInBounds:` and may be larger than any meter.
-    // Include its natural size so the widget window is large enough to
-    // contain it instead of cropping or spilling over the edges.
-    if (_bgImage) {
-        _contentSize.width  = MAX(_contentSize.width,  _bgImage.size.width);
-        _contentSize.height = MAX(_contentSize.height, _bgImage.size.height);
-    }
     if (_contentSize.width < 1) _contentSize.width = 1;
     if (_contentSize.height < 1) _contentSize.height = 1;
     _ticking = NO;
@@ -346,25 +338,12 @@
 
 - (void)drawInBounds:(NSRect)bounds {
     if (_bgImage) {
-        // Draw the background image constrained to the actual content
-        // bounds, preserving aspect ratio.  The previous code drew at
-        // `_bgImage.size` unconditionally, which caused large background
-        // assets (e.g. character portraits, full-screen wallpaper tiles) to
-        // spill far beyond the meter-determined widget frame — the user
-        // would see the character overflow the widget's rounded-rect
-        // background while the window stayed small.
-        NSSize img = _bgImage.size;
-        if (img.width > 0 && img.height > 0) {
-            CGFloat s = MIN(bounds.size.width / img.width,
-                            bounds.size.height / img.height);
-            CGFloat nw = img.width * s;
-            CGFloat nh = img.height * s;
-            NSRect dst = NSMakeRect((bounds.size.width - nw) / 2,
-                                    0, nw, nh);
-            [_bgImage drawInRect:dst
-                        fromRect:NSZeroRect operation:NSCompositingOperationSourceOver
-                        fraction:1.0 respectFlipped:YES hints:nil];
-        }
+        // Rainmeter stretches the Background image to fill the entire skin
+        // content area (determined by meter extents, not the image's natural
+        // size). Draw it into the full bounds rectangle.
+        [_bgImage drawInRect:bounds
+                    fromRect:NSZeroRect operation:NSCompositingOperationSourceOver
+                    fraction:1.0 respectFlipped:YES hints:nil];
     } else if (_bgColor && (_backgroundMode == 1 || _backgroundMode == 0)) {
         if (_bgColor.alphaComponent > 0.004) {
             [_bgColor setFill];

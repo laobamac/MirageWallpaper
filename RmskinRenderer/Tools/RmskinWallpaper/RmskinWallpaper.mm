@@ -161,14 +161,10 @@ static void BuildWindows(HostDelegate *delegate, RMLayout *layout, int screenInd
         window.hasShadow = NO;
         window.movableByWindowBackground = NO;   // dragging handled by the view
         window.releasedWhenClosed = NO;
-        // NSVisualEffectView with `BehindWindow` blending is intentionally not
-        // used here: it requires the window to have a real (non-clear) backdrop
-        // to sample, and a borderless `clearColor` window has nothing to blur —
-        // in that case the view renders as a solid light-gray rectangle, which
-        // shows through any skin area that has no explicit fill (i.e. a
-        // transparent widget hole), producing the abnormal "frosted" blocks.
-        // Skins are expected to paint their own backgrounds (via Shape /
-        // SolidColor / Image); anything else leaves the desktop visible.
+        // Frosted-glass blur is handled by NSVisualEffectView inside the skin
+        // view (with NSVisualEffectStateActive + BehindWindow blending). The
+        // window itself stays transparent so non-blurred areas show through to
+        // the desktop wallpaper.
         window.contentView = view;
 
         [window orderFrontRegardless];
