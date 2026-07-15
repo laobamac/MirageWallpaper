@@ -19,7 +19,7 @@ class MainWindowController: NSWindowController, NSWindowDelegate {
     
     override init(window: NSWindow?) {
         super.init(window: NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 480, height: 300),
+            contentRect: NSRect(x: 0, y: 0, width: 1000, height: 640),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered, defer: false))
         self.window.delegate = self
@@ -28,11 +28,14 @@ class MainWindowController: NSWindowController, NSWindowDelegate {
         self.window.titlebarAppearsTransparent = true
         self.window.setFrameAutosaveName("MainWindow")
         self.window.isMovableByWindowBackground = true
-        self.window.contentView = NSHostingView(rootView: ContentView(
+        self.window.contentMinSize = NSSize(width: 1000, height: 640)
+        let hostingView = NSHostingView(rootView: ContentView(
                 viewModel: AppDelegate.shared.contentViewModel,
                 wallpaperViewModel: AppDelegate.shared.wallpaperViewModel
             ).environmentObject(AppDelegate.shared.globalSettingsViewModel)
         )
+        hostingView.sizingOptions = []
+        self.window.contentView = hostingView
     }
     
     required init?(coder: NSCoder) {

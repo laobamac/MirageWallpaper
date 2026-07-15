@@ -220,13 +220,24 @@ class GlobalSettingsViewModel: ObservableObject {
     func didAddToLoginItem(_ added: Bool) {
         let appService = SMAppService.mainApp
         do {
-            if added {
+            switch (added, appService.status) {
+            case (true, .notRegistered):
                 try appService.register()
-            } else {
+            case (false, .enabled), (false, .requiresApproval):
                 try appService.unregister()
+            case (true, .notFound):
+                NSLog("[Mirage] Login item is unavailable")
+                settings.autoStart = false
+            default:
+                break
             }
         } catch {
-            print(error)
+            let nsError = error as NSError
+            NSLog("[Mirage] Failed to update login item: %@ (%@:%ld)", nsError.localizedDescription, nsError.domain, nsError.code)
+            let isRegistered = appService.status == .enabled || appService.status == .requiresApproval
+            if settings.autoStart != isRegistered {
+                settings.autoStart = isRegistered
+            }
         }
     }
     
