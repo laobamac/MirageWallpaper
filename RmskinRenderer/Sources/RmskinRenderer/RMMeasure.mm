@@ -2,6 +2,7 @@
 #import "RMConfigParser.h"
 #import "RMMathParser.h"
 #import "RMLog.h"
+#import <AppKit/AppKit.h>
 
 #include <mach/mach.h>
 #include <sys/sysctl.h>
@@ -120,7 +121,10 @@
     RMConfigParser *cp = self.parser;
     self.disabled = [cp readBool:self.name key:@"Disabled" default:NO];
     self.invert   = [cp readBool:self.name key:@"InvertMeasure" default:NO];
-    self.updateDivider = [cp readInt:self.name key:@"UpdateDivider" default:1];
+    // Use the section's explicit UpdateDivider if present; otherwise fall back
+    // to the [Rainmeter] DefaultUpdateDivider (already set on the measure).
+    int explicitDivider = [cp readInt:self.name key:@"UpdateDivider" default:-1];
+    self.updateDivider = (explicitDivider >= 1) ? explicitDivider : self.defaultUpdateDivider;
     if (self.updateDivider < 1) self.updateDivider = 1;
     self.group    = [cp readString:self.name key:@"Group" default:nil];
 
@@ -816,7 +820,7 @@ static NSString *RMTranslateTimeFormat(NSString *fmt) {
     NSArray *parts = [text componentsSeparatedByString:@"|||"];
     if (parts.count < 6) return @{@"STATE": @"0"};
 
-    NSString *state = [parts[5] trimmed];
+    NSString *state = [parts[5] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     BOOL playing = [state caseInsensitiveCompare:@"playing"] == NSOrderedSame ||
                    [state caseInsensitiveCompare:@"kPSP"] == NSOrderedSame;
 
@@ -827,9 +831,9 @@ static NSString *RMTranslateTimeFormat(NSString *fmt) {
     NSString *posStr = [self formatTime:position];
 
     return @{
-        @"TITLE":    [parts[0] trimmed],
-        @"ARTIST":   [parts[1] trimmed],
-        @"ALBUM":    [parts[2] trimmed],
+        @"TITLE":    [parts[0] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]],
+        @"ARTIST":   [parts[1] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]],
+        @"ALBUM":    [parts[2] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]],
         @"DURATION": durStr,
         @"POSITION": posStr,
         @"PROGRESS": [NSString stringWithFormat:@"%.1f", duration > 0 ? position / duration * 100 : 0],
@@ -1269,12 +1273,10 @@ static NSString *RMTranslateTimeFormat(NSString *fmt) {
 }
 
 - (void)updateValue {
-    // Only launch once, not on every tick. State=Hide (default) means no terminal window.
+    // Launch only once; subsequent ticks just return the cached result.
+    // The command result stays valid until the skin is refreshed.
     if (_running) return;
-
-    // Only launch if we haven't run yet or have no data.
-    if (_lastExitCode >= 0 && _lastOutput.length == 0) return;
-
+    if (_lastExitCode >= 0) return; // already ran
     if (_program.length == 0) return;
     [self launchCommand];
 }
@@ -1357,6 +1359,7 @@ static NSString *RMTranslateTimeFormat(NSString *fmt) {
 
             strongSelf->_lastOutput = [output stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
             strongSelf->_lastExitCode = (double)task.terminationStatus;
+            strongSelf.value = strongSelf->_lastExitCode;
 
         } @catch (NSException *e) {
             strongSelf->_lastOutput = @"";
@@ -1400,10 +1403,6 @@ static NSString *RMTranslateTimeFormat(NSString *fmt) {
 
 - (nullable NSString *)rawString {
     return _lastOutput ?: @"";
-}
-
-- (void)updateValueCore {
-    self.value = _lastExitCode;
 }
 
 @end
@@ -1534,12 +1533,12 @@ static NSString *RMTranslateTimeFormat(NSString *fmt) {
                                                         kCFPreferencesAnyHost);
         if (val) {
             if (CFGetTypeID(val) == CFNumberGetTypeID()) {
-                CFNumberGetValue(val, kCFNumberDoubleType, &_value);
+                { double tmp = 0; CFNumberGetValue((CFNumberRef)val, kCFNumberDoubleType, &tmp); self.value = tmp; }
             } else if (CFGetTypeID(val) == CFStringGetTypeID()) {
                 double d = 0;
                 if ([[NSScanner scannerWithString:(__bridge NSString *)val] scanDouble:&d]) self.value = d;
             } else if (CFGetTypeID(val) == CFBooleanGetTypeID()) {
-                self.value = CFBooleanGetValue(val) ? 1.0 : 0.0;
+                self.value = CFBooleanGetValue((CFBooleanRef)val) ? 1.0 : 0.0;
             }
             CFRelease(val);
         }
@@ -1627,7 +1626,7 @@ static NSString *RMTranslateTimeFormat(NSString *fmt) {
 
 #pragma mark - WiFiStatus (CoreWLAN)
 
-@import CoreWLAN;
+#import <CoreWLAN/CoreWLAN.h>
 
 @implementation RMMeasureWiFiStatus {
     NSString *_infoType; // SSID, Quality, Encryption, Description, PHY, Authenticated,

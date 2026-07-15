@@ -516,4 +516,31 @@ static BOOL RMBelongsToGroup(NSString *_Nullable groupSpec, NSString *query) {
     return out;
 }
 
+#pragma mark - Window management properties
+
+- (void)setWindowAlpha:(CGFloat)alpha {
+    if (self.onWindowAlphaChanged) {
+        self.onWindowAlphaChanged(alpha, _fadeDuration);
+    }
+    _fadeDuration = 0; // reset after use
+}
+
+- (CGFloat)windowAlpha { return 1.0; }
+
+- (void)setClickThrough:(BOOL)clickThrough {
+    if (self.onClickThroughChanged) {
+        self.onClickThroughChanged(clickThrough);
+    }
+}
+
+- (BOOL)clickThrough { return NO; }
+
+- (void)setWindowPosition:(NSPoint)pos {
+    if (self.onWindowPositionChanged) {
+        self.onWindowPositionChanged(pos);
+    }
+}
+
+- (NSPoint)windowPosition { return NSZeroPoint; }
+
 @end

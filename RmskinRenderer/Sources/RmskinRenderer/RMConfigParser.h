@@ -56,6 +56,9 @@ NS_ASSUME_NONNULL_BEGIN
 // Evaluate a single already-expanded value as number (handles (formula) & plain).
 + (double)evaluateNumber:(NSString *)expanded default:(double)def;
 
+// Like readBool but for an already-expanded string value.
+- (BOOL)readBoolFromExpanded:(NSString *)value default:(BOOL)def;
+
 // Resolve a bare measure name to a value string (for %MeasureName% in String meters).
 // Returns nil if the measure is not found. Installed by RMSkin.
 @property (nonatomic, copy, nullable) NSString *(^measureStringResolver)(NSString *name);

@@ -272,6 +272,16 @@
     return [RMConfigParser evaluateNumber:v default:(def ? 1 : 0)] != 0;
 }
 
+- (BOOL)readBoolFromExpanded:(NSString *)value default:(BOOL)def {
+    if (value.length == 0) return def;
+    NSString *v = [value stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+    if ([v caseInsensitiveCompare:@"1"] == NSOrderedSame) return YES;
+    if ([v caseInsensitiveCompare:@"true"] == NSOrderedSame) return YES;
+    if ([v caseInsensitiveCompare:@"0"] == NSOrderedSame) return NO;
+    if ([v caseInsensitiveCompare:@"false"] == NSOrderedSame) return NO;
+    return [RMConfigParser evaluateNumber:v default:(def ? 1 : 0)] != 0;
+}
+
 + (double)evaluateNumber:(NSString *)expanded default:(double)def {
     NSString *v = [expanded stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
     if (v.length == 0) return def;

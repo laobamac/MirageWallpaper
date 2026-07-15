@@ -32,7 +32,11 @@ final class RmskinViewModel: ObservableObject, DropDelegate {
         if let ids = UserDefaults.standard.stringArray(forKey: appliedKey) {
             appliedThemeIDs = Set(ids)
         }
-        refresh()
+        // 延迟首次加载，避免在窗口初始化 display cycle 期间
+        // 触发 @Published 更新导致约束循环
+        DispatchQueue.main.async { [weak self] in
+            self?.refresh()
+        }
     }
 
     // MARK: - Derived facets

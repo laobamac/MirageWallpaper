@@ -2,6 +2,7 @@
 #import "RMSkin.h"
 #import "RMLog.h"
 #import <CoreImage/CoreImage.h>
+#import <QuartzCore/QuartzCore.h>
 
 @implementation RMSkinView {
     NSTimer *_timer;
@@ -25,6 +26,17 @@
         _blurTint = [NSColor colorWithSRGBRed:0 green:0 blue:0 alpha:0.5];
         __weak RMSkinView *weakSelf = self;
         skin.onNeedsRedraw = ^{ weakSelf.needsDisplay = YES; };
+
+        // Wire up window-management callbacks from bangs.
+        skin.onWindowAlphaChanged = ^(CGFloat alpha, NSTimeInterval duration) {
+            [weakSelf setWindowAlpha:alpha animated:duration];
+        };
+        skin.onClickThroughChanged = ^(BOOL clickThrough) {
+            [weakSelf setWindowClickThrough:clickThrough];
+        };
+        skin.onWindowPositionChanged = ^(NSPoint pos) {
+            [weakSelf setWindowPosition:pos];
+        };
     }
     return self;
 }
@@ -268,12 +280,10 @@
 
 - (void)setFrame:(NSRect)frameRect {
     [super setFrame:frameRect];
-    if (_blurEffectView) _blurEffectView.frame = self.bounds;
 }
 
 - (void)setFrameSize:(NSSize)newSize {
     [super setFrameSize:newSize];
-    if (_blurEffectView) _blurEffectView.frame = self.bounds;
 }
 
 - (void)setBlurTint:(NSColor *)blurTint {
@@ -288,6 +298,52 @@
             ? NSVisualEffectMaterialLight
             : NSVisualEffectMaterialHUDWindow;
     }
+}
+
+#pragma mark - Window management (bang-driven)
+
+- (void)setWindowAlpha:(CGFloat)alpha animated:(NSTimeInterval)duration {
+    NSWindow *win = self.window;
+    if (!win) return;
+
+    if (duration > 0.01) {
+        // Animated fade.
+        [NSAnimationContext runAnimationGroup:^(NSAnimationContext *ctx) {
+            ctx.duration = duration;
+            ctx.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
+            win.animator.alphaValue = alpha;
+        } completionHandler:nil];
+    } else {
+        win.alphaValue = alpha;
+    }
+}
+
+- (void)setWindowClickThrough:(BOOL)clickThrough {
+    NSWindow *win = self.window;
+    if (!win) return;
+
+    if (clickThrough) {
+        win.ignoresMouseEvents = YES;
+        win.level = NSPopUpMenuWindowLevel;
+    } else {
+        win.ignoresMouseEvents = NO;
+        win.level = NSNormalWindowLevel;
+    }
+}
+
+- (void)setWindowPosition:(NSPoint)pos {
+    NSWindow *win = self.window;
+    if (!win) return;
+
+    self.desiredScreenTopLeft = NSMakePoint(pos.x, pos.y + self.skin.contentSize.height);
+    self.anchorFracX = 0;
+    self.anchorFracY = 0;
+    self.hasDesiredPosition = YES;
+    self.targetScreenFrame = win.screen ? win.screen.frame : NSScreen.mainScreen.frame;
+
+    NSRect newFrame = win.frame;
+    newFrame.origin = pos;
+    [win setFrame:newFrame display:YES];
 }
 
 @end

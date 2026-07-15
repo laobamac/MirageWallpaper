@@ -40,6 +40,7 @@ find_library(IMAGEIO_FRAMEWORK      ImageIO      REQUIRED)
 find_library(FOUNDATION_FRAMEWORK   Foundation   REQUIRED)
 find_library(IOKIT_FRAMEWORK        IOKit        REQUIRED)
 find_library(QUARTZCORE_FRAMEWORK   QuartzCore   REQUIRED)
+find_library(COREWLAN_FRAMEWORK     CoreWLAN     REQUIRED)
 
 set(RM_FRAMEWORKS
     ${COCOA_FRAMEWORK}
@@ -49,7 +50,8 @@ set(RM_FRAMEWORKS
     ${IMAGEIO_FRAMEWORK}
     ${FOUNDATION_FRAMEWORK}
     ${IOKIT_FRAMEWORK}
-    ${QUARTZCORE_FRAMEWORK})
+    ${QUARTZCORE_FRAMEWORK}
+    ${COREWLAN_FRAMEWORK})
 
 add_subdirectory(Sources/RmskinRenderer)
 
