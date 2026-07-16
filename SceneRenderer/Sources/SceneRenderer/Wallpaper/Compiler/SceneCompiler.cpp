@@ -2885,7 +2885,9 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
                 // (`_rt_imageLayerComposite_<self>[_a|_b]`) wants this layer's
                 // running chain result.
                 for (auto& t : wpmat.textures) {
-                    if (ParseImageLayerCompositeId(t).value() == static_cast<std::uint32_t>(wpimgobj.id))
+                    const auto composite_id = ParseImageLayerCompositeId(t);
+                    if (composite_id &&
+                        *composite_id == static_cast<std::uint32_t>(wpimgobj.id))
                         t = effect_ppong_a;
                 }
                 if (wpmat.textures.size() == 0) wpmat.textures.resize(1);
@@ -4147,7 +4149,9 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
                         }
                     }
                     for (auto& tex : wpmat.textures) {
-                        if (ParseImageLayerCompositeId(tex).value() == static_cast<std::uint32_t>(obj.id))
+                        const auto composite_id = ParseImageLayerCompositeId(tex);
+                        if (composite_id &&
+                            *composite_id == static_cast<std::uint32_t>(obj.id))
                             tex = ppong_a;
                     }
                     if (wpmat.textures.empty()) wpmat.textures.resize(1);

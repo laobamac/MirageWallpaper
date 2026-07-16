@@ -404,6 +404,11 @@ int main(int argc, char** argv) {
     data.psw  = psw;
 
     psw->init();
+    std::atomic<bool> first_frame_seen { false };
+    psw->setOnFirstFrame([&first_frame_seen]() {
+        first_frame_seen.store(true, std::memory_order_relaxed);
+        std::cerr << "SceneViewer: first frame rendered\n";
+    });
 
     sr::SceneWallpaperConfig config;
     config.assets_dir      = program.get<std::string>(viewer::ARG_ASSETS);
@@ -468,6 +473,9 @@ int main(int argc, char** argv) {
 
     psw->configure(std::move(config));
     psw->initVulkan(std::move(info));
+    if (! psw->waitVulkanInited(5000)) {
+        std::cerr << "SceneViewer: Vulkan initialization timed out\n";
+    }
 
     glfwSetWindowUserPointer(window, &data);
 
@@ -497,12 +505,23 @@ int main(int argc, char** argv) {
         std::this_thread::sleep_for(std::chrono::seconds(seconds));
     } else {
         const double wait_seconds = 1.0 / std::max(15, program.get<int32_t>(viewer::OPT_FPS));
+        const auto   startup_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        bool         startup_warned   = false;
         while (! glfwWindowShouldClose(window)) {
             // Letting the main thread enter GLFW's wait path gives AppKit /
             // CoreAnimation a chance to commit CAMetalLayer presents. A tight
             // glfwPollEvents loop can leave the drawable visible only when a
             // final window-close transaction is flushed.
             glfwWaitEventsTimeout(wait_seconds);
+            if (! startup_warned && std::chrono::steady_clock::now() >= startup_deadline) {
+                if (! psw->sceneReady()) {
+                    std::cerr << "SceneViewer: scene did not become ready within 5 seconds\n";
+                } else if (! first_frame_seen.load(std::memory_order_relaxed)) {
+                    std::cerr
+                        << "SceneViewer: scene is ready but no first frame was rendered within 5 seconds\n";
+                }
+                startup_warned = true;
+            }
             apply_locked_mouse();
 #if defined(__APPLE__)
             if (use_cpu_display_fallback) draw_live_frame(window, live_frame_state);

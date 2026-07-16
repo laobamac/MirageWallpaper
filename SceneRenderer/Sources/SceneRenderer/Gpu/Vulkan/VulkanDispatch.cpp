@@ -670,6 +670,8 @@ const char* ToString(VkResult result) noexcept {
         X(ERROR_VALIDATION_FAILED_EXT)
         // Provided by VK_KHR_swapchain
         X(SUBOPTIMAL_KHR)
+        // Provided by VK_KHR_swapchain
+        X(ERROR_OUT_OF_DATE_KHR)
 
         default:
         return "VK_RESULT_UNKNOWN";

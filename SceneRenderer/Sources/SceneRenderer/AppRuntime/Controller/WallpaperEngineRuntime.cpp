@@ -1293,6 +1293,9 @@ void SceneRenderController::on(RenderSetScene&& m) {
     m_scene = std::move(m.scene);
     rebuildRenderGraph(vulkan::RenderGraphResourceRetention::ReleaseSceneTextures, true);
     m_scene_ready.store(m_scene != nullptr && m_render->readyToDraw(), std::memory_order_release);
+    if (! m_stopped && renderInited() && m_rg && m_render->exSwapchain() == nullptr) {
+        frame_timer.Run();
+    }
 }
 
 void SceneRenderController::on(RenderSetSpeed&& m) { m_speed = m.speed; }
