@@ -1,5 +1,9 @@
 module;
 
+#if defined(__linux__)
+#include <string>
+#endif
+
 #include <rstd/macro.hpp>
 
 module sr.scene_uniform_updater;
@@ -252,7 +256,7 @@ void SceneUniformUpdater::UpdateUniforms(SceneNode* pNode, sprite_map_t& sprites
     }
     if (reqM || reqMVP || reqMI || reqMVPI || reqEffectModel) {
         Matrix4d modelTrans = pNode->ModelTrans();
-        if (hasNodeData && cam_name.compare("effect") != 0) {
+        if (hasNodeData && cam_name != "effect") {
             const auto& nodeData   = m_nodeDataMap.at(pNode);
             auto        cameraNode = camera->GetAttachedNode();
             const bool  layerLocalEffectSource =

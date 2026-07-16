@@ -1,5 +1,9 @@
 module;
 
+#if defined(__linux__)
+#include <string>
+#endif
+
 #include <rstd/macro.hpp>
 
 module sr.pkg.parse;
@@ -99,7 +103,7 @@ ParticleInitOp WPParticleParser::genParticleInitOp(const Json& wpj) {
         std::string name;
         sr::GetJsonValue(wpj, "name", name);
 
-        if (name.compare("colorrandom") == 0) {
+        if (name == "colorrandom") {
             VecRandom r;
             r.min = { 0.0f, 0.0f, 0.0f };
             r.max = { 255.0f, 255.0f, 255.0f };
@@ -115,25 +119,25 @@ ParticleInitOp WPParticleParser::genParticleInitOp(const Json& wpj) {
                           return x / 255.0f;
                       }));
             };
-        } else if (name.compare("lifetimerandom") == 0) {
+        } else if (name == "lifetimerandom") {
             SingleRandom r = { 0.0f, 1.0f };
             SingleRandom::ReadFromJson(wpj, r);
             return [=](Particle& p, double) {
                 PM::InitLifetime(p, Random::get(r.min, r.max));
             };
-        } else if (name.compare("sizerandom") == 0) {
+        } else if (name == "sizerandom") {
             SingleRandom r = { 0.0f, 20.0f };
             SingleRandom::ReadFromJson(wpj, r);
             return [=](Particle& p, double) {
                 PM::InitSize(p, Random::get(r.min, r.max));
             };
-        } else if (name.compare("alpharandom") == 0) {
+        } else if (name == "alpharandom") {
             SingleRandom r = { 0.05f, 1.0f };
             SingleRandom::ReadFromJson(wpj, r);
             return [=](Particle& p, double) {
                 PM::InitAlpha(p, Random::get(r.min, r.max));
             };
-        } else if (name.compare("velocityrandom") == 0) {
+        } else if (name == "velocityrandom") {
             VecRandom r;
             r.min[0] = r.min[1] = -32.0f;
             r.max[0] = r.max[1] = 32.0f;
@@ -142,7 +146,7 @@ ParticleInitOp WPParticleParser::genParticleInitOp(const Json& wpj) {
                 auto result = GenRandomVec3(r.min, r.max);
                 PM::ChangeVelocity(p, result[0], result[1], result[2]);
             };
-        } else if (name.compare("rotationrandom") == 0) {
+        } else if (name == "rotationrandom") {
             VecRandom r;
             r.max[2] = rstd::f32_::consts::TAU;
             VecRandom::ReadFromJson(wpj, r);
@@ -150,7 +154,7 @@ ParticleInitOp WPParticleParser::genParticleInitOp(const Json& wpj) {
                 auto result = GenRandomVec3(r.min, r.max);
                 PM::ChangeRotation(p, result[0], result[1], result[2]);
             };
-        } else if (name.compare("angularvelocityrandom") == 0) {
+        } else if (name == "angularvelocityrandom") {
             VecRandom r;
             r.min[2] = -5.0f;
             r.max[2] = 5.0f;
@@ -159,7 +163,7 @@ ParticleInitOp WPParticleParser::genParticleInitOp(const Json& wpj) {
                 auto result = GenRandomVec3(r.min, r.max);
                 PM::ChangeAngularVelocity(p, result[0], result[1], result[2]);
             };
-        } else if (name.compare("turbulentvelocityrandom") == 0) {
+        } else if (name == "turbulentvelocityrandom") {
             // to do
             TurbulentRandom r;
             TurbulentRandom::ReadFromJson(wpj, r);
@@ -291,10 +295,10 @@ struct FrequencyValue {
 
     static auto ReadFromJson(const Json& j, std::string_view name) {
         FrequencyValue v;
-        if (name.compare("oscillatesize") == 0) {
+        if (name == "oscillatesize") {
             v.scalemin = 0.8f;
             v.scalemax = 1.2f;
-        } else if (name.compare("oscillateposition") == 0) {
+        } else if (name == "oscillateposition") {
             v.frequencymax = 5.0f;
         }
         sr::GetJsonValue(j, "frequencymin", v.frequencymin, false);
@@ -446,7 +450,7 @@ ParticleOperatorOp WPParticleParser::genParticleOperatorOp(
         if (wpj.get("name").is_none()) break;
         std::string name;
         sr::GetJsonValue(wpj, "name", name);
-        if (name.compare("movement") == 0) {
+        if (name == "movement") {
             float drag { 0.0f };
 
             std::array<float, 3> gravity { 0, 0, 0 };
@@ -475,7 +479,7 @@ ParticleOperatorOp WPParticleParser::genParticleOperatorOp(
                     PM::Accelerate(p, speed * acc, info.time_pass);
                 }
             };
-        } else if (name.compare("angularmovement") == 0) {
+        } else if (name == "angularmovement") {
             float                drag { 0.0f };
             std::array<float, 3> force { 0, 0, 0 };
             sr::GetJsonValue(wpj, "drag", drag, false);
@@ -488,7 +492,7 @@ ParticleOperatorOp WPParticleParser::genParticleOperatorOp(
                     PM::AngularAccelerate(p, acc, info.time_pass);
                 }
             };
-        } else if (name.compare("sizechange") == 0) {
+        } else if (name == "sizechange") {
             auto vc = ValueChange::ReadFromJson(wpj);
             return [vc, over_state](const ParticleInfo& info) {
                 auto size_over = over_state->size;
@@ -496,7 +500,7 @@ ParticleOperatorOp WPParticleParser::genParticleOperatorOp(
                     PM::MutiplySize(p, size_over * FadeValueChange(PM::LifetimePos(p), vc));
             };
 
-        } else if (name.compare("alphafade") == 0) {
+        } else if (name == "alphafade") {
             float fadeintime { 0.5f }, fadeouttime { 0.5f };
             sr::GetJsonValue(wpj, "fadeintime", fadeintime, false);
             sr::GetJsonValue(wpj, "fadeouttime", fadeouttime, false);
@@ -510,14 +514,14 @@ ParticleOperatorOp WPParticleParser::genParticleOperatorOp(
                                          1.0f - FadeValueChange(life, fadeouttime, 1.0f, 0, 1.0f));
                 }
             };
-        } else if (name.compare("alphachange") == 0) {
+        } else if (name == "alphachange") {
             auto vc = ValueChange::ReadFromJson(wpj);
             return [vc](const ParticleInfo& info) {
                 for (auto& p : info.particles) {
                     PM::MutiplyAlpha(p, FadeValueChange(PM::LifetimePos(p), vc));
                 }
             };
-        } else if (name.compare("colorchange") == 0) {
+        } else if (name == "colorchange") {
             auto vc = VecChange::ReadFromJson(wpj);
             return [vc](const ParticleInfo& info) {
                 for (auto& p : info.particles) {
@@ -529,7 +533,7 @@ ParticleOperatorOp WPParticleParser::genParticleOperatorOp(
                     PM::MutiplyColor(p, result[0], result[1], result[2]);
                 }
             };
-        } else if (name.compare("oscillatealpha") == 0) {
+        } else if (name == "oscillatealpha") {
             FrequencyValue fv = FrequencyValue::ReadFromJson(wpj, name);
             return [fv](const ParticleInfo& info) mutable {
                 fv.CheckAndResize(info.particles.size());
@@ -539,7 +543,7 @@ ParticleOperatorOp WPParticleParser::genParticleOperatorOp(
                     PM::MutiplyAlpha(p, fv.GetScale(p.slot_id, PM::LifetimePassed(p)));
                 }
             };
-        } else if (name.compare("oscillatesize") == 0) {
+        } else if (name == "oscillatesize") {
             FrequencyValue fv = FrequencyValue::ReadFromJson(wpj, name);
             return [fv](const ParticleInfo& info) mutable {
                 fv.CheckAndResize(info.particles.size());
@@ -550,7 +554,7 @@ ParticleOperatorOp WPParticleParser::genParticleOperatorOp(
                 }
             };
 
-        } else if (name.compare("oscillateposition") == 0) {
+        } else if (name == "oscillateposition") {
             std::vector<Vector3f>         lastMove;
             FrequencyValue                fvx = FrequencyValue::ReadFromJson(wpj, name);
             std::array<FrequencyValue, 3> fxp = { fvx, fvx, fvx };
@@ -569,7 +573,7 @@ ParticleOperatorOp WPParticleParser::genParticleOperatorOp(
                     PM::Move(p, del);
                 }
             };
-        } else if (name.compare("turbulence") == 0) {
+        } else if (name == "turbulence") {
             Turbulence tur   = Turbulence::ReadFromJson(wpj);
             double     phase = Random::get(tur.phasemin, tur.phasemax);
             double     speed = Random::get(tur.speedmin, tur.speedmax);
@@ -585,7 +589,7 @@ ParticleOperatorOp WPParticleParser::genParticleOperatorOp(
                     PM::Accelerate(p, result, info.time_pass);
                 }
             };
-        } else if (name.compare("vortex") == 0) {
+        } else if (name == "vortex") {
             Vortex v = Vortex::ReadFromJson(wpj);
             return [=](const ParticleInfo& info) {
                 Vector3d offset  = info.controlpoints[v.controlpoint].offset +
@@ -610,7 +614,7 @@ ParticleOperatorOp WPParticleParser::genParticleOperatorOp(
                     }
                 }
             };
-        } else if (name.compare("controlpointattract") == 0) {
+        } else if (name == "controlpointattract") {
             ControlPointForce c = ControlPointForce::ReadFromJson(wpj);
             return [=](const ParticleInfo& info) {
                 Vector3d offset = info.controlpoints[c.controlpoint].offset +
@@ -637,7 +641,7 @@ ParticleEmittOp WPParticleParser::genParticleEmittOp(const wpscene::Emitter& wpe
         .frequency = wpe.audiofrequency,
         .bounds    = wpe.audiobounds,
     };
-    if (wpe.name.compare("boxrandom") == 0) {
+    if (wpe.name == "boxrandom") {
         ParticleBoxEmitterArgs box;
         box.emitSpeed      = wpe.rate;
         box.minDistance    = wpe.distancemin;
@@ -653,7 +657,7 @@ ParticleEmittOp WPParticleParser::genParticleEmittOp(const wpscene::Emitter& wpe
         box.audio_response = audio_response;
         box.sort           = sort;
         return ParticleBoxEmitterArgs::MakeEmittOp(box);
-    } else if (wpe.name.compare("sphererandom") == 0) {
+    } else if (wpe.name == "sphererandom") {
         ParticleSphereEmitterArgs sphere;
         sphere.emitSpeed      = wpe.rate;
         sphere.minDistance    = wpe.distancemin[0];

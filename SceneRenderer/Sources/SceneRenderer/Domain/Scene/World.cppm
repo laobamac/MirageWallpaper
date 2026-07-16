@@ -1,5 +1,9 @@
 module;
 
+#if defined(__linux__)
+#include <string>
+#endif
+
 #include <atomic>
 #include <climits>
 #include <initializer_list>
@@ -1468,7 +1472,7 @@ public:
     }
     const auto& FinalTarget() const { return m_final_target; }
     void        SetFinalCamera(std::string camera) {
-        if (m_final_camera.compare(camera) == 0) return;
+        if (m_final_camera == camera) return;
         m_final_camera = std::move(camera);
         m_resolved     = false;
     }

@@ -1,4 +1,9 @@
 module;
+
+#if defined(__linux__)
+#include <string>
+#endif
+
 #include <rstd/macro.hpp>
 
 #include "vvk/macros.hpp"
@@ -83,9 +88,9 @@ void AppendVideoDeviceExtensions(std::vector<Extension>& device_exts) {
 
 bool RequiresVulkanVideoDeviceExtensions(std::string_view hwdec) {
 #if defined(__APPLE__)
-    return hwdec.compare("vulkan") == 0;
+    return hwdec == "vulkan";
 #else
-    return hwdec.compare("none") != 0;
+    return hwdec != "none";
 #endif
 }
 

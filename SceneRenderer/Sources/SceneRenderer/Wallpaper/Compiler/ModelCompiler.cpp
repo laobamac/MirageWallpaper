@@ -1,4 +1,9 @@
 module;
+
+#if defined(__linux__)
+#include <string>
+#endif
+
 #include <rstd/macro.hpp>
 
 module sr.pkg.parse;
@@ -18,12 +23,12 @@ namespace
 {
 
 WPPuppet::PlayMode ToPlayMode(std::string_view m) {
-    if (m.compare("loop") == 0 || m.empty()) return WPPuppet::PlayMode::Loop;
-    if (m.compare("mirror") == 0) return WPPuppet::PlayMode::Mirror;
-    if (m.compare("single") == 0) return WPPuppet::PlayMode::Single;
+    if (m == "loop" || m.empty()) return WPPuppet::PlayMode::Loop;
+    if (m == "mirror") return WPPuppet::PlayMode::Mirror;
+    if (m == "single") return WPPuppet::PlayMode::Single;
 
     rstd_error("unknown puppet animation play mode \"{}\"", m);
-    rstd_assert(m.compare("loop") == 0);
+    rstd_assert(m == "loop");
     return WPPuppet::PlayMode::Loop;
 }
 

@@ -1,5 +1,9 @@
 module;
 
+#if defined(__linux__)
+#include <string>
+#endif
+
 #include <rstd/macro.hpp>
 #include <cstdio>
 
@@ -459,7 +463,7 @@ public:
     }
     bool IsMounted(std::string_view name) {
         for (const auto& el : m_mountedFss) {
-            if (el.name.compare(name) == 0) return true;
+            if (el.name == name) return true;
         }
         return false;
     }

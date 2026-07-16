@@ -268,54 +268,54 @@ bool ParseArgs(int argc, char** argv, Options& out) {
 
     for (int i = 1; i < argc; ++i) {
         std::string_view arg { argv[i] };
-        if (arg.compare("-h") == 0 || arg.compare("--help") == 0) {
+        if (arg == "-h" || arg == "--help") {
             PrintUsage(argv[0]);
             std::exit(0);
-        } else if (arg.compare("-V") == 0 || arg.compare("--valid-layer") == 0) {
+        } else if (arg == "-V" || arg == "--valid-layer") {
             out.valid_layer = true;
-        } else if (arg.compare("-G") == 0 || arg.compare("--graphviz") == 0) {
+        } else if (arg == "-G" || arg == "--graphviz") {
             out.graphviz = true;
-        } else if (arg.compare("--muted") == 0) {
+        } else if (arg == "--muted") {
             out.muted = true;
-        } else if (arg.compare("--control-stdin") == 0) {
+        } else if (arg == "--control-stdin") {
             out.control_stdin = true;
-        } else if (arg.compare("--deferred-show") == 0) {
+        } else if (arg == "--deferred-show") {
             out.deferred_show = true;
-        } else if (arg.compare("--no-spectrum") == 0) {
+        } else if (arg == "--no-spectrum") {
             out.spectrum_enabled = false;
-        } else if (arg.compare("--external-spectrum") == 0) {
+        } else if (arg == "--external-spectrum") {
             out.external_spectrum = true;
-        } else if (arg.compare("--screen") == 0) {
+        } else if (arg == "--screen") {
             const char* value = require_value(i, arg);
             if (value == nullptr || ! ParseUInt(value, out.screen)) return false;
-        } else if (arg.compare("-f") == 0 || arg.compare("--fps") == 0) {
+        } else if (arg == "-f" || arg == "--fps") {
             const char* value = require_value(i, arg);
             if (value == nullptr || ! ParseUInt(value, out.fps)) return false;
-        } else if (arg.compare("-R") == 0 || arg.compare("--resolution") == 0) {
+        } else if (arg == "-R" || arg == "--resolution") {
             const char* value = require_value(i, arg);
             if (value == nullptr) return false;
             out.resolution = ParseResolution(value);
             if (! out.resolution) return false;
-        } else if (arg.compare("-C") == 0 || arg.compare("--cache-path") == 0) {
+        } else if (arg == "-C" || arg == "--cache-path") {
             const char* value = require_value(i, arg);
             if (value == nullptr) return false;
             out.cache_dir = value;
-        } else if (arg.compare("-M") == 0 || arg.compare("--msaa") == 0) {
+        } else if (arg == "-M" || arg == "--msaa") {
             const char* value = require_value(i, arg);
             if (value == nullptr || ! ParseUInt(value, out.msaa)) return false;
-        } else if (arg.compare("-P") == 0 || arg.compare("--user-properties") == 0) {
+        } else if (arg == "-P" || arg == "--user-properties") {
             const char* value = require_value(i, arg);
             if (value == nullptr) return false;
             out.user_properties = value;
-        } else if (arg.compare("--mouse-position") == 0) {
+        } else if (arg == "--mouse-position") {
             const char* value = require_value(i, arg);
             if (value == nullptr) return false;
             out.mouse_position = ParseMousePosition(value);
             if (! out.mouse_position) return false;
-        } else if (arg.compare("--input-hz") == 0) {
+        } else if (arg == "--input-hz") {
             const char* value = require_value(i, arg);
             if (value == nullptr || ! ParseUInt(value, out.input_hz)) return false;
-        } else if (arg.compare("--run-seconds") == 0) {
+        } else if (arg == "--run-seconds") {
             const char* value = require_value(i, arg);
             if (value == nullptr || ! ParseInt(value, out.run_seconds)) return false;
         } else if (! arg.empty() && arg.front() == '-') {

@@ -1,5 +1,9 @@
 module;
 
+#if defined(__linux__)
+#include <string>
+#endif
+
 module sr.user_property;
 
 import rstd.cppstd;
@@ -26,7 +30,7 @@ std::string DescriptorType(const Json& descriptor) {
 Json ParseWireValue(const Json& schema, const Json& value) {
     if (! value.is_string()) return value.clone();
     const auto type = DescriptorType(schema);
-    if (type.empty() || type.compare("textinput") == 0) return value.clone();
+    if (type.empty() || type == "textinput") return value.clone();
 
     auto raw    = rstd::cppstd::as_string_view(*value.as_str());
     auto parsed = rstd::json::from_str(rstd::cppstd::as_str(raw), { .allow_comments = true });

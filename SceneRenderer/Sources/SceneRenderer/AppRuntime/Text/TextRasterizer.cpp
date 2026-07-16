@@ -1,5 +1,9 @@
 module;
 
+#if defined(__linux__)
+#include <string>
+#endif
+
 #include <rstd/macro.hpp>
 
 #include <ft2build.h>
@@ -105,7 +109,7 @@ std::uint64_t HashBlob(std::span<const std::byte> blob) {
 bool IsFontExt(const std::filesystem::path& p) {
     auto ext = p.extension().string();
     for (auto& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return ext.compare(".ttf") == 0 || ext.compare(".otf") == 0 || ext.compare(".ttc") == 0;
+    return ext == ".ttf" || ext == ".otf" || ext == ".ttc";
 }
 
 std::shared_ptr<std::vector<std::byte>> ReadAll(const std::filesystem::path& path) {
@@ -489,7 +493,7 @@ static std::filesystem::path ResolveViaFontconfig(std::string_view name) {
     // Match on the basename — scenes occasionally prefix a dir.
     std::string base = std::filesystem::path(name).filename().native();
     if (base.size() <= kPrefix.size() ||
-        std::string_view(base).substr(0, kPrefix.size()).compare(kPrefix) != 0) {
+        std::string_view(base).substr(0, kPrefix.size()) != kPrefix) {
         return {};
     }
     std::string family = base.substr(kPrefix.size());

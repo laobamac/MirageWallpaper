@@ -1,5 +1,9 @@
 module;
 
+#if defined(__linux__)
+#include <string>
+#endif
+
 #include <rstd/macro.hpp>
 
 module sr.pkg.scene_obj;
@@ -352,8 +356,8 @@ std::optional<SceneDocument> LoadSceneDocumentFromSource(std::string_view source
         if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
     }
 
-    if (ext.compare(".pkg") == 0) return LoadSceneDocumentFromPkg(source_path);
-    if (ext.compare(".json") != 0) return std::nullopt;
+    if (ext == ".pkg") return LoadSceneDocumentFromPkg(source_path);
+    if (ext != ".json") return std::nullopt;
 
     auto scene_file = fs::CreateCBinaryStream(source_path);
     if (! scene_file) return std::nullopt;

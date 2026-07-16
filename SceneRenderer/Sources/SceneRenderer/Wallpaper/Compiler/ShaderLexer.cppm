@@ -1,5 +1,9 @@
 module;
 
+#if defined(__linux__)
+#include <string>
+#endif
+
 export module sr.pkg.parse:shader_lex;
 import rstd.cppstd;
 
@@ -15,7 +19,7 @@ inline bool IsIdCont(char c) { return IsIdStart(c) || (c >= '0' && c <= '9'); }
 inline bool IsDigit(char c) { return c >= '0' && c <= '9'; }
 
 inline bool IsPrecisionQualifier(std::string_view ident) noexcept {
-    return ident.compare("lowp") == 0 || ident.compare("mediump") == 0 || ident.compare("highp") == 0;
+    return ident == "lowp" || ident == "mediump" || ident == "highp";
 }
 
 struct TypeName {
@@ -129,14 +133,14 @@ public:
     }
     bool MatchPunct(std::string_view s) noexcept {
         if (m_pos + s.size() > m_src.size()) return false;
-        if (m_src.substr(m_pos, s.size()).compare(s) != 0) return false;
+        if (m_src.substr(m_pos, s.size()) != s) return false;
         m_pos += s.size();
         return true;
     }
     // ident-边界感知 keyword 匹配。"uniform" 不会匹配 "uniformly".
     bool MatchKeyword(std::string_view kw) noexcept {
         if (m_pos + kw.size() > m_src.size()) return false;
-        if (m_src.substr(m_pos, kw.size()).compare(kw) != 0) return false;
+        if (m_src.substr(m_pos, kw.size()) != kw) return false;
         if (m_pos + kw.size() < m_src.size() && IsIdCont(m_src[m_pos + kw.size()])) return false;
         m_pos += kw.size();
         return true;
@@ -422,19 +426,19 @@ inline PpKind ClassifyPreproc(Cursor c) noexcept {
     });
     if (t.kind != TokenKind::Ident) return PpKind::Other;
     auto id = t.text;
-    if (id.compare("if") == 0) return PpKind::If;
-    if (id.compare("ifdef") == 0) return PpKind::Ifdef;
-    if (id.compare("ifndef") == 0) return PpKind::Ifndef;
-    if (id.compare("elif") == 0) return PpKind::Elif;
-    if (id.compare("else") == 0) return PpKind::Else;
-    if (id.compare("endif") == 0) return PpKind::Endif;
-    if (id.compare("define") == 0) return PpKind::Define;
-    if (id.compare("undef") == 0) return PpKind::Undef;
-    if (id.compare("include") == 0) return PpKind::Include;
-    if (id.compare("require") == 0) return PpKind::Require;
-    if (id.compare("pragma") == 0) return PpKind::Pragma;
-    if (id.compare("extension") == 0) return PpKind::Extension;
-    if (id.compare("version") == 0) return PpKind::Version;
+    if (id == "if") return PpKind::If;
+    if (id == "ifdef") return PpKind::Ifdef;
+    if (id == "ifndef") return PpKind::Ifndef;
+    if (id == "elif") return PpKind::Elif;
+    if (id == "else") return PpKind::Else;
+    if (id == "endif") return PpKind::Endif;
+    if (id == "define") return PpKind::Define;
+    if (id == "undef") return PpKind::Undef;
+    if (id == "include") return PpKind::Include;
+    if (id == "require") return PpKind::Require;
+    if (id == "pragma") return PpKind::Pragma;
+    if (id == "extension") return PpKind::Extension;
+    if (id == "version") return PpKind::Version;
     return PpKind::Other;
 }
 

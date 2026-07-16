@@ -1,5 +1,9 @@
 module;
 
+#if defined(__linux__)
+#include <string>
+#endif
+
 #include <rstd/macro.hpp>
 
 #include <array>
@@ -164,14 +168,14 @@ bool IsShaderGraphUserProperty(const Json& prop) {
     auto type = prop.get("type");
     if (type.is_none()) return false;
     auto string = (*type)->as_str();
-    return string.is_some() && rstd::cppstd::as_string_view(*string).compare("combo") == 0;
+    return string.is_some() && rstd::cppstd::as_string_view(*string) == "combo";
 }
 
 constexpr std::string_view kSchemeColorKey          = "schemecolor";
 constexpr std::string_view kSrSchemeColorKey = "scenerenderer.scheme_color";
 
 std::string CanonicalUserPropertyKey(std::string_view key) {
-    if (key.compare(kSrSchemeColorKey) == 0) return std::string(kSchemeColorKey);
+    if (key == kSrSchemeColorKey) return std::string(kSchemeColorKey);
     return std::string(key);
 }
 
@@ -238,11 +242,11 @@ UserPropertyCoerceResult CoerceUserPropertyValue(const Json& prop) {
     }
 
     // Combo / texture / file paths can't write a uniform.
-    if (type.compare("combo") == 0) {
+    if (type == "combo") {
         r.skip_reason = "shader graph mutation is not a uniform update";
         return r;
     }
-    if (type.compare("texture") == 0 || type.compare("replacetexture") == 0 || type.compare("file") == 0 || type.compare("textinput") == 0) {
+    if (type == "texture" || type == "replacetexture" || type == "file" || type == "textinput") {
         r.skip_reason = "non-uniform property type";
         return r;
     }
@@ -251,7 +255,7 @@ UserPropertyCoerceResult CoerceUserPropertyValue(const Json& prop) {
     auto        value = prop.get("value");
     const Json& v     = value.is_some() ? **value : prop;
 
-    if (type.compare("color") == 0) {
+    if (type == "color") {
         std::vector<float> nums;
         auto               value = v.as_str();
         if (value.is_some() && ParseFloatList(rstd::cppstd::as_string_view(*value), nums) &&
@@ -300,7 +304,7 @@ UserPropertyCoerceResult CoerceUserPropertyValue(const Json& prop) {
 
 void ApplyUserPropertyToClear(Scene& scene, const std::string& key, const Json& prop) {
     if (scene.clearColorUserKey.empty()) return;
-    if (CanonicalUserPropertyKey(scene.clearColorUserKey).compare(key) != 0) return;
+    if (CanonicalUserPropertyKey(scene.clearColorUserKey) != key) return;
     auto coerced = CoerceUserPropertyValue(prop);
     if (! coerced.ok || coerced.value.size() < 3) return;
     auto clamp01 = [](float n) {
@@ -348,7 +352,7 @@ std::optional<std::string> ResolveRuntimeSceneTextureProperty(const Json& prop) 
         auto string = (*member)->as_str();
         if (string.is_some()) type = rstd::cppstd::to_string(*string);
     }
-    if (! type.empty() && type.compare("scenetexture") != 0 && type.compare("texture") != 0 && type.compare("replacetexture") != 0)
+    if (! type.empty() && type != "scenetexture" && type != "texture" && type != "replacetexture")
         return std::nullopt;
     auto value = prop.get("value");
     if (value.is_none()) return std::nullopt;
@@ -423,7 +427,7 @@ std::vector<SceneUserPropertyDiagnostic> CollectUserPropertyDiagnostics(const Sc
                                                                         std::string_view key) {
     std::vector<SceneUserPropertyDiagnostic> out;
     for (const auto& diagnostic : scene.UserPropertyDiagnostics()) {
-        if (diagnostic.key.compare(key) == 0) out.push_back(diagnostic);
+        if (diagnostic.key == key) out.push_back(diagnostic);
     }
     return out;
 }
@@ -447,8 +451,8 @@ ResolveRuntimeShaderComboValue(const Json& prop, const Scene::ShaderComboUserBin
     auto text = rstd::cppstd::to_string(*value.as_str());
     if (text.empty()) return binding.fallback;
     if (auto it = binding.options.find(text); it != binding.options.end()) return it->second;
-    if (text.compare("true") == 0) return "1";
-    if (text.compare("false") == 0) return "0";
+    if (text == "true") return "1";
+    if (text == "false") return "0";
 
     try {
         std::size_t parsed = 0;
@@ -521,7 +525,7 @@ bool ApplyUserPropertyToShaderCombos(Scene& scene, const std::string& key, const
         }
         const auto& current_variant = *material.customShader.variant;
         if (auto current = current_variant.resolved_combos.find(binding.combo);
-            current != current_variant.resolved_combos.end() && current->second.compare(*next) == 0) {
+            current != current_variant.resolved_combos.end() && current->second == *next) {
             continue;
         }
 
@@ -715,25 +719,25 @@ void ApplyUserPropertyToParticles(Scene& scene, const std::string& key, const Js
         if (! b.state) continue;
         auto*              st = static_cast<sr::wpscene::ParticleInstanceoverride*>(b.state.get());
         const std::string& f  = b.field;
-        if (f.compare("alpha") == 0)
+        if (f == "alpha")
             write_scalar(st->alpha);
-        else if (f.compare("size") == 0)
+        else if (f == "size")
             write_scalar(st->size);
-        else if (f.compare("lifetime") == 0)
+        else if (f == "lifetime")
             write_scalar(st->lifetime);
-        else if (f.compare("rate") == 0)
+        else if (f == "rate")
             write_scalar(st->rate);
-        else if (f.compare("speed") == 0)
+        else if (f == "speed")
             write_scalar(st->speed);
-        else if (f.compare("count") == 0)
+        else if (f == "count")
             write_scalar(st->count);
-        else if (f.compare("brightness") == 0)
+        else if (f == "brightness")
             write_scalar(st->brightness);
-        else if (f.compare("color") == 0) {
+        else if (f == "color") {
             // `color` is 0..255 in the JSON; the init op divides by 255.
             write_vec3(st->color, 255.0f);
             st->overColor = true;
-        } else if (f.compare("colorn") == 0) {
+        } else if (f == "colorn") {
             write_vec3(st->colorn, 1.0f);
             st->overColorn = true;
         } else if (f.starts_with("controlpoint") && ! f.starts_with("controlpointangle")) {
@@ -775,7 +779,7 @@ void ApplyUserPropertyToCameraParallax(Scene& scene, const std::string& key, con
 
     float value = coerced.value[0];
     for (const auto& field : it->second) {
-        if (field.compare("cameraparallaxmouseinfluence") == 0)
+        if (field == "cameraparallaxmouseinfluence")
             scene.shaderValueUpdater->SetCameraParallaxMouseInfluence(value);
     }
 }
@@ -789,13 +793,13 @@ void ApplyUserPropertyToCameraShake(Scene& scene, const std::string& key, const 
 
     float value = coerced.value[0];
     for (const auto& field : it->second) {
-        if (field.compare("camerashake") == 0)
+        if (field == "camerashake")
             scene.shaderValueUpdater->SetCameraShakeEnabled(value >= 0.5f);
-        else if (field.compare("camerashakeamplitude") == 0)
+        else if (field == "camerashakeamplitude")
             scene.shaderValueUpdater->SetCameraShakeAmplitude(value);
-        else if (field.compare("camerashakespeed") == 0)
+        else if (field == "camerashakespeed")
             scene.shaderValueUpdater->SetCameraShakeSpeed(value);
-        else if (field.compare("camerashakeroughness") == 0)
+        else if (field == "camerashakeroughness")
             scene.shaderValueUpdater->SetCameraShakeRoughness(value);
     }
 }

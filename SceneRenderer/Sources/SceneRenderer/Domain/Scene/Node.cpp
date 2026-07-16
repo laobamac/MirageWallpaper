@@ -1,5 +1,9 @@
 module;
 
+#if defined(__linux__)
+#include <string>
+#endif
+
 module sr.scene;
 import eigen;
 import rstd.cppstd;
@@ -52,7 +56,7 @@ void SceneNode::MarkTransDirty() {
 }
 
 SceneNode* SceneNode::FindByName(std::string_view name) {
-    if (m_name.compare(name) == 0) return this;
+    if (m_name == name) return this;
     for (auto& child : m_children) {
         if (auto* hit = child->FindByName(name)) return hit;
     }

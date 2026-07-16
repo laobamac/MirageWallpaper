@@ -1,5 +1,9 @@
 module;
 
+#if defined(__linux__)
+#include <string>
+#endif
+
 #include <rstd/macro.hpp>
 #include "Utils/AutoDeletor.hpp"
 #include "vvk/macros.hpp"
@@ -210,7 +214,7 @@ CustomShaderPass::refreshMaterialTextureBindings(const RenderSceneSnapshot& rend
         const auto& next     = textures[i];
         auto&       old      = m_desc.texture_bindings[i];
         auto        next_dep = ClassifySceneMaterialTexture(next);
-        if (old.name.compare(next) == 0 && ! IsLocalSceneMaterialTextureDependency(next_dep)) continue;
+        if (old.name == next && ! IsLocalSceneMaterialTextureDependency(next_dep)) continue;
 
         TextureBindingRequest binding;
         if (! next.empty()) {
@@ -730,7 +734,7 @@ bool CustomShaderPass::canJoinRenderScopeAfter(const VulkanPass& previous) const
         return false;
 
     const auto& prev = prev_pass->m_desc;
-    if (m_desc.output.compare(prev.output) != 0) return false;
+    if (m_desc.output != prev.output) return false;
     if (m_desc.samples != prev.samples) return false;
     if (m_desc.has_depth_attachment != prev.has_depth_attachment) return false;
     if (m_desc.vk_output.handle != prev.vk_output.handle ||

@@ -1,5 +1,9 @@
 module;
 
+#if defined(__linux__)
+#include <string>
+#endif
+
 #include <rstd/macro.hpp>
 #include "FrameGraph/Pass.hpp"
 
@@ -210,7 +214,7 @@ void GraphLinkFinalizer::apply(ExtraInfo& extra) {
 
         GraphTextureOutput input = output_it->second;
         auto link_key = GenLinkTex(static_cast<std::ptrdiff_t>(consumer.source_layer.value));
-        if (input.binding.name.compare(link_key) != 0) {
+        if (input.binding.name != link_key) {
             auto copy_desc        = input.desc;
             copy_desc.key         = std::move(link_key);
             copy_desc.name        = copy_desc.key;
@@ -357,7 +361,7 @@ static void ToGraphPass(SceneNode* node, std::string_view output, i32 imgId, Ext
                         }
                     }
 
-                    if (url.compare(pass_output) == 0) {
+                    if (url == pass_output) {
                         builder.markSelfWrite(*input);
                         input = AddCopyPass(extra, *input);
                     }
@@ -409,7 +413,7 @@ static void ToGraphPass(SceneNode* node, std::string_view output, i32 imgId, Ext
                     extra.depth_initialized_outputs.erase(pass_output_s);
                 }
                 builder.write(output_node);
-                if (pass_output.compare(SpecTex_Default) == 0) {
+                if (pass_output == SpecTex_Default) {
                     extra.link_finalizer.recordSource(WallpaperLayerId { .value = imgId },
                                                       CaptureTextureOutput(extra, output_node));
                 } else if (IsSpecLinkTex(pass_output)) {

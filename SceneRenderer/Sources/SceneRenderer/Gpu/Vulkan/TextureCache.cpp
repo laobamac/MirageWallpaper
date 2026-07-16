@@ -1,5 +1,9 @@
 module;
 
+#if defined(__linux__)
+#include <string>
+#endif
+
 #if defined(__APPLE__)
 #define VK_USE_PLATFORM_METAL_EXT
 #define SCENERENDERER_ENABLE_METAL_EXPORT 1
@@ -603,9 +607,9 @@ private:
 };
 
 wavsen::video::HwAccel ParseHwdec(std::string_view value) {
-    if (value.compare("vulkan") == 0) return wavsen::video::HwAccel::Vulkan;
-    if (value.compare("videotoolbox") == 0) return wavsen::video::HwAccel::VideoToolbox;
-    if (value.compare("none") == 0) return wavsen::video::HwAccel::None;
+    if (value == "vulkan") return wavsen::video::HwAccel::Vulkan;
+    if (value == "videotoolbox") return wavsen::video::HwAccel::VideoToolbox;
+    if (value == "none") return wavsen::video::HwAccel::None;
     return wavsen::video::HwAccel::Auto;
 }
 
@@ -1211,7 +1215,7 @@ void TextureCache::BeginVideoTextureActivity() {
 void TextureCache::MarkVideoTextureActive(std::string_view key) {
     if (! m_video_registry) return;
     for (auto& slot : m_video_registry->slots) {
-        if (slot && slot->key.compare(key) == 0) {
+        if (slot && slot->key == key) {
             slot->active_epoch = m_video_activity_epoch;
             return;
         }

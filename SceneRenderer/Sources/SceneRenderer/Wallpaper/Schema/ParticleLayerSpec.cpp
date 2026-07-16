@@ -1,5 +1,9 @@
 module;
 
+#if defined(__linux__)
+#include <string>
+#endif
+
 #include <rstd/macro.hpp>
 
 module sr.pkg.scene_obj;
@@ -54,7 +58,7 @@ bool ParticleRender::FromJson(const sr::Json& json) {
     if (sstart_with(name, "rope")) {
         sr::GetJsonValue(json, "subdivision", subdivision, false);
     }
-    if (name.compare("spritetrail") == 0 || name.compare("ropetrail") == 0) {
+    if (name == "spritetrail" || name == "ropetrail") {
         sr::GetJsonValue(json, "length", length, false);
         sr::GetJsonValue(json, "maxlength", maxlength, false);
         sr::GetJsonValue(json, "segments", segments, false);

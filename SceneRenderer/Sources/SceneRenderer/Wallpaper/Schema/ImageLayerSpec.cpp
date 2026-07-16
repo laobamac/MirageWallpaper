@@ -1,5 +1,9 @@
 module;
 
+#if defined(__linux__)
+#include <string>
+#endif
+
 #include <rstd/macro.hpp>
 
 module sr.pkg.scene_obj;
@@ -251,7 +255,7 @@ std::optional<ImageAssetInfo> sr::wpscene::LoadImageAssetInfo(fs::VFS&         v
 
 bool ImageObject::FromJson(const sr::Json& json, fs::VFS& vfs, SceneVersion v) {
     sr::GetJsonValue(json, "image", image);
-    composite_layer = image.compare("models/util/composelayer.json") == 0;
+    composite_layer = image == "models/util/composelayer.json";
     ReadVisibleProperty(json, visible, visible_user);
     visible_user_key = visible_user.name;
     sr::GetJsonValue(json, "alignment", alignment, false);
@@ -313,7 +317,7 @@ bool ImageObject::FromJson(const sr::Json& json, fs::VFS& vfs, SceneVersion v) {
         }
         auto jMat = parsed_material.unwrap();
         material.FromJson(jMat, v);
-        if (image.compare("models/util/composelayer.json") == 0 && explicit_no_copy_background) {
+        if (image == "models/util/composelayer.json" && explicit_no_copy_background) {
             material.combos["CLEARALPHA"] = 1;
         }
     } else {

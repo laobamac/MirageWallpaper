@@ -1,5 +1,9 @@
 module;
 
+#if defined(__linux__)
+#include <string>
+#endif
+
 #include <rstd/macro.hpp>
 
 module sr.scene;
@@ -89,7 +93,7 @@ bool SceneVertexArray::AddVertex(const float* data) {
 bool SceneVertexArray::SetVertex(std::string_view name, std::span<const float> data) noexcept {
     u32 offset = 0;
     for (const auto& el : m_attributes) {
-        if (el.name.compare(name) == 0) {
+        if (el.name == name) {
             usize typeSize = SceneVertexArray::TypeCount(el.type);
             usize count    = data.size() / typeSize;
             if (! TrySetSize(count * m_oneSize)) return false;

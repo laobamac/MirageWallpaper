@@ -1,5 +1,9 @@
 module;
 
+#if defined(__linux__)
+#include <string>
+#endif
+
 #include <rstd/macro.hpp>
 
 module sr.scene;
@@ -93,7 +97,7 @@ void SceneImageEffectLayer::ResolveEffect(const SceneMesh& default_mesh,
             }
             
             if (sstart_with(it->output, SR_EFFECT_PPONG_PREFIX_B) ||
-                it->output.compare(SpecTex_Default) == 0) {
+                it->output == SpecTex_Default) {
                 it->output  = ppong_b;
                 last_output = &(*it);
             }

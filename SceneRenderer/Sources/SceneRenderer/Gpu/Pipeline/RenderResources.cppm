@@ -1,5 +1,9 @@
 module;
 
+#if defined(__linux__)
+#include <string>
+#endif
+
 #include <rstd/macro.hpp>
 
 export module sr.vulkan_render:resource;
@@ -57,7 +61,7 @@ inline bool SameRenderTextureDescId(const RenderTextureDescId& lhs,
 }
 
 inline bool SameTextureRequest(const TextureRequest& lhs, const TextureRequest& rhs) {
-    if (lhs.kind != rhs.kind || lhs.name.compare(rhs.name) != 0 || lhs.persist != rhs.persist) return false;
+    if (lhs.kind != rhs.kind || lhs.name != rhs.name || lhs.persist != rhs.persist) return false;
     if (lhs.imported_texture.has_value() != rhs.imported_texture.has_value()) return false;
     if (lhs.imported_texture.has_value() &&
         ! SameRenderTextureDescId(*lhs.imported_texture, *rhs.imported_texture))
@@ -75,7 +79,7 @@ inline bool SameTextureRequest(const std::optional<TextureRequest>& lhs,
 
 inline bool SameTextureBindingRequest(const TextureBindingRequest& lhs,
                                       const TextureBindingRequest& rhs) {
-    return lhs.name.compare(rhs.name) == 0 && SameTextureRequest(lhs.request, rhs.request);
+    return lhs.name == rhs.name && SameTextureRequest(lhs.request, rhs.request);
 }
 
 inline void WriteTextureSampleIdentity(PipelineKeyWriter& writer, const TextureSample& sample) {

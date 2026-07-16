@@ -1,5 +1,9 @@
 module;
 
+#if defined(__linux__)
+#include <string>
+#endif
+
 #include <sys/types.h>
 module sr.pkg.parse;
 import sr.core;
@@ -18,11 +22,11 @@ enum class PlaybackMode
 };
 
 static PlaybackMode ToPlaybackMode(std::string_view s) {
-    if (s.compare("loop") == 0)
+    if (s == "loop")
         return PlaybackMode::Loop;
-    else if (s.compare("random") == 0)
+    else if (s == "random")
         return PlaybackMode::Random;
-    else if (s.compare("single") == 0)
+    else if (s == "single")
         return PlaybackMode::Single;
     return PlaybackMode::Loop;
 };
