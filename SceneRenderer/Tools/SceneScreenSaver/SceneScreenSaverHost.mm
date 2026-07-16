@@ -4,6 +4,8 @@
 #include <cstdint>
 
 extern "C" void* SceneRendererMacMetalDisplayCreateForNSView(void* ns_view);
+extern "C" void* SceneRendererMacMetalDisplayCreateForNSViewWithDrawableSize(
+    void* ns_view, std::uint32_t width, std::uint32_t height);
 extern "C" void SceneRendererMacMetalDisplayDestroy(void* handle);
 extern "C" void SceneRendererMacMetalDisplayDraw(void* handle, void* texture,
                                                  std::uint32_t width, std::uint32_t height,
@@ -26,10 +28,14 @@ struct SaverHost {
 };
 }
 
-extern "C" void* MirageSceneSaverHostCreate(void* ns_view) {
+extern "C" void* MirageSceneSaverHostCreate(void* ns_view, std::uint32_t drawable_width,
+                                             std::uint32_t drawable_height) {
     auto create = ^void* {
         auto* host = new SaverHost();
-        host->display = SceneRendererMacMetalDisplayCreateForNSView(ns_view);
+        host->display = drawable_width > 0 && drawable_height > 0
+            ? SceneRendererMacMetalDisplayCreateForNSViewWithDrawableSize(
+                  ns_view, drawable_width, drawable_height)
+            : SceneRendererMacMetalDisplayCreateForNSView(ns_view);
         if (host->display == nullptr) {
             delete host;
             return nullptr;

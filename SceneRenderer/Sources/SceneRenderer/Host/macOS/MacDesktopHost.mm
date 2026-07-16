@@ -359,20 +359,15 @@ extern "C" void SceneRendererMacDesktopPresent(void* handle, void* texture, std:
 extern "C" std::uint32_t SceneRendererMacDesktopPixelWidth(void* handle) {
     auto* host = static_cast<MacDesktopHost*>(handle);
     if (host == nullptr || host->window == nil) return 0;
-    NSScreen*     screen = ResolveScreen(host);
-    const CGFloat fallbackScale = screen != nil ? screen.backingScaleFactor : 1.0;
-    const CGFloat scale = host->window.backingScaleFactor > 0.0 ? host->window.backingScaleFactor
-                                                                : fallbackScale;
-    return static_cast<std::uint32_t>(std::lround(NSWidth(host->window.contentView.bounds) * scale));
+    NSView* view = host->window.contentView;
+    const NSSize backing = [view convertRectToBacking:view.bounds].size;
+    return static_cast<std::uint32_t>(std::lround(backing.width));
 }
 
 extern "C" std::uint32_t SceneRendererMacDesktopPixelHeight(void* handle) {
     auto* host = static_cast<MacDesktopHost*>(handle);
     if (host == nullptr || host->window == nil) return 0;
-    NSScreen*     screen = ResolveScreen(host);
-    const CGFloat fallbackScale = screen != nil ? screen.backingScaleFactor : 1.0;
-    const CGFloat scale = host->window.backingScaleFactor > 0.0 ? host->window.backingScaleFactor
-                                                                : fallbackScale;
-    return static_cast<std::uint32_t>(
-        std::lround(NSHeight(host->window.contentView.bounds) * scale));
+    NSView* view = host->window.contentView;
+    const NSSize backing = [view convertRectToBacking:view.bounds].size;
+    return static_cast<std::uint32_t>(std::lround(backing.height));
 }

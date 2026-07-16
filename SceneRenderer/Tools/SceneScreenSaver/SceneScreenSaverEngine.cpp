@@ -13,7 +13,8 @@ import sr.utils;
 
 extern "C" void SceneRendererSetLiveMetalFrameCallback(
     void (*cb)(void*, std::uint32_t, std::uint32_t, void*), void* userdata);
-extern "C" void* MirageSceneSaverHostCreate(void* ns_view);
+extern "C" void* MirageSceneSaverHostCreate(void* ns_view, std::uint32_t drawable_width,
+                                               std::uint32_t drawable_height);
 extern "C" void MirageSceneSaverHostDestroy(void* host);
 extern "C" void MirageSceneSaverHostPresent(void* host, void* texture, std::uint32_t width,
                                                std::uint32_t height);
@@ -63,6 +64,8 @@ bool LoadProperties(const char* json, sr::SceneWallpaperConfig& config) {
 extern "C" void* MirageSceneSaverCreate(void* ns_view, const char* assets_dir,
                                           const char* scene_pkg, const char* properties_json,
                                           std::uint32_t width, std::uint32_t height,
+                                          std::uint32_t drawable_width,
+                                          std::uint32_t drawable_height,
                                           std::uint32_t fps) {
     if (ns_view == nullptr || assets_dir == nullptr || scene_pkg == nullptr) return nullptr;
     static rstd::log::EnvLogger logger;
@@ -73,7 +76,7 @@ extern "C" void* MirageSceneSaverCreate(void* ns_view, const char* assets_dir,
         logger_set = true;
     }
 
-    void* host = MirageSceneSaverHostCreate(ns_view);
+    void* host = MirageSceneSaverHostCreate(ns_view, drawable_width, drawable_height);
     if (host == nullptr) return nullptr;
     std::unique_lock lock(g_engine_mutex);
     if (g_engine != nullptr) {
