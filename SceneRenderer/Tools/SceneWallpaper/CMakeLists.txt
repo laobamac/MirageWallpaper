@@ -37,11 +37,11 @@ if(APPLE)
         $<$<COMPILE_LANGUAGE:OBJCXX>:-Wno-deprecated-declarations>
         $<$<COMPILE_LANGUAGE:OBJCXX>:-Wno-deprecated-enum-enum-conversion>)
 elseif(UNIX AND NOT APPLE AND SCENERENDERER_ENABLE_X11_WALLPAPER)
-    find_package(X11 REQUIRED)
+    find_package(X11 REQUIRED COMPONENTS Xrandr Xfixes Xext)
     target_sources(SceneWallpaper PRIVATE
         ../../Sources/SceneRenderer/Host/X11/X11DesktopHost.cpp)
     target_compile_definitions(SceneWallpaper PRIVATE SCENERENDERER_WALLPAPER_X11)
-    target_link_libraries(SceneWallpaper PRIVATE X11::X11)
+    target_link_libraries(SceneWallpaper PRIVATE X11::X11 X11::Xrandr X11::Xfixes X11::Xext)
 else()
     message(FATAL_ERROR "No SceneWallpaper host backend enabled for this platform")
 endif()

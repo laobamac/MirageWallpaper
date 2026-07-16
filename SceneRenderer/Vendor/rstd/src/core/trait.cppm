@@ -61,27 +61,27 @@ struct default_tag {};
 export template<typename T>
 struct in_class_default_tag {};
 
-struct in_class_tag {};
+export struct in_class_tag {};
 
-struct dyn_tag {};
+export struct dyn_tag {};
 
 namespace mtp
 {
 
-struct ImplHelper;
+export struct ImplHelper;
 
-struct api_check_tag {};
+export struct api_check_tag {};
 
-template<typename Ret>
+export template<typename Ret>
 [[noreturn]]
 auto trait_check_return() -> Ret {
     __builtin_unreachable();
 }
 
-template<typename T>
+export template<typename T>
 struct TraitFuncsHelper;
 
-template<auto... Api>
+export template<auto... Api>
 struct TraitFuncsHelper<TraitFuncs<Api...>> {
     template<template<class...> typename T>
     consteval static auto make() {
@@ -99,7 +99,7 @@ struct TraitFuncsHelper<TraitFuncs<Api...>> {
     using type_at = decltype(get<I>());
 };
 
-template<typename T>
+export template<typename T>
 struct ImplWithPtr {
     usizeptr ptr_;
 
@@ -113,28 +113,28 @@ protected:
     constexpr auto self() const noexcept -> T const& { return *rstd::bit_cast<T const*>(ptr_); }
 };
 
-template<template<typename, typename> class T, typename A, typename B>
+export template<template<typename, typename> class T, typename A, typename B>
 struct TraitApiTraits<T<A, B>> {
     using type          = A;
     using delegate_type = B;
 };
 
-template<typename Trait, typename A, typename Delegate = void>
+export template<typename Trait, typename A, typename Delegate = void>
 using TraitApi = typename Trait::template Api<A, Delegate>;
 
-template<typename Trait, typename A>
+export template<typename Trait, typename A>
 using TraitCheckApi = TraitApi<Trait, A, api_check_tag>;
 
-template<typename Trait, typename A>
+export template<typename Trait, typename A>
 using TraitFuncs = typename Trait::template Funcs<A>;
 
-template<typename Trait, typename A>
+export template<typename Trait, typename A>
 using TraitApiHelper = TraitFuncsHelper<TraitFuncs<Trait, A>>;
 
-template<typename F>
+export template<typename F>
 using trait_func_return_t = typename mtp::func_traits<mtp::rm_cv<F>>::ret;
 
-template<usize I, typename Trait, typename A>
+export template<usize I, typename Trait, typename A>
 using trait_api_return_t =
     trait_func_return_t<decltype(TraitApiHelper<Trait, A>::template get<I>())>;
 
@@ -150,11 +150,11 @@ constexpr bool trait_member_primary_compatible =
      (trait_allows_const_member_impl<Trait> && ! mtp::is_const<mtp::rm_ref<Expected>> &&
       mtp::is_const<mtp::rm_ref<Actual>>));
 
-template<typename... Api, template<class...> typename Tuple>
+export template<typename... Api, template<class...> typename Tuple>
 consteval auto to_dyn(Tuple<Api...>) {
     return Tuple { (typename mtp::func_traits<Api>::to_dyn)(nullptr)... };
 }
-struct DynHelper {
+export struct DynHelper {
     template<typename TDyn>
     static auto get_self(TDyn* t) noexcept {
         return t->p;
@@ -166,7 +166,7 @@ struct DynHelper {
     }
 };
 
-struct ImplHelper {
+export struct ImplHelper {
     template<typename T>
     static auto& get_self(T* t) noexcept {
         return t->self();
@@ -176,7 +176,7 @@ struct ImplHelper {
 template<typename...>
 constexpr bool dependent_false = false;
 
-enum class trait_impl_kind
+export enum class trait_impl_kind
 {
     None,
     Dyn,
@@ -198,32 +198,32 @@ enum class trait_impl_failure_reason
 template<typename Trait, typename A>
 using external_trait_impl_t = Impl<Trait, A>;
 
-template<typename T>
+export template<typename T>
 constexpr bool trait_default_tag_v = false;
 
-template<typename T>
+export template<typename T>
 constexpr bool trait_default_tag_v<default_tag<T>> = true;
 
-template<typename T>
+export template<typename T>
 constexpr bool trait_default_tag_v<in_class_default_tag<T>> = true;
 
-template<typename T>
+export template<typename T>
 concept trait_default_tag = trait_default_tag_v<T>;
 
-template<typename T>
+export template<typename T>
 struct trait_default_self;
 
-template<typename T>
+export template<typename T>
 struct trait_default_self<default_tag<T>> {
     using type = T;
 };
 
-template<typename T>
+export template<typename T>
 struct trait_default_self<in_class_default_tag<T>> {
     using type = T;
 };
 
-template<typename T>
+export template<typename T>
 using trait_default_self_t = typename trait_default_self<T>::type;
 
 template<typename Trait, typename A>
@@ -393,7 +393,7 @@ struct trait_impl_source_for<Trait, A, trait_impl_kind::None> {
     static constexpr auto reason = trait_impl_failure_reason::NoImpl;
 };
 
-template<typename Trait, typename A>
+export template<typename Trait, typename A>
 struct trait_impl_source : trait_impl_source_for<Trait, A, select_trait_impl_kind<Trait, A>()> {};
 
 template<typename Trait, typename A, trait_impl_failure_reason Reason>
@@ -434,7 +434,7 @@ struct trait_impl_failure<Trait, A, trait_impl_failure_reason::DirectApiMismatch
     static constexpr bool value = false;
 };
 
-template<typename Trait, typename A>
+export template<typename Trait, typename A>
 consteval bool check_trait_or_diagnose() {
     using source = trait_impl_source<Trait, A>;
     if constexpr (source::value) {

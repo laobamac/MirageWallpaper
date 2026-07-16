@@ -4,6 +4,8 @@ module;
 
 module sr.pkg.scene_obj;
 import sr.core;
+import sr.fs;
+import sr.json;
 import rstd.log;
 import rstd.cppstd;
 

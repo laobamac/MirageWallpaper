@@ -16,6 +16,7 @@ module;
 module sr.vulkan_render;
 import rstd.log;
 import rstd.cppstd;
+import sr.core;
 import sr.vulkan;
 import sr.scene;
 
@@ -458,7 +459,7 @@ void FinPass::execute(const Device& device, RenderingResources& rr) {
             cmd.ClearColorImage(m_desc.vk_present.handle,
                                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                 &color,
-                                spanone { sub });
+                                sr::spanone { sub });
         } else if (can_copy) {
             VkImageCopy region {
                 .srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },

@@ -5,6 +5,7 @@ module;
 module sr.pkg.scene_obj;
 import rstd.log;
 import rstd.cppstd;
+import sr.fs;
 import sr.json;
 
 using namespace sr::wpscene;

@@ -15,8 +15,9 @@
 #   scripts/build.sh -h|--help
 #
 # Environment overrides:
+#   CMAKE_BIN=PATH explicit CMake executable (or CMAKE=PATH)
 #   BUILD_PRESET   platform preset, e.g. macos-clang-release or linux-clang-debug
-#   KEEP_GOING=1   keep building past errors (cmake --keep-going)
+#   KEEP_GOING=1   keep building past errors (Ninja -k 0)
 #   JOBS=N         parallel jobs
 
 set -euo pipefail
@@ -51,9 +52,11 @@ Usage:
   scripts/build.sh configure      configure only
   scripts/build.sh build          build only (configures first if needed)
   scripts/build.sh clean          wipe build/<preset>
+  scripts/build.sh --cmake PATH   use an explicit CMake executable
   scripts/build.sh -h|--help      show this help
 
 Environment:
+  CMAKE_BIN      explicit CMake executable, e.g. /opt/cmake/bin/cmake
   BUILD_PRESET   platform preset, e.g. macos-clang-release or linux-clang-debug
   KEEP_GOING=1   keep building past errors
   JOBS=N         parallel jobs
@@ -63,9 +66,15 @@ EOF
 # --- parse args ---
 ACTION="all"
 POSITIONAL_PRESET=""
+CMAKE_BIN="${CMAKE_BIN:-${CMAKE:-cmake}}"
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help) usage; exit 0 ;;
+        --cmake)
+            [[ $# -ge 2 ]] || die "--cmake requires a path"
+            CMAKE_BIN="$2"
+            shift 2
+            ;;
         configure|build|all|clean) ACTION="$1"; shift ;;
         release|debug)
             POSITIONAL_PRESET="$(scene_preset "$1")"
@@ -85,7 +94,21 @@ esac
 BUILD_DIR="$PROJECT_DIR/build/$PRESET"
 
 # --- platform + core tools ---
-command -v cmake      >/dev/null || die "cmake not found. Install CMake 4.3.1 or newer."
+if [[ "$CMAKE_BIN" == */* ]]; then
+    [[ -x "$CMAKE_BIN" ]] || die "CMake executable not found or not executable: $CMAKE_BIN"
+else
+    command -v "$CMAKE_BIN" >/dev/null || die "cmake not found. Install CMake 4.3.1 or newer."
+    CMAKE_BIN="$(command -v "$CMAKE_BIN")"
+fi
+
+CMAKE_VERSION="$("$CMAKE_BIN" --version | awk 'NR == 1 { print $3 }')"
+if [[ -z "$CMAKE_VERSION" ]]; then
+    die "failed to determine CMake version from $CMAKE_BIN"
+fi
+if [[ "$(printf '%s\n' "4.3.1" "$CMAKE_VERSION" | sort -V | head -n1)" != "4.3.1" ]]; then
+    die "CMake $CMAKE_VERSION is too old. Use CMake 4.3.1 or newer."
+fi
+
 command -v ninja      >/dev/null || die "ninja not found. Install Ninja."
 command -v pkg-config >/dev/null || die "pkg-config not found. Install pkg-config."
 command -v glslangValidator >/dev/null || die "glslangValidator not found. Install glslang."
@@ -162,17 +185,23 @@ do_configure() {
     info "configuring preset: $PRESET"
     info "  project:  $PROJECT_DIR"
     info "  build dir:$BUILD_DIR"
-    cmake --preset "$PRESET" "${EXTRA_CONFIGURE_ARGS[@]}"
+    info "  cmake:   $CMAKE_BIN ($CMAKE_VERSION)"
+    "$CMAKE_BIN" --preset "$PRESET" "${EXTRA_CONFIGURE_ARGS[@]}"
 }
 
 do_build() {
     [[ -f "$BUILD_DIR/CMakeCache.txt" ]] || do_configure
     info "building preset: $PRESET (jobs=$JOBS)"
     local build_args=(--build "$BUILD_DIR" --parallel "$JOBS")
+    local native_args=()
     if [[ "${KEEP_GOING:-0}" == "1" ]]; then
-        build_args+=(--keep-going)
+        native_args+=(-k 0)
     fi
-    cmake "${build_args[@]}"
+    if [[ ${#native_args[@]} -gt 0 ]]; then
+        "$CMAKE_BIN" "${build_args[@]}" -- "${native_args[@]}"
+    else
+        "$CMAKE_BIN" "${build_args[@]}"
+    fi
 }
 
 report() {

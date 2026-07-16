@@ -834,8 +834,9 @@ void MergeProjectUserProperties(const std::filesystem::path& project_dir, rstd::
     std::ifstream is(project_path);
     if (! is) return;
 
-    std::string source(std::istreambuf_iterator<char>(is), {});
-    auto        parsed = ParseJson(source, { .allow_comments = true });
+    std::ostringstream ss;
+    ss << is.rdbuf();
+    auto parsed = ParseJson(ss.str(), { .allow_comments = true });
     if (parsed.is_err()) {
         rstd_warn("Can't parse {}: {}", project_path.string(), parsed.unwrap_err());
         return;

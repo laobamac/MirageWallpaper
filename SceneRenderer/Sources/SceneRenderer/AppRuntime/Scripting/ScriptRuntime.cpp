@@ -752,8 +752,9 @@ void LoadLocalStorage(EngineHostState* host) {
     if (host->ls_path.empty()) return;
     std::ifstream f(host->ls_path);
     if (! f) return;
-    std::string source(std::istreambuf_iterator<char>(f), {});
-    auto        parsed = ParseJson(source);
+    std::ostringstream ss;
+    ss << f.rdbuf();
+    auto parsed = ParseJson(ss.str());
     if (parsed.is_err()) {
         rstd_warn("localStorage parse failed: {}", parsed.unwrap_err());
         return;

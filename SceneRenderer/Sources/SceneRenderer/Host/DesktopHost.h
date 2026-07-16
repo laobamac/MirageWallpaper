@@ -18,7 +18,7 @@ struct DesktopConfig {
     const char* title { nullptr };
     std::uint32_t input_hz { 60 };
     std::uint32_t screen_index { 0 };
-    bool deferred_show { false };
+    bool          deferred_show { false };
 };
 
 struct DesktopCallbacks {
@@ -40,19 +40,19 @@ struct DesktopSurfaceInfo {
 
 inline void* DesktopCreate(const DesktopConfig* config, DesktopCallbacks callbacks) {
     SceneRendererMacDesktopConfig mac_config {
-        .title        = config != nullptr ? config->title : nullptr,
-        .input_hz     = config != nullptr ? config->input_hz : 60,
-        .screen_index = config != nullptr ? config->screen_index : 0,
+        .title         = config != nullptr ? config->title : nullptr,
+        .input_hz      = config != nullptr ? config->input_hz : 60,
+        .screen_index  = config != nullptr ? config->screen_index : 0,
         .deferred_show = config != nullptr ? config->deferred_show : false,
     };
     SceneRendererMacDesktopCallbacks mac_callbacks {
-        .mouse_move   = callbacks.mouse_move,
-        .mouse_button = callbacks.mouse_button,
-        .mouse_enter  = callbacks.mouse_enter,
-        .closed       = callbacks.closed,
+        .mouse_move            = callbacks.mouse_move,
+        .mouse_button          = callbacks.mouse_button,
+        .mouse_enter           = callbacks.mouse_enter,
+        .closed                = callbacks.closed,
         .first_frame_presented = callbacks.first_frame_presented,
-        .activated    = callbacks.activated,
-        .userdata     = callbacks.userdata,
+        .activated             = callbacks.activated,
+        .userdata              = callbacks.userdata,
     };
     return SceneRendererMacDesktopCreate(&mac_config, mac_callbacks);
 }
