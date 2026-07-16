@@ -104,8 +104,8 @@ inline void ForEachDeclLine(std::string_view                        src,
 }
 
 inline bool IsSamplerType(std::string_view t) {
-    return t == "sampler2D" || t == "sampler3D" || t == "samplerCube" ||
-           t == "sampler2DComparison" || t == "sampler2DShadow";
+    return t.compare("sampler2D") == 0 || t.compare("sampler3D") == 0 || t.compare("samplerCube") == 0 ||
+           t.compare("sampler2DComparison") == 0 || t.compare("sampler2DShadow") == 0;
 }
 
 // Replace every occurrence of `needle` in `body` with `repl`. The placeholder
@@ -491,7 +491,7 @@ inline std::optional<std::string> TryFlattenPackedAudioIndex(std::string_view gr
     if (g.size() == 3 && c.size() == 3 && g[0].kind == shader_lex::TokenKind::Ident &&
         c[0].kind == shader_lex::TokenKind::Ident && g[0].text == c[0].text && PunctIs(g[1], '/') &&
         PunctIs(c[1], '%') && g[2].kind == shader_lex::TokenKind::Int &&
-        c[2].kind == shader_lex::TokenKind::Int && g[2].text == "4" && c[2].text == "4") {
+        c[2].kind == shader_lex::TokenKind::Int && g[2].text.compare("4") == 0 && c[2].text.compare("4") == 0) {
         std::string out = "(int)(";
         out.append(g[0].text);
         out.append(")");
@@ -547,12 +547,12 @@ inline std::string NormalizePackedAudioSpectrumAccess(std::string_view src) {
 }
 
 inline bool IsLocalMatrixConstructor(std::string_view name) {
-    return name == "mat2" || name == "mat3" || name == "mat4" || name == "mat2x2" ||
-           name == "mat2x3" || name == "mat2x4" || name == "mat3x2" || name == "mat3x3" ||
-           name == "mat3x4" || name == "mat4x2" || name == "mat4x3" || name == "mat4x4" ||
-           name == "float2x2" || name == "float2x3" || name == "float2x4" || name == "float3x2" ||
-           name == "float3x3" || name == "float3x4" || name == "float4x2" || name == "float4x3" ||
-           name == "float4x4";
+    return name.compare("mat2") == 0 || name.compare("mat3") == 0 || name.compare("mat4") == 0 || name.compare("mat2x2") == 0 ||
+           name.compare("mat2x3") == 0 || name.compare("mat2x4") == 0 || name.compare("mat3x2") == 0 || name.compare("mat3x3") == 0 ||
+           name.compare("mat3x4") == 0 || name.compare("mat4x2") == 0 || name.compare("mat4x3") == 0 || name.compare("mat4x4") == 0 ||
+           name.compare("float2x2") == 0 || name.compare("float2x3") == 0 || name.compare("float2x4") == 0 || name.compare("float3x2") == 0 ||
+           name.compare("float3x3") == 0 || name.compare("float3x4") == 0 || name.compare("float4x2") == 0 || name.compare("float4x3") == 0 ||
+           name.compare("float4x4") == 0;
 }
 
 inline std::string NormalizeLocalMatrixMul(std::string_view src) {
@@ -703,7 +703,7 @@ inline void NormalizeExpandedShaderSource(std::string& src) {
 }
 
 inline std::string PatchCommonPerspectiveInclude(std::string_view include_name, std::string src) {
-    if (include_name != "common_perspective.h") return src;
+    if (include_name.compare("common_perspective.h") != 0) return src;
     if (src.find("_ww_perspective_mat") != std::string::npos) return src;
 
     static constexpr std::string_view helper = R"(
@@ -939,9 +939,9 @@ inline std::string Preprocessor(const std::string& in_src, ShaderType type, cons
         // attribute-in-vertex and varying-in-fragment both behave as inputs;
         // varying-in-vertex behaves as output. GS: `in` is input (from VS),
         // `out` is output (to FS).
-        bool        is_input = (m.storage == "attribute") ||
-                               (m.storage == "varying" && type == ShaderType::FRAGMENT) ||
-                               (m.storage == "in" && type == ShaderType::GEOMETRY);
+        bool        is_input = (m.storage.compare("attribute") == 0) ||
+                               (m.storage.compare("varying") == 0 && type == ShaderType::FRAGMENT) ||
+                               (m.storage.compare("in") == 0 && type == ShaderType::GEOMETRY);
         std::string line(src.substr(m.start, m.end - m.start));
         std::string name(m.name);
         if (is_input)
@@ -973,42 +973,42 @@ inline std::string Preprocessor(const std::string& in_src, ShaderType type, cons
 // Pass GLSL type names through unchanged; aliases like `float`/`float2` get
 // re-emitted as is for HLSL-flavoured leftovers.
 inline std::string ToGLSLType(std::string_view t) {
-    if (t == "float2") return "vec2";
-    if (t == "float3") return "vec3";
-    if (t == "float4") return "vec4";
-    if (t == "int2") return "ivec2";
-    if (t == "int3") return "ivec3";
-    if (t == "int4") return "ivec4";
-    if (t == "uint2") return "uvec2";
-    if (t == "uint3") return "uvec3";
-    if (t == "uint4") return "uvec4";
-    if (t == "float2x2") return "mat2";
-    if (t == "float3x3") return "mat3";
-    if (t == "float4x4") return "mat4";
+    if (t.compare("float2") == 0) return "vec2";
+    if (t.compare("float3") == 0) return "vec3";
+    if (t.compare("float4") == 0) return "vec4";
+    if (t.compare("int2") == 0) return "ivec2";
+    if (t.compare("int3") == 0) return "ivec3";
+    if (t.compare("int4") == 0) return "ivec4";
+    if (t.compare("uint2") == 0) return "uvec2";
+    if (t.compare("uint3") == 0) return "uvec3";
+    if (t.compare("uint4") == 0) return "uvec4";
+    if (t.compare("float2x2") == 0) return "mat2";
+    if (t.compare("float3x3") == 0) return "mat3";
+    if (t.compare("float4x4") == 0) return "mat4";
     return std::string(t);
 }
 
 // Inverse of ToGLSLType: bridge GLSL aliases back to HLSL canonical names
 // (used by the GS synth which feeds HLSL to glslang's HLSL frontend).
 inline std::string ToHLSLType(std::string_view t) {
-    if (t == "vec2") return "float2";
-    if (t == "vec3") return "float3";
-    if (t == "vec4") return "float4";
-    if (t == "ivec2") return "int2";
-    if (t == "ivec3") return "int3";
-    if (t == "ivec4") return "int4";
-    if (t == "uvec2") return "uint2";
-    if (t == "uvec3") return "uint3";
-    if (t == "uvec4") return "uint4";
-    if (t == "mat2" || t == "mat2x2") return "float2x2";
-    if (t == "mat3" || t == "mat3x3") return "float3x3";
-    if (t == "mat4" || t == "mat4x4") return "float4x4";
-    if (t == "mat2x3") return "float2x3";
-    if (t == "mat2x4") return "float2x4";
-    if (t == "mat3x2") return "float3x2";
-    if (t == "mat3x4") return "float3x4";
-    if (t == "mat4x2") return "float4x2";
-    if (t == "mat4x3") return "float4x3";
+    if (t.compare("vec2") == 0) return "float2";
+    if (t.compare("vec3") == 0) return "float3";
+    if (t.compare("vec4") == 0) return "float4";
+    if (t.compare("ivec2") == 0) return "int2";
+    if (t.compare("ivec3") == 0) return "int3";
+    if (t.compare("ivec4") == 0) return "int4";
+    if (t.compare("uvec2") == 0) return "uint2";
+    if (t.compare("uvec3") == 0) return "uint3";
+    if (t.compare("uvec4") == 0) return "uint4";
+    if (t.compare("mat2") == 0 || t.compare("mat2x2") == 0) return "float2x2";
+    if (t.compare("mat3") == 0 || t.compare("mat3x3") == 0) return "float3x3";
+    if (t.compare("mat4") == 0 || t.compare("mat4x4") == 0) return "float4x4";
+    if (t.compare("mat2x3") == 0) return "float2x3";
+    if (t.compare("mat2x4") == 0) return "float2x4";
+    if (t.compare("mat3x2") == 0) return "float3x2";
+    if (t.compare("mat3x4") == 0) return "float3x4";
+    if (t.compare("mat4x2") == 0) return "float4x2";
+    if (t.compare("mat4x3") == 0) return "float4x3";
     return std::string(t);
 }
 
@@ -1020,9 +1020,9 @@ struct IODecl {
 };
 
 inline char StorageCharFor(const std::string& storage_word) {
-    if (storage_word == "attribute") return 'a';
-    if (storage_word == "in") return 'i';
-    if (storage_word == "out") return 'o';
+    if (storage_word.compare("attribute") == 0) return 'a';
+    if (storage_word.compare("in") == 0) return 'i';
+    if (storage_word.compare("out") == 0) return 'o';
     return 'v'; // varying
 }
 
@@ -1049,18 +1049,18 @@ ScanAndStripSamplers(const std::string& src) {
 }
 
 inline const char* HLSLSamplerType(std::string_view glsl) {
-    if (glsl == "sampler2D") return "Texture2D<float4>";
-    if (glsl == "sampler3D") return "Texture3D<float4>";
-    if (glsl == "samplerCube") return "TextureCube<float4>";
+    if (glsl.compare("sampler2D") == 0) return "Texture2D<float4>";
+    if (glsl.compare("sampler3D") == 0) return "Texture3D<float4>";
+    if (glsl.compare("samplerCube") == 0) return "TextureCube<float4>";
     // GLSL shadow / comparison samplers: scalar-result texture with a
     // SamplerComparisonState. We bind a Texture2D<float> and a paired
     // SamplerComparisonState (the latter chosen via HLSLSamplerStateType).
-    if (glsl == "sampler2DComparison" || glsl == "sampler2DShadow") return "Texture2D<float>";
+    if (glsl.compare("sampler2DComparison") == 0 || glsl.compare("sampler2DShadow") == 0) return "Texture2D<float>";
     return "Texture2D<float4>";
 }
 
 inline const char* HLSLSamplerStateType(std::string_view glsl) {
-    if (glsl == "sampler2DComparison" || glsl == "sampler2DShadow") return "SamplerComparisonState";
+    if (glsl.compare("sampler2DComparison") == 0 || glsl.compare("sampler2DShadow") == 0) return "SamplerComparisonState";
     return "SamplerState";
 }
 
@@ -1124,10 +1124,10 @@ inline ScalarVec DecomposeVecType(std::string_view t) {
         if (auto r = suffixed(base); r.comps) return r;
     }
     // GLSL vector spellings normalize to the matching HLSL base kind.
-    if (t == "vec2" || t == "vec3" || t == "vec4") return { "float", unsigned(t.back() - '0') };
-    if (t == "ivec2" || t == "ivec3" || t == "ivec4") return { "int", unsigned(t.back() - '0') };
-    if (t == "uvec2" || t == "uvec3" || t == "uvec4") return { "uint", unsigned(t.back() - '0') };
-    if (t == "bvec2" || t == "bvec3" || t == "bvec4") return { "bool", unsigned(t.back() - '0') };
+    if (t.compare("vec2") == 0 || t.compare("vec3") == 0 || t.compare("vec4") == 0) return { "float", unsigned(t.back() - '0') };
+    if (t.compare("ivec2") == 0 || t.compare("ivec3") == 0 || t.compare("ivec4") == 0) return { "int", unsigned(t.back() - '0') };
+    if (t.compare("uvec2") == 0 || t.compare("uvec3") == 0 || t.compare("uvec4") == 0) return { "uint", unsigned(t.back() - '0') };
+    if (t.compare("bvec2") == 0 || t.compare("bvec3") == 0 || t.compare("bvec4") == 0) return { "bool", unsigned(t.back() - '0') };
     return {};
 }
 
@@ -1196,7 +1196,7 @@ inline std::string EmitStageIOLayout(std::vector<IODecl> decls, bool is_input) {
     decls.erase(std::remove_if(decls.begin(),
                                decls.end(),
                                [](const IODecl& d) {
-                                   return d.name == "gl_Position" || d.name == "_ww_sv_position";
+                                   return d.name.compare("gl_Position") == 0 || d.name.compare("_ww_sv_position") == 0;
                                }),
                 decls.end());
     std::sort(decls.begin(), decls.end(), [](const IODecl& a, const IODecl& b) {
@@ -1220,7 +1220,7 @@ inline std::string EmitGSHLSLStruct(std::string_view name, std::vector<IODecl> d
     decls.erase(std::remove_if(decls.begin(),
                                decls.end(),
                                [](const IODecl& d) {
-                                   return d.name == "gl_Position" || d.name == "_ww_sv_position";
+                                   return d.name.compare("gl_Position") == 0 || d.name.compare("_ww_sv_position") == 0;
                                }),
                 decls.end());
     std::sort(decls.begin(), decls.end(), [](const IODecl& a, const IODecl& b) {
@@ -1254,7 +1254,7 @@ inline std::string EmitVSFSStruct(std::string_view name, std::vector<IODecl> dec
     decls.erase(std::remove_if(decls.begin(),
                                decls.end(),
                                [](const IODecl& d) {
-                                   return d.name == "gl_Position" || d.name == "_ww_sv_position";
+                                   return d.name.compare("gl_Position") == 0 || d.name.compare("_ww_sv_position") == 0;
                                }),
                 decls.end());
     std::sort(decls.begin(), decls.end(), [](const IODecl& a, const IODecl& b) {
@@ -1290,7 +1290,7 @@ inline SynthOutput SynthesizeHLSLEntry(ShaderType stage, std::vector<IODecl> att
         v.erase(std::remove_if(v.begin(),
                                v.end(),
                                [](const IODecl& d) {
-                                   return d.name == "gl_Position" || d.name == "_ww_sv_position";
+                                   return d.name.compare("gl_Position") == 0 || d.name.compare("_ww_sv_position") == 0;
                                }),
                 v.end());
     };
@@ -1327,7 +1327,7 @@ inline SynthOutput SynthesizeHLSLEntry(ShaderType stage, std::vector<IODecl> att
         out += "    WW_VSOut _ww_out;\n";
         out += "    _ww_out._ww_sv_position = gl_Position;\n";
         for (const auto& v : varyings) {
-            if (v.name == "gl_Position" || v.name == "_ww_sv_position") continue;
+            if (v.name.compare("gl_Position") == 0 || v.name.compare("_ww_sv_position") == 0) continue;
             out += "    _ww_out." + v.name + " = " + v.name + ";\n";
         }
         out += "    return _ww_out;\n";
@@ -1337,7 +1337,7 @@ inline SynthOutput SynthesizeHLSLEntry(ShaderType stage, std::vector<IODecl> att
         out += "float4 main_ps(WW_PSIn _ww_in) : SV_Target0 {\n";
         out += "    gl_FragCoord = _ww_in._ww_sv_position;\n";
         for (const auto& v : varyings) {
-            if (v.name == "gl_Position" || v.name == "_ww_sv_position") continue;
+            if (v.name.compare("gl_Position") == 0 || v.name.compare("_ww_sv_position") == 0) continue;
             out += "    " + v.name + " = _ww_in." + v.name + ";\n";
         }
         out += "    shader_main();\n";
@@ -1368,15 +1368,15 @@ struct Std140Layout {
     std::size_t size;
 };
 inline Std140Layout Std140Base(std::string_view hlsl_base) {
-    if (hlsl_base == "float" || hlsl_base == "int" || hlsl_base == "uint" || hlsl_base == "bool")
+    if (hlsl_base.compare("float") == 0 || hlsl_base.compare("int") == 0 || hlsl_base.compare("uint") == 0 || hlsl_base.compare("bool") == 0)
         return { 4, 4 };
-    if (hlsl_base == "float2" || hlsl_base == "int2" || hlsl_base == "uint2") return { 8, 8 };
-    if (hlsl_base == "float3" || hlsl_base == "int3" || hlsl_base == "uint3") return { 16, 12 };
-    if (hlsl_base == "float4" || hlsl_base == "int4" || hlsl_base == "uint4") return { 16, 16 };
+    if (hlsl_base.compare("float2") == 0 || hlsl_base.compare("int2") == 0 || hlsl_base.compare("uint2") == 0) return { 8, 8 };
+    if (hlsl_base.compare("float3") == 0 || hlsl_base.compare("int3") == 0 || hlsl_base.compare("uint3") == 0) return { 16, 12 };
+    if (hlsl_base.compare("float4") == 0 || hlsl_base.compare("int4") == 0 || hlsl_base.compare("uint4") == 0) return { 16, 16 };
     // WE/GLSL matrix names are kept in source order for HLSL row-vector math
     // (`matCxR` -> `floatCxR`). std140 still stores C columns, each padded to
     // 16 bytes, so the first HLSL index is the storage column count here.
-    if (hlsl_base.size() == 8 && hlsl_base.substr(0, 5) == "float" && hlsl_base[6] == 'x' &&
+    if (hlsl_base.size() == 8 && hlsl_base.substr(0, 5).compare("float") == 0 && hlsl_base[6] == 'x' &&
         hlsl_base[5] >= '2' && hlsl_base[5] <= '4' && hlsl_base[7] >= '2' && hlsl_base[7] <= '4') {
         std::size_t cols = (std::size_t)(hlsl_base[5] - '0');
         return { 16, cols * 16 };
@@ -1454,15 +1454,15 @@ inline std::string EmitCBufferStd140(const Map<std::string, std::string>& unifor
         std::size_t reg       = offset / 16;
         std::size_t comp      = (offset % 16) / 4;
         const char  letter    = "xyzw"[comp];
-        const bool  is_square_matrix = layout.hlsl_ty == "float2x2" ||
-                                      layout.hlsl_ty == "float3x3" ||
-                                      layout.hlsl_ty == "float4x4";
-        const bool is_rect_matrix = layout.hlsl_ty == "float2x3" ||
-                                    layout.hlsl_ty == "float2x4" ||
-                                    layout.hlsl_ty == "float3x2" ||
-                                    layout.hlsl_ty == "float3x4" ||
-                                    layout.hlsl_ty == "float4x2" ||
-                                    layout.hlsl_ty == "float4x3";
+        const bool  is_square_matrix = layout.hlsl_ty.compare("float2x2") == 0 ||
+                                      layout.hlsl_ty.compare("float3x3") == 0 ||
+                                      layout.hlsl_ty.compare("float4x4") == 0;
+        const bool is_rect_matrix = layout.hlsl_ty.compare("float2x3") == 0 ||
+                                    layout.hlsl_ty.compare("float2x4") == 0 ||
+                                    layout.hlsl_ty.compare("float3x2") == 0 ||
+                                    layout.hlsl_ty.compare("float3x4") == 0 ||
+                                    layout.hlsl_ty.compare("float4x2") == 0 ||
+                                    layout.hlsl_ty.compare("float4x3") == 0;
         out += "    ";
         if (is_square_matrix) out += "column_major ";
         // MoltenVK/SPIRV-Cross flips column_major rectangular cbuffer matrices

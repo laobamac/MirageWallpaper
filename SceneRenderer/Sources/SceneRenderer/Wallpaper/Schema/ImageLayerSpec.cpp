@@ -130,7 +130,7 @@ bool ImageEffect::FromJson(const sr::Json& json, fs::VFS& vfs, SceneVersion v) {
         for (const auto& jP : **array) {
             MaterialPass pass;
             pass.FromJson(jP);
-            if (filePath == kFoliageSwayEffect && v != kSceneVersionUnknown &&
+            if (filePath.c_str() == kFoliageSwayEffect.data() && v != kSceneVersionUnknown &&
                 v < kNormalizedFoliageSwayStrengthVersion)
                 NormalizeLegacyFoliageSwayStrength(pass);
             passes[i++].Update(pass);
@@ -250,7 +250,7 @@ std::optional<ImageAssetInfo> sr::wpscene::LoadImageAssetInfo(fs::VFS&         v
 
 bool ImageObject::FromJson(const sr::Json& json, fs::VFS& vfs, SceneVersion v) {
     sr::GetJsonValue(json, "image", image);
-    composite_layer = image == "models/util/composelayer.json";
+    composite_layer = image.compare("models/util/composelayer.json") == 0;
     ReadVisibleProperty(json, visible, visible_user);
     visible_user_key = visible_user.name;
     sr::GetJsonValue(json, "alignment", alignment, false);
@@ -312,7 +312,7 @@ bool ImageObject::FromJson(const sr::Json& json, fs::VFS& vfs, SceneVersion v) {
         }
         auto jMat = parsed_material.unwrap();
         material.FromJson(jMat, v);
-        if (image == "models/util/composelayer.json" && explicit_no_copy_background) {
+        if (image.compare("models/util/composelayer.json") == 0 && explicit_no_copy_background) {
             material.combos["CLEARALPHA"] = 1;
         }
     } else {

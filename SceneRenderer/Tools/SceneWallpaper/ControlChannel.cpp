@@ -19,15 +19,15 @@ namespace {
 // Maps the wire fill-mode name (matching WE / the other renderers' vocabulary)
 // to sr::FillMode. cover→ASPECTCROP, contain/fit→ASPECTFIT, stretch→STRETCH.
 bool ParseFillMode(const std::string& s, sr::FillMode& out) {
-    if (s == "cover" || s == "aspectcrop" || s == "crop") {
+    if (s.compare("cover") == 0 || s.compare("aspectcrop") == 0 || s.compare("crop") == 0) {
         out = sr::FillMode::ASPECTCROP;
         return true;
     }
-    if (s == "contain" || s == "fit" || s == "aspectfit") {
+    if (s.compare("contain") == 0 || s.compare("fit") == 0 || s.compare("aspectfit") == 0) {
         out = sr::FillMode::ASPECTFIT;
         return true;
     }
-    if (s == "stretch") {
+    if (s.compare("stretch") == 0) {
         out = sr::FillMode::STRETCH;
         return true;
     }
@@ -50,7 +50,7 @@ void SceneControlChannel::dispatchLine(const char* line) {
 
     const std::string cmd = rstd::cppstd::to_string(*command_text);
 
-    if (cmd == "setProperty") {
+    if (cmd.compare("setProperty") == 0) {
         auto key_value = msg.get("key");
         if (key_value.is_none()) return;
         auto key_text = (*key_value)->as_str();
@@ -76,28 +76,28 @@ void SceneControlChannel::dispatchLine(const char* line) {
             return;
         }
         m_wallpaper.setUserPropertyJson(key, std::move(prop));
-    } else if (cmd == "pause") {
+    } else if (cmd.compare("pause") == 0) {
         m_wallpaper.pause();
-    } else if (cmd == "resume" || cmd == "play") {
+    } else if (cmd.compare("resume") == 0 || cmd.compare("play") == 0) {
         m_wallpaper.play();
-    } else if (cmd == "volume") {
+    } else if (cmd.compare("volume") == 0) {
         auto value = msg.get("value");
         if (value.is_some() && (*value)->is_number()) {
             auto number = (*value)->as_f64();
             if (number.is_some()) m_wallpaper.setVolume(static_cast<float>(*number));
         }
-    } else if (cmd == "muted") {
+    } else if (cmd.compare("muted") == 0) {
         auto value = msg.get("value");
         if (value.is_some() && (*value)->is_boolean()) {
             m_wallpaper.setMuted(*(*value)->as_bool());
         }
-    } else if (cmd == "fps") {
+    } else if (cmd.compare("fps") == 0) {
         auto value = msg.get("value");
         if (value.is_some() && (*value)->is_number()) {
             auto number = (*value)->as_u64();
             if (number.is_some()) m_wallpaper.setFps(static_cast<std::uint32_t>(*number));
         }
-    } else if (cmd == "fillmode") {
+    } else if (cmd.compare("fillmode") == 0) {
         auto value = msg.get("value");
         if (value.is_some() && (*value)->is_string()) {
             sr::FillMode mode {};
@@ -105,13 +105,13 @@ void SceneControlChannel::dispatchLine(const char* line) {
                 m_wallpaper.setFillMode(mode);
             }
         }
-    } else if (cmd == "speed") {
+    } else if (cmd.compare("speed") == 0) {
         auto value = msg.get("value");
         if (value.is_some() && (*value)->is_number()) {
             auto number = (*value)->as_f64();
             if (number.is_some()) m_wallpaper.setSpeed(static_cast<float>(*number));
         }
-    } else if (cmd == "audioSpectrum") {
+    } else if (cmd.compare("audioSpectrum") == 0) {
         auto data = msg.get("data");
         if (data.is_none() || !(*data)->is_array()) return;
         auto values = (*data)->as_array();
@@ -129,9 +129,9 @@ void SceneControlChannel::dispatchLine(const char* line) {
             ++index;
         }
         m_wallpaper.setAudioSpectrum(std::move(left), std::move(right));
-    } else if (cmd == "activate") {
+    } else if (cmd.compare("activate") == 0) {
         if (m_on_activate) m_on_activate();
-    } else if (cmd == "quit") {
+    } else if (cmd.compare("quit") == 0) {
         m_running.store(false);
         if (m_on_quit) m_on_quit();
     }

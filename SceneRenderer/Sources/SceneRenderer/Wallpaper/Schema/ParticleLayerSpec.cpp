@@ -52,7 +52,7 @@ bool ParticleRender::FromJson(const sr::Json& json) {
     if (sstart_with(name, "rope")) {
         sr::GetJsonValue(json, "subdivision", subdivision, false);
     }
-    if (name == "spritetrail" || name == "ropetrail") {
+    if (name.compare("spritetrail") == 0 || name.compare("ropetrail") == 0) {
         sr::GetJsonValue(json, "length", length, false);
         sr::GetJsonValue(json, "maxlength", maxlength, false);
         sr::GetJsonValue(json, "segments", segments, false);

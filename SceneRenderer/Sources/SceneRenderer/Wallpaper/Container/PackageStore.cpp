@@ -29,7 +29,7 @@ std::optional<std::string> ReadSizedString(IBinaryStream& f, usize max_len) {
 
 bool IsPkgVersionStamp(std::string_view stamp) {
     constexpr std::string_view kPrefix = "PKGV";
-    return stamp.size() > kPrefix.size() && stamp.substr(0, kPrefix.size()) == kPrefix;
+    return stamp.size() > kPrefix.size() && stamp.substr(0, kPrefix.size()).compare(kPrefix) == 0;
 }
 
 // WE pkgs were authored on Windows where NTFS is case-insensitive; some

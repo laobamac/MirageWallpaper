@@ -18,11 +18,11 @@ enum class PlaybackMode
 };
 
 static PlaybackMode ToPlaybackMode(std::string_view s) {
-    if (s == "loop")
+    if (s.compare("loop") == 0)
         return PlaybackMode::Loop;
-    else if (s == "random")
+    else if (s.compare("random") == 0)
         return PlaybackMode::Random;
-    else if (s == "single")
+    else if (s.compare("single") == 0)
         return PlaybackMode::Single;
     return PlaybackMode::Loop;
 };

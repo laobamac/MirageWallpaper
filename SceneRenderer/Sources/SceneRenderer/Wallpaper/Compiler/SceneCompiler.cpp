@@ -256,7 +256,7 @@ void CollectLinkedSourceIdsFromJsonValue(const Json& value, Set<std::int32_t>& o
         auto [entry_key, entry_value] = entry;
         const auto  key               = rstd::cppstd::as_string_view(entry_key->as_str());
         const auto& child             = *entry_value;
-        if (key == "dependencies") {
+        if (key.compare("dependencies") == 0) {
             if (auto values = child.as_array(); values.is_some()) {
                 for (const auto& dep : **values) {
                     auto id = dep.as_i64();
@@ -421,7 +421,7 @@ bool IsFractionSliderProperty(const ParseContext& context, const Json& binding) 
     auto type = (*prop)->get("type");
     if (type.is_none()) return false;
     auto type_string = (*type)->as_str();
-    if (type_string.is_none() || rstd::cppstd::as_string_view(*type_string) != "slider")
+    if (type_string.is_none() || rstd::cppstd::as_string_view(*type_string).compare("slider") != 0)
         return false;
     auto fraction = (*prop)->get("fraction");
     return fraction.is_some() && (*fraction)->as_bool().unwrap_or(false);
@@ -430,7 +430,7 @@ bool IsFractionSliderProperty(const ParseContext& context, const Json& binding) 
 Json ScriptPropertiesForField(const ParseContext& context, std::string_view field,
                               const wpscene::ScriptBinding& binding) {
     Json props = binding.properties.clone();
-    if (field != "scale" || binding.source.find("/10000") == std::string::npos ||
+    if (field.compare("scale") != 0 || binding.source.find("/10000") == std::string::npos ||
         ! props.is_object())
         return props;
 
@@ -449,7 +449,7 @@ Json ScriptPropertiesForField(const ParseContext& context, std::string_view fiel
 }
 
 Json ScriptInitialValueForField(std::string_view field, const Json& value) {
-    if (field != "angles") return value.clone();
+    if (field.compare("angles") != 0) return value.clone();
 
     constexpr float kRadToDeg = 180.0f / rstd::f32_::consts::PI;
     if (value.is_null()) return Json::Null();
@@ -755,22 +755,22 @@ void WireFieldScripts(ParseContext& context, const rstd::sync::Arc<SceneNode>& n
         script::FieldKind           kind;
         bool                        has_actuator = true;
         bool                        is_alpha     = false;
-        if (field == "origin") {
+        if (field.compare("origin") == 0) {
             tgt  = script::NodeTransformTarget::Translate;
             kind = script::FieldKind::Vec3;
-        } else if (field == "scale") {
+        } else if (field.compare("scale") == 0) {
             tgt  = script::NodeTransformTarget::Scale;
             kind = script::FieldKind::Vec3;
-        } else if (field == "angles") {
+        } else if (field.compare("angles") == 0) {
             tgt  = script::NodeTransformTarget::Rotation;
             kind = script::FieldKind::Vec3;
-        } else if (field == "visible") {
+        } else if (field.compare("visible") == 0) {
             // Side-effect-only script bound to visibility. update() may
             // drive other layers via createLayer + property writes; we
             // don't write a return value back to the node.
             kind         = script::FieldKind::Bool;
             has_actuator = false;
-        } else if (field == "alpha") {
+        } else if (field.compare("alpha") == 0) {
             kind     = script::FieldKind::Scalar;
             is_alpha = true;
         } else {
@@ -795,9 +795,9 @@ void WireFieldScripts(ParseContext& context, const rstd::sync::Arc<SceneNode>& n
         if (! has_actuator) continue;
         if (is_alpha)
             ss.AddActuator({ fs, script::MakeNodeAlphaApply(node_sp.clone()) });
-        else if (field == "origin" && origin_apply)
+        else if (field.compare("origin") == 0 && origin_apply)
             ss.AddActuator({ fs, origin_apply });
-        else if (field == "scale" && scale_apply)
+        else if (field.compare("scale") == 0 && scale_apply)
             ss.AddActuator({ fs, scale_apply });
         else
             ss.AddActuator({ fs, script::MakeNodeTransformApply(node_sp.clone(), tgt) });
@@ -812,10 +812,10 @@ void WireCameraShakeScripts(ParseContext& context, const wpscene::FieldBindings&
 
     for (const auto& [field, sb] : fb.scripts) {
         script::FieldKind kind = script::FieldKind::Scalar;
-        if (field == "camerashake") {
+        if (field.compare("camerashake") == 0) {
             kind = script::FieldKind::Bool;
-        } else if (field != "camerashakeamplitude" && field != "camerashakespeed" &&
-                   field != "camerashakeroughness") {
+        } else if (field.compare("camerashakeamplitude") != 0 && field.compare("camerashakespeed") != 0 &&
+                   field.compare("camerashakeroughness") != 0) {
             continue;
         }
 
@@ -828,13 +828,13 @@ void WireCameraShakeScripts(ParseContext& context, const wpscene::FieldBindings&
                             if (! updater) return;
                             auto scalar = ScriptValueAsFloat(value);
                             if (! scalar) return;
-                            if (field == "camerashake")
+                            if (field.compare("camerashake") == 0)
                                 updater->SetCameraShakeEnabled(*scalar >= 0.5f);
-                            else if (field == "camerashakeamplitude")
+                            else if (field.compare("camerashakeamplitude") == 0)
                                 updater->SetCameraShakeAmplitude(*scalar);
-                            else if (field == "camerashakespeed")
+                            else if (field.compare("camerashakespeed") == 0)
                                 updater->SetCameraShakeSpeed(*scalar);
-                            else if (field == "camerashakeroughness")
+                            else if (field.compare("camerashakeroughness") == 0)
                                 updater->SetCameraShakeRoughness(*scalar);
                         } });
     }
@@ -852,9 +852,9 @@ void WireCameraFieldScripts(ParseContext& context, const rstd::sync::Arc<SceneNo
 
     for (const auto& [field, sb] : fb.scripts) {
         script::FieldKind kind = script::FieldKind::Vec3;
-        if (field == "visible") {
+        if (field.compare("visible") == 0) {
             kind = script::FieldKind::Bool;
-        } else if (field != "origin" && field != "angles") {
+        } else if (field.compare("origin") != 0 && field.compare("angles") != 0) {
             continue;
         }
 
@@ -863,7 +863,7 @@ void WireCameraFieldScripts(ParseContext& context, const rstd::sync::Arc<SceneNo
         auto* fs = rt.MakeFieldScript(sb.source, sha, kind, sb.properties, initial_value, node);
         if (! fs) continue;
 
-        if (field == "origin") {
+        if (field.compare("origin") == 0) {
             ss.AddActuator(
                 { fs,
                   [node, camera, camera_path, translate_bias](const script::ScriptValue& value) {
@@ -876,7 +876,7 @@ void WireCameraFieldScripts(ParseContext& context, const rstd::sync::Arc<SceneNo
                           if (camera) camera->Update();
                       }
                   } });
-        } else if (field == "angles") {
+        } else if (field.compare("angles") == 0) {
             ss.AddActuator(
                 { fs, [node, camera, camera_path, rotation_bias](const script::ScriptValue& value) {
                      constexpr float kRadToDeg = 180.0f / rstd::f32_::consts::PI;
@@ -1071,8 +1071,8 @@ void SetParticleMesh(SceneMesh& mesh, const wpscene::Particle& particle, uint32_
 }
 
 bool IsLayerCompositeShader(std::string_view shader) {
-    return shader == "genericimage" || shader == "genericimage2" || shader == "genericimage3" ||
-           shader == "genericimage4" || shader == "passthrough";
+    return shader.compare("genericimage") == 0 || shader.compare("genericimage2") == 0 || shader.compare("genericimage3") == 0 ||
+           shader.compare("genericimage4") == 0 || shader.compare("passthrough") == 0;
 }
 
 // Render targets must be at least 1 pixel on Vulkan. Zero-height audio-buffer
@@ -1139,19 +1139,19 @@ struct ParticleRenderDesc {
 
 ParticleRenderDesc DescribeParticleRender(const wpscene::ParticleRender& render) {
     ParticleRenderDesc desc;
-    desc.rope            = render.name == "rope";
+    desc.rope            = render.name.compare("rope") == 0;
     desc.trail           = send_with(render.name, "trail");
     // Metal has no geometry-shader stage and MoltenVK can't lower it, so
     // rope/sprite/trail particles fall back to CPU quad expansion on macOS.
     desc.geometry_shader =
-        PlatformSupportsGeometryShaders() && (desc.rope || render.name == "sprite" || desc.trail);
+        PlatformSupportsGeometryShaders() && (desc.rope || render.name.compare("sprite") == 0 || desc.trail);
     return desc;
 }
 
 ParticleAnimationMode ToAnimMode(const std::string& str) {
-    if (str == "randomframe")
+    if (str.compare("randomframe") == 0)
         return ParticleAnimationMode::RANDOMONE;
-    else if (str == "sequence")
+    else if (str.compare("sequence") == 0)
         return ParticleAnimationMode::SEQUENCE;
     else {
         return ParticleAnimationMode::SEQUENCE;
@@ -1209,11 +1209,11 @@ void LoadEmitter(ParticleSubSystem& pSys, const wpscene::Particle& wp, float cou
 ParticleSubSystem::SpawnType ParseSpawnType(std::string_view str) {
     using ST = ParticleSubSystem::SpawnType;
     ST type { ST::STATIC };
-    if (str == "eventfollow") {
+    if (str.compare("eventfollow") == 0) {
         type = ST::EVENT_FOLLOW;
-    } else if (str == "eventspawn") {
+    } else if (str.compare("eventspawn") == 0) {
         type = ST::EVENT_SPAWN;
-    } else if (str == "eventdeath") {
+    } else if (str.compare("eventdeath") == 0) {
         type = ST::EVENT_DEATH;
     }
     return type;
@@ -1221,13 +1221,13 @@ ParticleSubSystem::SpawnType ParseSpawnType(std::string_view str) {
 
 BlendMode ParseBlendMode(std::string_view str) {
     BlendMode bm;
-    if (str == "translucent") {
+    if (str.compare("translucent") == 0) {
         bm = BlendMode::Translucent;
-    } else if (str == "additive") {
+    } else if (str.compare("additive") == 0) {
         bm = BlendMode::Additive;
-    } else if (str == "normal") {
+    } else if (str.compare("normal") == 0) {
         bm = BlendMode::Normal;
-    } else if (str == "disabled") {
+    } else if (str.compare("disabled") == 0) {
         bm = BlendMode::Disable;
     } else {
         bm = BlendMode::Normal;
@@ -1249,12 +1249,12 @@ i32 CountVisibleImageEffects(std::span<const wpscene::ImageEffect> effects) {
     return count;
 }
 
-bool ParseEnabled(std::string_view str) { return str == "enabled"; }
+bool ParseEnabled(std::string_view str) { return str.compare("enabled") == 0; }
 
 CullMode ParseCullMode(std::string_view str) {
-    if (str == "back" || str == "normal") return CullMode::Back;
-    if (str == "front") return CullMode::Front;
-    if (str == "nocull" || str == "none" || str.empty()) return CullMode::None;
+    if (str.compare("back") == 0 || str.compare("normal") == 0) return CullMode::Back;
+    if (str.compare("front") == 0) return CullMode::Front;
+    if (str.compare("nocull") == 0 || str.compare("none") == 0 || str.empty()) return CullMode::None;
     rstd_error("unknown cullmode: {}", str);
     return CullMode::None;
 }
@@ -1264,11 +1264,11 @@ void ParseSpecTexName(std::string& name, const wpscene::Material& wpmat, const W
     if (IsSpecTex(name)) {
         if (name == WE_FULL_FRAME_BUFFER) {
             name = SpecTex_Default;
-            if (wpmat.shader == "genericimage2" &&
+            if (wpmat.shader.compare("genericimage2") == 0 &&
                 ! exists(sinfo.combos, std::string(WE_CB_BLENDMODE)))
                 name = "";
             /*
-            if(wpmat.shader == "genericparticle") {
+            if(wpmat.shader.compare("genericparticle") == 0) {
                 name = "_rt_ParticleRefract";
             }
             */
@@ -1316,7 +1316,7 @@ sr::Map<std::string, std::string> MaterialCombosToShaderCombos(const wpscene::Ma
 }
 
 bool IsLegacyAtmosphereMaterial(const wpscene::Material& material) {
-    return material.shader == "workshop/2839476907/effects/atmosphere";
+    return material.shader.compare("workshop/2839476907/effects/atmosphere") == 0;
 }
 
 void ApplyLegacyAtmosphereLightCombo(const wpscene::Material& material, WPShaderInfo& info) {
@@ -1473,9 +1473,9 @@ bool LoadMaterial(fs::VFS& vfs, const wpscene::Material& wpmat, Scene* pScene, S
     }
     add_shader_unit(ShaderType::FRAGMENT, shaderPath + ".frag");
 
-    if (wpmat.shader == "genericparticle" &&
+    if (wpmat.shader.compare("genericparticle") == 0 &&
         pWPShaderInfo->combos.contains("PARTICLEINSTANCED") &&
-        pWPShaderInfo->combos.at("PARTICLEINSTANCED") == "1") {
+        pWPShaderInfo->combos.at("PARTICLEINSTANCED").compare("1") == 0) {
         auto instanced_source = MakeInstancedGenericParticleVertexSource(sd_units.front().src);
         if (! instanced_source) {
             rstd_error("genericparticle vertex layout changed; cannot enable instanced particle path");
@@ -1586,7 +1586,7 @@ bool LoadMaterial(fs::VFS& vfs, const wpscene::Material& wpmat, Scene* pScene, S
             if ((pScene->textures.at(name)).isSprite) {
                 material.hasSprite = true;
                 const auto& f1     = texh.spriteAnim.GetCurFrame();
-                if (wpmat.shader == "genericparticle" || wpmat.shader == "genericropeparticle") {
+                if (wpmat.shader.compare("genericparticle") == 0 || wpmat.shader.compare("genericropeparticle") == 0) {
                     pWPShaderInfo->combos[std::string(WE_CB_SPRITESHEET)]  = "1";
                     pWPShaderInfo->combos[std::string(WE_CB_THICK_FORMAT)] = "1";
                     if (algorism::IsPowOfTwo((u32)texh.width) &&
@@ -1693,21 +1693,21 @@ bool IsShaderPositionUniform(const WPShaderInfo& info, const std::string& glname
 }
 
 bool UsesEffectPositionSpace(const wpscene::Material& wpmat) {
-    if (wpmat.shader != "effects/spin" && wpmat.shader != "effects/transform") return false;
+    if (wpmat.shader.compare("effects/spin") != 0 && wpmat.shader.compare("effects/transform") != 0) return false;
     auto mode_it = wpmat.combos.find("MODE");
     return mode_it != wpmat.combos.end() && mode_it->second == 1;
 }
 
 bool UsesUnitFinalQuad(const wpscene::Material& wpmat) {
-    if (wpmat.shader != "effects/transform") return false;
+    if (wpmat.shader.compare("effects/transform") != 0) return false;
     auto mode_it = wpmat.combos.find("MODE");
     return mode_it != wpmat.combos.end() && mode_it->second == 1;
 }
 
 bool CanCompositeFinalEffectShader(std::string_view shader) {
-    return IsLayerCompositeShader(shader) || shader == "effects/transform" ||
-           shader == "effects/scroll" || shader == "effects/spin" ||
-           shader == "effects/perspective" || shader == "effects/foliagesway";
+    return IsLayerCompositeShader(shader) || shader.compare("effects/transform") == 0 ||
+           shader.compare("effects/scroll") == 0 || shader.compare("effects/spin") == 0 ||
+           shader.compare("effects/perspective") == 0 || shader.compare("effects/foliagesway") == 0;
 }
 
 bool HasShaderCombo(const WPShaderInfo& info, std::string_view combo_name) {
@@ -1826,10 +1826,10 @@ std::optional<std::string> UserTexturePropertyKey(const Json& binding) {
     auto type_string  = (*type)->as_str();
     auto value_string = (*value)->as_str();
     if (type_string.is_none() || value_string.is_none() ||
-        rstd::cppstd::as_string_view(*type_string) != "system")
+        rstd::cppstd::as_string_view(*type_string).compare("system") != 0)
         return std::nullopt;
     auto name = rstd::cppstd::as_string_view(*value_string);
-    if (name != "$mediaThumbnail" && name != "$mediaPreviousThumbnail") return std::nullopt;
+    if (name.compare("$mediaThumbnail") != 0 && name.compare("$mediaPreviousThumbnail") != 0) return std::nullopt;
     return std::string(name);
 }
 
@@ -1905,7 +1905,7 @@ std::string ResolveSceneTextureProperty(const ParseContext& context, std::string
         auto string = (*value)->as_str();
         if (string.is_some()) type = rstd::cppstd::to_string(*string);
     }
-    if (! type.empty() && type != "scenetexture" && type != "texture" && type != "replacetexture")
+    if (! type.empty() && type.compare("scenetexture") != 0 && type.compare("texture") != 0 && type.compare("replacetexture") != 0)
         return {};
     auto value = payload.get("value");
     if (value.is_none()) return {};
@@ -2233,8 +2233,8 @@ void InitContext(ParseContext& context, fs::VFS& vfs, const wpscene::SceneMetada
         cam_shake.roughness = sc.general.camerashakeroughness;
         context.shader_updater->SetCameraShake(cam_shake);
         for (const auto& [field, key] : sc.general.user_bindings) {
-            if (field == "camerashake" || field == "camerashakeamplitude" ||
-                field == "camerashakespeed" || field == "camerashakeroughness") {
+            if (field.compare("camerashake") == 0 || field.compare("camerashakeamplitude") == 0 ||
+                field.compare("camerashakespeed") == 0 || field.compare("camerashakeroughness") == 0) {
                 scene.camera_shake_user_var_index[key].push_back(field);
             }
         }
@@ -2845,7 +2845,7 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
             // load! effect commands
             {
                 for (const auto& el : wpeffobj.commands) {
-                    if (el.command != "copy") {
+                    if (el.command.compare("copy") != 0) {
                         rstd_error("Unknown effect command: {}", el.command);
                         continue;
                     }
@@ -2885,7 +2885,7 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
                 // (`_rt_imageLayerComposite_<self>[_a|_b]`) wants this layer's
                 // running chain result.
                 for (auto& t : wpmat.textures) {
-                    if (ParseImageLayerCompositeId(t) == static_cast<std::uint32_t>(wpimgobj.id))
+                    if (ParseImageLayerCompositeId(t).value() == static_cast<std::uint32_t>(wpimgobj.id))
                         t = effect_ppong_a;
                 }
                 if (wpmat.textures.size() == 0) wpmat.textures.resize(1);
@@ -3217,7 +3217,7 @@ void ParseParticleObj(ParseContext& context, wpscene::ParticleObject& wppartobj,
     // Only the stock genericparticle shader receives the instanced layout;
     // other/custom materials retain the original CPU-expanded layout.
     const bool use_instanced_particles = ! render_rope &&
-                                         particle_obj.material.shader == "genericparticle";
+                                         particle_obj.material.shader.compare("genericparticle") == 0;
 
     // wppartobj.origin[1] = context.ortho_h - wppartobj.origin[1];
 
@@ -3452,9 +3452,9 @@ void ParseLightObj(ParseContext& context, wpscene::LightObject& light_obj) {
                                                  light_obj.name);
 
     SceneLight::Desc desc;
-    if (light_obj.light == "spot") {
+    if (light_obj.light.compare("spot") == 0) {
         desc.type = SceneLightType::Spot;
-    } else if (light_obj.light == "directional") {
+    } else if (light_obj.light.compare("directional") == 0) {
         desc.type = SceneLightType::Directional;
     } else {
         desc.type = SceneLightType::Point; // default + "point"
@@ -4113,7 +4113,7 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
                 }
 
                 for (const auto& cmd : wpeffobj.commands) {
-                    if (cmd.command != "copy") {
+                    if (cmd.command.compare("copy") != 0) {
                         rstd_error("Unknown effect command: {}", cmd.command);
                         continue;
                     }
@@ -4147,7 +4147,7 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
                         }
                     }
                     for (auto& tex : wpmat.textures) {
-                        if (ParseImageLayerCompositeId(tex) == static_cast<std::uint32_t>(obj.id))
+                        if (ParseImageLayerCompositeId(tex).value() == static_cast<std::uint32_t>(obj.id))
                             tex = ppong_a;
                     }
                     if (wpmat.textures.empty()) wpmat.textures.resize(1);

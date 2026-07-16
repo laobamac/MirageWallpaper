@@ -1,6 +1,11 @@
 module;
 
+#if defined(__APPLE__)
 #define VK_USE_PLATFORM_METAL_EXT
+#define SCENERENDERER_ENABLE_METAL_EXPORT 1
+#else
+#define SCENERENDERER_ENABLE_METAL_EXPORT 0
+#endif
 #include <vulkan/vulkan.h>
 #include <rstd/macro.hpp>
 #include "vk_mem_alloc.h"
@@ -127,6 +132,7 @@ CreateImage(const Device& device, VkExtent3D extent, u32 miplevel, VkFormat form
             if ((usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT) == 0)
                 usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
         }
+#if SCENERENDERER_ENABLE_METAL_EXPORT
         const bool metal_export =
             device.supportExt("VK_EXT_metal_objects") &&
             (usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT) == 0;
@@ -135,9 +141,16 @@ CreateImage(const Device& device, VkExtent3D extent, u32 miplevel, VkFormat form
             .pNext            = nullptr,
             .exportObjectType = VK_EXPORT_METAL_OBJECT_TYPE_METAL_TEXTURE_BIT_EXT,
         };
+#else
+        const bool metal_export = false;
+#endif
         VkImageCreateInfo info {
             .sType                 = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+#if SCENERENDERER_ENABLE_METAL_EXPORT
             .pNext                = metal_export ? &metal_image_export : nullptr,
+#else
+            .pNext                = nullptr,
+#endif
             .imageType             = VK_IMAGE_TYPE_2D,
             .format                = format,
             .extent                = extent,
@@ -159,14 +172,20 @@ CreateImage(const Device& device, VkExtent3D extent, u32 miplevel, VkFormat form
         image.mipmap_level = miplevel;
         {
             const bool depth_usage = (usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT) != 0;
+#if SCENERENDERER_ENABLE_METAL_EXPORT
             VkExportMetalObjectCreateInfoEXT metal_view_export {
                 .sType            = VK_STRUCTURE_TYPE_EXPORT_METAL_OBJECT_CREATE_INFO_EXT,
                 .pNext            = nullptr,
                 .exportObjectType = VK_EXPORT_METAL_OBJECT_TYPE_METAL_TEXTURE_BIT_EXT,
             };
+#endif
             VkImageViewCreateInfo createinfo {
                 .sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+#if SCENERENDERER_ENABLE_METAL_EXPORT
                 .pNext    = metal_export ? &metal_view_export : nullptr,
+#else
+                .pNext    = nullptr,
+#endif
                 .image    = *image.handle,
                 .viewType = VK_IMAGE_VIEW_TYPE_2D,
                 .format   = format,
@@ -584,9 +603,9 @@ private:
 };
 
 wavsen::video::HwAccel ParseHwdec(std::string_view value) {
-    if (value == "vulkan") return wavsen::video::HwAccel::Vulkan;
-    if (value == "videotoolbox") return wavsen::video::HwAccel::VideoToolbox;
-    if (value == "none") return wavsen::video::HwAccel::None;
+    if (value.compare("vulkan") == 0) return wavsen::video::HwAccel::Vulkan;
+    if (value.compare("videotoolbox") == 0) return wavsen::video::HwAccel::VideoToolbox;
+    if (value.compare("none") == 0) return wavsen::video::HwAccel::None;
     return wavsen::video::HwAccel::Auto;
 }
 
@@ -1192,7 +1211,7 @@ void TextureCache::BeginVideoTextureActivity() {
 void TextureCache::MarkVideoTextureActive(std::string_view key) {
     if (! m_video_registry) return;
     for (auto& slot : m_video_registry->slots) {
-        if (slot && slot->key == key) {
+        if (slot && slot->key.compare(key) == 0) {
             slot->active_epoch = m_video_activity_epoch;
             return;
         }

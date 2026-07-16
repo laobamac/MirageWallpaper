@@ -961,12 +961,14 @@ export using std::weak_ordering;
 // operators in __gnu_cxx::; those are still reachable via ADL through the
 // vector type even with these std exports active.
 export using std::operator+;
+#if defined(__APPLE__)
 export using std::operator==;
 export using std::operator!=;
 export using std::operator<;
 export using std::operator<=;
 export using std::operator>;
 export using std::operator>=;
+#endif
 export using std::operator<<;
 export using std::operator>>;
 export using std::operator|;

@@ -2,7 +2,12 @@ module;
 
 #include <cstdlib>
 #include <fstream>
+#if defined(__APPLE__)
 #define VK_USE_PLATFORM_METAL_EXT
+#define SCENERENDERER_ENABLE_METAL_EXPORT 1
+#else
+#define SCENERENDERER_ENABLE_METAL_EXPORT 0
+#endif
 #include <vulkan/vulkan.h>
 #include <rstd/macro.hpp>
 #include "vk_mem_alloc.h"
@@ -62,6 +67,7 @@ void DispatchLiveMetalFrame(void* mtl_texture, uint32_t width, uint32_t height) 
     if (cb != nullptr) cb(mtl_texture, width, height, userdata);
 }
 
+#if SCENERENDERER_ENABLE_METAL_EXPORT
 void* ExportMetalTexture(const Device& device, const ImageParameters& image) {
     auto export_metal_objects = device.handle().Dispatch().vkExportMetalObjectsEXT;
     if (export_metal_objects == nullptr || image.handle == VK_NULL_HANDLE ||
@@ -84,6 +90,7 @@ void* ExportMetalTexture(const Device& device, const ImageParameters& image) {
     export_metal_objects(*device.handle(), &export_info);
     return reinterpret_cast<void*>(texture_info.mtlTexture);
 }
+#endif
 
 const char* EnvPath(const char* primary) {
     const char* value = std::getenv(primary);
@@ -273,6 +280,7 @@ void FinPass::recordPresentDump(const Device& device, RenderingResources& rr) {
 }
 
 void FinPass::finishFrameDump(const Device& device) {
+#if SCENERENDERER_ENABLE_METAL_EXPORT
     if (m_desc.metal_frame_callback || LiveMetalFrameRequested()) {
         if (void* texture = ExportMetalTexture(device, m_desc.vk_result); texture != nullptr) {
             if (m_desc.metal_frame_callback) {
@@ -287,6 +295,7 @@ void FinPass::finishFrameDump(const Device& device) {
             }
         }
     }
+#endif
 
     if (m_dump_pending && ! m_dump_done && m_dump_buffer) {
         void* mapped = nullptr;

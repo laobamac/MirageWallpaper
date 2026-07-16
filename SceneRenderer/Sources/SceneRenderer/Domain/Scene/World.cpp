@@ -68,7 +68,8 @@ float animation_frame(const SceneAnimationCurve& curve, double runtime) {
     if (end <= 0.0f) return frame;
 
     const float end_frame = end;
-    bool        loop = curve.wraploop || curve.mode == "loop" || curve.mode == "repeat";
+    bool        loop = curve.wraploop || curve.mode.compare("loop") == 0 ||
+                curve.mode.compare("repeat") == 0;
     if (loop) {
         frame = std::fmod(frame, end_frame);
         if (frame < 0.0f) frame += end_frame;
@@ -878,7 +879,7 @@ Scene::SetMaterialTextureSlot(SceneMaterial& material, uint32_t slot, std::strin
     auto slot_index = static_cast<std::size_t>(slot);
     if (material.textures.size() <= slot_index) material.textures.resize(slot_index + 1);
     auto& current = material.textures[slot_index];
-    if (current == texture) return {};
+    if (current.compare(texture) == 0) return {};
 
     current = std::string(texture);
     if (m_resource_index.Empty()) RebuildResourceIndex();
@@ -906,7 +907,7 @@ void Scene::ClearUserPropertyDiagnostics(std::string_view key) {
         return;
     }
     for (auto it = m_user_property_diagnostics.begin(); it != m_user_property_diagnostics.end();) {
-        if (it->key == key) {
+        if (it->key.compare(key) == 0) {
             it = m_user_property_diagnostics.erase(it);
         } else {
             ++it;

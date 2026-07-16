@@ -16,7 +16,7 @@ namespace sr::wpscene
 SceneVersion ParsePkgVersionStamp(std::string_view stamp) {
     constexpr std::string_view kPrefix = "PKGV";
     if (stamp.size() < kPrefix.size() + 1) return kSceneVersionUnknown;
-    if (stamp.substr(0, kPrefix.size()) != kPrefix) return kSceneVersionUnknown;
+    if (stamp.substr(0, kPrefix.size()).data() != kPrefix.data()) return kSceneVersionUnknown;
     SceneVersion v       = 0;
     const char*  first   = stamp.data() + kPrefix.size();
     const char*  last    = stamp.data() + stamp.size();
@@ -352,8 +352,8 @@ std::optional<SceneDocument> LoadSceneDocumentFromSource(std::string_view source
         if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
     }
 
-    if (ext == ".pkg") return LoadSceneDocumentFromPkg(source_path);
-    if (ext != ".json") return std::nullopt;
+    if (ext.compare(".pkg") == 0) return LoadSceneDocumentFromPkg(source_path);
+    if (ext.compare(".json") != 0) return std::nullopt;
 
     auto scene_file = fs::CreateCBinaryStream(source_path);
     if (! scene_file) return std::nullopt;

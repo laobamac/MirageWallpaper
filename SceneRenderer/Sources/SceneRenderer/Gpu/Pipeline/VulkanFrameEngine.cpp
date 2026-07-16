@@ -61,8 +61,10 @@ constexpr std::array base_inst_exts {
 constexpr std::array base_device_exts {
     Extension { false, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME },
     Extension { true, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME },
+#if defined(__APPLE__)
     Extension { true, "VK_KHR_portability_subset" },
     Extension { false, "VK_EXT_metal_objects" },
+#endif
     Extension { true, VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME },
     Extension { false, VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME },
 };
@@ -81,9 +83,9 @@ void AppendVideoDeviceExtensions(std::vector<Extension>& device_exts) {
 
 bool RequiresVulkanVideoDeviceExtensions(std::string_view hwdec) {
 #if defined(__APPLE__)
-    return hwdec == "vulkan";
+    return hwdec.compare("vulkan") == 0;
 #else
-    return hwdec != "none";
+    return hwdec.compare("none") != 0;
 #endif
 }
 

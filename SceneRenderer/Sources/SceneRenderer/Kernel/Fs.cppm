@@ -441,28 +441,38 @@ public:
     bool Unmount(std::string_view mountpoint) { return Unmount(ToPath(mountpoint)); }
     bool Unmount(const char* mountpoint) { return Unmount(ToPath(mountpoint)); }
     bool Unmount(RstdPath mountpoint) {
-        for (auto iter = m_mountedFss.rbegin(); iter < m_mountedFss.rend(); iter++) {
-            if (MountedFs::SamePath(iter->path(), mountpoint)) {
-                m_mountedFss.erase((++iter).base());
-                return true;
-            }
+        // if (auto it = m_shortcuts.find(actionId[KGlobalAccel::ActionUnique]); it != m_shortcuts.end()) {
+        //     it->second->setShortcuts(newKeys);
+        //     qCInfo(logQHotkey_Linux) << "Shortcut " << actionId[KGlobalAccel::ActionUnique] << " to " << newKeys;
+        // }
+        const auto it = std::find_if(m_mountedFss.begin(), m_mountedFss.end(),
+            [&mountpoint](const auto& el) {
+                return MountedFs::SamePath(el.path(), mountpoint);
+            });
+
+        if (it != m_mountedFss.end()) {
+            m_mountedFss.erase(it); // 直接擦除找到的迭代器
+            return true;
         }
         rstd_info("mount point not exist");
         return false;
     }
     bool IsMounted(std::string_view name) {
         for (const auto& el : m_mountedFss) {
-            if (el.name == name) return true;
+            if (el.name.compare(name) == 0) return true;
         }
         return false;
     }
     std::shared_ptr<IBinaryStream> Open(std::string_view path) { return Open(ToPath(path)); }
     std::shared_ptr<IBinaryStream> Open(const char* path) { return Open(ToPath(path)); }
     std::shared_ptr<IBinaryStream> Open(RstdPath path) {
-        for (auto iter = m_mountedFss.rbegin(); iter < m_mountedFss.rend(); iter++) {
-            auto mounted_path = iter->PathInMount(path);
-            if (mounted_path.is_none() || ! iter->fs->Contains(*mounted_path)) continue;
-            return iter->fs->Open(*mounted_path);
+        const auto it = std::find_if(m_mountedFss.begin(), m_mountedFss.end(), [&](const auto& entry) {
+            auto mounted_path = entry.PathInMount(path);
+            return !mounted_path.is_none() && entry.fs->Contains(*mounted_path);
+        });
+
+        if (it != m_mountedFss.end()) {
+            return it->fs->Open(*it->PathInMount(path));
         }
         rstd_error("not found \"{}\" in vfs", path);
         return nullptr;
@@ -470,12 +480,12 @@ public:
     std::shared_ptr<IBinaryStreamW> OpenW(std::string_view path) { return OpenW(ToPath(path)); }
     std::shared_ptr<IBinaryStreamW> OpenW(const char* path) { return OpenW(ToPath(path)); }
     std::shared_ptr<IBinaryStreamW> OpenW(RstdPath path) {
-        for (auto iter = m_mountedFss.rbegin(); iter < m_mountedFss.rend(); iter++) {
+        for (auto iter = m_mountedFss.begin(); iter != m_mountedFss.end(); ++iter) {
             auto mounted_path = iter->PathInMount(path);
             if (mounted_path.is_none() || ! iter->fs->Contains(*mounted_path)) continue;
             return iter->fs->OpenW(*mounted_path);
         }
-        for (auto iter = m_mountedFss.rbegin(); iter < m_mountedFss.rend(); iter++) {
+        for (auto iter = m_mountedFss.begin(); iter != m_mountedFss.end(); ++iter) {
             auto mounted_path = iter->PathInMount(path);
             if (mounted_path.is_some()) return iter->fs->OpenW(*mounted_path);
         }
@@ -485,7 +495,7 @@ public:
     bool Contains(std::string_view path) const { return Contains(ToPath(path)); }
     bool Contains(const char* path) const { return Contains(ToPath(path)); }
     bool Contains(RstdPath path) const {
-        for (auto iter = m_mountedFss.rbegin(); iter < m_mountedFss.rend(); iter++) {
+        for (auto iter = m_mountedFss.begin(); iter != m_mountedFss.end(); ++iter) {
             auto& el           = *iter;
             auto  mounted_path = el.PathInMount(path);
             if (mounted_path.is_some() && el.fs->Contains(*mounted_path)) return true;

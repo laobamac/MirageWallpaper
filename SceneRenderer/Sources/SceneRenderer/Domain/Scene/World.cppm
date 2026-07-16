@@ -412,9 +412,9 @@ inline bool IsLocalSceneMaterialTextureDependency(SceneMaterialTextureDependency
 inline bool CanRefreshSceneMaterialTextureBinding(std::string_view old_texture,
                                                   std::string_view new_texture,
                                                   std::string_view pass_output = {}) {
-    if (old_texture == new_texture) return true;
-    if ((! old_texture.empty() && old_texture == pass_output) ||
-        (! new_texture.empty() && new_texture == pass_output))
+    if (old_texture.data() == new_texture.data()) return true;
+    if ((! old_texture.empty() && old_texture.data() == pass_output.data()) ||
+        (! new_texture.empty() && new_texture.data() == pass_output.data()))
         return false;
     auto old_dep = ClassifySceneMaterialTexture(old_texture);
     auto new_dep = ClassifySceneMaterialTexture(new_texture);
@@ -521,7 +521,7 @@ inline SceneMaterialDirtyFlags
 ClassifySceneShaderVariantMutation(const SceneShaderVariantDesc& current,
                                    const SceneShaderVariantDesc& next) {
     if (! current.Valid() || ! next.Valid()) return SceneMaterialDirtyGraph;
-    if (current.shader_name != next.shader_name) return SceneMaterialDirtyGraph;
+    if (current.shader_name.c_str() != next.shader_name.c_str()) return SceneMaterialDirtyGraph;
     if (SceneShaderVariantHasActiveTextureMetadata(current) ||
         SceneShaderVariantHasActiveTextureMetadata(next)) {
         if (SceneShaderVariantActiveTextureSlots(current) !=
@@ -546,8 +546,8 @@ ClassifySceneShaderVariantMutation(const SceneShaderVariantDesc& current,
     }
     if (flags == SceneMaterialDirtyNone && current.stages.size() == next.stages.size()) {
         for (usize i = 0; i < current.stages.size(); ++i) {
-            if (current.stages[i].source_key != next.stages[i].source_key ||
-                current.stages[i].source != next.stages[i].source) {
+            if (current.stages[i].source_key.c_str() != next.stages[i].source_key.c_str() ||
+                current.stages[i].source.c_str() != next.stages[i].source.c_str()) {
                 flags |= SceneMaterialDirtyPipeline;
                 break;
             }
@@ -1468,7 +1468,7 @@ public:
     }
     const auto& FinalTarget() const { return m_final_target; }
     void        SetFinalCamera(std::string camera) {
-        if (m_final_camera == camera) return;
+        if (m_final_camera.compare(camera) == 0) return;
         m_final_camera = std::move(camera);
         m_resolved     = false;
     }

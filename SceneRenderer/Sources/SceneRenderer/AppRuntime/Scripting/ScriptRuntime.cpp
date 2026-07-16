@@ -26,18 +26,18 @@ namespace
 FieldKind GuessFieldKind(std::string_view field) {
     // Visible/enabled-style fields: bool. Several scripts return numbers
     // 0/1 here too; coercion table accepts both.
-    if (field == "visible") return FieldKind::Bool;
+    if (field.compare("visible") == 0) return FieldKind::Bool;
     // Vec3 (position-like) fields.
-    if (field == "origin" || field == "scale" || field == "angles" || field == "spriteoffset")
+    if (field.compare("origin") == 0 || field.compare("scale") == 0 || field.compare("angles") == 0 || field.compare("spriteoffset") == 0)
         return FieldKind::Vec3;
     // Color (rgb) fields.
-    if (field == "color" || field == "colorn" || field == "Bg color" || field == "Bar Color" ||
-        field == "Inner Color" || field == "Outer Color" || field == "Color 1" ||
-        field == "Color 2" || field == "Color filter")
+    if (field.compare("color") == 0 || field.compare("colorn") == 0 || field.compare("Bg color") == 0 || field.compare("Bar Color") == 0 ||
+        field.compare("Inner Color") == 0 || field.compare("Outer Color") == 0 || field.compare("Color 1") == 0 ||
+        field.compare("Color 2") == 0 || field.compare("Color filter") == 0)
         return FieldKind::Color;
     // Strings (text content). Recognised here so the JS can run without
     // erroring; the actuator side ignores the result for MVP scope.
-    if (field == "text") return FieldKind::String;
+    if (field.compare("text") == 0) return FieldKind::String;
     // Everything else is a scalar: alpha, rate, intensity, fov, volume,
     // parallaxDepth, percentage, brightness, saturation, ... .
     return FieldKind::Scalar;
@@ -2603,11 +2603,11 @@ void JsRuntime::SetMediaStatus(const MediaStatus& status) {
     host.media_initialized = true;
 
     const bool playback_changed   = first || prev.state != status.state;
-    const bool properties_changed = first || prev.title != status.title ||
-                                    prev.artist != status.artist || prev.album != status.album ||
-                                    prev.album_artist != status.album_artist;
+    const bool properties_changed = first || prev.title.compare(status.title) != 0 ||
+                                    prev.artist.compare(status.artist) != 0 || prev.album.compare(status.album) != 0 ||
+                                    prev.album_artist.compare(status.album_artist) != 0;
     const bool thumbnail_changed =
-        first || prev.art_url != status.art_url || prev.previous_art_url != status.previous_art_url;
+        first || prev.art_url.compare(status.art_url) != 0 || prev.previous_art_url.compare(status.previous_art_url) != 0;
     if (! playback_changed && ! properties_changed && ! thumbnail_changed) return;
 
     for (auto& fs : m_impl->scripts) {

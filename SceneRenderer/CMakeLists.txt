@@ -11,10 +11,10 @@ set(SCENERENDERER_VERSION 0.1.8)
 
 project(SceneRenderer VERSION ${SCENERENDERER_VERSION})
 
-# SceneRenderer engine build for macOS.
-# MoltenVK is used as the Vulkan ICD and wavsen is forced onto Core Audio
-# when building on Darwin. The repository is intentionally laid out as an
-# embeddable engine plus a small standalone tool, not as the final app shell.
+# SceneRenderer engine build.
+# On macOS, MoltenVK is used as the Vulkan ICD and wavsen is forced onto
+# Core Audio. Linux builds use the system Vulkan loader and the default
+# wavsen backend unless explicitly overridden.
 if(APPLE)
     set(WAVSEN_AUDIO_BACKEND "coreaudio" CACHE STRING "Core Audio backend on macOS" FORCE)
     # MoltenVK as the Vulkan ICD. Hint Vulkan::Vulkan to the brew loader.
@@ -32,9 +32,13 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# ELF $ORIGIN doesn't exist on mach-o; use @loader_path so install rpath
-# stays explicit and the build doesn't bake the literal "$ORIGIN" string.
-set(CMAKE_INSTALL_RPATH "@loader_path")
+# ELF $ORIGIN doesn't exist on mach-o; use @loader_path on macOS and
+# $ORIGIN on ELF so installed tools can resolve adjacent runtime libraries.
+if(APPLE)
+    set(CMAKE_INSTALL_RPATH "@loader_path")
+else()
+    set(CMAKE_INSTALL_RPATH "$ORIGIN")
+endif()
 set(CMAKE_INSTALL_RPATH_USE_LINK_PATH OFF)
 set(CMAKE_BUILD_WITH_INSTALL_RPATH OFF)
 set(CMAKE_INSTALL_REMOVE_ENVIRONMENT_RPATH ON)
@@ -46,7 +50,6 @@ if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND NOT SR_ALLOW_NONCLANG)
         "Re-run cmake with `-DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER=clang`, "
         "or pass -DSR_ALLOW_NONCLANG=ON to bypass this check.")
 endif()
-
 
 find_package(PkgConfig REQUIRED)
 find_package(Threads REQUIRED)
@@ -75,8 +78,17 @@ if(SCENERENDERER_BUILD_ENGINE AND SCENERENDERER_BUILD_VIEWER)
     add_subdirectory(Tools/SceneViewer)
 endif()
 
-option(SCENERENDERER_BUILD_WALLPAPER_HOST "Build the native macOS desktop wallpaper host" ${APPLE})
-if(SCENERENDERER_BUILD_ENGINE AND APPLE AND SCENERENDERER_BUILD_WALLPAPER_HOST)
-    add_subdirectory(Tools/SceneWallpaper)
-    add_subdirectory(Tools/SceneScreenSaver)
+set(_scenerenderer_default_wallpaper_host OFF)
+if(APPLE OR (UNIX AND NOT APPLE))
+    set(_scenerenderer_default_wallpaper_host ON)
+endif()
+option(SCENERENDERER_ENABLE_X11_WALLPAPER "Build the X11 desktop wallpaper host on Linux" ON)
+option(SCENERENDERER_BUILD_WALLPAPER_HOST "Build the native desktop wallpaper host" ${_scenerenderer_default_wallpaper_host})
+if(SCENERENDERER_BUILD_ENGINE AND SCENERENDERER_BUILD_WALLPAPER_HOST)
+    if(APPLE OR (UNIX AND NOT APPLE AND SCENERENDERER_ENABLE_X11_WALLPAPER))
+        add_subdirectory(Tools/SceneWallpaper)
+    endif()
+    if(APPLE)
+        add_subdirectory(Tools/SceneScreenSaver)
+    endif()
 endif()

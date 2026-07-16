@@ -150,7 +150,7 @@ bool Device::CheckGPU(vvk::PhysicalDevice gpu, std::span<const Extension> exts,
     for (auto& ext : exts) {
         if (ext.required) {
             if (! exists(extensions, ext.name)) return false;
-            if (std::string_view(ext.name) == VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME) {
+            if (std::string_view(ext.name).compare(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME) == 0) {
                 requires_timeline_semaphore = true;
             }
         }
