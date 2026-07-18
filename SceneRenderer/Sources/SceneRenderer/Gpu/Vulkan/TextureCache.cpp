@@ -2,6 +2,8 @@ module;
 
 #if defined(__linux__)
 #include <string>
+#include <memory>
+#include <vector>
 #endif
 
 #if defined(__APPLE__)
