@@ -67,6 +67,8 @@ EOF
 ACTION="all"
 POSITIONAL_PRESET=""
 CMAKE_BIN="${CMAKE_BIN:-${CMAKE:-cmake}}"
+CC="${CC:-clang}"
+CXX="${CXX:-clang++}"
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help) usage; exit 0 ;;
@@ -165,6 +167,10 @@ case "$SYSTEM_NAME" in
         command -v clang >/dev/null || die "clang not found. Install clang."
         command -v clang++ >/dev/null || die "clang++ not found. Install clang++."
         JOBS="${JOBS:-$(nproc 2>/dev/null || echo 8)}"
+        EXTRA_CONFIGURE_ARGS+=(
+            -DCMAKE_C_COMPILER="$CC"
+            -DCMAKE_CXX_COMPILER="$CXX"
+        )
         ;;
     *)
         die "unsupported platform: $SYSTEM_NAME"

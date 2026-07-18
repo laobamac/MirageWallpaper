@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=MirageQt
+Exec=@MIRAGEQT_EXECUTABLE@
+Icon=preferences-desktop-wallpaper
+Terminal=false
+Categories=Utility;DesktopSettings;
+StartupNotify=false
