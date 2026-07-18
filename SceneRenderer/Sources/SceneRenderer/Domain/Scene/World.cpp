@@ -3,6 +3,7 @@ module;
 #if defined(__linux__)
 #include <string>
 #endif
+#include <cmath>
 
 module sr.scene;
 import eigen;
@@ -87,6 +88,24 @@ float animation_frame(const SceneAnimationCurve& curve, double runtime) {
         return folded <= end_frame ? folded : (period - folded);
     }
     return std::clamp(frame, 0.0f, end_frame);
+}
+
+bool animation_loops(const SceneAnimationCurve& curve) {
+    return curve.wraploop || curve.mode == "loop" || curve.mode == "repeat";
+}
+
+double animation_duration_seconds(const SceneAnimationCurve& curve) {
+    float fps = curve.fps > 0.0f ? curve.fps : 30.0f;
+    float end = curve_end_frame(curve);
+    if (fps <= 0.0f || end <= 0.0f) return 0.0;
+    return static_cast<double>(end) / static_cast<double>(fps);
+}
+
+double control_local_runtime(const SceneFieldAnimationControl& control, double runtime) {
+    if (! control.playing) return control.local_runtime;
+    double elapsed = runtime - control.start_runtime;
+    if (! std::isfinite(elapsed) || elapsed < 0.0) elapsed = 0.0;
+    return control.local_runtime + elapsed * static_cast<double>(control.rate);
 }
 
 float eval_segment(const SceneAnimationKey& a, const SceneAnimationKey& b, float frame) {
@@ -745,11 +764,171 @@ Eigen::Vector3f SceneAnimationCurve::EvaluateVec3(const Eigen::Vector3f& base,
     return value;
 }
 
+SceneFieldAnimationControl* SceneNode::FindFieldAnimationControl(std::string_view name) {
+    if (name.empty()) return nullptr;
+    auto it = m_field_animation_controls.find(std::string(name));
+    return it == m_field_animation_controls.end() ? nullptr : &it->second;
+}
+
+const SceneFieldAnimationControl*
+SceneNode::FindFieldAnimationControl(std::string_view name) const {
+    if (name.empty()) return nullptr;
+    auto it = m_field_animation_controls.find(std::string(name));
+    return it == m_field_animation_controls.end() ? nullptr : &it->second;
+}
+
+void SceneNode::RegisterFieldAnimationControl(const SceneAnimationCurve& curve) {
+    if (curve.name.empty()) return;
+
+    auto [it, inserted] = m_field_animation_controls.try_emplace(curve.name);
+    auto& control       = it->second;
+    if (inserted) {
+        control.playing       = ! curve.startpaused;
+        control.start_runtime = 0.0;
+        control.local_runtime = 0.0;
+    } else if (curve.startpaused) {
+        control.playing       = false;
+        control.start_runtime = 0.0;
+        control.local_runtime = 0.0;
+    }
+
+    control.fps = curve.fps > 0.0f ? curve.fps : 30.0f;
+    if (animation_loops(curve)) {
+        control.finite = false;
+        return;
+    }
+
+    double duration = animation_duration_seconds(curve);
+    if (duration > control.duration) {
+        control.duration = duration;
+        control.finite   = duration > 0.0;
+    }
+}
+
+double SceneNode::FieldAnimationRuntime(const SceneAnimationCurve& curve, double runtime) const {
+    if (curve.name.empty()) return curve.startpaused ? 0.0 : runtime;
+    auto* control = FindFieldAnimationControl(curve.name);
+    if (control == nullptr) return runtime;
+    return control_local_runtime(*control, runtime);
+}
+
+void SceneNode::UpdateFieldAnimationPlayback(double runtime) {
+    for (auto& [_, control] : m_field_animation_controls) {
+        if (control.playing && control.finite && control.duration > 0.0) {
+            double local = control_local_runtime(control, runtime);
+            const bool reached_end =
+                control.rate >= 0.0f ? local >= control.duration : local <= 0.0;
+            if (reached_end) {
+                control.local_runtime = control.rate >= 0.0f ? control.duration : 0.0;
+                control.playing       = false;
+            }
+        }
+    }
+}
+
+bool SceneNode::HasFieldAnimation(std::string_view name) const {
+    return FindFieldAnimationControl(name) != nullptr;
+}
+
+bool SceneNode::PlayFieldAnimation(std::string_view name, double runtime) {
+    auto* control = FindFieldAnimationControl(name);
+    if (control == nullptr) return false;
+    control->playing       = true;
+    control->start_runtime = runtime;
+    control->local_runtime = control->rate >= 0.0f ? 0.0 : control->duration;
+    if (control->alpha_gate_when_stopped) SetUserAlpha(m_base_alpha);
+    return true;
+}
+
+bool SceneNode::StopFieldAnimation(std::string_view name) {
+    auto* control = FindFieldAnimationControl(name);
+    if (control == nullptr) return false;
+    control->playing       = false;
+    control->start_runtime = 0.0;
+    control->local_runtime = 0.0;
+    if (control->alpha_gate_when_stopped) SetUserAlpha(0.0f);
+    return true;
+}
+
+bool SceneNode::PauseFieldAnimation(std::string_view name, double runtime) {
+    auto* control = FindFieldAnimationControl(name);
+    if (control == nullptr) return false;
+    control->local_runtime = control_local_runtime(*control, runtime);
+    control->playing       = false;
+    return true;
+}
+
+bool SceneNode::IsFieldAnimationPlaying(std::string_view name) const {
+    auto* control = FindFieldAnimationControl(name);
+    return control != nullptr && control->playing;
+}
+
+bool SceneNode::SetFieldAnimationFrame(std::string_view name, std::int32_t frame) {
+    auto* control = FindFieldAnimationControl(name);
+    if (control == nullptr) return false;
+    if (frame < 0) frame = 0;
+    control->local_runtime = static_cast<double>(frame) / static_cast<double>(control->fps);
+    control->playing       = false;
+    if (control->alpha_gate_when_stopped) SetUserAlpha(m_base_alpha);
+    return true;
+}
+
+std::int32_t SceneNode::FieldAnimationFrame(std::string_view name, double runtime) const {
+    auto* control = FindFieldAnimationControl(name);
+    if (control == nullptr) return 0;
+    double frame = control_local_runtime(*control, runtime) * static_cast<double>(control->fps);
+    if (! std::isfinite(frame) || frame < 0.0) return 0;
+    return static_cast<std::int32_t>(std::lround(frame));
+}
+
+std::int32_t SceneNode::FieldAnimationFrameCount(std::string_view name) const {
+    auto* control = FindFieldAnimationControl(name);
+    if (control == nullptr || control->duration <= 0.0) return 1;
+    double frames = control->duration * static_cast<double>(control->fps);
+    if (! std::isfinite(frames) || frames < 1.0) return 1;
+    return static_cast<std::int32_t>(std::lround(frames));
+}
+
+float SceneNode::FieldAnimationRate(std::string_view name) const {
+    auto* control = FindFieldAnimationControl(name);
+    return control == nullptr ? 1.0f : control->rate;
+}
+
+bool SceneNode::SetFieldAnimationRate(std::string_view name, float rate) {
+    auto* control = FindFieldAnimationControl(name);
+    if (control == nullptr || ! std::isfinite(rate)) return false;
+    control->rate = rate;
+    return true;
+}
+
+void SceneNode::SetFieldAnimationAlphaGate(std::string_view name, bool value) {
+    auto* control = FindFieldAnimationControl(name);
+    if (control == nullptr) return;
+    control->alpha_gate_when_stopped = value;
+    if (value && ! control->playing) SetUserAlpha(0.0f);
+}
+
 void SceneNode::TickFieldAnimations(double runtime) {
-    if (m_origin_curve) SetTranslate(m_origin_curve->EvaluateVec3(m_origin_base, runtime));
-    if (m_scale_curve) SetScale(m_scale_curve->EvaluateVec3(m_scale_base, runtime));
-    if (m_rotation_curve) SetRotation(m_rotation_curve->EvaluateVec3(m_rotation_base, runtime));
-    if (m_alpha_curve) SetUserAlpha(m_alpha_curve->EvaluateScalar(m_base_alpha, runtime));
+    UpdateFieldAnimationPlayback(runtime);
+    if (m_origin_curve)
+        SetTranslate(
+            m_origin_curve->EvaluateVec3(m_origin_base, FieldAnimationRuntime(*m_origin_curve, runtime)));
+    if (m_scale_curve)
+        SetScale(m_scale_curve->EvaluateVec3(m_scale_base, FieldAnimationRuntime(*m_scale_curve, runtime)));
+    if (m_rotation_curve)
+        SetRotation(m_rotation_curve->EvaluateVec3(
+            m_rotation_base, FieldAnimationRuntime(*m_rotation_curve, runtime)));
+    if (m_alpha_curve)
+        SetUserAlpha(
+            m_alpha_curve->EvaluateScalar(m_base_alpha, FieldAnimationRuntime(*m_alpha_curve, runtime)));
+    bool gated = false;
+    bool gated_playing = false;
+    for (const auto& [_, control] : m_field_animation_controls) {
+        if (! control.alpha_gate_when_stopped) continue;
+        gated         = true;
+        gated_playing = gated_playing || control.playing;
+    }
+    if (gated && ! gated_playing) SetUserAlpha(0.0f);
 }
 
 void SceneCameraPath::CaptureViewport() {
