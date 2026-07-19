@@ -7,6 +7,24 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
         <title>Mirage</title>
         <item>
             <title>1.0.0</title>
+            <pubDate>Sun, 19 Jul 2026 04:54:13 +0000</pubDate>
+            <link>https://github.com/laobamac/MirageWallpaper</link>
+            <sparkle:channel>beta</sparkle:channel>
+            <sparkle:version>151</sparkle:version>
+            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="plain-text"><![CDATA[Commit: d2dee186736fde96479810cd8bef4d5cb9cf1beb
+Channel: beta
+
+fix(app): open wallpaper settings for screen saver setup
+
+
+]]></description>
+            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-151-d2dee186736f-macOS-arm64.zip" length="192243463" type="application/octet-stream" sparkle:edSignature="Yi3GdxTm3LMO6lq+sb3sk9+jKvc3/GOI08NsWkHyr8VOlWvu7sbqFbYvGkr50XBge2TfbNQSuBGX8znum63wAA=="/>
+        </item>
+        <item>
+            <title>1.0.0</title>
             <pubDate>Sun, 19 Jul 2026 04:43:44 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
             <sparkle:channel>beta</sparkle:channel>
@@ -62,6 +80,6 @@ feat(app): add signed automatic update channels
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: r53AucDcSGZ7s4O3hi+pXn7nKb3Cs2eUz9/VFiyqsjK8Gk2eAOySXgpK9/KAuK2aT3LEFoV7RaWuI6zUpvPYBw==
-length: 3532
+edSignature: VhLNt3ydhZbY6t9xXAoOJWoZjr6IX0sneyHOzPvT4+9sAywjOrIGIijhz0h+glN1Eb/JhhCYTOGW1hLZ+2UODQ==
+length: 4572
 -->
