@@ -7,6 +7,24 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
         <title>Mirage</title>
         <item>
             <title>1.0.0</title>
+            <pubDate>Sun, 19 Jul 2026 12:24:02 +0000</pubDate>
+            <link>https://github.com/laobamac/MirageWallpaper</link>
+            <sparkle:channel>beta</sparkle:channel>
+            <sparkle:version>153</sparkle:version>
+            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="plain-text"><![CDATA[Commit: fd4538600eb7de22cc2c32ddfcf59a29139bb9e6
+Channel: beta
+
+chore(app): remove segmented picker
+
+
+]]></description>
+            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-153-fd4538600eb7-macOS-arm64.zip" length="192236915" type="application/octet-stream" sparkle:edSignature="DJxpuiVewYd1Jgtd/oPA9vaxMQgnllrUbe68G54C6yv5PWFNT+yp6R3pP3NUnB7yXmPIcdTvsOXRSqWbmNzAAw=="/>
+        </item>
+        <item>
+            <title>1.0.0</title>
             <pubDate>Sun, 19 Jul 2026 12:03:07 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
             <sparkle:channel>beta</sparkle:channel>
@@ -98,6 +116,6 @@ feat(app): add signed automatic update channels
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: F4YC+OLlKIkmRUly5SZUzfz/AAv2PIWj/5CBe5Gh76nJkwLziL3AI4/3SuRAVJkR6zA7nbjYnS9iIBPaJjUqBA==
-length: 5630
+edSignature: 718PSf/37SRHjpr+azsaZsL7nEGDVAcTaXmSfcJMytKwHEuvvquQmHidusH/vXujsyAZHlB2wAkN6AjNwZslCQ==
+length: 6649
 -->
