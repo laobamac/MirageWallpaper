@@ -9,38 +9,44 @@ import SwiftUI
 
 protocol SettingsPage: View {
     var viewModel: GlobalSettingsViewModel { get set }
-    
+
     init(globalSettings: GlobalSettingsViewModel)
 }
 
-extension AppDelegate {
-    @objc func jumpToPerformance() {
-        self.globalSettingsViewModel.selection = 0
-    }
-    
-    @objc func jumpToGeneral() {
-        self.globalSettingsViewModel.selection = 1
-    }
-    
-    @objc func jumpToPlugins() {
-        self.globalSettingsViewModel.selection = 2
-    }
-
-    @objc func jumpToScreenSaver() {
-        self.globalSettingsViewModel.selection = 3
-    }
-    
-    @objc func jumpToAbout() {
-        self.globalSettingsViewModel.selection = 4
-    }
+private struct SettingsSection: Identifiable {
+    let id: Int
+    let title: String
+    let systemImage: String
 }
 
 struct SettingsView: View {
     @EnvironmentObject var viewModel: GlobalSettingsViewModel
     @ObservedObject private var localization = MirageLocalization.shared
-    
+
+    private var sections: [SettingsSection] {
+        [
+            .init(id: 0, title: L("性能"), systemImage: "speedometer"),
+            .init(id: 1, title: L("通用"), systemImage: "gearshape"),
+            .init(id: 2, title: L("插件"), systemImage: "puzzlepiece.extension"),
+            .init(id: 3, title: L("屏保"), systemImage: "sparkles.tv"),
+            .init(id: 4, title: L("关于"), systemImage: "person.3"),
+        ]
+    }
+
+    private var hasUnsavedChanges: Bool {
+        guard let data = UserDefaults.standard.data(forKey: "GlobalSettings"),
+              let savedSettings = try? JSONDecoder().decode(GlobalSettings.self, from: data) else {
+            return false
+        }
+        return viewModel.settings != savedSettings
+    }
+
     var body: some View {
-        VStack {
+        VStack(spacing: 0) {
+            header
+
+            Divider()
+
             Group {
                 switch viewModel.selection {
                 case 0:
@@ -54,120 +60,76 @@ struct SettingsView: View {
                 case 4:
                     AboutUsView()
                 default:
-                    fatalError()
+                    PerformancePage(globalSettings: viewModel)
                 }
             }
-            .frame(minHeight: 400, maxHeight: 800)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            HStack {
-                if let savedSettings = try? JSONDecoder()
-                    .decode(GlobalSettings.self,
-                        from: UserDefaults.standard.data(forKey: "GlobalSettings")
-                            ?? Data()), viewModel.settings != savedSettings {
-                    Image(systemName: "exclamationmark.circle.fill")
-                        .foregroundStyle(.yellow)
-                    Text("已修改")
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button {
-                    viewModel.save()
-                    AppDelegate.shared.settingsWindow.close()
-                } label: {
-                    Text("好").frame(width: 50)
-                }
-                .buttonStyle(.borderedProminent)
-                Button {
-                    AppDelegate.shared.settingsWindow.close()
-                } label: {
-                    Text("取消").frame(width: 50)
-                }
-            }
-            .padding(20)
+            Divider()
+
+            footer
         }
-        .frame(minWidth: 500)
+        .frame(minWidth: 720, idealWidth: 780, minHeight: 520, idealHeight: 620)
         .environment(\.locale, localization.locale)
     }
-}
 
-extension AppDelegate: NSToolbarDelegate {
-    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [SettingsToolbarIdentifiers.performance, SettingsToolbarIdentifiers.general, SettingsToolbarIdentifiers.plugins, SettingsToolbarIdentifiers.screenSaver, SettingsToolbarIdentifiers.about]
-    }
-        
-    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [SettingsToolbarIdentifiers.performance, SettingsToolbarIdentifiers.general, SettingsToolbarIdentifiers.plugins, SettingsToolbarIdentifiers.screenSaver, SettingsToolbarIdentifiers.about]
-    }
-    
-    func toolbarSelectableItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [SettingsToolbarIdentifiers.performance, SettingsToolbarIdentifiers.general, SettingsToolbarIdentifiers.plugins, SettingsToolbarIdentifiers.screenSaver, SettingsToolbarIdentifiers.about]
-    }
-    
-    func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier, willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
-        let toolbarItem = NSToolbarItem(itemIdentifier: itemIdentifier)
-        
-        switch itemIdentifier {
-        case SettingsToolbarIdentifiers.performance:
-            toolbarItem.action = #selector(jumpToPerformance)
-            toolbarItem.image = NSImage(systemSymbolName: "speedometer", accessibilityDescription: nil)
-            toolbarItem.label = L("性能")
+    private var header: some View {
+        HStack(spacing: 6) {
+            Text(L("设置"))
+                .font(.headline)
+                .padding(.trailing, 8)
 
-        case SettingsToolbarIdentifiers.general:
-            toolbarItem.action = #selector(jumpToGeneral)
-            toolbarItem.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: nil)
-            toolbarItem.label = L("通用")
-            
-        case SettingsToolbarIdentifiers.plugins:
-            toolbarItem.action = #selector(jumpToPlugins)
-            toolbarItem.image = NSImage(systemSymbolName: "puzzlepiece.extension", accessibilityDescription: nil)
-            toolbarItem.label = L("插件")
-
-        case SettingsToolbarIdentifiers.screenSaver:
-            toolbarItem.action = #selector(jumpToScreenSaver)
-            toolbarItem.image = NSImage(systemSymbolName: "sparkles.tv", accessibilityDescription: nil)
-            toolbarItem.label = L("屏保")
-            
-        case SettingsToolbarIdentifiers.about:
-            toolbarItem.action = #selector(jumpToAbout)
-            toolbarItem.image = NSImage(systemSymbolName: "person.3", accessibilityDescription: nil)
-            toolbarItem.label = L("关于")
-            
-        default:
-            fatalError()
-        }
-        
-        toolbarItem.isBordered = false
-        
-        return toolbarItem
-    }
-}
-
-extension AppDelegate {
-    func refreshSettingsToolbarLocalization() {
-        guard let toolbar = settingsWindow?.toolbar else { return }
-        for item in toolbar.items {
-            switch item.itemIdentifier {
-            case SettingsToolbarIdentifiers.performance: item.label = L("性能")
-            case SettingsToolbarIdentifiers.general: item.label = L("通用")
-            case SettingsToolbarIdentifiers.plugins: item.label = L("插件")
-            case SettingsToolbarIdentifiers.screenSaver: item.label = L("屏保")
-            case SettingsToolbarIdentifiers.about: item.label = L("关于")
-            default: continue
+            Picker("", selection: $viewModel.selection) {
+                ForEach(sections) { section in
+                    Label(section.title, systemImage: section.systemImage)
+                        .tag(section.id)
+                }
             }
-            item.paletteLabel = item.label
-            item.toolTip = item.label
+            .pickerStyle(.segmented)
+            .labelsHidden()
+
+            Spacer(minLength: 0)
         }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+    }
+
+    private var footer: some View {
+        HStack {
+            if hasUnsavedChanges {
+                Image(systemName: "exclamationmark.circle.fill")
+                    .foregroundStyle(.yellow)
+                Text("已修改")
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button {
+                viewModel.isSettingsPresented = false
+            } label: {
+                Text("取消").frame(width: 50)
+            }
+            .keyboardShortcut(.cancelAction)
+            Button {
+                viewModel.save()
+                viewModel.isSettingsPresented = false
+            } label: {
+                Text("好").frame(width: 50)
+            }
+            .buttonStyle(.borderedProminent)
+            .keyboardShortcut(.defaultAction)
+        }
+        .padding(20)
     }
 }
 
 struct SettingsView_Previews: PreviewProvider {
     static var previews: some View {
         SettingsView()
-            .environmentObject({ () -> GlobalSettingsViewModel in 
+            .environmentObject({ () -> GlobalSettingsViewModel in
                 let viewModel = GlobalSettingsViewModel()
                 viewModel.selection = 2
                 return viewModel
             }())
-            .frame(width: 500, height: 600)
+            .frame(width: 780, height: 620)
     }
 }

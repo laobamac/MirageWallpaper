@@ -160,7 +160,11 @@ class GlobalSettingsViewModel: ObservableObject {
     }
     
     @Published var selection = 0
-    
+
+    // Drives the settings panel that now floats over the main window as a sheet
+    // instead of living in its own top-level NSWindow.
+    @Published var isSettingsPresented = false
+
     @Published var isFirstLaunch = UserDefaults.standard.value(forKey: "IsFirstLaunch") as? Bool ?? true
     
     var didFinishLaunchingNotificationCancellable: Cancellable?

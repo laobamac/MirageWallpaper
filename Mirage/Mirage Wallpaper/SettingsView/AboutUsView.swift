@@ -8,14 +8,10 @@ import SwiftUI
 
 extension AppDelegate {
     @objc func showAboutUs() {
-        let window = NSWindow()
-        window.styleMask = [.closable, .titled]
-        window.isReleasedWhenClosed = false
-        window.title = ""
-        window.contentView = NSHostingView(rootView: AboutUsView()
-            .environment(\.locale, MirageLocalization.shared.locale))
-        window.center()
-        window.makeKeyAndOrderFront(nil)
+        // "About" now lives inside the unified settings panel that floats over
+        // the main window. Open the panel and select the About section.
+        globalSettingsViewModel.selection = 4
+        openSettingsWindow()
     }
 }
 
@@ -40,41 +36,44 @@ struct AboutUsView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 24) {
-            HStack(spacing: 20) {
-                if let icon = NSImage(named: "AppIcon") {
-                    Image(nsImage: icon)
-                        .resizable()
-                        .frame(width: 88, height: 88)
+                HStack(spacing: 20) {
+                    if let icon = NSImage(named: "AppIcon") {
+                        Image(nsImage: icon)
+                            .resizable()
+                            .frame(width: 88, height: 88)
+                    }
+                    Divider().frame(maxHeight: 90)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Mirage").bold().font(.largeTitle)
+                        Text("macOS 动态壁纸引擎").font(.footnote).foregroundStyle(.secondary)
+                        Text("场景 · 网页 · 视频").font(.caption).foregroundStyle(.tertiary)
+                    }
                 }
-                Divider().frame(maxHeight: 90)
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Mirage").bold().font(.largeTitle)
-                    Text("macOS 动态壁纸引擎").font(.footnote).foregroundStyle(.secondary)
-                    Text("场景 · 网页 · 视频").font(.caption).foregroundStyle(.tertiary)
+
+                VStack(spacing: 14) {
+                    Text("版本 \(version)（构建 \(build)）").foregroundStyle(.secondary)
+                    Text("提交 \(commit)").font(.caption.monospaced()).foregroundStyle(.tertiary)
+                    HStack(spacing: 4) {
+                        Text("作者")
+                        Text("王孝慈 (laobamac)").bold()
+                    }
+                    Link("github.com/laobamac/MirageWallpaper",
+                         destination: URL(string: "https://github.com/laobamac/MirageWallpaper")!)
+                        .font(.footnote)
                 }
-            }
-            VStack(spacing: 14) {
-                Text("版本 \(version)（构建 \(build)）").foregroundStyle(.secondary)
-                Text("提交 \(commit)").font(.caption.monospaced()).foregroundStyle(.tertiary)
-                HStack(spacing: 4) {
-                    Text("作者")
-                    Text("王孝慈 (laobamac)").bold()
-                }
-                Link("github.com/laobamac/MirageWallpaper",
-                     destination: URL(string: "https://github.com/laobamac/MirageWallpaper")!)
-                    .font(.footnote)
-            }
-            .font(.callout)
+                .font(.callout)
+
                 sponsorSection
 
                 ProjectFeedbackBanner(showsActions: false)
-                    .padding(.horizontal, 20)
             }
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 28)
             .padding(.vertical, 24)
         }
         .textSelection(.enabled)
         .environment(\.locale, localization.locale)
-        .frame(width: 760, height: 700)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var sponsorSection: some View {
@@ -89,8 +88,16 @@ struct AboutUsView: View {
             Text("Mirage 会继续免费开放开发。若它为你的桌面带来了价值，欢迎按自己的意愿赞助；每一份支持都会用于持续维护与兼容性改进。")
                 .font(.callout)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-            HStack(alignment: .top, spacing: 16) {
+            // A flexible grid keeps every donation option visible regardless of
+            // the container width instead of being clipped by a fixed-width HStack.
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 150), spacing: 16, alignment: .top)],
+                alignment: .leading,
+                spacing: 16
+            ) {
                 Link(destination: afdianURL) {
                     SponsorQRCode(resource: "afdian", fileExtension: "jpg", title: "爱发电", subtitle: "点击打开爱发电")
                 }
@@ -99,37 +106,42 @@ struct AboutUsView: View {
                 SponsorQRCode(resource: "wechat-pay", fileExtension: "png", title: "微信支付", subtitle: "使用微信扫一扫")
                 SponsorQRCode(resource: "alipay", fileExtension: "jpg", title: "支付宝", subtitle: "使用支付宝扫一扫")
 
-                VStack(alignment: .leading, spacing: 8) {
-                    Label("USDT", systemImage: "bitcoinsign.circle")
-                        .font(.headline)
-                    Text("海外赞助")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Text("接收 USDT")
-                        .font(.caption)
-                    Text(usdtAddress)
-                        .font(.caption.monospaced())
-                        .textSelection(.enabled)
-                        .lineLimit(3)
-                    Button {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(usdtAddress, forType: .string)
-                        copiedUSDTAddress = true
-                    } label: {
-                        Label(copiedUSDTAddress ? "地址已复制" : "复制地址", systemImage: copiedUSDTAddress ? "checkmark" : "doc.on.doc")
-                    }
-                    .buttonStyle(.bordered)
-                }
-                .frame(width: 160, alignment: .leading)
+                usdtCard
             }
         }
         .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.pink.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
         .overlay {
             RoundedRectangle(cornerRadius: 12)
                 .stroke(Color.pink.opacity(0.25))
         }
-        .padding(.horizontal, 28)
+    }
+
+    private var usdtCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("USDT", systemImage: "bitcoinsign.circle")
+                .font(.headline)
+            Text("海外赞助")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text("接收 USDT")
+                .font(.caption)
+            Text(usdtAddress)
+                .font(.caption.monospaced())
+                .textSelection(.enabled)
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(usdtAddress, forType: .string)
+                copiedUSDTAddress = true
+            } label: {
+                Label(copiedUSDTAddress ? "地址已复制" : "复制地址", systemImage: copiedUSDTAddress ? "checkmark" : "doc.on.doc")
+            }
+            .buttonStyle(.bordered)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

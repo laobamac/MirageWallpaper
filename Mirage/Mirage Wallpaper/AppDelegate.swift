@@ -8,10 +8,9 @@ import Cocoa
 import SwiftUI
 import AVKit
 
-class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate {
 
     var statusItem: NSStatusItem!
-    var settingsWindow: NSWindow!
 
     var mainWindowController: MainWindowController!
 
@@ -26,7 +25,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     static var shared = AppDelegate()
 
     func applicationWillFinishLaunching(_ notification: Notification) {
-        setSettingsWindow()
         setMainMenu()
         setStatusMenu()
         self.mainWindowController = MainWindowController()
@@ -82,7 +80,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if !self.mainWindowController.window.isVisible && !settingsWindow.isVisible {
+        if !self.mainWindowController.window.isVisible {
             openMainWindow()
         }
         return true
@@ -109,13 +107,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc func openSettingsWindow() {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
-        self.settingsWindow.center()
-        self.settingsWindow.makeKeyAndOrderFront(nil)
+        // The settings panel is a sheet that floats over the main window, so the
+        // host window must exist and be on screen before we present it.
+        openMainWindow()
+        globalSettingsViewModel.isSettingsPresented = true
     }
 
     @objc func openSteamAPIKeySettings() {
         globalSettingsViewModel.selection = 1
-        settingsWindow.toolbar?.selectedItemIdentifier = SettingsToolbarIdentifiers.general
         openSettingsWindow()
     }
 
@@ -133,33 +132,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         contentViewModel.isSteamSetupPresented = true
     }
 
-    func setSettingsWindow() {
-        self.settingsWindow = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 480, height: 300),
-            styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
-            backing: .buffered, defer: false)
-        self.settingsWindow.title = L("设置")
-        self.settingsWindow.isReleasedWhenClosed = false
-        self.settingsWindow.toolbarStyle = .preference
-        self.settingsWindow.delegate = self
-
-        let toolbar = NSToolbar(identifier: "SettingsToolbar")
-        toolbar.delegate = self
-        toolbar.selectedItemIdentifier = SettingsToolbarIdentifiers.performance
-        self.settingsWindow.toolbar = toolbar
-        self.settingsWindow.contentView = NSHostingView(rootView: SettingsView().environmentObject(self.globalSettingsViewModel))
-    }
-
     private func refreshLocalizedChrome() {
         setMainMenu()
         setStatusMenu()
-        settingsWindow?.title = L("设置")
-        refreshSettingsToolbarLocalization()
         mainWindowController?.refreshLocalizedTitle()
-    }
-
-    func windowWillClose(_ notification: Notification) {
-        globalSettingsViewModel.reset()
     }
 
     func setPlaceholderWallpaper(with wallpaper: WEWallpaper) {
@@ -177,12 +153,4 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             try? data.write(to: url, options: .atomic)
         }
     }
-}
-
-enum SettingsToolbarIdentifiers {
-    static let performance = NSToolbarItem.Identifier(rawValue: "performance")
-    static let general = NSToolbarItem.Identifier(rawValue: "general")
-    static let plugins = NSToolbarItem.Identifier(rawValue: "plugins")
-    static let screenSaver = NSToolbarItem.Identifier(rawValue: "screenSaver")
-    static let about = NSToolbarItem.Identifier(rawValue: "about")
 }

@@ -175,6 +175,14 @@ struct ContentView: View {
             SteamSetupView(viewModel: SteamSetupViewModel())
                 .frame(width: 560, height: 640)
         }
+        .sheet(isPresented: $globalSettingsViewModel.isSettingsPresented, onDismiss: {
+            // Match the previous window-close behavior: discard any in-flight
+            // edits that were not committed via "好".
+            globalSettingsViewModel.reset()
+        }) {
+            SettingsView()
+                .environmentObject(globalSettingsViewModel)
+        }
         .environment(\.locale, localization.locale)
     }
 }

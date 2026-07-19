@@ -48,10 +48,10 @@ class MainWindowController: NSWindowController, NSWindowDelegate {
     
     func windowWillClose(_ notification: Notification) {
         AppDelegate.shared.contentViewModel.isStaging = false
-        if !AppDelegate.shared.settingsWindow.isVisible {
-            DispatchQueue.main.async {
-                NSApp.setActivationPolicy(.accessory)
-            }
+        // The settings panel is now a sheet hosted by this window, so it can no
+        // longer be visible on its own once the main window closes.
+        DispatchQueue.main.async {
+            NSApp.setActivationPolicy(.accessory)
         }
     }
     
@@ -68,6 +68,10 @@ class MainWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func refreshLocalizedTitle() {
-        window?.title = L("Mirage %@", Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0")
+        // The brand name "Mirage" is never localized. Build the title from a
+        // literal so it stays "Mirage" in every language even if the string
+        // generator re-harvests the "Mirage" literal into the localization table.
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
+        window?.title = "Mirage \(version)"
     }
 }
