@@ -1,0 +1,184 @@
+---
+// Animated splash landing page for Mirage. Localized via `lang` prop.
+// All copy is grounded in the app's actual, documented capabilities.
+import '../scripts/reveal.ts';
+
+interface Props {
+  lang?: 'zh' | 'en';
+}
+const { lang = 'zh' } = Astro.props;
+
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const docsHref = lang === 'en' ? `${base}/en/guides/introduction` : `${base}/guides/introduction`;
+const github = 'https://github.com/laobamac/MirageWallpaper';
+const releases = `${github}/releases`;
+
+const t = {
+  zh: {
+    badge: 'macOS 原生 · Wallpaper Engine 兼容运行时',
+    title1: '让 macOS 桌面',
+    titleGrad: '真正动起来',
+    lede: '场景、网页、视频三类动态壁纸，一套原生体验。浏览、下载 Steam 创意工坊作品，多显示器覆盖，还能装成动态屏保。',
+    ctaPrimary: '阅读文档',
+    ctaGhost: '下载 Release',
+    meta: '开源 · GPL-3.0 · 支持 Intel 与 Apple Silicon',
+    canvas: 'Mirage',
+    featTitle: '一个应用，覆盖动态壁纸的全流程',
+    featSub: '从获取、管理到播放与系统集成，Mirage 用原生方式把每一步串起来。',
+    features: [
+      { icon: '🎬', t: '三类壁纸', d: '场景（scene）、网页（web）、视频（video）由三个独立渲染进程分别播放，互不影响。' },
+      { icon: '🗂️', t: '壁纸库', d: '浏览已安装作品，支持搜索、排序，以及按类型 / 来源 / 标签 / 内容分级筛选和收藏。' },
+      { icon: '🛠️', t: '导入与转换', d: '直接导入含 project.json 的目录，或把 mp4 / mov / m4v 视频转换成本地壁纸包。' },
+      { icon: '🌊', t: 'Steam 创意工坊', d: '浏览趋势、最新、热门与标签分类，识别预设，由 Mirage 管理 SteamCMD 下载。' },
+      { icon: '🖥️', t: '多显示器与菜单栏', d: '为不同显示器分别指派壁纸，菜单栏随手控制播放，支持登录启动。' },
+      { icon: '🌙', t: '动态屏保', d: '把视频、网页、场景壁纸装成独立屏保，保留当前预设与自定义属性。' },
+      { icon: '🎚️', t: '播放控制', d: '音量、速度、填充模式，以及作品自带的自定义属性，都能在侧栏实时调整。' },
+      { icon: '🔋', t: '智能省电', d: '全屏应用、后台音频、屏幕休眠或电池供电时，可选继续、静音、暂停或停止。' },
+    ],
+    archTitle: '多进程渲染架构',
+    archSub: '渲染器作为独立进程运行，通过标准输入接收逐行 JSON 控制消息，单个渲染器异常不会破坏主应用。',
+    arch: [
+      { tag: 'App', name: 'Mirage', tech: 'SwiftUI · AppKit', d: '界面、壁纸库、创意工坊、设置、进程管理与系统集成。' },
+      { tag: 'Scene', name: 'SceneWallpaper', tech: 'C++20 · Vulkan · MoltenVK', d: '材质、粒子、LUT、文字与用户属性。' },
+      { tag: 'Web', name: 'WebWallpaper', tech: 'Objective-C++ · WKWebView', d: 'HTML 壁纸、JavaScript、媒体与鼠标事件。' },
+      { tag: 'Video', name: 'VideoWallpaper', tech: 'Objective-C++ · AVFoundation', d: '视频循环、音量、速度与填充模式。' },
+    ],
+    stats: [
+      { b: '3', s: '类动态壁纸' },
+      { b: '4', s: '个独立渲染进程' },
+      { b: '3', s: '种界面语言' },
+      { b: 'GPL-3.0', s: '完全开源' },
+    ],
+    finalTitle: '准备好点亮你的桌面了吗？',
+    finalSub: '按文档从源码构建，或直接下载最新 Release 开始使用。',
+    footerNote: 'Mirage 与 Valve、Steam 或 Wallpaper Engine 没有关联，也未获其官方认可。',
+  },
+  en: {
+    badge: 'Native macOS · Wallpaper Engine-compatible runtime',
+    title1: 'Bring your macOS desktop',
+    titleGrad: 'to life',
+    lede: 'Scene, web, and video live wallpapers in one native experience. Browse and download Steam Workshop items, span multiple displays, and even install it as a screen saver.',
+    ctaPrimary: 'Read the docs',
+    ctaGhost: 'Download release',
+    meta: 'Open source · GPL-3.0 · Intel & Apple Silicon',
+    canvas: 'Mirage',
+    featTitle: 'One app for the whole live-wallpaper workflow',
+    featSub: 'From getting and managing wallpapers to playback and system integration, Mirage ties every step together, natively.',
+    features: [
+      { icon: '🎬', t: 'Three wallpaper types', d: 'Scene, web, and video wallpapers each play in their own renderer process, isolated from one another.' },
+      { icon: '🗂️', t: 'Wallpaper library', d: 'Browse installed items with search, sorting, favorites, and filters by type, source, tag, and content rating.' },
+      { icon: '🛠️', t: 'Import & convert', d: 'Import any folder with a project.json, or convert mp4 / mov / m4v videos into local wallpaper packages.' },
+      { icon: '🌊', t: 'Steam Workshop', d: 'Browse trending, newest, popular, and tagged items, detect presets, and let Mirage drive SteamCMD downloads.' },
+      { icon: '🖥️', t: 'Displays & menu bar', d: 'Assign wallpapers per display, control playback from the menu bar, and launch at login.' },
+      { icon: '🌙', t: 'Screen saver', d: 'Install video, web, and scene wallpapers as a standalone screen saver that keeps your preset and properties.' },
+      { icon: '🎚️', t: 'Playback control', d: 'Adjust volume, speed, fill mode, and a wallpaper’s own custom properties live from the sidebar.' },
+      { icon: '🔋', t: 'Battery-aware', d: 'When apps go fullscreen, audio plays, the display sleeps, or on battery, choose keep, mute, pause, or stop.' },
+    ],
+    archTitle: 'Multi-process rendering architecture',
+    archSub: 'Renderers run as separate processes and receive line-delimited JSON over stdin, so a single renderer crash never takes down the main app.',
+    arch: [
+      { tag: 'App', name: 'Mirage', tech: 'SwiftUI · AppKit', d: 'UI, library, Workshop, settings, process management, and system integration.' },
+      { tag: 'Scene', name: 'SceneWallpaper', tech: 'C++20 · Vulkan · MoltenVK', d: 'Materials, particles, LUTs, text, and user properties.' },
+      { tag: 'Web', name: 'WebWallpaper', tech: 'Objective-C++ · WKWebView', d: 'HTML wallpapers, JavaScript, media, and mouse events.' },
+      { tag: 'Video', name: 'VideoWallpaper', tech: 'Objective-C++ · AVFoundation', d: 'Video looping, volume, speed, and fill mode.' },
+    ],
+    stats: [
+      { b: '3', s: 'wallpaper types' },
+      { b: '4', s: 'renderer processes' },
+      { b: '3', s: 'interface languages' },
+      { b: 'GPL-3.0', s: 'fully open source' },
+    ],
+    finalTitle: 'Ready to light up your desktop?',
+    finalSub: 'Build from source with the docs, or grab the latest release to get started.',
+    footerNote: 'Mirage is not affiliated with or endorsed by Valve, Steam, or Wallpaper Engine.',
+  },
+}[lang];
+---
+
+<div class="mirage-landing">
+  <!-- HERO -->
+  <section class="hero">
+    <div class="hero-aurora" aria-hidden="true">
+      <span class="a1"></span>
+      <span class="a2"></span>
+      <span class="a3"></span>
+    </div>
+    <div class="wrap">
+      <span class="hero-badge"><span class="dot"></span>{t.badge}</span>
+      <h1>{t.title1} <span class="mirage-gradient-text">{t.titleGrad}</span></h1>
+      <p class="lede">{t.lede}</p>
+      <div class="cta-row">
+        <a class="btn btn-primary" href={docsHref}>{t.ctaPrimary} →</a>
+        <a class="btn btn-ghost" href={releases}>{t.ctaGhost}</a>
+      </div>
+      <p class="hero-meta">{t.meta}</p>
+
+      <div class="hero-window mirage-reveal">
+        <div class="titlebar"><i></i><i></i><i></i></div>
+        <div class="canvas"><span>{t.canvas}</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FEATURES -->
+  <section>
+    <div class="wrap">
+      <div class="section-head mirage-reveal">
+        <h2>{t.featTitle}</h2>
+        <p>{t.featSub}</p>
+      </div>
+      <div class="feature-grid">
+        {t.features.map((f, i) => (
+          <article class="feature-card mirage-reveal" data-delay={i * 60}>
+            <div class="feature-icon" aria-hidden="true">{f.icon}</div>
+            <h3>{f.t}</h3>
+            <p>{f.d}</p>
+          </article>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <!-- ARCHITECTURE -->
+  <section>
+    <div class="wrap">
+      <div class="section-head mirage-reveal">
+        <h2>{t.archTitle}</h2>
+        <p>{t.archSub}</p>
+      </div>
+      <div class="arch-grid">
+        {t.arch.map((a, i) => (
+          <article class="arch-node mirage-reveal" data-delay={i * 70}>
+            <span class="tag">{a.tag}</span>
+            <h4>{a.name}</h4>
+            <code>{a.tech}</code>
+            <p>{a.d}</p>
+          </article>
+        ))}
+      </div>
+      <div class="stat-row">
+        {t.stats.map((s) => (
+          <div class="stat mirage-reveal">
+            <b class="mirage-gradient-text">{s.b}</b>
+            <span>{s.s}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <!-- FINAL CTA -->
+  <section class="final-cta">
+    <div class="wrap mirage-reveal">
+      <h2 class="mirage-gradient-text">{t.finalTitle}</h2>
+      <p>{t.finalSub}</p>
+      <div class="cta-row">
+        <a class="btn btn-primary" href={docsHref}>{t.ctaPrimary} →</a>
+        <a class="btn btn-ghost" href={github}>GitHub</a>
+      </div>
+    </div>
+    <footer class="landing-footer">
+      <p>{t.footerNote}</p>
+    </footer>
+  </section>
+</div>

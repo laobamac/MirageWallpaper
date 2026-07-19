@@ -1,0 +1,21 @@
+{
+  "name": "mirage-website",
+  "type": "module",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Documentation site and landing page for Mirage, the native macOS live wallpaper manager.",
+  "packageManager": "pnpm@11.8.0",
+  "scripts": {
+    "dev": "astro dev",
+    "start": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "check": "astro check"
+  },
+  "dependencies": {
+    "@astrojs/sitemap": "^3.7.3",
+    "@astrojs/starlight": "^0.41.3",
+    "astro": "^7.1.1",
+    "sharp": "^0.34.1"
+  }
+}

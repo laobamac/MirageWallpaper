@@ -1,0 +1,11 @@
+allowBuilds:
+  esbuild: set this to true or false
+  sharp: set this to true or false
+onlyBuiltDependencies:
+  - esbuild
+  - sharp
+
+# The build scripts above are opt-in; Astro's build only needs the prebuilt
+# platform binaries (@img/sharp-*, @esbuild/*), so don't block `pnpm build`
+# on the pre-run dependency-state check.
+verifyDepsBeforeRun: false

@@ -1,0 +1,170 @@
+/* ==========================================================================
+   Mirage design system — brand tokens, dark/light themes, motion primitives.
+   Layered on top of Starlight's default theme.
+   ========================================================================== */
+
+:root {
+  /* Brand palette — an aurora/iridescent gradient echoing "mirage". */
+  --mirage-violet: #7c5cff;
+  --mirage-blue: #38bdf8;
+  --mirage-teal: #34e1c4;
+  --mirage-pink: #f472b6;
+
+  --mirage-gradient: linear-gradient(
+    120deg,
+    var(--mirage-violet) 0%,
+    var(--mirage-blue) 50%,
+    var(--mirage-teal) 100%
+  );
+  --mirage-gradient-soft: linear-gradient(
+    120deg,
+    rgba(124, 92, 255, 0.16) 0%,
+    rgba(56, 189, 248, 0.14) 50%,
+    rgba(52, 225, 196, 0.16) 100%
+  );
+
+  /* Map Starlight accent scale onto the Mirage violet/blue. */
+  --sl-color-accent-low: #1c1b46;
+  --sl-color-accent: #6d5cf0;
+  --sl-color-accent-high: #c3bffb;
+
+  --sl-font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+  --sl-font-mono: "SF Mono", ui-monospace, "JetBrains Mono", "Fira Code",
+    Menlo, Consolas, monospace;
+
+  /* Radii + surfaces (macOS-flavoured). */
+  --mirage-radius: 16px;
+  --mirage-radius-sm: 10px;
+  --mirage-shadow: 0 18px 50px -20px rgba(20, 20, 60, 0.45);
+  --mirage-ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Light theme overrides. */
+:root[data-theme='light'] {
+  --sl-color-accent-low: #dcd9fb;
+  --sl-color-accent: #5b47e0;
+  --sl-color-accent-high: #241d5c;
+  --mirage-shadow: 0 18px 50px -22px rgba(80, 90, 160, 0.35);
+}
+
+/* --------------------------------------------------------------------------
+   Global polish
+   -------------------------------------------------------------------------- */
+
+body {
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Gradient text utility used across landing + docs. */
+.mirage-gradient-text {
+  background: var(--mirage-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+
+/* Site title glow in the header. */
+.site-title {
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+/* Nicer focus ring for keyboard users. */
+:focus-visible {
+  outline: 2px solid var(--mirage-blue);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* --------------------------------------------------------------------------
+   Docs content niceties
+   -------------------------------------------------------------------------- */
+
+.sl-markdown-content :is(h2, h3) {
+  scroll-margin-top: 6rem;
+}
+
+.sl-markdown-content h2 {
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--sl-color-hairline-light);
+}
+
+.sl-markdown-content table {
+  border-radius: var(--mirage-radius-sm);
+  overflow: hidden;
+}
+
+.sl-markdown-content a {
+  text-underline-offset: 0.2em;
+}
+
+/* Callout accent for Starlight asides matches brand. */
+.starlight-aside--tip {
+  border-inline-start-color: var(--mirage-teal);
+}
+.starlight-aside--note {
+  border-inline-start-color: var(--mirage-blue);
+}
+
+/* --------------------------------------------------------------------------
+   Reusable animation primitives (opt-in via classes)
+   -------------------------------------------------------------------------- */
+
+@keyframes mirage-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes mirage-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+@keyframes mirage-shimmer {
+  0% {
+    background-position: 0% 50%;
+  }
+  100% {
+    background-position: 200% 50%;
+  }
+}
+
+.mirage-reveal {
+  opacity: 0;
+  transform: translateY(18px);
+}
+
+.mirage-reveal.is-visible {
+  animation: mirage-fade-up 0.7s var(--mirage-ease) forwards;
+}
+
+/* Respect user motion preferences everywhere. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .mirage-reveal {
+    opacity: 1;
+    transform: none;
+  }
+}

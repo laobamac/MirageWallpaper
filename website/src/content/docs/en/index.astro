@@ -1,0 +1,17 @@
+---
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+import Landing from '../../../components/Landing.astro';
+---
+
+<StarlightPage
+  frontmatter={{
+    title: 'Mirage',
+    description: 'A native live wallpaper manager for macOS and a Wallpaper Engine-compatible runtime.',
+    template: 'splash',
+    tableOfContents: false,
+    pagefind: false,
+    hero: { tagline: '', actions: [] },
+  }}
+>
+  <Landing lang="en" />
+</StarlightPage>

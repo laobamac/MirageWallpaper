@@ -1,0 +1,382 @@
+/* ==========================================================================
+   Landing page styles (splash layout). Scoped under .mirage-landing so they
+   never leak into the docs chrome.
+   ========================================================================== */
+
+.mirage-landing {
+  --content-max: 1120px;
+  color: var(--sl-color-white);
+}
+
+.mirage-landing section {
+  position: relative;
+  padding: clamp(3.5rem, 8vw, 7rem) 1.5rem;
+}
+
+.mirage-landing .wrap {
+  max-width: var(--content-max);
+  margin-inline: auto;
+}
+
+/* --------------------------------------------------------------------------
+   Hero
+   -------------------------------------------------------------------------- */
+
+.hero {
+  overflow: hidden;
+  text-align: center;
+  padding-top: clamp(4rem, 10vw, 8rem);
+}
+
+/* Animated aurora backdrop. */
+.hero-aurora {
+  position: absolute;
+  inset: -30% -10% auto -10%;
+  height: 140%;
+  z-index: 0;
+  filter: blur(60px);
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.hero-aurora span {
+  position: absolute;
+  border-radius: 50%;
+  mix-blend-mode: screen;
+  animation: mirage-float 9s ease-in-out infinite;
+}
+.hero-aurora .a1 {
+  width: 46vw;
+  height: 46vw;
+  left: 4%;
+  top: 8%;
+  background: radial-gradient(circle, var(--mirage-violet), transparent 62%);
+}
+.hero-aurora .a2 {
+  width: 40vw;
+  height: 40vw;
+  right: 6%;
+  top: 0%;
+  background: radial-gradient(circle, var(--mirage-blue), transparent 62%);
+  animation-delay: -3s;
+}
+.hero-aurora .a3 {
+  width: 38vw;
+  height: 38vw;
+  left: 30%;
+  top: 30%;
+  background: radial-gradient(circle, var(--mirage-teal), transparent 62%);
+  animation-delay: -6s;
+}
+
+.hero .wrap {
+  position: relative;
+  z-index: 1;
+}
+
+.hero-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.9rem;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  border: 1px solid var(--sl-color-gray-5);
+  background: var(--sl-color-black);
+  color: var(--sl-color-gray-2);
+  margin-bottom: 1.5rem;
+}
+.hero-badge .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--mirage-teal);
+  box-shadow: 0 0 12px var(--mirage-teal);
+}
+
+.hero h1 {
+  font-size: clamp(2.6rem, 7vw, 4.75rem);
+  line-height: 1.03;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  margin: 0 0 1.1rem;
+}
+
+.hero .lede {
+  font-size: clamp(1.05rem, 2.3vw, 1.35rem);
+  color: var(--sl-color-gray-2);
+  max-width: 40ch;
+  margin: 0 auto 2rem;
+  line-height: 1.6;
+}
+
+.cta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.85rem;
+  justify-content: center;
+  margin-bottom: 1.4rem;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.8rem 1.5rem;
+  border-radius: 999px;
+  font-weight: 650;
+  font-size: 1rem;
+  text-decoration: none;
+  transition: transform 0.25s var(--mirage-ease), box-shadow 0.25s var(--mirage-ease),
+    background 0.25s var(--mirage-ease);
+}
+.btn-primary {
+  color: #fff;
+  background: var(--mirage-gradient);
+  background-size: 200% auto;
+  box-shadow: 0 12px 30px -12px rgba(124, 92, 255, 0.7);
+}
+.btn-primary:hover {
+  transform: translateY(-2px);
+  background-position: right center;
+  box-shadow: 0 18px 40px -12px rgba(56, 189, 248, 0.7);
+}
+.btn-ghost {
+  color: var(--sl-color-white);
+  background: color-mix(in srgb, var(--sl-color-gray-6) 55%, transparent);
+  border: 1px solid var(--sl-color-gray-5);
+  backdrop-filter: blur(8px);
+}
+.btn-ghost:hover {
+  transform: translateY(-2px);
+  border-color: var(--mirage-blue);
+}
+
+.hero-meta {
+  font-size: 0.85rem;
+  color: var(--sl-color-gray-3);
+}
+
+/* Faux app window under the hero. */
+.hero-window {
+  margin: 3.5rem auto 0;
+  max-width: 860px;
+  border-radius: 18px;
+  border: 1px solid var(--sl-color-gray-5);
+  background: var(--sl-color-black);
+  box-shadow: var(--mirage-shadow);
+  overflow: hidden;
+}
+.hero-window .titlebar {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.85rem 1rem;
+  border-bottom: 1px solid var(--sl-color-gray-6);
+}
+.hero-window .titlebar i {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.hero-window .titlebar i:nth-child(1) { background: #ff5f57; }
+.hero-window .titlebar i:nth-child(2) { background: #febc2e; }
+.hero-window .titlebar i:nth-child(3) { background: #28c840; }
+.hero-window .canvas {
+  aspect-ratio: 16 / 9;
+  background: var(--mirage-gradient);
+  background-size: 300% 300%;
+  animation: mirage-shimmer 12s linear infinite alternate;
+  display: grid;
+  place-items: center;
+}
+.hero-window .canvas span {
+  font-size: clamp(1.5rem, 4vw, 2.6rem);
+  font-weight: 800;
+  color: rgba(255, 255, 255, 0.92);
+  letter-spacing: 0.04em;
+  text-shadow: 0 2px 30px rgba(0, 0, 0, 0.35);
+}
+
+/* --------------------------------------------------------------------------
+   Feature grid
+   -------------------------------------------------------------------------- */
+
+.section-head {
+  text-align: center;
+  max-width: 52ch;
+  margin: 0 auto 3rem;
+}
+.section-head h2 {
+  font-size: clamp(1.8rem, 4vw, 2.6rem);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin: 0 0 0.75rem;
+  border: 0;
+}
+.section-head p {
+  color: var(--sl-color-gray-2);
+  font-size: 1.05rem;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1.1rem;
+}
+
+.feature-card {
+  position: relative;
+  padding: 1.6rem;
+  border-radius: var(--mirage-radius);
+  border: 1px solid var(--sl-color-gray-5);
+  background: color-mix(in srgb, var(--sl-color-gray-6) 40%, transparent);
+  transition: transform 0.3s var(--mirage-ease), border-color 0.3s var(--mirage-ease);
+  overflow: hidden;
+}
+.feature-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--mirage-gradient-soft);
+  opacity: 0;
+  transition: opacity 0.3s var(--mirage-ease);
+}
+.feature-card:hover {
+  transform: translateY(-4px);
+  border-color: color-mix(in srgb, var(--mirage-blue) 55%, transparent);
+}
+.feature-card:hover::before {
+  opacity: 1;
+}
+.feature-card > * {
+  position: relative;
+  z-index: 1;
+}
+.feature-card .ico {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  background: var(--mirage-gradient);
+  margin-bottom: 1rem;
+  font-size: 1.4rem;
+}
+.feature-card h3 {
+  margin: 0 0 0.4rem;
+  font-size: 1.15rem;
+  font-weight: 700;
+}
+.feature-card p {
+  margin: 0;
+  color: var(--sl-color-gray-2);
+  font-size: 0.95rem;
+  line-height: 1.55;
+}
+
+/* --------------------------------------------------------------------------
+   Architecture strip
+   -------------------------------------------------------------------------- */
+
+.arch {
+  background: var(--sl-color-black);
+  border-top: 1px solid var(--sl-color-gray-6);
+  border-bottom: 1px solid var(--sl-color-gray-6);
+}
+.arch-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+  margin-top: 2.5rem;
+}
+.arch-node {
+  padding: 1.3rem;
+  border-radius: var(--mirage-radius);
+  border: 1px solid var(--sl-color-gray-5);
+  background: color-mix(in srgb, var(--sl-color-gray-6) 30%, transparent);
+}
+.arch-node .tag {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--mirage-blue);
+}
+.arch-node h4 {
+  margin: 0.3rem 0 0.5rem;
+  font-size: 1.1rem;
+}
+.arch-node p {
+  margin: 0;
+  font-size: 0.88rem;
+  color: var(--sl-color-gray-2);
+  line-height: 1.5;
+}
+.arch-node code {
+  font-size: 0.82em;
+}
+
+/* --------------------------------------------------------------------------
+   Stats + final CTA
+   -------------------------------------------------------------------------- */
+
+.stat-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 1rem;
+  margin-top: 2.5rem;
+}
+.stat {
+  text-align: center;
+  padding: 1.4rem;
+  border-radius: var(--mirage-radius);
+  border: 1px solid var(--sl-color-gray-5);
+}
+.stat b {
+  display: block;
+  font-size: clamp(1.8rem, 4vw, 2.6rem);
+  font-weight: 800;
+  line-height: 1;
+}
+.stat span {
+  color: var(--sl-color-gray-2);
+  font-size: 0.9rem;
+}
+
+.final-cta {
+  text-align: center;
+}
+.final-cta .panel {
+  border-radius: 24px;
+  padding: clamp(2.5rem, 6vw, 4.5rem) 1.5rem;
+  background: var(--mirage-gradient-soft);
+  border: 1px solid var(--sl-color-gray-5);
+}
+.final-cta h2 {
+  font-size: clamp(1.8rem, 4vw, 2.8rem);
+  font-weight: 800;
+  border: 0;
+  margin: 0 0 0.75rem;
+}
+.final-cta p {
+  color: var(--sl-color-gray-2);
+  max-width: 46ch;
+  margin: 0 auto 1.8rem;
+  line-height: 1.6;
+}
+
+.landing-footer {
+  text-align: center;
+  padding: 2.5rem 1.5rem 3.5rem;
+  color: var(--sl-color-gray-3);
+  font-size: 0.85rem;
+}
+.landing-footer a {
+  color: var(--sl-color-gray-2);
+}
+
+/* Reveal-on-scroll handled by shared .mirage-reveal primitive. */
