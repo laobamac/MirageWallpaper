@@ -1,8 +1,27 @@
-<?xml version="1.0" standalone="yes"?><!-- sparkle-sign-warning:
+<?xml version="1.0" standalone="yes"?>
+<!-- sparkle-sign-warning:
 IMPORTANT: This file was signed by Sparkle. Any modifications to this file requires re-signing this file with generate_appcast or sign_update! The signed signature will be embedded at the end of this file.
---><rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+-->
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
     <channel>
         <title>Mirage</title>
+        <item>
+            <title>1.0.0</title>
+            <pubDate>Sun, 19 Jul 2026 04:22:15 +0000</pubDate>
+            <link>https://github.com/laobamac/MirageWallpaper</link>
+            <sparkle:channel>beta</sparkle:channel>
+            <sparkle:version>148</sparkle:version>
+            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <description sparkle:format="plain-text"><![CDATA[Commit: 3df9e9f7e2446d0bf69ac1154e50345f2810cab3
+Channel: beta
+
+feat(app): add English and Traditional Chinese localization
+
+
+]]></description>
+            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-148-3df9e9f7e244-macOS-x86_64.zip" length="196820629" type="application/octet-stream" sparkle:edSignature="N3am6RwKm7YZK8VF6FngdbDqXq5CM+9WnFiehIPmuPhU5j4DzowmIJqwADq8Z49SLUk/L5UVmZIRKuRAiBP/Cg=="/>
+        </item>
         <item>
             <title>1.0.0</title>
             <pubDate>Sun, 19 Jul 2026 03:46:21 +0000</pubDate>
@@ -18,10 +37,11 @@ feat(app): add signed automatic update channels
 
 
 ]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-147-a6b6cbe72b6a-macOS-x86_64.zip" length="196623602" type="application/octet-stream" sparkle:edSignature="zj98KJ2rUtXou/eqRt/4Ufx4BmmHB+1idP3Z/slvoi0GipKQq3pV+l9UrpiNI516EQkFc8aKcYpIkHJQOUUjAQ=="></enclosure>
+            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-147-a6b6cbe72b6a-macOS-x86_64.zip" length="196623602" type="application/octet-stream" sparkle:edSignature="zj98KJ2rUtXou/eqRt/4Ufx4BmmHB+1idP3Z/slvoi0GipKQq3pV+l9UrpiNI516EQkFc8aKcYpIkHJQOUUjAQ=="/>
         </item>
     </channel>
-</rss><!-- sparkle-signatures:
-edSignature: zwoMOJkAabRSwLZsjLVSeM6jrLRPHOII4pXqYcWdCONitjZQeTScs7KhibnN2Zq05vTXRPuMOmd8yaiY6G48AA==
-length: 1391
+</rss>
+<!-- sparkle-signatures:
+edSignature: lBpQvUJOyS8RTyw4vTglzQcnItPIJ5iZEgYZgij/2pKEbpnLSCtwA06YQqMuoARyzmbPuoBQfK66FRwMkGIuDQ==
+length: 2348
 -->
