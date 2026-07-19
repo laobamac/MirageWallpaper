@@ -3,6 +3,14 @@
    never leak into the docs chrome.
    ========================================================================== */
 
+/* Starlight's splash template renders its own <h1 data-page-title> from the
+   page's `title`. Our landing provides a custom hero, so hide that duplicate
+   title block on landing pages only (scoped via :has). The title still drives
+   <title> / SEO / a11y — it's only hidden visually here. */
+.sl-container:has(.mirage-landing) > .hero {
+  display: none;
+}
+
 .mirage-landing {
   --content-max: 1140px;
   color: var(--sl-color-white);
