@@ -16,10 +16,12 @@ QToolButton* tabButton(const QIcon& icon, const QString& text, int id, QButtonGr
     button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     button->setCheckable(true);
     button->setAutoRaise(false);
-    button->setMinimumHeight(34);
+    button->setProperty("tabButton", true);
+    button->setMinimumHeight(32);
     button->setStyleSheet(QStringLiteral(
-        "QToolButton { padding: 4px 8px; border: 2px solid palette(highlight); }"
-        "QToolButton:checked { background: palette(highlight); color: palette(highlighted-text); }"));
+        "QToolButton { color: #f1efec; background: transparent; padding: 3px 8px;"
+        " border: 2px solid #0a84ff; border-radius: 0; font-size: 16px; font-weight: 600; }"
+        "QToolButton:hover, QToolButton:checked { background: #0a84ff; color: white; }"));
     group->addButton(button, id);
     return button;
 }
@@ -30,13 +32,16 @@ QToolButton* plainButton(const QIcon& icon, const QString& text, QWidget* parent
     button->setIcon(icon);
     button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     button->setAutoRaise(true);
+    button->setProperty("flatButton", true);
+    button->setMinimumHeight(32);
     return button;
 }
 
 QFrame* divider(QWidget* parent) {
     auto* frame = new QFrame(parent);
     frame->setFrameShape(QFrame::VLine);
-    frame->setFrameShadow(QFrame::Sunken);
+    frame->setFixedHeight(24);
+    frame->setStyleSheet(QStringLiteral("color: #625d56;"));
     return frame;
 }
 
@@ -73,7 +78,7 @@ TopTabBarWidget::TopTabBarWidget(QWidget* parent)
 
     auto* accent = new QFrame(this);
     accent->setFixedHeight(4);
-    accent->setStyleSheet(QStringLiteral("background: palette(highlight);"));
+    accent->setStyleSheet(QStringLiteral("background: #0a84ff; border: 0;"));
 
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);

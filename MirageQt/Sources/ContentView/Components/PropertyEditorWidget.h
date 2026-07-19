@@ -2,9 +2,9 @@
 
 #include "Services/WEProject.h"
 
-#include <QFormLayout>
-#include <QHash>
 #include <QWidget>
+
+class QVBoxLayout;
 
 namespace Mirage {
 
@@ -21,10 +21,10 @@ signals:
     void propertyChanged(const QString& key, const Mirage::ProjectProperty& property);
 
 private:
-    QWidget* editorFor(const QString& key, ProjectProperty property);
+    QWidget* widgetFor(const QString& key, ProjectProperty property);
     void clear();
 
-    QFormLayout* m_form = nullptr;
+    QVBoxLayout* m_layout = nullptr;
     Wallpaper m_wallpaper;
 };
 

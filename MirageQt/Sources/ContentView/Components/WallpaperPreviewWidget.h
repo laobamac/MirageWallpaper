@@ -10,6 +10,8 @@
 #include <QSlider>
 #include <QWidget>
 
+class QComboBox;
+
 namespace Mirage {
 
 class WallpaperPreviewWidget : public QWidget {
@@ -32,7 +34,7 @@ signals:
     void closeRequested();
 
 private:
-    QLabel* sectionHeader(const QString& title);
+    QWidget* sectionHeader(const QString& title);
     void updateTags();
 
     FavoritesManager* m_favorites = nullptr;
@@ -45,6 +47,11 @@ private:
     QWidget* m_tags = nullptr;
     QSlider* m_volume = nullptr;
     QSlider* m_speed = nullptr;
+    QLabel* m_volumeValue = nullptr;
+    QLabel* m_speedValue = nullptr;
+    QWidget* m_speedRow = nullptr;
+    QWidget* m_fillRow = nullptr;
+    QComboBox* m_fill = nullptr;
     PropertyEditorWidget* m_properties = nullptr;
     QPushButton* m_favorite = nullptr;
 };

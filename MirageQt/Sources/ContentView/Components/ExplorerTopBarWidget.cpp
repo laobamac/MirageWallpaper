@@ -12,13 +12,20 @@ ExplorerTopBarWidget::ExplorerTopBarWidget(QWidget* parent)
     m_search->setFixedWidth(160);
 
     auto* filter = new QPushButton(QIcon::fromTheme("view-filter"), QStringLiteral("筛选"), this);
+    filter->setCheckable(true);
+    filter->setChecked(true);
+    filter->setProperty("accent", true);
     auto* refresh = new QToolButton(this);
     refresh->setIcon(QIcon::fromTheme("view-refresh"));
     refresh->setToolTip(QStringLiteral("刷新"));
+    refresh->setProperty("flatButton", true);
+    refresh->setFixedWidth(34);
 
     m_direction = new QToolButton(this);
     m_direction->setIcon(QIcon::fromTheme("go-up"));
     m_direction->setToolTip(QStringLiteral("切换排序方向"));
+    m_direction->setProperty("flatButton", true);
+    m_direction->setFixedWidth(34);
 
     m_sort = new QComboBox(this);
     m_sort->addItems({QStringLiteral("名称"), QStringLiteral("评分"), QStringLiteral("文件大小")});
@@ -26,6 +33,7 @@ ExplorerTopBarWidget::ExplorerTopBarWidget(QWidget* parent)
 
     auto* layout = new QHBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(8);
     layout->addWidget(m_search);
     layout->addWidget(filter);
     layout->addWidget(refresh);

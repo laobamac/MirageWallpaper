@@ -1,12 +1,10 @@
 #pragma once
 
+#include "ContentView/Components/FilterResultsWidget.h"
 #include "Services/FavoritesManager.h"
 #include "Services/WallpaperLibrary.h"
 
-#include <QComboBox>
-#include <QLineEdit>
 #include <QListWidget>
-#include <QPushButton>
 #include <QWidget>
 
 namespace Mirage {
@@ -24,8 +22,9 @@ public:
 public slots:
     void reload();
     void setSearchText(const QString& text);
-    void setTypeFilterText(const QString& text);
     void setSortText(const QString& text);
+    void setSortDescending(bool descending);
+    void setFilterState(const Mirage::WallpaperFilterState& state);
 
 signals:
     void wallpaperSelected(const Mirage::Wallpaper& wallpaper);
@@ -36,22 +35,15 @@ signals:
 private:
     void rebuildList();
     bool matchesFilter(const Wallpaper& wallpaper) const;
-    QString itemText(const Wallpaper& wallpaper) const;
 
     WallpaperLibrary* m_library = nullptr;
     FavoritesManager* m_favorites = nullptr;
     QVector<Wallpaper> m_wallpapers;
-
-    QLineEdit* m_search = nullptr;
-    QComboBox* m_typeFilter = nullptr;
-    QComboBox* m_sort = nullptr;
     QListWidget* m_list = nullptr;
-    QPushButton* m_apply = nullptr;
-    QPushButton* m_applyAll = nullptr;
-    QPushButton* m_favorite = nullptr;
-    QString m_externalSearch;
-    QString m_externalTypeFilter = QStringLiteral("全部");
-    QString m_externalSort = QStringLiteral("名称");
+    QString m_searchText;
+    QString m_sortText = QStringLiteral("名称");
+    bool m_sortDescending = true;
+    WallpaperFilterState m_filter;
 };
 
 } // namespace Mirage

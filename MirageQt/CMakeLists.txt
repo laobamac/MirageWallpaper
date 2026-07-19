@@ -56,6 +56,8 @@ target_link_libraries(MirageQtCore PUBLIC
 
 qt_add_executable(MirageQt
     Sources/App/main.cpp
+    Sources/App/MirageStyle.cpp
+    Sources/App/MirageStyle.h
     Sources/ContentView/ContentView.cpp
     Sources/ContentView/ContentView.h
     Sources/ContentView/FirstLaunchView.cpp
@@ -72,6 +74,8 @@ qt_add_executable(MirageQt
     Sources/ContentView/Components/FilterResultsWidget.h
     Sources/ContentView/Components/PropertyEditorWidget.cpp
     Sources/ContentView/Components/PropertyEditorWidget.h
+    Sources/ContentView/Components/ProjectFeedbackBannerWidget.cpp
+    Sources/ContentView/Components/ProjectFeedbackBannerWidget.h
     Sources/ContentView/Components/TopTabBarWidget.cpp
     Sources/ContentView/Components/TopTabBarWidget.h
     Sources/ContentView/Components/WallpaperListWidget.cpp
@@ -87,7 +91,8 @@ qt_add_executable(MirageQt
 
 target_link_libraries(MirageQt PRIVATE
     MirageQtCore
-    Qt6::Widgets)
+    Qt6::Widgets
+    Qt6::WebEngineWidgets)
 
 qt_add_executable(WebWallpaperQt
     Sources/Renderers/Common/ControlReader.cpp

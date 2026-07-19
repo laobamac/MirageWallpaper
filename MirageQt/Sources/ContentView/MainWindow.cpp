@@ -2,6 +2,7 @@
 
 #include "ContentView/FirstLaunchView.h"
 #include "ContentView/ImportPanels.h"
+#include "ContentView/Components/ProjectFeedbackBannerWidget.h"
 #include "SettingsView/SettingsWidget.h"
 #include "Services/Paths.h"
 #include "SteamSetup/SteamSetupDialog.h"
@@ -26,9 +27,10 @@ namespace Mirage {
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent) {
-    setWindowTitle(QStringLiteral("MirageQt 0.1.0"));
-    resize(1100, 760);
+    setWindowTitle(QStringLiteral("Mirage 1.0.0"));
     setMinimumSize(1000, 640);
+    const QSize available = QGuiApplication::primaryScreen()->availableGeometry().size();
+    resize(qMin(1616, available.width() - 80), qMin(860, available.height() - 80));
 
     Paths::ensureBaseDirectories();
 
@@ -52,19 +54,28 @@ MainWindow::MainWindow(QWidget* parent)
     m_contentStack->addWidget(m_workshop);
 
     auto* left = new QWidget(this);
+    left->setObjectName(QStringLiteral("mainContentPane"));
     auto* leftLayout = new QVBoxLayout(left);
-    leftLayout->setContentsMargins(12, 12, 12, 12);
-    leftLayout->setSpacing(8);
+    leftLayout->setContentsMargins(16, 16, 16, 16);
+    leftLayout->setSpacing(6);
     leftLayout->addWidget(m_topTabs);
+    leftLayout->addWidget(new ProjectFeedbackBannerWidget(left));
     leftLayout->addWidget(m_contentStack, 1);
 
     auto* splitter = new QSplitter(Qt::Horizontal, this);
+    splitter->setObjectName(QStringLiteral("mainSplitter"));
+    splitter->setHandleWidth(1);
+    splitter->setChildrenCollapsible(false);
+    m_rightStack->setObjectName(QStringLiteral("previewRail"));
+    m_rightStack->setMinimumWidth(320);
+    m_rightStack->setMaximumWidth(340);
     splitter->addWidget(left);
     splitter->addWidget(m_rightStack);
     splitter->setStretchFactor(0, 1);
     splitter->setStretchFactor(1, 0);
-    splitter->setSizes({780, 320});
+    splitter->setSizes({1296, 320});
     setCentralWidget(splitter);
+    statusBar()->hide();
 
     connect(m_topTabs, &TopTabBarWidget::tabChanged, this, [this](int index) {
         m_contentStack->setCurrentIndex(index);
@@ -184,26 +195,32 @@ QWidget* MainWindow::buildInstalledPage() {
 
     auto* middle = new QHBoxLayout;
     middle->setContentsMargins(0, 0, 0, 0);
+    middle->setSpacing(10);
     middle->addWidget(m_filter);
     middle->addWidget(m_wallpaperList, 1);
 
     auto* layout = new QVBoxLayout(page);
     layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(4);
     layout->addWidget(top);
     layout->addLayout(middle, 1);
     layout->addWidget(bottom);
 
-    m_filter->hide();
     connect(top, &ExplorerTopBarWidget::filterToggled, m_filter, [this] { m_filter->setVisible(!m_filter->isVisible()); });
     connect(top, &ExplorerTopBarWidget::refreshRequested, m_wallpaperList, &WallpaperListWidget::reload);
     connect(top, &ExplorerTopBarWidget::searchChanged, m_wallpaperList, &WallpaperListWidget::setSearchText);
     connect(top, &ExplorerTopBarWidget::sortChanged, this, [this, top] {
         m_wallpaperList->setSortText(top->sortText());
+        m_wallpaperList->setSortDescending(top->descending());
+    });
+    connect(m_filter, &FilterResultsWidget::filtersChanged, this, [this] {
+        m_wallpaperList->setFilterState(m_filter->filterState());
     });
     connect(bottom, &ExplorerBottomBarWidget::importRequested, this, &MainWindow::importWallpaper);
     connect(m_wallpaperList, &WallpaperListWidget::wallpaperSelected, m_preview, &WallpaperPreviewWidget::setWallpaper);
     connect(m_wallpaperList, &WallpaperListWidget::applyRequested, this, &MainWindow::applyWallpaper);
     connect(m_wallpaperList, &WallpaperListWidget::importRequested, this, &MainWindow::importWallpaper);
+    m_wallpaperList->setFilterState(m_filter->filterState());
     return page;
 }
 
