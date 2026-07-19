@@ -28,5 +28,5 @@ Trust is recorded **per wallpaper**, applying only to the specific web wallpaper
 
 ## Related
 
-- For the differences between wallpaper types, see [Wallpaper types](/MirageWallpaper/en/formats/wallpaper-types/).
-- Web wallpapers are rendered by a separate WebWallpaper process, running in isolation. See [Render architecture](/MirageWallpaper/en/advanced/architecture/).
+- For the differences between wallpaper types, see [Wallpaper types](/en/formats/wallpaper-types/).
+- Web wallpapers are rendered by a separate WebWallpaper process, running in isolation. See [Render architecture](/en/advanced/architecture/).

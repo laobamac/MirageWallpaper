@@ -25,11 +25,11 @@ A web wallpaper is essentially an HTML page. It can run JavaScript, play media, 
 - **Tech stack**: Objective-C++, WKWebView
 - **Capabilities**: HTML / CSS / JS, media playback, mouse interaction, user properties
 
-Because web wallpapers execute scripts, Mirage shows a security confirmation when you apply a web wallpaper from an unknown source. See [Web Wallpaper Safety](/MirageWallpaper/en/settings/web-safety/) for details.
+Because web wallpapers execute scripts, Mirage shows a security confirmation when you apply a web wallpaper from an unknown source. See [Web Wallpaper Safety](/en/settings/web-safety/) for details.
 
 ## Video
 
-A video wallpaper loops a video clip. It is the lightest type and offers the best compatibility. You can [turn a video directly into a video wallpaper](/MirageWallpaper/en/formats/video-convert/).
+A video wallpaper loops a video clip. It is the lightest type and offers the best compatibility. You can [turn a video directly into a video wallpaper](/en/formats/video-convert/).
 
 - **Renderer**: VideoWallpaper
 - **Tech stack**: Objective-C++, AVFoundation
@@ -37,8 +37,8 @@ A video wallpaper loops a video clip. It is the lightest type and offers the bes
 
 ## Other Types
 
-`project.json` may also declare types such as `application`. Mirage offers "Application" and "Preset" categories in its filters, but it will not launch a renderer process for unrecognized or unsupported types. For Workshop presets, see [Presets](/MirageWallpaper/en/workshop/presets/).
+`project.json` may also declare types such as `application`. Mirage offers "Application" and "Preset" categories in its filters, but it will not launch a renderer process for unrecognized or unsupported types. For Workshop presets, see [Presets](/en/workshop/presets/).
 
 ## Types and the Rendering Architecture
 
-Each type maps to a separate renderer process that runs in isolation from the others. To learn how the processes communicate and how crashes are isolated, read [Rendering Architecture](/MirageWallpaper/en/advanced/architecture/).
+Each type maps to a separate renderer process that runs in isolation from the others. To learn how the processes communicate and how crashes are isolated, read [Rendering Architecture](/en/advanced/architecture/).

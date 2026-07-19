@@ -36,7 +36,7 @@ Update authenticity is verified by a built-in Ed25519 public key. Each architect
 - **Global volume**: the master control for all wallpaper volume (0–100%). The final volume combines an individual wallpaper's volume with the global volume.
 - **Global mute**: mutes all wallpapers in one click.
 
-Individual wallpaper volume and speed are adjusted in [Playback controls](/MirageWallpaper/en/wallpapers/playback/).
+Individual wallpaper volume and speed are adjusted in [Playback controls](/en/wallpapers/playback/).
 
 ## Wallpaper library directories
 
@@ -46,7 +46,7 @@ This lists all the sources Mirage scans for wallpapers. Each entry shows a title
 - **Choose Directory…**: sets a custom location for the "Steam Workshop directory" or "Imported wallpaper directory".
 - **Restore Default**: returns a custom directory to its default location.
 
-The "Mirage download directory" is labeled "Current download location". For a full explanation of each directory, see [Data directories](/MirageWallpaper/en/advanced/data-directories/).
+The "Mirage download directory" is labeled "Current download location". For a full explanation of each directory, see [Data directories](/en/advanced/data-directories/).
 
 There is also:
 
@@ -65,7 +65,7 @@ Switching to the mirror shows a warning: the mirror is only accessible to users 
 
 ### Steam Web API Key
 
-Enter your own 32-character hexadecimal API key. If it's unset or in an invalid format, a reminder is shown and Mirage falls back to a shared built-in key. Once a valid key is set, "Dedicated API key set" is shown. The key is only used for local requests to browse Workshop data, so don't share it. See [Steam Web API Key](/MirageWallpaper/en/workshop/api-key/) for details.
+Enter your own 32-character hexadecimal API key. If it's unset or in an invalid format, a reminder is shown and Mirage falls back to a shared built-in key. Once a valid key is set, "Dedicated API key set" is shown. The key is only used for local requests to browse Workshop data, so don't share it. See [Steam Web API Key](/en/workshop/api-key/) for details.
 
 ## macOS and Advanced
 

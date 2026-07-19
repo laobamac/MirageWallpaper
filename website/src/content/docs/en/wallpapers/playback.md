@@ -7,7 +7,7 @@ Once you select a wallpaper, you can adjust its playback parameters in real time
 
 ## Volume
 
-Adjusts the playback volume of the current wallpaper. A volume of 0 is equivalent to muting. The final output is also affected by the [master volume in Settings](/MirageWallpaper/en/settings/general/) and global mute.
+Adjusts the playback volume of the current wallpaper. A volume of 0 is equivalent to muting. The final output is also affected by the [master volume in Settings](/en/settings/general/) and global mute.
 
 ## Speed
 
@@ -27,7 +27,7 @@ Controls how the wallpaper fits the screen:
 
 Many Wallpaper Engine works define **user properties** (`general.properties`) in `project.json`, such as colors, toggles, sliders, dropdown options, and text content. Mirage reads these properties and generates the matching controls in the sidebar. Your changes are saved as `propertyOverrides` and pushed to the renderer process in real time.
 
-The supported property types depend on the work's definition, with common ones being boolean toggles, slider values, colors, dropdown combo boxes, and text inputs. The exact meaning of each property is decided by the author. See [The project.json structure](/MirageWallpaper/en/formats/project-json/) for details.
+The supported property types depend on the work's definition, with common ones being boolean toggles, slider values, colors, dropdown combo boxes, and text inputs. The exact meaning of each property is decided by the author. See [The project.json structure](/en/formats/project-json/) for details.
 
 ## Saving and restoring settings
 
@@ -35,4 +35,4 @@ Each wallpaper's runtime state (volume, speed, fill mode, property overrides) is
 
 ## Relationship to global playback rules
 
-The parameters above apply to a **single wallpaper**. On top of that, there's a layer of **global playback rules** that automatically take over playback behavior (continue / mute / pause / stop) in situations like a full-screen app being active, another app playing audio, the screen sleeping, or running on battery power. This is configured in [Performance & playback rules](/MirageWallpaper/en/settings/performance/).
+The parameters above apply to a **single wallpaper**. On top of that, there's a layer of **global playback rules** that automatically take over playback behavior (continue / mute / pause / stop) in situations like a full-screen app being active, another app playing audio, the screen sleeping, or running on battery power. This is configured in [Performance & playback rules](/en/settings/performance/).

@@ -3,12 +3,12 @@ title: 软件更新
 description: Mirage 基于 Sparkle 的自动更新、测试版通道与更新安全机制。
 ---
 
-Mirage 使用 [Sparkle](https://sparkle-project.org/) 框架进行应用内更新。相关开关位于[通用设置](/MirageWallpaper/settings/general/)的「软件更新」区块。
+Mirage 使用 [Sparkle](https://sparkle-project.org/) 框架进行应用内更新。相关开关位于[通用设置](/settings/general/)的「软件更新」区块。
 
 ## 自动更新
 
 - **自动检查并下载更新**：开启后，Mirage 会在后台自动检查并下载可用更新。
-- 关闭后，Mirage 不再在后台检查或下载，但你仍可通过[菜单栏](/MirageWallpaper/wallpapers/menubar/)的「检查更新…」随时手动检查。
+- 关闭后，Mirage 不再在后台检查或下载，但你仍可通过[菜单栏](/wallpapers/menubar/)的「检查更新…」随时手动检查。
 
 自动检查与自动下载两个行为跟随同一开关，改动即时生效。
 

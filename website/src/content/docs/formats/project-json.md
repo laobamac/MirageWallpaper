@@ -112,4 +112,4 @@ usershortcut 快捷方式
 }
 ```
 
-关于如何在界面中调整这些属性，见[播放控制与自定义属性](/MirageWallpaper/wallpapers/playback/)。
+关于如何在界面中调整这些属性，见[播放控制与自定义属性](/wallpapers/playback/)。

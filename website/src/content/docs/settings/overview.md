@@ -3,16 +3,16 @@ title: 设置概览
 description: Mirage 设置窗口的五个分区：性能、通用、插件、屏保和关于。
 ---
 
-从主窗口顶部的**设置**按钮，或[菜单栏](/MirageWallpaper/wallpapers/menubar/)的「设置」（`,`）打开设置窗口。窗口顶部有五个分区标签。
+从主窗口顶部的**设置**按钮，或[菜单栏](/wallpapers/menubar/)的「设置」（`,`）打开设置窗口。窗口顶部有五个分区标签。
 
 ## 五个分区
 
 | 分区 | 内容 |
 | --- | --- |
-| 性能 | 播放规则（省电策略）与渲染质量。见[性能与播放策略](/MirageWallpaper/settings/performance/) |
-| 通用 | 启动、更新、语言、外观、音频、壁纸库目录、创意工坊 API。见[通用与音频设置](/MirageWallpaper/settings/general/) |
-| 插件 | 扩展与插件相关。见[插件](/MirageWallpaper/settings/plugins/) |
-| 屏保 | 安装并配置动态屏保。见[动态屏保](/MirageWallpaper/screensaver/overview/) |
+| 性能 | 播放规则（省电策略）与渲染质量。见[性能与播放策略](/settings/performance/) |
+| 通用 | 启动、更新、语言、外观、音频、壁纸库目录、创意工坊 API。见[通用与音频设置](/settings/general/) |
+| 插件 | 扩展与插件相关。见[插件](/settings/plugins/) |
+| 屏保 | 安装并配置动态屏保。见[动态屏保](/screensaver/overview/) |
 | 关于 | 版本信息、致谢与项目链接 |
 
 ## 保存与取消

@@ -8,7 +8,7 @@ Mirage is a **native live wallpaper manager** for macOS, and also a **Wallpaper 
 You can use it to read local Wallpaper Engine style wallpaper packages, or browse the Steam Workshop directly, install SteamCMD, sign in to Steam, and download wallpapers.
 
 :::note[The project is still in an early stage]
-Mirage is under active development, and compatibility with the Wallpaper Engine scene format is still being refined. Complex works may differ in how they render effects, scripts, or materials. If you run into problems, feel free to [open an issue](https://github.com/laobamac/MirageWallpaper/issues/new/choose) or join the community to share feedback. See [Community & Feedback](/MirageWallpaper/en/reference/community/) for details.
+Mirage is under active development, and compatibility with the Wallpaper Engine scene format is still being refined. Complex works may differ in how they render effects, scripts, or materials. If you run into problems, feel free to [open an issue](https://github.com/laobamac/MirageWallpaper/issues/new/choose) or join the community to share feedback. See [Community & Feedback](/en/reference/community/) for details.
 :::
 
 ## What it can do
@@ -34,13 +34,13 @@ Mirage delegates rendering to three separate processes, leaving the main app to 
 | VideoWallpaper | Objective-C++, AVFoundation | Video looping, volume, speed, and fill mode |
 | MirageScreenSaver | Swift, WebKit, AVFoundation, Metal | Standalone-installed host for live screen savers |
 
-The renderers run as separate processes. Mirage sends line-by-line JSON control messages over standard input, so a crash in a single renderer won't directly corrupt the main app's state. To dig deeper, read [Rendering architecture](/MirageWallpaper/en/advanced/architecture/).
+The renderers run as separate processes. Mirage sends line-by-line JSON control messages over standard input, so a crash in a single renderer won't directly corrupt the main app's state. To dig deeper, read [Rendering architecture](/en/advanced/architecture/).
 
 ## What's next
 
-- Start by confirming your machine meets the [system and build requirements](/MirageWallpaper/en/guides/requirements/).
-- Then get Mirage running with [Install & first launch](/MirageWallpaper/en/guides/install/).
-- To get familiar with the interface quickly, see the [Interface tour](/MirageWallpaper/en/guides/interface/).
+- Start by confirming your machine meets the [system and build requirements](/en/guides/requirements/).
+- Then get Mirage running with [Install & first launch](/en/guides/install/).
+- To get familiar with the interface quickly, see the [Interface tour](/en/guides/interface/).
 
 :::caution[Not officially affiliated]
 Mirage is not affiliated with or endorsed by Valve, Steam, or Wallpaper Engine. When using Steam Workshop content, please follow the applicable licenses and terms.

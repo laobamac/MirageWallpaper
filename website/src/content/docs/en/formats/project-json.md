@@ -112,4 +112,4 @@ A scene wallpaper with user properties might look like this:
 }
 ```
 
-For how to adjust these properties in the interface, see [Playback Controls and Custom Properties](/MirageWallpaper/en/wallpapers/playback/).
+For how to adjust these properties in the interface, see [Playback Controls and Custom Properties](/en/wallpapers/playback/).

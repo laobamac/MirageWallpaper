@@ -3,7 +3,7 @@ title: 视频转换为壁纸
 description: 把 mp4、mov、m4v 视频包装成可直接播放的本地视频壁纸包。
 ---
 
-Mirage 可以把普通视频文件转换成动态壁纸。你只需在[导入](/MirageWallpaper/formats/import/)时选择视频，Mirage 就会自动生成一个视频壁纸包。
+Mirage 可以把普通视频文件转换成动态壁纸。你只需在[导入](/formats/import/)时选择视频，Mirage 就会自动生成一个视频壁纸包。
 
 ## 支持的格式
 
@@ -32,10 +32,10 @@ Mirage 可以把普通视频文件转换成动态壁纸。你只需在[导入](/
 
 ## 播放
 
-转换后的视频壁纸由 VideoWallpaper（AVFoundation）渲染，支持[音量、速度、填充模式](/MirageWallpaper/wallpapers/playback/)等控制。
+转换后的视频壁纸由 VideoWallpaper（AVFoundation）渲染，支持[音量、速度、填充模式](/wallpapers/playback/)等控制。
 
 ## 提示
 
 - 由于不重新编码，请尽量使用 macOS / AVFoundation 能良好播放的编码（如 H.264 / HEVC 的 mp4、mov）。若某个视频在系统「快速查看」中能正常播放，通常也能作为壁纸播放。
-- 想进一步压缩体积或转码，可在导入前用外部工具处理（项目构建依赖中包含 FFmpeg，主要用于渲染器侧的视频处理，见[系统与构建要求](/MirageWallpaper/guides/requirements/)）。
+- 想进一步压缩体积或转码，可在导入前用外部工具处理（项目构建依赖中包含 FFmpeg，主要用于渲染器侧的视频处理，见[系统与构建要求](/guides/requirements/)）。
 - 转换是复制操作，原视频不受影响，但会占用额外磁盘空间。

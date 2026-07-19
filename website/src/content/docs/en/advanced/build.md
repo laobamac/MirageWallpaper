@@ -90,7 +90,7 @@ MIRAGE_STEAM_WEB_API_KEY='YOUR_32_CHARACTER_STEAM_WEB_API_KEY' \
   ./Mirage/scripts/build.sh Release
 ```
 
-The app still compiles fine without a built-in key; after running it, you can [enter your own key in the settings](/MirageWallpaper/en/workshop/api-key/).
+The app still compiles fine without a built-in key; after running it, you can [enter your own key in the settings](/en/workshop/api-key/).
 
 :::note[A built-in key can never be a real secret]
 A released app must contain the key, so anyone able to analyze the app can still extract it. If you need a credential that cannot be extracted, put the request on a controlled server that holds the key, rather than relying on client-side obfuscation.

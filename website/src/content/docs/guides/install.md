@@ -19,7 +19,7 @@ description: 下载或构建 Mirage，完成首次启动，并处理 Gatekeeper 
 
 ## 方式二：从源码构建
 
-先确认满足[构建要求](/MirageWallpaper/guides/requirements/)，然后：
+先确认满足[构建要求](/guides/requirements/)，然后：
 
 ```bash
 git clone https://github.com/laobamac/MirageWallpaper.git
@@ -33,20 +33,20 @@ cd MirageWallpaper
 open "Mirage/dist/Mirage.app"
 ```
 
-最终 App 位于 `Mirage/dist/Mirage.app`。完整的构建说明、Debug 构建和内置 Steam Web API Key 的配置，见[从源码构建](/MirageWallpaper/advanced/build/)。
+最终 App 位于 `Mirage/dist/Mirage.app`。完整的构建说明、Debug 构建和内置 Steam Web API Key 的配置，见[从源码构建](/advanced/build/)。
 
 ## 首次启动
 
 首次启动后，建议按顺序完成几件事：
 
-1. **了解界面**：顶部标签在「已安装」壁纸库和「发现 / 创意工坊」之间切换。参见[界面导览](/MirageWallpaper/guides/interface/)。
-2. **添加壁纸**：可以直接[导入本地目录或视频](/MirageWallpaper/formats/import/)，也可以[设置 Steam 创意工坊](/MirageWallpaper/workshop/overview/)后下载。
-3. **填写自己的 Steam Web API Key**（可选但推荐）：内置 Key 由所有用户共享，容易繁忙。见[Steam Web API Key](/MirageWallpaper/workshop/api-key/)。
+1. **了解界面**：顶部标签在「已安装」壁纸库和「发现 / 创意工坊」之间切换。参见[界面导览](/guides/interface/)。
+2. **添加壁纸**：可以直接[导入本地目录或视频](/formats/import/)，也可以[设置 Steam 创意工坊](/workshop/overview/)后下载。
+3. **填写自己的 Steam Web API Key**（可选但推荐）：内置 Key 由所有用户共享，容易繁忙。见[Steam Web API Key](/workshop/api-key/)。
 
 :::tip
-应用内包含可在「设置 → 屏保」中安装的 `MirageScreenSaver.saver`。安装后即使不保持 Mirage 运行，也能使用动态屏保。参见[动态屏保](/MirageWallpaper/screensaver/overview/)。
+应用内包含可在「设置 → 屏保」中安装的 `MirageScreenSaver.saver`。安装后即使不保持 Mirage 运行，也能使用动态屏保。参见[动态屏保](/screensaver/overview/)。
 :::
 
 ## 数据存放在哪里
 
-Mirage 的本地壁纸、SteamCMD 数据、缓存和配置都有固定位置，完整清单见[数据目录](/MirageWallpaper/advanced/data-directories/)。
+Mirage 的本地壁纸、SteamCMD 数据、缓存和配置都有固定位置，完整清单见[数据目录](/advanced/data-directories/)。

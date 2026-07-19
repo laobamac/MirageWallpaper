@@ -41,7 +41,7 @@ Mirage 通过 GitHub Actions 工作流 [`build-macos.yml`](https://github.com/la
 | 推送 `main` | 滚动的 `prerelease` Release | beta 源 |
 
 - App 默认自动检查并下载**正式版**；
-- 在 [软件更新设置](/MirageWallpaper/settings/updates/) 中开启「接收测试版更新」后，Sparkle 会同时检查 beta 通道；
+- 在 [软件更新设置](/settings/updates/) 中开启「接收测试版更新」后，Sparkle 会同时检查 beta 通道；
 - 两个架构各自使用独立 appcast；更新包、appcast 和更新说明均经 Sparkle Ed25519 签名。
 
 发布必须串行执行：两种架构会更新同一组签名更新源，工作流通过 `concurrency` 组避免并发发布冲突。
@@ -54,7 +54,7 @@ Mirage 通过 GitHub Actions 工作流 [`build-macos.yml`](https://github.com/la
 
 ## 屏保组件同步
 
-App 更新后的下一次启动会检查已安装到 `~/Library/Screen Savers` 的 Mirage 屏保组件；仅当其构建号落后于 App 内置组件时，才会原子替换并重启相关系统屏保服务。详见 [屏保](/MirageWallpaper/screensaver/overview/)。
+App 更新后的下一次启动会检查已安装到 `~/Library/Screen Savers` 的 Mirage 屏保组件；仅当其构建号落后于 App 内置组件时，才会原子替换并重启相关系统屏保服务。详见 [屏保](/screensaver/overview/)。
 
 ## 所需 Secrets
 

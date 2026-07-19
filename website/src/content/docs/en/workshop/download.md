@@ -9,7 +9,7 @@ Once you've found a wallpaper you like in the Workshop, Mirage uses its managed 
 
 Kick off a download from an item card or its detail page. Mirage uses the signed-in SteamCMD session to download the corresponding Workshop item (App ID `431960`) to an isolated download directory.
 
-Downloading requires [SteamCMD and Steam Sign-In](/MirageWallpaper/en/workshop/steamcmd/) to be set up first. If you're not signed in or the session has expired, Mirage prompts you to complete setup first.
+Downloading requires [SteamCMD and Steam Sign-In](/en/workshop/steamcmd/) to be set up first. If you're not signed in or the session has expired, Mirage prompts you to complete setup first.
 
 ## Download progress and badge
 
@@ -21,11 +21,11 @@ Mirage supports multiple download tasks. You can **cancel** an in-progress downl
 
 ## After a download completes
 
-Completed wallpapers go into your local wallpaper library, where you can browse, filter, and apply them from the Installed tab. They're grouped under the Workshop source; for their actual paths, see [Data Directories](/MirageWallpaper/en/advanced/data-directories/).
+Completed wallpapers go into your local wallpaper library, where you can browse, filter, and apply them from the Installed tab. They're grouped under the Workshop source; for their actual paths, see [Data Directories](/en/advanced/data-directories/).
 
 ## Presets and their dependencies
 
-If what you downloaded is a **preset**, it needs a base work to display correctly. When you try to apply a preset that's missing its dependency, Mirage pops up a prompt and helps you download the required base work first, then applies the preset once the dependency is ready. See [Presets](/MirageWallpaper/en/workshop/presets/).
+If what you downloaded is a **preset**, it needs a base work to display correctly. When you try to apply a preset that's missing its dependency, Mirage pops up a prompt and helps you download the required base work first, then applies the preset once the dependency is ready. See [Presets](/en/workshop/presets/).
 
 ## Updates and re-downloading
 
@@ -33,4 +33,4 @@ Workshop content may get updated. Re-downloading the same item makes SteamCMD pu
 
 ## If you run into problems
 
-If a download fails, stalls, or sign-in acts up, first check your network and Steam sign-in status, then see [Troubleshooting](/MirageWallpaper/en/workshop/troubleshooting/). Mirage provides a redacted diagnostic report you can use for feedback.
+If a download fails, stalls, or sign-in acts up, first check your network and Steam sign-in status, then see [Troubleshooting](/en/workshop/troubleshooting/). Mirage provides a redacted diagnostic report you can use for feedback.

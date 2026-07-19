@@ -63,7 +63,7 @@ The `assets/` directory contains resources and test wallpapers required by the s
 
 If you want to see which commands the main app actually sends, rather than constructing them yourself, you can:
 
-1. Raise the log level in "Settings → About / Developer" (see [Settings Overview](/MirageWallpaper/en/settings/overview/)).
+1. Raise the log level in "Settings → About / Developer" (see [Settings Overview](/en/settings/overview/)).
 2. Run the main app from Xcode and watch the console for logs like `[Mirage] 启动渲染器: …` to confirm which binary is loaded and which screen it acts on.
 3. The renderer's own standard output/standard error is forwarded by the main app and appears in the same log stream.
 
@@ -73,4 +73,4 @@ If you want to see which commands the main app actually sends, rather than const
 - **Per-screen independence**: with multiple displays, each screen can run its own renderer instance, without interfering with the others.
 - **Easier debugging**: you can reproduce a problem outside the main app, decoupling the "rendering" and "scheduling" layers.
 
-For the overall process model, see [Rendering Architecture](/MirageWallpaper/en/advanced/architecture/).
+For the overall process model, see [Rendering Architecture](/en/advanced/architecture/).

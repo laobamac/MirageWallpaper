@@ -3,7 +3,7 @@ title: Screen Saver Settings
 description: A per-item explanation of the options on the "Settings → Screen Saver" page.
 ---
 
-"Settings → Screen Saver" is where you install, configure, and manage Mirage's [live screen saver](/MirageWallpaper/en/screensaver/overview/). This page explains the contents of that settings page item by item.
+"Settings → Screen Saver" is where you install, configure, and manage Mirage's [live screen saver](/en/screensaver/overview/). This page explains the contents of that settings page item by item.
 
 ## Screen saver component
 

@@ -37,5 +37,5 @@ Click **Uninstall** in "Settings → Screen Saver" to remove the screen saver co
 
 ## Related
 
-- For a per-item explanation of the screen saver settings, see [Screen Saver settings](/MirageWallpaper/en/settings/screensaver/).
-- For how the screen saver host loads different wallpaper types, see [Render architecture](/MirageWallpaper/en/advanced/architecture/).
+- For a per-item explanation of the screen saver settings, see [Screen Saver settings](/en/settings/screensaver/).
+- For how the screen saver host loads different wallpaper types, see [Render architecture](/en/advanced/architecture/).

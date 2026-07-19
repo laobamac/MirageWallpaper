@@ -19,7 +19,7 @@ Once you add **your own API Key**, Mirage prefers it, making browsing and search
 
 ## Entering it in Mirage
 
-Open [Settings](/MirageWallpaper/en/settings/general/), find the Steam Workshop options, and paste the Key in. Mirage trims leading and trailing whitespace, validates the format, and applies it immediately once valid.
+Open [Settings](/en/settings/general/), find the Steam Workshop options, and paste the Key in. Mirage trims leading and trailing whitespace, validates the format, and applies it immediately once valid.
 
 ## API endpoints
 
@@ -40,4 +40,4 @@ Your API Key is stored in local settings. Mirage's diagnostic logs redact fields
 - **"Key is invalid"**: confirm it's a 32-character hexadecimal string with no extra spaces.
 - **Slow access in some regions**: try switching to the mirror endpoint.
 
-For more, see [Troubleshooting](/MirageWallpaper/en/workshop/troubleshooting/).
+For more, see [Troubleshooting](/en/workshop/troubleshooting/).

@@ -37,5 +37,5 @@ Mirage 提供一个独立的**动态屏保**组件，让你把视频、网页或
 
 ## 相关
 
-- 屏保设置项的逐项说明见[屏保设置](/MirageWallpaper/settings/screensaver/)。
-- 屏保宿主如何加载不同类型壁纸，见[渲染架构](/MirageWallpaper/advanced/architecture/)。
+- 屏保设置项的逐项说明见[屏保设置](/settings/screensaver/)。
+- 屏保宿主如何加载不同类型壁纸，见[渲染架构](/advanced/architecture/)。

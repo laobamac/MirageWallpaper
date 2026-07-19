@@ -3,7 +3,7 @@ title: 屏保设置
 description: 「设置 → 屏保」页各选项的逐项说明。
 ---
 
-「设置 → 屏保」用于安装、配置和管理 Mirage 的[动态屏保](/MirageWallpaper/screensaver/overview/)。本页逐项说明该设置页的内容。
+「设置 → 屏保」用于安装、配置和管理 Mirage 的[动态屏保](/screensaver/overview/)。本页逐项说明该设置页的内容。
 
 ## 屏保组件
 

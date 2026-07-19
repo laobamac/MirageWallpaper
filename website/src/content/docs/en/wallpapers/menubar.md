@@ -33,4 +33,4 @@ These two are linked with the volume and speed controls in the preview sidebar: 
 
 ## Icon and menu bar tint
 
-Mirage uses its own menu bar icon. The "Adjust menu bar tint" option in Settings affects how the menu bar looks against a live wallpaper. See [General & audio settings](/MirageWallpaper/en/settings/general/) for details.
+Mirage uses its own menu bar icon. The "Adjust menu bar tint" option in Settings affects how the menu bar looks against a live wallpaper. See [General & audio settings](/en/settings/general/) for details.

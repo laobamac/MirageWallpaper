@@ -3,16 +3,16 @@ title: Settings Overview
 description: "The five sections of the Mirage settings window: Performance, General, Plugins, Screen Saver, and About."
 ---
 
-Open the settings window from the **Settings** button at the top of the main window, or from "Settings" (`,`) in the [menu bar](/MirageWallpaper/en/wallpapers/menubar/). There are five section tabs at the top of the window.
+Open the settings window from the **Settings** button at the top of the main window, or from "Settings" (`,`) in the [menu bar](/en/wallpapers/menubar/). There are five section tabs at the top of the window.
 
 ## The five sections
 
 | Section | Contents |
 | --- | --- |
-| Performance | Playback rules (power-saving strategy) and render quality. See [Performance and Playback Strategy](/MirageWallpaper/en/settings/performance/) |
-| General | Startup, updates, language, appearance, audio, wallpaper library directories, Workshop API. See [General and audio settings](/MirageWallpaper/en/settings/general/) |
-| Plugins | Extensions and plugins. See [Plugins](/MirageWallpaper/en/settings/plugins/) |
-| Screen Saver | Install and configure the live screen saver. See [Live Screen Saver](/MirageWallpaper/en/screensaver/overview/) |
+| Performance | Playback rules (power-saving strategy) and render quality. See [Performance and Playback Strategy](/en/settings/performance/) |
+| General | Startup, updates, language, appearance, audio, wallpaper library directories, Workshop API. See [General and audio settings](/en/settings/general/) |
+| Plugins | Extensions and plugins. See [Plugins](/en/settings/plugins/) |
+| Screen Saver | Install and configure the live screen saver. See [Live Screen Saver](/en/screensaver/overview/) |
 | About | Version info, acknowledgments, and project links |
 
 ## Save and cancel

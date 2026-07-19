@@ -3,7 +3,7 @@ title: Browse the Workshop
 description: Browse wallpapers in the Workshop tab by sort, tag, and keyword, and view item details.
 ---
 
-Once [setup](/MirageWallpaper/en/workshop/overview/) is done, switch to the Workshop tab to browse Wallpaper Engine's vast library of Workshop content.
+Once [setup](/en/workshop/overview/) is done, switch to the Workshop tab to browse Wallpaper Engine's vast library of Workshop content.
 
 ## Sort options
 
@@ -34,16 +34,16 @@ Results load in pages (about 30 items each); scroll or page through to load more
 
 ## Item details
 
-Click an item to view its details: title, author, preview, tags, rating, description, and other metadata. Once you're happy with it, you can download; see [Download and Manage](/MirageWallpaper/en/workshop/download/).
+Click an item to view its details: title, author, preview, tags, rating, description, and other metadata. Once you're happy with it, you can download; see [Download and Manage](/en/workshop/download/).
 
 ## Presets
 
-Some Workshop items are **presets**: they don't contain a complete wallpaper themselves, but depend on another base work and override its properties. Mirage recognizes presets and prompts you to download their dependency first when needed; see [Presets](/MirageWallpaper/en/workshop/presets/).
+Some Workshop items are **presets**: they don't contain a complete wallpaper themselves, but depend on another base work and override its properties. Mirage recognizes presets and prompts you to download their dependency first when needed; see [Presets](/en/workshop/presets/).
 
 ## Content rating
 
-Workshop content comes with rating information. Please use discretion. Mirage's local [filter panel](/MirageWallpaper/en/wallpapers/library/) also supports filtering downloaded content by "Everyone / Questionable / Mature."
+Workshop content comes with rating information. Please use discretion. Mirage's local [filter panel](/en/wallpapers/library/) also supports filtering downloaded content by "Everyone / Questionable / Mature."
 
 :::tip
-If you frequently hit busy or timeout errors while browsing, it's usually because the shared built-in API Key is rate-limited. Adding your own [Steam Web API Key](/MirageWallpaper/en/workshop/api-key/) improves things significantly.
+If you frequently hit busy or timeout errors while browsing, it's usually because the shared built-in API Key is rate-limited. Adding your own [Steam Web API Key](/en/workshop/api-key/) improves things significantly.
 :::

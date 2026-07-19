@@ -29,7 +29,7 @@ What the actions mean:
 When multiple triggers are met at the same time, Mirage applies the **strongest** action. The order from weakest to strongest is: Keep running < Mute < Pause < Stop. For example, if you're on battery and another app is full screen, set to "Pause" and "Stop" respectively, Mirage actually performs "Stop".
 
 :::tip[Power-saving tips]
-Laptop users can set "On battery" to Pause or Stop and "Another app is full screen" to Pause or Stop, which noticeably lowers power draw and heat. These are global strategies, independent of any individual wallpaper's [playback parameters](/MirageWallpaper/en/wallpapers/playback/).
+Laptop users can set "On battery" to Pause or Stop and "Another app is full screen" to Pause or Stop, which noticeably lowers power draw and heat. These are global strategies, independent of any individual wallpaper's [playback parameters](/en/wallpapers/playback/).
 :::
 
 ## Render quality
@@ -64,5 +64,5 @@ For most live wallpapers, 30 FPS is smooth enough and more power-efficient.
 
 ## Related settings
 
-- Global volume and global mute are in [General and audio settings](/MirageWallpaper/en/settings/general/).
+- Global volume and global mute are in [General and audio settings](/en/settings/general/).
 - More advanced options like process priority, pausing when VRAM is exhausted, and restarting after a crash are in the advanced options of Settings.

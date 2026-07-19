@@ -41,7 +41,7 @@ Each runner performs the following in order:
 | Push to `main` | Rolling `prerelease` Release | Beta feed |
 
 - By default, the app automatically checks for and downloads the **stable** version;
-- After enabling "Receive beta updates" in [Software Update Settings](/MirageWallpaper/en/settings/updates/), Sparkle also checks the beta channel;
+- After enabling "Receive beta updates" in [Software Update Settings](/en/settings/updates/), Sparkle also checks the beta channel;
 - The two architectures each use a separate appcast; the update packages, appcasts, and release notes are all signed with the Sparkle Ed25519 key.
 
 Releases must run serially: both architectures update the same set of signed update feeds, so the workflow uses a `concurrency` group to avoid concurrent release conflicts.
@@ -54,7 +54,7 @@ Only a commit with a higher build number gets installed, which prevents a newer 
 
 ## Screen Saver Component Sync
 
-The next time the app launches after an update, it checks the Mirage screen saver component installed in `~/Library/Screen Savers`; only when its build number lags behind the app's bundled component does it atomically replace it and restart the relevant system screen saver services. See [Screen Saver](/MirageWallpaper/en/screensaver/overview/) for details.
+The next time the app launches after an update, it checks the Mirage screen saver component installed in `~/Library/Screen Savers`; only when its build number lags behind the app's bundled component does it atomically replace it and restart the relevant system screen saver services. See [Screen Saver](/en/screensaver/overview/) for details.
 
 ## Required Secrets
 

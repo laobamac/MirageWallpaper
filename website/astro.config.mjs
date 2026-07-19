@@ -3,11 +3,11 @@ import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import sitemap from '@astrojs/sitemap';
 
-// Deployed to GitHub Pages at https://laobamac.github.io/MirageWallpaper/
-// `site` + `base` produce correct absolute URLs and asset paths under the
-// project sub-path. Override locally with SITE / BASE env vars if needed.
-const SITE = process.env.SITE ?? 'https://laobamac.github.io';
-const BASE = process.env.BASE ?? '/MirageWallpaper/';
+// Deployed to GitHub Pages on the custom domain https://page.simplehac.cn/
+// The site lives at the domain root, so base is '/'. `site` + `base` produce
+// correct absolute URLs and asset paths. Override locally with SITE / BASE.
+const SITE = process.env.SITE ?? 'https://page.simplehac.cn';
+const BASE = process.env.BASE ?? '/';
 
 export default defineConfig({
   site: SITE,

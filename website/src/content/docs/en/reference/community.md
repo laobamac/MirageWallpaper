@@ -16,7 +16,7 @@ To make it easier to pin down, please try to state clearly:
 - Your system version and Mirage version;
 - Steps to reproduce;
 - The expected result and the actual behavior;
-- Relevant logs (you can enable "Verbose logging" in [General Settings](/MirageWallpaper/en/settings/general/), and for Workshop issues you can export a redacted support report).
+- Relevant logs (you can enable "Verbose logging" in [General Settings](/en/settings/general/), and for Workshop issues you can export a redacted support report).
 
 You can also join the **QQ group 2160040437** to chat and share feedback.
 
@@ -29,7 +29,7 @@ Pull Requests are welcome. Before submitting, please confirm at least that:
 3. The app bundle contains the three renderers, the runtime dynamic libraries, the MoltenVK ICD, and `assets`;
 4. You haven't committed API Keys, Steam login data, build directories, or user wallpapers.
 
-For build instructions, see [Building from Source](/MirageWallpaper/en/advanced/build/).
+For build instructions, see [Building from Source](/en/advanced/build/).
 
 ## Sponsoring
 

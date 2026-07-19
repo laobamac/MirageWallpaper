@@ -9,15 +9,15 @@ The top of Mirage's main window is a row of tabs and entry buttons, with the con
 
 The main window has three primary tabs across the top:
 
-- **Installed**: your local wallpaper library, where you browse, search, filter, and play installed wallpapers. See [Wallpaper library](/MirageWallpaper/en/wallpapers/library/).
+- **Installed**: your local wallpaper library, where you browse, search, filter, and play installed wallpapers. See [Wallpaper library](/en/wallpapers/library/).
 - **Discover**: the content discovery page, showing recommendations and category entries.
-- **Workshop**: browse and download from the Steam Workshop. Switching to this tab requires completing the [Steam Workshop setup](/MirageWallpaper/en/workshop/overview/) first. When downloads are in progress, a badge on the tab shows the number of active downloads.
+- **Workshop**: browse and download from the Steam Workshop. Switching to this tab requires completing the [Steam Workshop setup](/en/workshop/overview/) first. When downloads are in progress, a badge on the tab shows the number of active downloads.
 
 There are also a few entry buttons on the right side of the tab bar:
 
 - **Mobile**: mobile-related entry.
-- **Displays**: opens display settings, where you can assign wallpapers to different displays individually. See [Multiple displays](/MirageWallpaper/en/wallpapers/displays/).
-- **Settings**: opens the settings window. See [Settings in depth](/MirageWallpaper/en/settings/overview/).
+- **Displays**: opens display settings, where you can assign wallpapers to different displays individually. See [Multiple displays](/en/wallpapers/displays/).
+- **Settings**: opens the settings window. See [Settings in depth](/en/settings/overview/).
 
 ## Wallpaper library toolbar
 
@@ -61,8 +61,8 @@ Covers the common Wallpaper Engine categories, such as Abstract, Anime, Cyberpun
 
 ## Wallpaper cards and context menu
 
-Every work in the wallpaper library is shown as a card. Once selected, you can adjust playback parameters in the preview and properties panel, and the context menu on the card or empty space offers actions like apply, favorite, and open directory. For playback-related actions, see [Apply wallpaper](/MirageWallpaper/en/wallpapers/apply/) and [Playback control](/MirageWallpaper/en/wallpapers/playback/).
+Every work in the wallpaper library is shown as a card. Once selected, you can adjust playback parameters in the preview and properties panel, and the context menu on the card or empty space offers actions like apply, favorite, and open directory. For playback-related actions, see [Apply wallpaper](/en/wallpapers/apply/) and [Playback control](/en/wallpapers/playback/).
 
 ## Menu bar
 
-Mirage provides a status icon in the system menu bar, letting you control playback of the current wallpaper without opening the main window. See [Menu bar control](/MirageWallpaper/en/wallpapers/menubar/).
+Mirage provides a status icon in the system menu bar, letting you control playback of the current wallpaper without opening the main window. See [Menu bar control](/en/wallpapers/menubar/).

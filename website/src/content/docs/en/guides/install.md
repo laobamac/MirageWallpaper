@@ -19,7 +19,7 @@ Because the current build uses ad-hoc signing, macOS may say it can't verify the
 
 ## Option 2: Build from source
 
-First make sure you meet the [build requirements](/MirageWallpaper/en/guides/requirements/), then:
+First make sure you meet the [build requirements](/en/guides/requirements/), then:
 
 ```bash
 git clone https://github.com/laobamac/MirageWallpaper.git
@@ -33,20 +33,20 @@ cd MirageWallpaper
 open "Mirage/dist/Mirage.app"
 ```
 
-The final app lives at `Mirage/dist/Mirage.app`. For full build instructions, Debug builds, and configuring a built-in Steam Web API Key, see [Build from source](/MirageWallpaper/en/advanced/build/).
+The final app lives at `Mirage/dist/Mirage.app`. For full build instructions, Debug builds, and configuring a built-in Steam Web API Key, see [Build from source](/en/advanced/build/).
 
 ## First launch
 
 After the first launch, we recommend doing a few things in order:
 
-1. **Learn the interface**: the top tabs switch between the "Installed" wallpaper library and "Discover / Workshop". See the [Interface tour](/MirageWallpaper/en/guides/interface/).
-2. **Add wallpapers**: you can [import a local directory or video](/MirageWallpaper/en/formats/import/) directly, or [set up the Steam Workshop](/MirageWallpaper/en/workshop/overview/) and download.
-3. **Enter your own Steam Web API Key** (optional but recommended): the built-in key is shared by all users and can get busy. See [Steam Web API Key](/MirageWallpaper/en/workshop/api-key/).
+1. **Learn the interface**: the top tabs switch between the "Installed" wallpaper library and "Discover / Workshop". See the [Interface tour](/en/guides/interface/).
+2. **Add wallpapers**: you can [import a local directory or video](/en/formats/import/) directly, or [set up the Steam Workshop](/en/workshop/overview/) and download.
+3. **Enter your own Steam Web API Key** (optional but recommended): the built-in key is shared by all users and can get busy. See [Steam Web API Key](/en/workshop/api-key/).
 
 :::tip
-The app bundles a `MirageScreenSaver.saver` that you can install from Settings → Screen Saver. Once installed, you can use the live screen saver even without keeping Mirage running. See [Live screen saver](/MirageWallpaper/en/screensaver/overview/).
+The app bundles a `MirageScreenSaver.saver` that you can install from Settings → Screen Saver. Once installed, you can use the live screen saver even without keeping Mirage running. See [Live screen saver](/en/screensaver/overview/).
 :::
 
 ## Where data is stored
 
-Mirage's local wallpapers, SteamCMD data, cache, and configuration all have fixed locations. For the full list, see [Data directories](/MirageWallpaper/en/advanced/data-directories/).
+Mirage's local wallpapers, SteamCMD data, cache, and configuration all have fixed locations. For the full list, see [Data directories](/en/advanced/data-directories/).

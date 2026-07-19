@@ -7,7 +7,7 @@ Mirage uses **SteamCMD**, Valve's official command-line tool, to download Worksh
 
 ## Installation and detection
 
-In the [setup wizard](/MirageWallpaper/en/workshop/setup-wizard/), Mirage will:
+In the [setup wizard](/en/workshop/setup-wizard/), Mirage will:
 
 1. First **detect** whether a usable SteamCMD is already present.
 2. If not, download the official `steamcmd_osx.tar.gz` from `steamcdn-a.akamaihd.net` and install it to a dedicated directory.
@@ -21,7 +21,7 @@ To avoid interfering with any Steam installation already on your system, Mirage 
 - SteamCMD home: `Mirage/steamcmd`
 - Isolated Steam data: `Mirage/steamcmd/home/Library/Application Support/Steam`
 
-Workshop content (App ID `431960`) is downloaded to `steamapps/workshop/content/431960` under that dedicated directory. Mirage's wallpaper library scans the current download directory, the legacy download directory, and the system Steam's default directory together; for the full list, see [Data Directories](/MirageWallpaper/en/advanced/data-directories/).
+Workshop content (App ID `431960`) is downloaded to `steamapps/workshop/content/431960` under that dedicated directory. Mirage's wallpaper library scans the current download directory, the legacy download directory, and the system Steam's default directory together; for the full list, see [Data Directories](/en/advanced/data-directories/).
 
 ## Steam sign-in
 
@@ -44,7 +44,7 @@ When a valid session already exists on this machine, the wizard offers "Use save
 
 ## Privacy and redaction
 
-Mirage keeps a **redacted** support diagnostic log for troubleshooting Workshop issues. The log automatically hides sensitive fields like passwords, API keys, and tokens (replacing them with `[redacted]`), and retains the most recent events. You can export this report for feedback; see [Troubleshooting](/MirageWallpaper/en/workshop/troubleshooting/) for details.
+Mirage keeps a **redacted** support diagnostic log for troubleshooting Workshop issues. The log automatically hides sensitive fields like passwords, API keys, and tokens (replacing them with `[redacted]`), and retains the most recent events. You can export this report for feedback; see [Troubleshooting](/en/workshop/troubleshooting/) for details.
 
 :::caution
 Only sign in to your own Steam account on your own device, and keep your credentials secure. Mirage never uploads your password to any third-party server; sign-in happens only in the local SteamCMD process.

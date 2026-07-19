@@ -18,7 +18,7 @@ Current automated builds use ad-hoc signing and don't include an Apple Developer
 
 ## Build requirements
 
-If you plan to [build from source](/MirageWallpaper/en/advanced/build/), you'll also need the following toolchain:
+If you plan to [build from source](/en/advanced/build/), you'll also need the following toolchain:
 
 - Full **Xcode**
 - **Homebrew**
@@ -46,4 +46,4 @@ What each dependency is for:
 | LZ4 | Scene asset decompression |
 | FFmpeg | Video processing |
 
-Once your environment is ready, head to [Install & first launch](/MirageWallpaper/en/guides/install/).
+Once your environment is ready, head to [Install & first launch](/en/guides/install/).

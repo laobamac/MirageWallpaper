@@ -19,7 +19,7 @@ Mirage 附带一个**内置的 Steam Web API Key**，所有用户共享。它开
 
 ## 在 Mirage 中填写
 
-打开[设置](/MirageWallpaper/settings/general/)，找到 Steam 创意工坊相关选项，把 Key 粘贴进去。Mirage 会去除首尾空白并校验格式，有效后立即生效。
+打开[设置](/settings/general/)，找到 Steam 创意工坊相关选项，把 Key 粘贴进去。Mirage 会去除首尾空白并校验格式，有效后立即生效。
 
 ## API 端点
 
@@ -40,4 +40,4 @@ Mirage 提供两个端点：
 - **提示 Key 无效**：确认是 32 位十六进制字符串，且没有多余空格。
 - **国内访问慢**：尝试切换到镜像端点。
 
-更多排查见[故障排查](/MirageWallpaper/workshop/troubleshooting/)。
+更多排查见[故障排查](/workshop/troubleshooting/)。

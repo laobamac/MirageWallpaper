@@ -36,7 +36,7 @@ Mirage 使用 Sparkle 处理更新：
 - **全局音量**：所有壁纸音量的总控制（0–100%）。最终音量是单个壁纸音量与全局音量的叠加。
 - **全局静音**：一键静音所有壁纸。
 
-单个壁纸的音量与速度在[播放控制](/MirageWallpaper/wallpapers/playback/)中调整。
+单个壁纸的音量与速度在[播放控制](/wallpapers/playback/)中调整。
 
 ## 壁纸库目录
 
@@ -46,7 +46,7 @@ Mirage 使用 Sparkle 处理更新：
 - **选择目录…**：为「Steam 创意工坊目录」或「导入壁纸目录」指定自定义位置。
 - **恢复默认**：把自定义目录还原为默认位置。
 
-「Mirage 下载目录」会标注为「当前下载位置」。各目录的完整说明见[数据目录](/MirageWallpaper/advanced/data-directories/)。
+「Mirage 下载目录」会标注为「当前下载位置」。各目录的完整说明见[数据目录](/advanced/data-directories/)。
 
 此外还有：
 
@@ -65,7 +65,7 @@ Mirage 使用 Sparkle 处理更新：
 
 ### Steam Web API Key
 
-填入你自己的 32 位十六进制 API Key。未设置或格式无效时，会显示提醒并回退到共享的内置 Key。设置有效 Key 后会显示「已设置专属 API Key」。Key 仅用于本机请求创意工坊浏览数据，请勿分享。详见 [Steam Web API Key](/MirageWallpaper/workshop/api-key/)。
+填入你自己的 32 位十六进制 API Key。未设置或格式无效时，会显示提醒并回退到共享的内置 Key。设置有效 Key 后会显示「已设置专属 API Key」。Key 仅用于本机请求创意工坊浏览数据，请勿分享。详见 [Steam Web API Key](/workshop/api-key/)。
 
 ## macOS 与高级
 

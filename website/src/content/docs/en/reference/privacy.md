@@ -12,7 +12,7 @@ Mirage is a locally running desktop app. It does not operate any account system,
 - Mirage only persists your **username**, to reuse the session next time.
 - Steam Guard codes are likewise used only for the current login.
 
-See [Steam Login](/MirageWallpaper/en/workshop/login/) and [SteamCMD](/MirageWallpaper/en/workshop/steamcmd/) for details.
+See [Steam Login](/en/workshop/login/) and [SteamCMD](/en/workshop/steamcmd/) for details.
 
 ## Steam Web API Key
 
@@ -20,7 +20,7 @@ See [Steam Login](/MirageWallpaper/en/workshop/login/) and [SteamCMD](/MirageWal
 - Do not share your key publicly.
 - The app ships with a built-in key shared by all users, for browsing only.
 
-See [Steam Web API Key](/MirageWallpaper/en/workshop/api-key/).
+See [Steam Web API Key](/en/workshop/api-key/).
 
 ## Network Requests
 
@@ -40,7 +40,7 @@ The optional SteamCF mirror available to users in mainland China is **not an off
 
 ## Web Wallpapers
 
-Web wallpapers execute JavaScript and may make their own network requests or load remote resources. That's why Mirage has a [security confirmation](/MirageWallpaper/en/settings/web-safety/) for untrusted web wallpapers. Only trust web wallpapers from reliable sources.
+Web wallpapers execute JavaScript and may make their own network requests or load remote resources. That's why Mirage has a [security confirmation](/en/settings/web-safety/) for untrusted web wallpapers. Only trust web wallpapers from reliable sources.
 
 ## Diagnostic Logs
 
@@ -49,7 +49,7 @@ Web wallpapers execute JavaScript and may make their own network requests or loa
 
 ## Local Data
 
-Your wallpapers, downloads, caches, and settings are all stored on your own machine. For the relevant paths, see [Data Directories](/MirageWallpaper/en/advanced/data-directories/). You can view, back up, or clean up these directories in Finder at any time.
+Your wallpapers, downloads, caches, and settings are all stored on your own machine. For the relevant paths, see [Data Directories](/en/advanced/data-directories/). You can view, back up, or clean up these directories in Finder at any time.
 
 ## Affiliation Notice
 

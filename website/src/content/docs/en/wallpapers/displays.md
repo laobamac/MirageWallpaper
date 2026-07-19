@@ -14,7 +14,7 @@ Click the **Displays** button at the top of the main window to open the display 
 **Cover all displays** applies the current wallpaper to every screen detected. You can trigger it from:
 
 - The display settings in the main window.
-- "Cover all displays" in the [menu bar](/MirageWallpaper/en/wallpapers/menubar/).
+- "Cover all displays" in the [menu bar](/en/wallpapers/menubar/).
 
 When covering, each screen starts its own separate renderer instance.
 
@@ -26,7 +26,7 @@ This means different screens can play different wallpapers, with each one's play
 
 ## Rendering and resource usage
 
-The wallpaper on each display is handled by its own render process. The more screens you have and the more live wallpapers you run at once, the higher the GPU and memory usage. If you run into stutter or heat, you can lower the quality tier or frame rate in [Performance & playback rules](/MirageWallpaper/en/settings/performance/), or use the global playback rules to pause automatically in certain situations.
+The wallpaper on each display is handled by its own render process. The more screens you have and the more live wallpapers you run at once, the higher the GPU and memory usage. If you run into stutter or heat, you can lower the quality tier or frame rate in [Performance & playback rules](/en/settings/performance/), or use the global playback rules to pause automatically in certain situations.
 
 ## Display changes
 

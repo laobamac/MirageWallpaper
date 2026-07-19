@@ -3,7 +3,7 @@ title: Steam Sign-In
 description: Sign in to your Steam account in Mirage, handle Steam Guard, and reuse a saved session.
 ---
 
-Downloading Workshop content requires signing in to a Steam account. Sign-in happens in step 3 of the [setup wizard](/MirageWallpaper/en/workshop/setup-wizard/), after which SteamCMD maintains the session.
+Downloading Workshop content requires signing in to a Steam account. Sign-in happens in step 3 of the [setup wizard](/en/workshop/setup-wizard/), after which SteamCMD maintains the session.
 
 ## Sign in with a password
 
@@ -33,10 +33,10 @@ If the saved session has become invalid, Mirage prompts: "The saved Steam sessio
 
 - You can **cancel** during sign-in at any time; Mirage clears the password and code inputs.
 - Going back a step also safely cancels a sign-in in progress.
-- If you run into problems, retry, or see [Troubleshooting](/MirageWallpaper/en/workshop/troubleshooting/).
+- If you run into problems, retry, or see [Troubleshooting](/en/workshop/troubleshooting/).
 
 ## Privacy
 
 - Your password is only used for local SteamCMD sign-in.
 - Diagnostic logs redact sensitive fields like passwords, API keys, and tokens (replacing them with `[redacted]`).
-- For more detail, see [SteamCMD and Steam Sign-In](/MirageWallpaper/en/workshop/steamcmd/).
+- For more detail, see [SteamCMD and Steam Sign-In](/en/workshop/steamcmd/).

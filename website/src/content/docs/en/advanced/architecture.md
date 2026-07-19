@@ -32,7 +32,7 @@ The main app sends commands to renderers over a **line-based JSON protocol on st
 
 - Renderers are independent processes, so a crash only affects a single wallpaper; the main app and the other screens are unaffected.
 - The main app listens for renderer exit events and can use them to clean up or restart according to policy.
-- Policies in [Performance Settings](/MirageWallpaper/en/settings/performance/) such as "Stop (release memory)" simply terminate the corresponding renderer process to free up resources.
+- Policies in [Performance Settings](/en/settings/performance/) such as "Stop (release memory)" simply terminate the corresponding renderer process to free up resources.
 
 ## Binary Lookup
 
@@ -42,6 +42,6 @@ The RendererController prefers the renderer binaries **bundled inside the app**.
 
 ## Related
 
-- To build these components, see [Building from Source](/MirageWallpaper/en/advanced/build/).
-- To debug a single renderer on its own, see [Debugging Renderers](/MirageWallpaper/en/advanced/debug-renderers/).
-- For a capability comparison across wallpaper types, see [Wallpaper Types](/MirageWallpaper/en/formats/wallpaper-types/).
+- To build these components, see [Building from Source](/en/advanced/build/).
+- To debug a single renderer on its own, see [Debugging Renderers](/en/advanced/debug-renderers/).
+- For a capability comparison across wallpaper types, see [Wallpaper Types](/en/formats/wallpaper-types/).

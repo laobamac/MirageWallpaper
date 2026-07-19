@@ -3,12 +3,12 @@ title: Software Update
 description: Mirage's Sparkle-based automatic updates, beta channel, and update security.
 ---
 
-Mirage uses the [Sparkle](https://sparkle-project.org/) framework for in-app updates. The relevant toggles live in the "Software Update" section of [General settings](/MirageWallpaper/en/settings/general/).
+Mirage uses the [Sparkle](https://sparkle-project.org/) framework for in-app updates. The relevant toggles live in the "Software Update" section of [General settings](/en/settings/general/).
 
 ## Automatic updates
 
 - **Automatically check for and download updates**: When enabled, Mirage checks for and downloads available updates in the background.
-- When disabled, Mirage no longer checks or downloads in the background, but you can still check manually anytime via "Check for Updates…" in the [menu bar](/MirageWallpaper/en/wallpapers/menubar/).
+- When disabled, Mirage no longer checks or downloads in the background, but you can still check manually anytime via "Check for Updates…" in the [menu bar](/en/wallpapers/menubar/).
 
 Both automatic checking and automatic downloading follow the same toggle, and changes take effect immediately.
 

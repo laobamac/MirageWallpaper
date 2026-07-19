@@ -10,7 +10,7 @@ Besides downloading from the Steam Workshop, you can also import local content d
 There are a few ways to start an import:
 
 - The import entry at the bottom of the wallpaper library in the main window.
-- "Import Wallpaper…" (`I`) in the [menu bar](/MirageWallpaper/en/wallpapers/menubar/).
+- "Import Wallpaper…" (`I`) in the [menu bar](/en/wallpapers/menubar/).
 
 The import panel lets you select multiple folders or video files at once. Supported inputs include folders as well as `.mp4`, `.mov`, and `.m4v` videos.
 
@@ -18,11 +18,11 @@ The import panel lets you select multiple folders or video files at once. Suppor
 
 When you select a folder, Mirage requires that its **root contains a `project.json`**. This is exactly the standard structure of a Wallpaper Engine wallpaper. Once the requirement is met, the entire folder is copied into the import directory.
 
-If the selected folder has no `project.json`, the import fails with the message "The selected folder must contain project.json. Please check and try again." For the fields in this file, see [project.json Structure](/MirageWallpaper/en/formats/project-json/).
+If the selected folder has no `project.json`, the import fails with the message "The selected folder must contain project.json. Please check and try again." For the fields in this file, see [project.json Structure](/en/formats/project-json/).
 
 ## Importing a Video File
 
-When you select an `.mp4`, `.mov`, or `.m4v` video, Mirage automatically wraps it into a video wallpaper package. This process does not re-encode the video; for the exact behavior, see [Converting Video to Wallpaper](/MirageWallpaper/en/formats/video-convert/).
+When you select an `.mp4`, `.mov`, or `.m4v` video, Mirage automatically wraps it into a video wallpaper package. This process does not re-encode the video; for the exact behavior, see [Converting Video to Wallpaper](/en/formats/video-convert/).
 
 ## Name Conflicts
 
@@ -30,7 +30,7 @@ If the target name already exists, Mirage automatically appends a number (such a
 
 ## After Importing
 
-Once the import finishes, Mirage refreshes the wallpaper library. Imported content is grouped under the "Import directory" source, which you can locate by source in the [filter panel](/MirageWallpaper/en/wallpapers/library/). For the actual path, see [Data Directories](/MirageWallpaper/en/advanced/data-directories/).
+Once the import finishes, Mirage refreshes the wallpaper library. Imported content is grouped under the "Import directory" source, which you can locate by source in the [filter panel](/en/wallpapers/library/). For the actual path, see [Data Directories](/en/advanced/data-directories/).
 
 :::note
 Importing **copies** the content rather than moving or referencing it, so the original files stay unchanged. As a result, importing large wallpapers takes up additional disk space.

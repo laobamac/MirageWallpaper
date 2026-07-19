@@ -9,8 +9,8 @@ The Workshop feature spans several layers: the network, the Steam Web API, and S
 
 **Keeps showing busy, times out, or content won't load**
 
-- Usually the shared built-in Steam Web API Key is rate-limited. Adding your own [Steam Web API Key](/MirageWallpaper/en/workshop/api-key/) generally fixes it.
-- When the official endpoint is unstable on your network, switch to the **mirror endpoint** in [Settings](/MirageWallpaper/en/settings/general/).
+- Usually the shared built-in Steam Web API Key is rate-limited. Adding your own [Steam Web API Key](/en/workshop/api-key/) generally fixes it.
+- When the official endpoint is unstable on your network, switch to the **mirror endpoint** in [Settings](/en/settings/general/).
 
 **"API Key is invalid"**
 
@@ -30,7 +30,7 @@ The Workshop feature spans several layers: the network, the Steam Web API, and S
 
 **"Session is no longer valid"**
 
-- Once a saved session expires, you need to sign in again with your password. Just re-run the [setup wizard](/MirageWallpaper/en/workshop/setup-wizard/).
+- Once a saved session expires, you need to sign in again with your password. Just re-run the [setup wizard](/en/workshop/setup-wizard/).
 
 ## SteamCMD
 
@@ -53,14 +53,14 @@ The Workshop feature spans several layers: the network, the Steam Web API, and S
 
 **Preset won't display**
 
-- A preset needs its base dependency work. See [Presets](/MirageWallpaper/en/workshop/presets/) and let Mirage download the dependency automatically.
+- A preset needs its base dependency work. See [Presets](/en/workshop/presets/) and let Mirage download the dependency automatically.
 
 ## Exporting a diagnostic report
 
-Mirage keeps a **redacted** Workshop support report that automatically hides sensitive fields like passwords, API keys, and tokens. You can attach this report when reporting an issue to help with diagnosis. For feedback channels, see [Community and Feedback](/MirageWallpaper/en/reference/community/).
+Mirage keeps a **redacted** Workshop support report that automatically hides sensitive fields like passwords, API keys, and tokens. You can attach this report when reporting an issue to help with diagnosis. For feedback channels, see [Community and Feedback](/en/reference/community/).
 
 ## Where to find related settings
 
-- API Key and endpoint: [General and Audio Settings](/MirageWallpaper/en/settings/general/)
-- Sign-in and SteamCMD: [SteamCMD and Steam Sign-In](/MirageWallpaper/en/workshop/steamcmd/)
-- Data and cache locations: [Data Directories](/MirageWallpaper/en/advanced/data-directories/)
+- API Key and endpoint: [General and Audio Settings](/en/settings/general/)
+- Sign-in and SteamCMD: [SteamCMD and Steam Sign-In](/en/workshop/steamcmd/)
+- Data and cache locations: [Data Directories](/en/advanced/data-directories/)

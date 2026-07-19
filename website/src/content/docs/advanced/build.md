@@ -90,7 +90,7 @@ MIRAGE_STEAM_WEB_API_KEY='YOUR_32_CHARACTER_STEAM_WEB_API_KEY' \
   ./Mirage/scripts/build.sh Release
 ```
 
-没有内置 Key 时 App 仍可正常编译，运行后可在[设置里填写自己的 Key](/MirageWallpaper/workshop/api-key/)。
+没有内置 Key 时 App 仍可正常编译，运行后可在[设置里填写自己的 Key](/workshop/api-key/)。
 
 :::note[内置 Key 无法成为真正的秘密]
 发布后的 App 必须包含该 Key，有能力分析 App 的人仍可提取。若需要不可提取的凭据，应把请求放到受控服务端，由服务端持有 Key，不要依赖客户端混淆。

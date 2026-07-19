@@ -7,7 +7,7 @@ Once you select a work in the wallpaper library, you can preview it and apply it
 
 ## Preview and selection
 
-Click a wallpaper card to select it, and Mirage loads its preview and properties panel. While selected, you can adjust the [playback parameters and custom properties](/MirageWallpaper/en/wallpapers/playback/) before deciding whether to apply it for real.
+Click a wallpaper card to select it, and Mirage loads its preview and properties panel. While selected, you can adjust the [playback parameters and custom properties](/en/wallpapers/playback/) before deciding whether to apply it for real.
 
 ## Apply to the desktop
 
@@ -21,7 +21,7 @@ Mirage remembers the current wallpaper and, when applying it, also sets a **desk
 
 ## Cover all displays
 
-By default, a wallpaper is applied to the primary display. To make the current wallpaper fill every display, use **Cover all displays** (triggered from either the main window or the [menu bar](/MirageWallpaper/en/wallpapers/menubar/)). To assign different wallpapers to different displays, see [Multiple displays](/MirageWallpaper/en/wallpapers/displays/).
+By default, a wallpaper is applied to the primary display. To make the current wallpaper fill every display, use **Cover all displays** (triggered from either the main window or the [menu bar](/en/wallpapers/menubar/)). To assign different wallpapers to different displays, see [Multiple displays](/en/wallpapers/displays/).
 
 ## Stop wallpaper
 
@@ -29,7 +29,7 @@ By default, a wallpaper is applied to the primary display. To make the current w
 
 ## Security confirmation for web wallpapers
 
-When applying a **web wallpaper** from an untrusted source, Mirage shows a security prompt first, because web wallpapers execute JavaScript. Only trust web wallpapers from reliable sources. See [Web wallpaper safety](/MirageWallpaper/en/settings/web-safety/) for details.
+When applying a **web wallpaper** from an untrusted source, Mirage shows a security prompt first, because web wallpapers execute JavaScript. Only trust web wallpapers from reliable sources. See [Web wallpaper safety](/en/settings/web-safety/) for details.
 
 ## About unsupported wallpapers
 

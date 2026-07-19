@@ -7,7 +7,7 @@ Mirage scans wallpapers from several sources and keeps downloads, caches, and se
 
 ## Wallpaper Source Directories
 
-Mirage's wallpaper library scans all of the following sources at once (you can view the real paths and "Show in Finder" in the "Wallpaper library" section of [General Settings](/MirageWallpaper/en/settings/general/)):
+Mirage's wallpaper library scans all of the following sources at once (you can view the real paths and "Show in Finder" in the "Wallpaper library" section of [General Settings](/en/settings/general/)):
 
 | Source | Description |
 | --- | --- |
@@ -33,7 +33,7 @@ The SteamCMD that Mirage manages uses a dedicated directory under the applicatio
 └── steamapps/workshop/content/431960/  # legacy download directory (compatibility)
 ```
 
-This directory is accessible only to the current user (`0700`). See [SteamCMD and Steam Login](/MirageWallpaper/en/workshop/steamcmd/) for details.
+This directory is accessible only to the current user (`0700`). See [SteamCMD and Steam Login](/en/workshop/steamcmd/) for details.
 
 ## Cache
 
@@ -54,7 +54,7 @@ The live screen saver is installed into the current user's screen saver director
 ~/Library/Application Support/Mirage/screensaver.json   # screen saver configuration
 ```
 
-See [Live Screen Saver](/MirageWallpaper/en/screensaver/overview/).
+See [Live Screen Saver](/en/screensaver/overview/).
 
 ## Settings and Runtime State
 
@@ -63,7 +63,7 @@ See [Live Screen Saver](/MirageWallpaper/en/screensaver/overview/).
 
 ## Custom Directories
 
-In [General Settings](/MirageWallpaper/en/settings/general/), you can set custom locations for the "Steam Workshop directory" and the "Import directory", and you can "Restore Defaults" at any time.
+In [General Settings](/en/settings/general/), you can set custom locations for the "Steam Workshop directory" and the "Import directory", and you can "Restore Defaults" at any time.
 
 :::caution[Clean up with care]
 Deleting the download directory or the import directory removes the corresponding wallpapers; deleting the SteamCMD directory means you'll need to reinstall and log in again. Confirm a directory's contents before backing it up.

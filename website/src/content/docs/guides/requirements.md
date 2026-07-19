@@ -18,7 +18,7 @@ Mirage 是一款原生 macOS 应用，同时支持 Intel 和 Apple Silicon。
 
 ## 构建要求
 
-如果你打算[从源码构建](/MirageWallpaper/advanced/build/)，还需要以下工具链：
+如果你打算[从源码构建](/advanced/build/)，还需要以下工具链：
 
 - 完整版 **Xcode**
 - **Homebrew**
@@ -46,4 +46,4 @@ brew install cmake ninja pkg-config llvm molten-vk vulkan-loader vulkan-headers 
 | LZ4 | 场景资源解压 |
 | FFmpeg | 视频处理 |
 
-确认环境就绪后，前往[安装与首次启动](/MirageWallpaper/guides/install/)。
+确认环境就绪后，前往[安装与首次启动](/guides/install/)。
