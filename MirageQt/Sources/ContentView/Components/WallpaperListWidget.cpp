@@ -133,7 +133,7 @@ protected:
         QPainter painter(viewport());
         painter.setPen(QColor(QStringLiteral("#aaa59f")));
         QFont emptyFont = font();
-        emptyFont.setPointSize(emptyFont.pointSize() + 3);
+        emptyFont.setPixelSize(17);
         painter.setFont(emptyFont);
         painter.drawText(viewport()->rect().adjusted(40, 40, -40, -40),
                          Qt::AlignHCenter | Qt::AlignTop | Qt::TextWordWrap,

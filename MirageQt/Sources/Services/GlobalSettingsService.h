@@ -41,6 +41,8 @@ struct GlobalSettings {
     QString steamAPIKey;
     QString customWorkshopDirectory;
     QString customImportedDirectory;
+
+    bool operator==(const GlobalSettings&) const = default;
 };
 
 class GlobalSettingsService : public QObject {
@@ -50,8 +52,8 @@ public:
     explicit GlobalSettingsService(QObject* parent = nullptr);
 
     const GlobalSettings& settings() const;
-    void setSettings(const GlobalSettings& settings);
-    void save() const;
+    bool setSettings(const GlobalSettings& settings, QString* error = nullptr);
+    bool save(QString* error = nullptr) const;
     void reload();
 
     QString normalizedSteamAPIKey() const;

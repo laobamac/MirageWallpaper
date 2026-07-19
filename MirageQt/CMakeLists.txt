@@ -21,6 +21,11 @@ find_package(X11 REQUIRED)
 qt_standard_project_setup()
 
 set(MIRAGEQT_REPO_ROOT "${CMAKE_CURRENT_LIST_DIR}/..")
+set(MIRAGE_STEAM_WEB_API_KEY "$ENV{MIRAGE_STEAM_WEB_API_KEY}" CACHE STRING
+    "Optional built-in Steam Web API key (32 hexadecimal characters)")
+if(MIRAGE_STEAM_WEB_API_KEY AND NOT MIRAGE_STEAM_WEB_API_KEY MATCHES "^[A-Fa-f0-9]{32}$")
+    message(FATAL_ERROR "MIRAGE_STEAM_WEB_API_KEY must contain exactly 32 hexadecimal characters")
+endif()
 
 add_library(MirageQtCore STATIC
     Sources/Services/FavoritesManager.cpp
@@ -42,11 +47,16 @@ add_library(MirageQtCore STATIC
     Sources/Services/WallpaperLibrary.cpp
     Sources/Services/WallpaperLibrary.h
     Sources/Services/WEProject.cpp
-    Sources/Services/WEProject.h)
+    Sources/Services/WEProject.h
+    Sources/Services/WorkshopModels.cpp
+    Sources/Services/WorkshopModels.h
+    Sources/Services/WorkshopViewModel.cpp
+    Sources/Services/WorkshopViewModel.h)
 
 target_include_directories(MirageQtCore PUBLIC Sources)
 target_compile_definitions(MirageQtCore PUBLIC
-    MIRAGEQT_REPO_ROOT="${MIRAGEQT_REPO_ROOT}")
+    MIRAGEQT_REPO_ROOT="${MIRAGEQT_REPO_ROOT}"
+    MIRAGE_STEAM_WEB_API_KEY="${MIRAGE_STEAM_WEB_API_KEY}")
 target_link_libraries(MirageQtCore PUBLIC
     Qt6::Core
     Qt6::Gui
@@ -82,10 +92,38 @@ qt_add_executable(MirageQt
     Sources/ContentView/Components/WallpaperListWidget.h
     Sources/ContentView/Components/WallpaperPreviewWidget.cpp
     Sources/ContentView/Components/WallpaperPreviewWidget.h
-    Sources/ContentView/Components/WorkshopWidget.cpp
-    Sources/ContentView/Components/WorkshopWidget.h
-    Sources/SettingsView/SettingsWidget.cpp
-    Sources/SettingsView/SettingsWidget.h
+    Sources/ContentView/Components/Discover/DiscoverBannerView.cpp
+    Sources/ContentView/Components/Discover/DiscoverBannerView.h
+    Sources/ContentView/Components/Discover/DiscoverSectionView.cpp
+    Sources/ContentView/Components/Discover/DiscoverSectionView.h
+    Sources/ContentView/Components/Discover/DiscoverView.cpp
+    Sources/ContentView/Components/Discover/DiscoverView.h
+    Sources/ContentView/Components/Workshop/DownloadPopover.cpp
+    Sources/ContentView/Components/Workshop/DownloadPopover.h
+    Sources/ContentView/Components/Workshop/WorkshopFilterSidebar.cpp
+    Sources/ContentView/Components/Workshop/WorkshopFilterSidebar.h
+    Sources/ContentView/Components/Workshop/WorkshopItemCard.cpp
+    Sources/ContentView/Components/Workshop/WorkshopItemCard.h
+    Sources/ContentView/Components/Workshop/WorkshopItemDetail.cpp
+    Sources/ContentView/Components/Workshop/WorkshopItemDetail.h
+    Sources/ContentView/Components/Workshop/WorkshopSearchBar.cpp
+    Sources/ContentView/Components/Workshop/WorkshopSearchBar.h
+    Sources/ContentView/Components/Workshop/WorkshopTagBar.cpp
+    Sources/ContentView/Components/Workshop/WorkshopTagBar.h
+    Sources/ContentView/Components/Workshop/WorkshopView.cpp
+    Sources/ContentView/Components/Workshop/WorkshopView.h
+    Sources/SettingsView/AboutUsView.cpp
+    Sources/SettingsView/AboutUsView.h
+    Sources/SettingsView/GeneralPage.cpp
+    Sources/SettingsView/GeneralPage.h
+    Sources/SettingsView/PerformancePage.cpp
+    Sources/SettingsView/PerformancePage.h
+    Sources/SettingsView/PluginsPage.cpp
+    Sources/SettingsView/PluginsPage.h
+    Sources/SettingsView/ScreenSaverPage.cpp
+    Sources/SettingsView/ScreenSaverPage.h
+    Sources/SettingsView/SettingsView.cpp
+    Sources/SettingsView/SettingsView.h
     Sources/SteamSetup/SteamSetupDialog.cpp
     Sources/SteamSetup/SteamSetupDialog.h)
 

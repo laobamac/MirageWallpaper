@@ -25,23 +25,6 @@ QString tagName(const QJsonValue& value) {
 
 } // namespace
 
-WallpaperKind WorkshopItem::kind() const {
-    return wallpaperKindFromString(wallpaperType);
-}
-
-bool WorkshopItem::isPreset() const {
-    for (const QString& tag : tags) {
-        if (tag.compare(QStringLiteral("Preset"), Qt::CaseInsensitive) == 0) return true;
-    }
-    return false;
-}
-
-QString WorkshopItem::displayTypeName() const {
-    return isPreset()
-        ? QStringLiteral("预设 · %1").arg(wallpaperKindName(kind()))
-        : wallpaperKindName(kind());
-}
-
 SteamWebAPI::SteamWebAPI(GlobalSettingsService* settings, QObject* parent)
     : QObject(parent)
     , m_settings(settings) {
@@ -86,30 +69,44 @@ QByteArray SteamWebAPI::detailsPostBody(const QStringList& workshopIds) const {
     return body.query(QUrl::FullyEncoded).toUtf8();
 }
 
-void SteamWebAPI::queryFiles(const WorkshopQuery& query) {
+quint64 SteamWebAPI::queryFiles(const WorkshopQuery& query) {
+    const quint64 requestId = m_nextRequestId++;
     QNetworkReply* reply = m_network.get(QNetworkRequest(queryFilesUrl(query)));
-    connect(reply, &QNetworkReply::finished, this, [this, reply] {
+    connect(reply, &QNetworkReply::finished, this, [this, reply, requestId] {
         WorkshopQueryResult result;
         const QByteArray bytes = reply->readAll();
         if (reply->error() != QNetworkReply::NoError) {
-            result.error = reply->errorString();
+            const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+            if (status == 401 || status == 403) {
+                result.error = QStringLiteral("Steam API Key 无效、权限不足或当前线路拒绝访问");
+            } else if (status == 429) {
+                result.error = QStringLiteral("Steam Web API 请求过于频繁，请稍后重试或设置专属 API Key");
+            } else {
+                result.error = reply->errorString();
+            }
         } else {
-            const QJsonDocument doc = QJsonDocument::fromJson(bytes);
+            QJsonParseError parseError;
+            const QJsonDocument doc = QJsonDocument::fromJson(bytes, &parseError);
+            if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+                result.error = QStringLiteral("数据解析错误: %1").arg(parseError.errorString());
+            }
             const QJsonObject response = doc.object().value("response").toObject();
             result.total = response.value("total").toInt();
             result.items = parsePublishedFiles(response);
         }
         reply->deleteLater();
-        emit queryFinished(result);
+        emit queryFinished(requestId, result);
     });
+    return requestId;
 }
 
-void SteamWebAPI::getFileDetails(const QStringList& workshopIds) {
+quint64 SteamWebAPI::getFileDetails(const QStringList& workshopIds) {
+    const quint64 requestId = m_nextRequestId++;
     QUrl url(m_settings->steamAPIBaseUrl() + "ISteamRemoteStorage/GetPublishedFileDetails/v1/");
     QNetworkRequest request(url);
     request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/x-www-form-urlencoded"));
     QNetworkReply* reply = m_network.post(request, detailsPostBody(workshopIds));
-    connect(reply, &QNetworkReply::finished, this, [this, reply] {
+    connect(reply, &QNetworkReply::finished, this, [this, reply, requestId] {
         QString error;
         QVector<WorkshopItem> items;
         const QByteArray bytes = reply->readAll();
@@ -120,8 +117,9 @@ void SteamWebAPI::getFileDetails(const QStringList& workshopIds) {
             items = parsePublishedFiles(doc.object().value("response").toObject());
         }
         reply->deleteLater();
-        emit detailsFinished(items, error);
+        emit detailsFinished(requestId, items, error);
     });
+    return requestId;
 }
 
 void SteamWebAPI::downloadPreviewImage(const QUrl& url) {
@@ -130,22 +128,33 @@ void SteamWebAPI::downloadPreviewImage(const QUrl& url) {
         return;
     }
 
+    if (m_imageCache.contains(url)) {
+        emit previewImageFinished(url, m_imageCache.value(url), {});
+        return;
+    }
+    if (m_pendingImages.contains(url)) return;
+
     const QByteArray hash = QCryptographicHash::hash(url.toEncoded(), QCryptographicHash::Sha1).toHex();
     const QString cachePath = Paths::workshopCacheDir() + "/" + QString::fromLatin1(hash) + ".img";
     QFile cached(cachePath);
     if (cached.open(QIODevice::ReadOnly)) {
-        emit previewImageFinished(url, cached.readAll(), {});
+        const QByteArray bytes = cached.readAll();
+        m_imageCache.insert(url, bytes);
+        emit previewImageFinished(url, bytes, {});
         return;
     }
 
+    m_pendingImages.insert(url);
     QNetworkReply* reply = m_network.get(QNetworkRequest(url));
     connect(reply, &QNetworkReply::finished, this, [this, reply, url, cachePath] {
         QByteArray bytes = reply->readAll();
         QString error;
+        m_pendingImages.remove(url);
         if (reply->error() != QNetworkReply::NoError) {
             error = reply->errorString();
             bytes.clear();
         } else {
+            m_imageCache.insert(url, bytes);
             QFile out(cachePath);
             if (out.open(QIODevice::WriteOnly | QIODevice::Truncate)) out.write(bytes);
         }
@@ -155,9 +164,12 @@ void SteamWebAPI::downloadPreviewImage(const QUrl& url) {
 }
 
 QString SteamWebAPI::apiKey() const {
-    return m_settings && m_settings->hasValidCustomSteamAPIKey()
-        ? m_settings->normalizedSteamAPIKey()
-        : QString();
+    if (m_settings && m_settings->hasValidCustomSteamAPIKey()) return m_settings->normalizedSteamAPIKey();
+#ifdef MIRAGE_STEAM_WEB_API_KEY
+    return QStringLiteral(MIRAGE_STEAM_WEB_API_KEY).trimmed();
+#else
+    return {};
+#endif
 }
 
 int SteamWebAPI::sortApiValue(WorkshopSortOrder order) const {

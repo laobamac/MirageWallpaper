@@ -1,9 +1,11 @@
 #include "ContentView/MainWindow.h"
 
+#include "App/MirageStyle.h"
 #include "ContentView/FirstLaunchView.h"
 #include "ContentView/ImportPanels.h"
 #include "ContentView/Components/ProjectFeedbackBannerWidget.h"
-#include "SettingsView/SettingsWidget.h"
+#include "ContentView/Components/ExplorerBottomBarWidget.h"
+#include "SettingsView/SettingsView.h"
 #include "Services/Paths.h"
 #include "SteamSetup/SteamSetupDialog.h"
 
@@ -19,6 +21,7 @@
 #include <QMessageBox>
 #include <QScrollArea>
 #include <QScreen>
+#include <QSettings>
 #include <QSplitter>
 #include <QStatusBar>
 #include <QVBoxLayout>
@@ -35,23 +38,25 @@ MainWindow::MainWindow(QWidget* parent)
     Paths::ensureBaseDirectories();
 
     m_settings = new GlobalSettingsService(this);
+    applyMirageStyle(*qApp, m_settings->settings().appearance);
     m_favorites = new FavoritesManager(this);
     m_library = new WallpaperLibrary(m_settings, this);
     m_steamCMD = new SteamCMDManager(this);
     m_steamAPI = new SteamWebAPI(m_settings, this);
+    m_workshopViewModel = new WorkshopViewModel(m_steamAPI, m_steamCMD, m_library, this);
     m_renderer = new RendererController(m_settings, this);
 
     m_topTabs = new TopTabBarWidget(this);
     m_contentStack = new QStackedWidget(this);
     m_rightStack = new QStackedWidget(this);
     m_preview = new WallpaperPreviewWidget(m_favorites, this);
+    m_workshopDetail = new WorkshopItemDetail(m_workshopViewModel, m_steamAPI, this);
     m_rightStack->addWidget(m_preview);
-    m_rightStack->addWidget(buildWorkshopDetailPage());
+    m_rightStack->addWidget(m_workshopDetail);
 
     m_contentStack->addWidget(buildInstalledPage());
     m_contentStack->addWidget(buildDiscoverPage());
-    m_workshop = new WorkshopWidget(m_steamAPI, m_steamCMD, m_library, this);
-    m_contentStack->addWidget(m_workshop);
+    m_contentStack->addWidget(buildWorkshopPage());
 
     auto* left = new QWidget(this);
     left->setObjectName(QStringLiteral("mainContentPane"));
@@ -61,26 +66,38 @@ MainWindow::MainWindow(QWidget* parent)
     leftLayout->addWidget(m_topTabs);
     leftLayout->addWidget(new ProjectFeedbackBannerWidget(left));
     leftLayout->addWidget(m_contentStack, 1);
+    auto* bottom = new ExplorerBottomBarWidget(left);
+    leftLayout->addWidget(bottom);
 
-    auto* splitter = new QSplitter(Qt::Horizontal, this);
-    splitter->setObjectName(QStringLiteral("mainSplitter"));
-    splitter->setHandleWidth(1);
-    splitter->setChildrenCollapsible(false);
+    m_splitter = new QSplitter(Qt::Horizontal, this);
+    m_splitter->setObjectName(QStringLiteral("mainSplitter"));
+    m_splitter->setHandleWidth(1);
+    m_splitter->setChildrenCollapsible(false);
     m_rightStack->setObjectName(QStringLiteral("previewRail"));
     m_rightStack->setMinimumWidth(320);
     m_rightStack->setMaximumWidth(340);
-    splitter->addWidget(left);
-    splitter->addWidget(m_rightStack);
-    splitter->setStretchFactor(0, 1);
-    splitter->setStretchFactor(1, 0);
-    splitter->setSizes({1296, 320});
-    setCentralWidget(splitter);
+    m_splitter->addWidget(left);
+    m_splitter->addWidget(m_rightStack);
+    m_splitter->setStretchFactor(0, 1);
+    m_splitter->setStretchFactor(1, 0);
+    m_splitter->setSizes({1296, 320});
+    setCentralWidget(m_splitter);
     statusBar()->hide();
+
+    QSettings uiState;
+    if (const QByteArray geometry = uiState.value(QStringLiteral("MainWindow/Geometry")).toByteArray(); !geometry.isEmpty()) {
+        restoreGeometry(geometry);
+    }
+    if (const QByteArray splitterState = uiState.value(QStringLiteral("MainWindow/Splitter")).toByteArray(); !splitterState.isEmpty()) {
+        m_splitter->restoreState(splitterState);
+    }
+    setFilterVisible(uiState.value(QStringLiteral("MainWindow/FilterVisible"), false).toBool());
 
     connect(m_topTabs, &TopTabBarWidget::tabChanged, this, [this](int index) {
         m_contentStack->setCurrentIndex(index);
-        m_rightStack->setCurrentIndex(index == 2 ? 1 : 0);
-        if (index == 2) m_workshop->search();
+        m_rightStack->setCurrentIndex(index == 0 || m_showWorkshopCustomization ? 0 : 1);
+        if (index == 1) m_discover->activate();
+        if (index == 2) m_workshop->activate();
     });
     connect(m_topTabs, &TopTabBarWidget::settingsRequested, this, &MainWindow::openSettings);
     connect(m_topTabs, &TopTabBarWidget::displaySettingsRequested, this, [this] {
@@ -111,10 +128,56 @@ MainWindow::MainWindow(QWidget* parent)
     });
     connect(m_preview, &WallpaperPreviewWidget::stopRequested, m_renderer, &RendererController::stopAll);
     connect(m_preview, &WallpaperPreviewWidget::closeRequested, this, &QWidget::hide);
-    connect(m_workshop, &WorkshopWidget::steamSetupRequested, this, &MainWindow::openSteamSetup);
-    connect(m_workshop, &WorkshopWidget::itemSelected, this, &MainWindow::showWorkshopDetail);
-    connect(m_workshop, &WorkshopWidget::downloadRequested, this, [this](const WorkshopItem& item) {
-        m_steamCMD->downloadItem(item.publishedFileId, item.fileSize);
+    connect(bottom, &ExplorerBottomBarWidget::importRequested, this, &MainWindow::importWallpaper);
+    connect(m_workshop, &WorkshopView::steamSetupRequested, this, &MainWindow::openSteamSetup);
+    connect(m_workshopDetail, &WorkshopItemDetail::steamSetupRequested, this, &MainWindow::openSteamSetup);
+    connect(m_workshopDetail, &WorkshopItemDetail::closeRequested, this, &QWidget::hide);
+    connect(m_workshopViewModel, &WorkshopViewModel::steamSetupRequested, this, &MainWindow::openSteamSetup);
+    connect(m_workshop, &WorkshopView::settingsRequested, this, [this] { openSettingsPage(1); });
+    connect(m_discover, &DiscoverView::settingsRequested, this, [this] { openSettingsPage(1); });
+    connect(m_workshopViewModel, &WorkshopViewModel::navigateToWorkshopRequested, this, [this] {
+        m_topTabs->setCurrentIndex(2);
+    });
+    connect(m_workshopViewModel, &WorkshopViewModel::selectedItemChanged, this,
+            [this](const WorkshopItem& item, bool hasSelection) {
+        m_showWorkshopCustomization = false;
+        if (hasSelection) m_workshopDetail->setItem(item);
+        else m_workshopDetail->clearItem();
+        if (m_topTabs->currentIndex() != 0) m_rightStack->setCurrentIndex(1);
+    });
+    connect(m_workshopViewModel, &WorkshopViewModel::installedWallpaperRequested, this,
+            [this](const Wallpaper& wallpaper) {
+        m_showWorkshopCustomization = true;
+        m_preview->setWallpaper(wallpaper);
+        m_rightStack->setCurrentIndex(0);
+    });
+    connect(m_workshopViewModel, &WorkshopViewModel::presetDependencyRequested, this,
+            [this](const QString& presetId,
+                   const QString& presetTitle,
+                   const QString& dependencyId,
+                   const WorkshopItem& dependencyItem) {
+        const QString size = dependencyItem.fileSize > 0
+            ? QStringLiteral("（%1）").arg(dependencyItem.formattedFileSize())
+            : QString();
+        const auto answer = QMessageBox::question(
+            this,
+            QStringLiteral("需要基础壁纸"),
+            QStringLiteral("预设“%1”需要基础壁纸“%2”%3才能使用。是否一起下载？")
+                .arg(presetTitle, dependencyItem.title, size),
+            QMessageBox::Yes | QMessageBox::No,
+            QMessageBox::Yes);
+        if (answer == QMessageBox::Yes) {
+            m_workshopViewModel->confirmPresetDependencyDownload(presetId, dependencyId, dependencyItem);
+        }
+    });
+    connect(m_workshopViewModel, &WorkshopViewModel::workshopItemDownloaded, m_wallpaperList, &WallpaperListWidget::reload);
+    connect(m_settings, &GlobalSettingsService::settingsChanged, this, [this](const GlobalSettings& settings) {
+        applyMirageStyle(*qApp, settings.appearance);
+        m_renderer->setVolume(settings.masterVolume);
+        m_renderer->setMuted(settings.globalMuted);
+        m_renderer->setFps(settings.fps);
+        m_wallpaperList->reload();
+        m_workshopViewModel->reloadOnlineContent();
     });
     connect(m_renderer, &RendererController::rendererMessage, this, &MainWindow::showMessage);
     connect(m_steamCMD, &SteamCMDManager::downloadStateChanged, this, [this](const QString& id, const DownloadState& state) {
@@ -130,6 +193,13 @@ MainWindow::MainWindow(QWidget* parent)
 
 MainWindow::~MainWindow() {
     m_renderer->stopAll();
+}
+
+void MainWindow::closeEvent(QCloseEvent* event) {
+    QSettings uiState;
+    uiState.setValue(QStringLiteral("MainWindow/Geometry"), saveGeometry());
+    if (m_splitter) uiState.setValue(QStringLiteral("MainWindow/Splitter"), m_splitter->saveState());
+    QMainWindow::closeEvent(event);
 }
 
 void MainWindow::applyWallpaper(const Wallpaper& wallpaper, bool allScreens) {
@@ -163,11 +233,38 @@ void MainWindow::importWallpaper() {
 }
 
 void MainWindow::openSettings() {
+    openSettingsPage(-1);
+}
+
+void MainWindow::openSettingsPage(int page) {
+    if (m_settingsDialog) {
+        if (page >= 0) {
+            if (auto* settingsView = m_settingsDialog->findChild<SettingsView*>()) settingsView->selectPage(page);
+        }
+        m_settingsDialog->showNormal();
+        m_settingsDialog->raise();
+        m_settingsDialog->activateWindow();
+        return;
+    }
     auto* dialog = new QDialog(this);
+    m_settingsDialog = dialog;
     dialog->setWindowTitle(QStringLiteral("设置"));
-    dialog->resize(640, 560);
+    dialog->resize(680, 680);
     auto* layout = new QVBoxLayout(dialog);
-    layout->addWidget(new SettingsWidget(m_settings, dialog));
+    layout->setContentsMargins(0, 0, 0, 0);
+    auto* settingsView = new SettingsView(m_settings, dialog);
+    if (page >= 0) settingsView->selectPage(page);
+    layout->addWidget(settingsView);
+    connect(settingsView, &SettingsView::accepted, dialog, &QDialog::accept);
+    connect(settingsView, &SettingsView::cancelled, dialog, &QDialog::reject);
+    QSettings uiState;
+    if (const QByteArray geometry = uiState.value(QStringLiteral("Settings/Geometry")).toByteArray(); !geometry.isEmpty()) {
+        dialog->restoreGeometry(geometry);
+    }
+    connect(dialog, &QDialog::finished, this, [this, dialog] {
+        QSettings().setValue(QStringLiteral("Settings/Geometry"), dialog->saveGeometry());
+        if (m_settingsDialog == dialog) m_settingsDialog = nullptr;
+    });
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     dialog->show();
 }
@@ -177,21 +274,11 @@ void MainWindow::openSteamSetup() {
     dialog.exec();
 }
 
-void MainWindow::showWorkshopDetail(const WorkshopItem& item) {
-    m_workshopTitle->setText(item.title);
-    m_workshopMeta->setText(QStringLiteral("%1 · %2 · Workshop ID %3")
-                                .arg(item.displayTypeName(), QLocale().formattedDataSize(item.fileSize), item.publishedFileId));
-    m_workshopDescription->setText(item.description.isEmpty() ? QStringLiteral("暂无描述") : item.description);
-    m_workshopPreview->setPixmap(QIcon::fromTheme("preferences-desktop-wallpaper").pixmap(280, 158));
-    if (item.previewImageUrl.isValid()) m_steamAPI->downloadPreviewImage(item.previewImageUrl);
-}
-
 QWidget* MainWindow::buildInstalledPage() {
     auto* page = new QWidget(this);
-    auto* top = new ExplorerTopBarWidget(page);
+    m_installedTop = new ExplorerTopBarWidget(page);
     m_filter = new FilterResultsWidget(page);
     m_wallpaperList = new WallpaperListWidget(m_library, m_favorites, page);
-    auto* bottom = new ExplorerBottomBarWidget(page);
 
     auto* middle = new QHBoxLayout;
     middle->setContentsMargins(0, 0, 0, 0);
@@ -202,21 +289,20 @@ QWidget* MainWindow::buildInstalledPage() {
     auto* layout = new QVBoxLayout(page);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(4);
-    layout->addWidget(top);
+    layout->addWidget(m_installedTop);
     layout->addLayout(middle, 1);
-    layout->addWidget(bottom);
 
-    connect(top, &ExplorerTopBarWidget::filterToggled, m_filter, [this] { m_filter->setVisible(!m_filter->isVisible()); });
-    connect(top, &ExplorerTopBarWidget::refreshRequested, m_wallpaperList, &WallpaperListWidget::reload);
-    connect(top, &ExplorerTopBarWidget::searchChanged, m_wallpaperList, &WallpaperListWidget::setSearchText);
-    connect(top, &ExplorerTopBarWidget::sortChanged, this, [this, top] {
-        m_wallpaperList->setSortText(top->sortText());
-        m_wallpaperList->setSortDescending(top->descending());
+    m_filter->hide();
+    connect(m_installedTop, &ExplorerTopBarWidget::filterToggled, this, &MainWindow::setFilterVisible);
+    connect(m_installedTop, &ExplorerTopBarWidget::refreshRequested, m_wallpaperList, &WallpaperListWidget::reload);
+    connect(m_installedTop, &ExplorerTopBarWidget::searchChanged, m_wallpaperList, &WallpaperListWidget::setSearchText);
+    connect(m_installedTop, &ExplorerTopBarWidget::sortChanged, this, [this] {
+        m_wallpaperList->setSortText(m_installedTop->sortText());
+        m_wallpaperList->setSortDescending(m_installedTop->descending());
     });
     connect(m_filter, &FilterResultsWidget::filtersChanged, this, [this] {
         m_wallpaperList->setFilterState(m_filter->filterState());
     });
-    connect(bottom, &ExplorerBottomBarWidget::importRequested, this, &MainWindow::importWallpaper);
     connect(m_wallpaperList, &WallpaperListWidget::wallpaperSelected, m_preview, &WallpaperPreviewWidget::setWallpaper);
     connect(m_wallpaperList, &WallpaperListWidget::applyRequested, this, &MainWindow::applyWallpaper);
     connect(m_wallpaperList, &WallpaperListWidget::importRequested, this, &MainWindow::importWallpaper);
@@ -225,59 +311,49 @@ QWidget* MainWindow::buildInstalledPage() {
 }
 
 QWidget* MainWindow::buildDiscoverPage() {
+    m_discover = new DiscoverView(m_workshopViewModel, m_steamAPI, m_settings, this);
+    return m_discover;
+}
+
+QWidget* MainWindow::buildWorkshopPage() {
     auto* page = new QWidget(this);
-    auto* title = new QLabel(QStringLiteral("发现"), page);
-    QFont font = title->font();
-    font.setPointSize(font.pointSize() + 8);
-    font.setBold(true);
-    title->setFont(font);
-    auto* text = new QLabel(QStringLiteral("热门趋势、最新发布、订阅最多和评分最高内容使用创意工坊数据。请切换到“创意工坊”浏览和下载。"), page);
-    text->setWordWrap(true);
+    m_workshopTop = new ExplorerTopBarWidget(page);
+    m_workshopFilter = new WorkshopFilterSidebar(m_workshopViewModel, page);
+    m_workshop = new WorkshopView(m_workshopViewModel, m_steamAPI, m_steamCMD, m_settings, page);
+    m_workshopFilter->hide();
+
+    auto* middle = new QHBoxLayout;
+    middle->setContentsMargins(0, 0, 0, 0);
+    middle->setSpacing(10);
+    middle->addWidget(m_workshopFilter);
+    middle->addWidget(m_workshop, 1);
     auto* layout = new QVBoxLayout(page);
-    layout->addWidget(title);
-    layout->addWidget(text);
-    layout->addStretch(1);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(4);
+    layout->addWidget(m_workshopTop);
+    layout->addLayout(middle, 1);
+
+    connect(m_workshopTop, &ExplorerTopBarWidget::filterToggled, this, &MainWindow::setFilterVisible);
+    connect(m_workshopTop, &ExplorerTopBarWidget::refreshRequested, m_workshopViewModel, &WorkshopViewModel::search);
+    connect(m_workshopTop, &ExplorerTopBarWidget::searchChanged, m_workshopViewModel, &WorkshopViewModel::setSearchText);
+    connect(m_workshopTop, &ExplorerTopBarWidget::sortChanged, this, [this] {
+        if (m_workshopTop->sortText() == QStringLiteral("评分")) {
+            m_workshopViewModel->setSortOrder(WorkshopSortOrder::TopRated);
+        } else if (m_workshopTop->sortText() == QStringLiteral("文件大小")) {
+            m_workshopViewModel->setSortOrder(WorkshopSortOrder::MostSubscribed);
+        } else {
+            m_workshopViewModel->setSortOrder(WorkshopSortOrder::Trending);
+        }
+    });
     return page;
 }
 
-QWidget* MainWindow::buildWorkshopDetailPage() {
-    auto* page = new QWidget(this);
-    auto* scroll = new QScrollArea(page);
-    auto* content = new QWidget(scroll);
-    auto* layout = new QVBoxLayout(content);
-    layout->setContentsMargins(12, 12, 12, 12);
-    layout->setSpacing(14);
-
-    m_workshopPreview = new QLabel(content);
-    m_workshopPreview->setFixedSize(280, 158);
-    m_workshopPreview->setAlignment(Qt::AlignCenter);
-    m_workshopPreview->setFrameShape(QFrame::Box);
-    m_workshopTitle = new QLabel(QStringLiteral("点击壁纸查看详情"), content);
-    m_workshopTitle->setWordWrap(true);
-    m_workshopTitle->setAlignment(Qt::AlignCenter);
-    m_workshopMeta = new QLabel(content);
-    m_workshopMeta->setWordWrap(true);
-    m_workshopDescription = new QLabel(QStringLiteral("暂无描述"), content);
-    m_workshopDescription->setWordWrap(true);
-
-    auto* center = new QHBoxLayout;
-    center->addStretch(1);
-    center->addWidget(m_workshopPreview);
-    center->addStretch(1);
-    layout->addLayout(center);
-    layout->addWidget(m_workshopTitle);
-    layout->addWidget(m_workshopMeta);
-    layout->addWidget(new QLabel(QStringLiteral("标签"), content));
-    layout->addWidget(new QLabel(QStringLiteral("描述"), content));
-    layout->addWidget(m_workshopDescription);
-    layout->addStretch(1);
-
-    scroll->setWidget(content);
-    scroll->setWidgetResizable(true);
-    auto* outer = new QVBoxLayout(page);
-    outer->setContentsMargins(0, 0, 0, 0);
-    outer->addWidget(scroll);
-    return page;
+void MainWindow::setFilterVisible(bool visible) {
+    if (m_filter) m_filter->setVisible(visible);
+    if (m_workshopFilter) m_workshopFilter->setVisible(visible);
+    if (m_installedTop) m_installedTop->setFilterVisible(visible);
+    if (m_workshopTop) m_workshopTop->setFilterVisible(visible);
+    QSettings().setValue(QStringLiteral("MainWindow/FilterVisible"), visible);
 }
 
 RenderOptions MainWindow::currentRenderOptions() const {

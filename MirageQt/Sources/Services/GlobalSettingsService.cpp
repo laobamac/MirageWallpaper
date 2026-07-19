@@ -8,9 +8,13 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QRegularExpression>
+#include <QSaveFile>
+#include <QSet>
 
 namespace Mirage {
 namespace {
+
+QString settingsPath();
 
 QString value(const QJsonObject& object, const char* key, const QString& fallback) {
     return object.value(QString::fromLatin1(key)).toString(fallback);
@@ -98,6 +102,46 @@ GlobalSettings fromJson(const QJsonObject& object) {
     return s;
 }
 
+GlobalSettings sanitized(GlobalSettings settings) {
+    const QSet<QString> playback = {QStringLiteral("keepRunning"), QStringLiteral("mute"),
+                                    QStringLiteral("pause"), QStringLiteral("stop")};
+    auto validOr = [](QString value, const QSet<QString>& accepted, const QString& fallback) {
+        return accepted.contains(value) ? value : fallback;
+    };
+    settings.otherApplicationFocused = validOr(settings.otherApplicationFocused, playback, QStringLiteral("keepRunning"));
+    settings.otherApplicationFullscreen = validOr(settings.otherApplicationFullscreen, playback, QStringLiteral("keepRunning"));
+    settings.otherApplicationPlayingAudio = validOr(settings.otherApplicationPlayingAudio, playback, QStringLiteral("keepRunning"));
+    settings.displayAsleep = validOr(settings.displayAsleep, playback, QStringLiteral("keepRunning"));
+    settings.laptopOnBattery = validOr(settings.laptopOnBattery, playback, QStringLiteral("keepRunning"));
+    settings.antiAliasing = validOr(settings.antiAliasing,
+                                    {QStringLiteral("none"), QStringLiteral("msaa_x2"), QStringLiteral("msaa_x4"), QStringLiteral("msaa_x8")},
+                                    QStringLiteral("msaa_x2"));
+    settings.appearance = validOr(settings.appearance,
+                                  {QStringLiteral("light"), QStringLiteral("dark"), QStringLiteral("followSystem")},
+                                  QStringLiteral("followSystem"));
+    settings.steamAPIEndpoint = validOr(settings.steamAPIEndpoint,
+                                        {QStringLiteral("official"), QStringLiteral("mirror")},
+                                        QStringLiteral("official"));
+    settings.fps = qBound(10, settings.fps, 120);
+    settings.masterVolume = qBound(0.0, settings.masterVolume, 1.0);
+    settings.steamAPIKey = settings.steamAPIKey.trimmed();
+    return settings;
+}
+
+bool writeSettings(const GlobalSettings& settings, QString* error) {
+    QSaveFile file(settingsPath());
+    if (!file.open(QIODevice::WriteOnly)) {
+        if (error) *error = file.errorString();
+        return false;
+    }
+    const QByteArray bytes = QJsonDocument(toJson(settings)).toJson(QJsonDocument::Indented);
+    if (file.write(bytes) != bytes.size() || !file.commit()) {
+        if (error) *error = file.errorString();
+        return false;
+    }
+    return true;
+}
+
 QString settingsPath() {
     return Paths::configDir() + "/settings.json";
 }
@@ -114,29 +158,28 @@ const GlobalSettings& GlobalSettingsService::settings() const {
     return m_settings;
 }
 
-void GlobalSettingsService::setSettings(const GlobalSettings& settings) {
-    const bool autoStartChanged = settings.autoStart != m_settings.autoStart;
-    m_settings = settings;
+bool GlobalSettingsService::setSettings(const GlobalSettings& settings, QString* error) {
+    const GlobalSettings next = sanitized(settings);
+    if (!writeSettings(next, error)) return false;
+    const bool autoStartChanged = next.autoStart != m_settings.autoStart;
+    m_settings = next;
     if (autoStartChanged) {
         LinuxSystemIntegration::setAutoStartEnabled(
             m_settings.autoStart, QCoreApplication::applicationFilePath());
     }
-    save();
     emit settingsChanged(m_settings);
+    return true;
 }
 
-void GlobalSettingsService::save() const {
-    QFile file(settingsPath());
-    if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        file.write(QJsonDocument(toJson(m_settings)).toJson(QJsonDocument::Indented));
-    }
+bool GlobalSettingsService::save(QString* error) const {
+    return writeSettings(m_settings, error);
 }
 
 void GlobalSettingsService::reload() {
     QFile file(settingsPath());
     if (file.open(QIODevice::ReadOnly)) {
         const auto doc = QJsonDocument::fromJson(file.readAll());
-        if (doc.isObject()) m_settings = fromJson(doc.object());
+        if (doc.isObject()) m_settings = sanitized(fromJson(doc.object()));
     }
     emit settingsChanged(m_settings);
 }

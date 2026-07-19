@@ -11,10 +11,10 @@ ExplorerTopBarWidget::ExplorerTopBarWidget(QWidget* parent)
     m_search->setPlaceholderText(QStringLiteral("搜索"));
     m_search->setFixedWidth(160);
 
-    auto* filter = new QPushButton(QIcon::fromTheme("view-filter"), QStringLiteral("筛选"), this);
-    filter->setCheckable(true);
-    filter->setChecked(true);
-    filter->setProperty("accent", true);
+    m_filter = new QPushButton(QIcon::fromTheme("view-filter"), QStringLiteral("筛选"), this);
+    m_filter->setCheckable(true);
+    m_filter->setChecked(false);
+    m_filter->setProperty("accent", true);
     auto* refresh = new QToolButton(this);
     refresh->setIcon(QIcon::fromTheme("view-refresh"));
     refresh->setToolTip(QStringLiteral("刷新"));
@@ -35,14 +35,14 @@ ExplorerTopBarWidget::ExplorerTopBarWidget(QWidget* parent)
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(8);
     layout->addWidget(m_search);
-    layout->addWidget(filter);
+    layout->addWidget(m_filter);
     layout->addWidget(refresh);
     layout->addStretch(1);
     layout->addWidget(m_direction);
     layout->addWidget(m_sort);
 
     connect(m_search, &QLineEdit::textChanged, this, &ExplorerTopBarWidget::searchChanged);
-    connect(filter, &QPushButton::clicked, this, &ExplorerTopBarWidget::filterToggled);
+    connect(m_filter, &QPushButton::toggled, this, &ExplorerTopBarWidget::filterToggled);
     connect(refresh, &QToolButton::clicked, this, &ExplorerTopBarWidget::refreshRequested);
     connect(m_sort, &QComboBox::currentIndexChanged, this, &ExplorerTopBarWidget::sortChanged);
     connect(m_direction, &QToolButton::clicked, this, [this] {
@@ -62,6 +62,10 @@ QString ExplorerTopBarWidget::sortText() const {
 
 bool ExplorerTopBarWidget::descending() const {
     return m_descending;
+}
+
+void ExplorerTopBarWidget::setFilterVisible(bool visible) {
+    m_filter->setChecked(visible);
 }
 
 } // namespace Mirage

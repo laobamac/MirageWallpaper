@@ -18,10 +18,6 @@ QToolButton* tabButton(const QIcon& icon, const QString& text, int id, QButtonGr
     button->setAutoRaise(false);
     button->setProperty("tabButton", true);
     button->setMinimumHeight(32);
-    button->setStyleSheet(QStringLiteral(
-        "QToolButton { color: #f1efec; background: transparent; padding: 3px 8px;"
-        " border: 2px solid #0a84ff; border-radius: 0; font-size: 16px; font-weight: 600; }"
-        "QToolButton:hover, QToolButton:checked { background: #0a84ff; color: white; }"));
     group->addButton(button, id);
     return button;
 }

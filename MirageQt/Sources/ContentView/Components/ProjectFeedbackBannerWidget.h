@@ -10,7 +10,7 @@ class ProjectFeedbackBannerWidget : public QWidget {
     Q_OBJECT
 
 public:
-    explicit ProjectFeedbackBannerWidget(QWidget* parent = nullptr);
+    explicit ProjectFeedbackBannerWidget(QWidget* parent = nullptr, bool showsActions = true);
 
 private:
     QPushButton* m_copyButton = nullptr;

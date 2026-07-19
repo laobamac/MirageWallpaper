@@ -289,15 +289,15 @@ WallpaperPreviewWidget::WallpaperPreviewWidget(FavoritesManager* favorites, QWid
     auto* footer = new QWidget(this);
     footer->setObjectName(QStringLiteral("previewFooter"));
     auto* closeRow = new QHBoxLayout(footer);
-    closeRow->setContentsMargins(12, 10, 12, 12);
+    closeRow->setContentsMargins(16, 16, 16, 16);
     closeRow->setSpacing(8);
-    auto* ok = new QPushButton(QStringLiteral("确定"), footer);
+    auto* confirm = new QPushButton(QStringLiteral("确认"), footer);
     auto* cancel = new QPushButton(QStringLiteral("取消"), footer);
-    ok->setProperty("accent", true);
-    ok->setFixedWidth(64);
-    cancel->setFixedWidth(64);
+    confirm->setProperty("accent", true);
+    confirm->setFixedWidth(70);
+    cancel->setFixedWidth(70);
     closeRow->addStretch(1);
-    closeRow->addWidget(ok);
+    closeRow->addWidget(confirm);
     closeRow->addWidget(cancel);
 
     auto* layout = new QVBoxLayout(this);
@@ -323,7 +323,7 @@ WallpaperPreviewWidget::WallpaperPreviewWidget(FavoritesManager* favorites, QWid
     connect(m_properties, &PropertyEditorWidget::propertyChanged, this, &WallpaperPreviewWidget::propertyChanged);
     connect(applyAll, &QPushButton::clicked, this, [this] { emit applyAllRequested(m_wallpaper); });
     connect(stop, &QPushButton::clicked, this, &WallpaperPreviewWidget::stopRequested);
-    connect(ok, &QPushButton::clicked, this, &WallpaperPreviewWidget::closeRequested);
+    connect(confirm, &QPushButton::clicked, this, &WallpaperPreviewWidget::closeRequested);
     connect(cancel, &QPushButton::clicked, this, &WallpaperPreviewWidget::closeRequested);
 }
 

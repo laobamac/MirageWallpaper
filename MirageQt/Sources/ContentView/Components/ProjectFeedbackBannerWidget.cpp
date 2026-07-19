@@ -12,7 +12,7 @@
 
 namespace Mirage {
 
-ProjectFeedbackBannerWidget::ProjectFeedbackBannerWidget(QWidget* parent)
+ProjectFeedbackBannerWidget::ProjectFeedbackBannerWidget(QWidget* parent, bool showsActions)
     : QWidget(parent) {
     setObjectName(QStringLiteral("projectFeedbackBanner"));
     setAttribute(Qt::WA_StyledBackground, true);
@@ -48,6 +48,8 @@ ProjectFeedbackBannerWidget::ProjectFeedbackBannerWidget(QWidget* parent)
     auto* issue = new QPushButton(QIcon::fromTheme(QStringLiteral("document-edit")), QStringLiteral("提交 Issue"), this);
     m_copyButton = new QPushButton(QIcon::fromTheme(QStringLiteral("edit-copy")), QStringLiteral("复制群号"), this);
     m_copyButton->setProperty("accent", true);
+    issue->setVisible(showsActions);
+    m_copyButton->setVisible(showsActions);
 
     auto* layout = new QHBoxLayout(this);
     layout->setContentsMargins(12, 7, 12, 7);

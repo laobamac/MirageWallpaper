@@ -24,6 +24,7 @@ QString statePath() {
     return Paths::configDir() + "/steamcmd.json";
 }
 
+
 QString markerPath() {
     return Paths::steamCMDDir() + "/.mirage-ready";
 }
