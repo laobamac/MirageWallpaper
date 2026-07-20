@@ -5,6 +5,10 @@ description: Set a live wallpaper as your macOS screen saver, running independen
 
 Mirage provides a standalone **live screen saver** component that lets you set a video, web, or scene wallpaper as your macOS screen saver. The screen saver is loaded by Mirage's own host, and **does not require the main Mirage app to keep running**.
 
+![Mirage live screen saver settings](/images/docs/settings-screensaver.webp)
+
+*Real interface: the screen saver component status, configured screen saver wallpaper, and currently playing desktop wallpaper appear together here.*
+
 ## Installing the screen saver component
 
 In "Settings → Screen Saver":

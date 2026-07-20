@@ -5,6 +5,10 @@ description: Get to know the top tabs, wallpaper library, filter panel, and entr
 
 The top of Mirage's main window is a row of tabs and entry buttons, with the content area for the current tab below. Getting familiar with these areas is enough to get you started.
 
+![The Mirage main window with the installed library, filters, wallpaper grid, and playback panel](/images/docs/library-overview.webp)
+
+*Real interface: the Installed view in Mirage 1.0.0. Filters sit on the left, the wallpaper library is in the middle, and the selected work and playback properties appear on the right.*
+
 ## Top tabs
 
 The main window has three primary tabs across the top:

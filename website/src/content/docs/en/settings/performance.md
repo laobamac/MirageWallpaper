@@ -5,6 +5,10 @@ description: Configure power-saving playback rules and scene render quality to b
 
 The "Performance" section has two parts: **playback rules** (automatically adjusting playback in specific situations) and **render quality**.
 
+![Mirage performance settings with playback rules and render quality controls](/images/docs/settings-performance.webp)
+
+*Real interface: performance settings control both system-triggered playback behavior and scene-wallpaper render quality.*
+
 ## Playback rules
 
 Mirage continuously monitors system state and automatically changes wallpaper playback behavior in the situations below. Each item can be set to its own action.

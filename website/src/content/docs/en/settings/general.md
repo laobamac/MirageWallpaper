@@ -5,6 +5,10 @@ description: General settings for startup, software update, language, appearance
 
 The "General" section brings together settings for startup, updates, appearance, audio, wallpaper library directories, and the Workshop.
 
+![Mirage general settings for launch, updates, language, and appearance](/images/docs/settings-general.webp)
+
+*Real interface: the top of General settings, including launch at login, update channels, interface language, and appearance.*
+
 ## Startup
 
 - **Launch Mirage at login**: automatically runs Mirage and restores your wallpaper after you log in.

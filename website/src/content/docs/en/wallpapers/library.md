@@ -5,6 +5,10 @@ description: Browse, search, sort, filter, and favorite your live wallpapers in 
 
 The "Installed" tab is your local wallpaper library, showing every wallpaper you've imported or downloaded.
 
+![The Mirage wallpaper library](/images/docs/library-overview.webp)
+
+*Real interface: the library with its filter panel open. The wallpaper grid and preview panel update as you select a work.*
+
 ## Browsing
 
 Wallpapers appear as a grid of cards, each showing a preview image and a name. Scroll to browse everything, and click a card to select it and load the preview and properties panel.
