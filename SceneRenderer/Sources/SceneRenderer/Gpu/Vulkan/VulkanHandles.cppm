@@ -2,7 +2,9 @@ module;
 
 #include <unistd.h>
 
+#if defined(__APPLE__)
 #define VK_USE_PLATFORM_METAL_EXT
+#endif
 #include <rstd/macro.hpp>
 
 #include "vk_mem_alloc.h"
@@ -323,7 +325,9 @@ struct DeviceDispatch : InstanceDispatch {
     PFN_vkGetImageMemoryRequirements             vkGetImageMemoryRequirements {};
     PFN_vkGetImageSubresourceLayout              vkGetImageSubresourceLayout {};
     PFN_vkGetPipelineCacheData                   vkGetPipelineCacheData {};
+#if defined(__APPLE__)
     PFN_vkExportMetalObjectsEXT                  vkExportMetalObjectsEXT {};
+#endif
     PFN_vkGetImageDrmFormatModifierPropertiesEXT vkGetImageDrmFormatModifierPropertiesEXT {};
     PFN_vkGetPipelineExecutablePropertiesKHR     vkGetPipelineExecutablePropertiesKHR {};
     PFN_vkGetPipelineExecutableStatisticsKHR     vkGetPipelineExecutableStatisticsKHR {};

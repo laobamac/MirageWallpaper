@@ -1,5 +1,9 @@
 module;
 
+#if defined(__linux__)
+#include <string>
+#endif
+
 #include <sys/types.h>
 module sr.pkg.parse;
 import sr.core;

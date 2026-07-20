@@ -1,5 +1,9 @@
 module;
 
+#if defined(__linux__)
+#include <string>
+#endif
+
 #include <algorithm>
 #include <cmath>
 #include <sstream>
@@ -627,8 +631,10 @@ SceneAnimationCurve ToSceneAnimationCurve(const wpscene::AnimCurve& curve) {
     out.fps      = curve.options.fps;
     out.length   = curve.options.length;
     out.mode     = curve.options.mode;
+    out.name     = curve.options.name;
     out.wraploop = curve.options.wraploop;
     out.relative = curve.relative;
+    out.startpaused = curve.options.startpaused;
     return out;
 }
 
@@ -650,6 +656,19 @@ void AssignNodeFieldAnimations(SceneNode& node, const wpscene::FieldBindings& bi
         node.SetRotationAnimation(ToSceneAnimationCurve(angles_it->second));
     auto it = bindings.animations.find("alpha");
     if (it != bindings.animations.end()) node.SetAlphaAnimation(ToSceneAnimationCurve(it->second));
+}
+
+bool HasStartPausedNamedFieldAnimation(const wpscene::FieldBindings& bindings) {
+    for (const auto& [_, curve] : bindings.animations) {
+        if (! curve.options.name.empty() && curve.options.startpaused) return true;
+    }
+    return false;
+}
+
+void SetFieldAnimationsAlphaGate(SceneNode& node, const wpscene::FieldBindings& bindings) {
+    for (const auto& [_, curve] : bindings.animations) {
+        if (! curve.options.name.empty()) node.SetFieldAnimationAlphaGate(curve.options.name, true);
+    }
 }
 
 std::optional<SceneCameraLookAtKey> ParseLookAtKey(const Json& json) {
@@ -2244,10 +2263,15 @@ void InitContext(ParseContext& context, fs::VFS& vfs, const wpscene::SceneMetada
 
 void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
     auto& wpimgobj = img_obj;
+    const bool is_hidden_link_source =
+        context.hidden_link_source_ids.count(static_cast<std::int32_t>(wpimgobj.id)) != 0;
+    const bool hidden_playable_animation =
+        ! wpimgobj.visible && ! is_hidden_link_source &&
+        HasStartPausedNamedFieldAnimation(wpimgobj.field_bindings);
     // Invisible image layers are kept in the scene tree because their composite
     // may be sampled by other layers via `_rt_imageLayerComposite_<id>`. The
     // render-graph builder decides whether to actually emit passes for them.
-    if (! wpimgobj.visible) {
+    if (! wpimgobj.visible && ! hidden_playable_animation) {
         context.scene->MarkLayerVisibilityElidable(
             WallpaperLayerId { .value = static_cast<i32>(wpimgobj.id) });
     }
@@ -2313,8 +2337,6 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
         colorEffect.materials.push_back(std::move(colorMat));
         wpimgobj.effects.push_back(std::move(colorEffect));
     }
-    const bool is_hidden_link_source =
-        context.hidden_link_source_ids.count(static_cast<std::int32_t>(wpimgobj.id)) != 0;
     if (! has_author_effect && (is_hidden_link_source || wpimgobj.composite_layer)) {
         AppendLayerCompositePassthroughEffect(vfs, wpimgobj);
     }
@@ -2885,7 +2907,9 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
                 // (`_rt_imageLayerComposite_<self>[_a|_b]`) wants this layer's
                 // running chain result.
                 for (auto& t : wpmat.textures) {
-                    if (ParseImageLayerCompositeId(t) == static_cast<std::uint32_t>(wpimgobj.id))
+                    const auto composite_id = ParseImageLayerCompositeId(t);
+                    if (composite_id &&
+                        *composite_id == static_cast<std::uint32_t>(wpimgobj.id))
                         t = effect_ppong_a;
                 }
                 if (wpmat.textures.size() == 0) wpmat.textures.resize(1);
@@ -3085,6 +3109,9 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj) {
         }
     }
     AssignNodeFieldAnimations(*spImgNode.as_ptr(), wpimgobj.field_bindings);
+    if (hidden_playable_animation) {
+        SetFieldAnimationsAlphaGate(*spImgNode.as_ptr(), wpimgobj.field_bindings);
+    }
     WireFieldScripts(context, spImgNode, wpimgobj.field_bindings);
     if (! wpimgobj.color_user_key.empty()) {
         context.scene->image_color_user_index[wpimgobj.color_user_key].push_back(
@@ -4147,7 +4174,9 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
                         }
                     }
                     for (auto& tex : wpmat.textures) {
-                        if (ParseImageLayerCompositeId(tex) == static_cast<std::uint32_t>(obj.id))
+                        const auto composite_id = ParseImageLayerCompositeId(tex);
+                        if (composite_id &&
+                            *composite_id == static_cast<std::uint32_t>(obj.id))
                             tex = ppong_a;
                     }
                     if (wpmat.textures.empty()) wpmat.textures.resize(1);

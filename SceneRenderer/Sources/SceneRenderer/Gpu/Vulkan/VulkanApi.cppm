@@ -479,6 +479,7 @@ public:
                          VkSurfaceKHR surface);
 
     void Destroy();
+    bool RecreateSwapchain(VkSurfaceKHR surface, VkExtent2D extent);
 
     const auto&                  graphics_queue() const { return m_graphics_queue; }
     const auto&                  present_queue() const { return m_present_queue; }

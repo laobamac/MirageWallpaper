@@ -339,7 +339,7 @@ std::span<const Eigen::Affine3f> WPPuppetLayer::genFrame(double time) noexcept {
 uint32_t WPPuppetLayer::boneIndex(std::string_view name) const noexcept {
     if (! m_puppet) return 0;
     for (uint32_t i = 0; i < m_puppet->bones.size(); ++i) {
-        if (m_puppet->bones[i].name == name) return i + 1;
+        if (m_puppet->bones[i].name.c_str() == name.data()) return i + 1;
     }
     return 0;
 }

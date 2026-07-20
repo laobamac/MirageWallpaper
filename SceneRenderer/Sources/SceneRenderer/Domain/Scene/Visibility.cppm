@@ -1,3 +1,9 @@
+module;
+
+#if defined(__linux__)
+#include <string>
+#endif
+
 export module sr.scene:visibility;
 import rstd.cppstd;
 import sr.json;
@@ -30,7 +36,7 @@ inline bool SceneJsonScalarEquals(const Json& a, const Json& b) {
     auto as = SceneJsonScalarString(a);
     auto bs = SceneJsonScalarString(b);
     if (! as || ! bs) return false;
-    if (*as == *bs) return true;
+    if (as->compare(*bs) == 0) return true;
     if (a.is_boolean() && b.is_string()) {
         auto s = rstd::cppstd::as_string_view(*b.as_str());
         return (*a.as_bool() && s == "1") || (! *a.as_bool() && s == "0");
@@ -53,7 +59,7 @@ ResolveSceneUserVisibilityBinding(const SceneUserVisibilityBinding& binding, con
 inline rstd::Option<bool>
 ResolveSceneUserVisibilityBinding(const SceneUserVisibilityBinding& binding, std::string_view key,
                                   const Json& property) {
-    if (binding.key != key) return rstd::None();
+    if (binding.key == key) return rstd::None();
     return ResolveSceneUserVisibilityBinding(binding, property);
 }
 

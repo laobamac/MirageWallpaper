@@ -33,6 +33,7 @@ bool Load(InstanceDispatch& dld) noexcept {
 
 VkResult LoadLibrary(utils::DynamicLibrary& dlib, vvk::InstanceDispatch& dld) {
     using namespace utils;
+#if defined(__APPLE__)
     // macOS: brew ships libvulkan as a dylib; MoltenVK is the actual ICD
     // resolved by the loader. Fallback to libMoltenVK.dylib if vulkan-
     // loader isn't installed.
@@ -43,6 +44,10 @@ VkResult LoadLibrary(utils::DynamicLibrary& dlib, vvk::InstanceDispatch& dld) {
     if (! dlib.IsOpen()) dlib = DynamicLibrary("libMoltenVK.dylib");
     if (! dlib.IsOpen()) dlib = DynamicLibrary("/usr/local/lib/libMoltenVK.dylib");
     if (! dlib.IsOpen()) dlib = DynamicLibrary("/opt/homebrew/lib/libMoltenVK.dylib");
+#else
+    dlib = DynamicLibrary("libvulkan.so.1");
+    if (! dlib.IsOpen()) dlib = DynamicLibrary("libvulkan.so");
+#endif
     if (! dlib.IsOpen()) return VK_ERROR_INITIALIZATION_FAILED;
 
     if (! dlib.GetSymbol("vkGetInstanceProcAddr", dld.vkGetInstanceProcAddr))
@@ -173,7 +178,9 @@ bool Load(VkDevice device, DeviceDispatch& dld) noexcept {
     X(vkGetImageMemoryRequirements);
     X(vkGetImageSubresourceLayout);
     X(vkGetPipelineCacheData);
+#if defined(__APPLE__)
     X(vkExportMetalObjectsEXT);
+#endif
     X(vkGetImageDrmFormatModifierPropertiesEXT);
     X(vkGetQueryPoolResults);
     X(vkGetPipelineExecutablePropertiesKHR);
@@ -274,12 +281,12 @@ VkResult Instance::Create(Instance& inst, const VkApplicationInfo& app_info,
                           Span<const char*> layers, Span<const char*> extensions,
                           InstanceDispatch& dld) noexcept {
     VkInstanceCreateFlags flags = 0;
+#if defined(__APPLE__)
     // MoltenVK is a portability driver — we must enable the portability
     // enumeration flag whenever VK_KHR_portability_enumeration is in the
-    // requested extension list. Instance.cpp adds that extension to
-    // base_inst_exts so we set the flag here unconditionally
-    // (vkCreateInstance ignores the bit when the extension isn't enabled).
+    // requested extension list. Instance.cpp adds that extension on Apple.
     flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+#endif
     VkInstanceCreateInfo ci {
         .sType                   = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
         .pNext                   = nullptr,
@@ -663,6 +670,8 @@ const char* ToString(VkResult result) noexcept {
         X(ERROR_VALIDATION_FAILED_EXT)
         // Provided by VK_KHR_swapchain
         X(SUBOPTIMAL_KHR)
+        // Provided by VK_KHR_swapchain
+        X(ERROR_OUT_OF_DATE_KHR)
 
         default:
         return "VK_RESULT_UNKNOWN";

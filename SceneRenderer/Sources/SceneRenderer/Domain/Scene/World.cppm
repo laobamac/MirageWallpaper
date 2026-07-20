@@ -1,5 +1,9 @@
 module;
 
+#if defined(__linux__)
+#include <string>
+#endif
+
 #include <atomic>
 #include <climits>
 #include <initializer_list>
@@ -412,9 +416,9 @@ inline bool IsLocalSceneMaterialTextureDependency(SceneMaterialTextureDependency
 inline bool CanRefreshSceneMaterialTextureBinding(std::string_view old_texture,
                                                   std::string_view new_texture,
                                                   std::string_view pass_output = {}) {
-    if (old_texture == new_texture) return true;
-    if ((! old_texture.empty() && old_texture == pass_output) ||
-        (! new_texture.empty() && new_texture == pass_output))
+    if (old_texture.data() == new_texture.data()) return true;
+    if ((! old_texture.empty() && old_texture.data() == pass_output.data()) ||
+        (! new_texture.empty() && new_texture.data() == pass_output.data()))
         return false;
     auto old_dep = ClassifySceneMaterialTexture(old_texture);
     auto new_dep = ClassifySceneMaterialTexture(new_texture);
@@ -521,7 +525,7 @@ inline SceneMaterialDirtyFlags
 ClassifySceneShaderVariantMutation(const SceneShaderVariantDesc& current,
                                    const SceneShaderVariantDesc& next) {
     if (! current.Valid() || ! next.Valid()) return SceneMaterialDirtyGraph;
-    if (current.shader_name != next.shader_name) return SceneMaterialDirtyGraph;
+    if (current.shader_name.c_str() != next.shader_name.c_str()) return SceneMaterialDirtyGraph;
     if (SceneShaderVariantHasActiveTextureMetadata(current) ||
         SceneShaderVariantHasActiveTextureMetadata(next)) {
         if (SceneShaderVariantActiveTextureSlots(current) !=
@@ -546,8 +550,8 @@ ClassifySceneShaderVariantMutation(const SceneShaderVariantDesc& current,
     }
     if (flags == SceneMaterialDirtyNone && current.stages.size() == next.stages.size()) {
         for (usize i = 0; i < current.stages.size(); ++i) {
-            if (current.stages[i].source_key != next.stages[i].source_key ||
-                current.stages[i].source != next.stages[i].source) {
+            if (current.stages[i].source_key.c_str() != next.stages[i].source_key.c_str() ||
+                current.stages[i].source.c_str() != next.stages[i].source.c_str()) {
                 flags |= SceneMaterialDirtyPipeline;
                 break;
             }
@@ -1003,12 +1007,25 @@ struct SceneAnimationCurve {
     float                          fps { 30.0f };
     std::int32_t                   length { 0 };
     std::string                    mode;
+    std::string                    name;
     bool                           wraploop { false };
     bool                           relative { false };
+    bool                           startpaused { false };
 
     bool            Empty() const;
     float           EvaluateScalar(float base, double runtime) const;
     Eigen::Vector3f EvaluateVec3(const Eigen::Vector3f& base, double runtime) const;
+};
+
+struct SceneFieldAnimationControl {
+    bool   playing { true };
+    double start_runtime { 0.0 };
+    double local_runtime { 0.0 };
+    float  rate { 1.0f };
+    float  fps { 30.0f };
+    double duration { 0.0 };
+    bool   finite { false };
+    bool   alpha_gate_when_stopped { false };
 };
 
 struct SceneCameraLookAtKey {
@@ -1087,7 +1104,8 @@ public:
 //
 // post-parse mutations restricted to render thread: m_translate / m_scale /
 // m_rotation, m_visible, m_user_alpha, m_brightness, m_color, m_tex_anim,
-// m_dirty (all driven by script ticks and shader-value updates).
+// m_field_animation_controls, m_dirty (all driven by script ticks and
+// shader-value updates).
 //
 // Practical consequence: every non-owning `SceneNode*` reference held by
 // downstream subsystems (FieldScript::Impl::node, EngineHostState::text_setters,
@@ -1195,18 +1213,35 @@ public:
     }
     void SetOriginAnimation(SceneAnimationCurve curve) {
         m_origin_base  = m_translate;
+        RegisterFieldAnimationControl(curve);
         m_origin_curve = std::move(curve);
     }
     void SetScaleAnimation(SceneAnimationCurve curve) {
         m_scale_base  = m_scale;
+        RegisterFieldAnimationControl(curve);
         m_scale_curve = std::move(curve);
     }
     void SetRotationAnimation(SceneAnimationCurve curve) {
         m_rotation_base  = m_rotation;
+        RegisterFieldAnimationControl(curve);
         m_rotation_curve = std::move(curve);
     }
-    void SetAlphaAnimation(SceneAnimationCurve curve) { m_alpha_curve = std::move(curve); }
+    void SetAlphaAnimation(SceneAnimationCurve curve) {
+        RegisterFieldAnimationControl(curve);
+        m_alpha_curve = std::move(curve);
+    }
     void TickFieldAnimations(double runtime);
+    bool HasFieldAnimation(std::string_view name) const;
+    bool PlayFieldAnimation(std::string_view name, double runtime);
+    bool StopFieldAnimation(std::string_view name);
+    bool PauseFieldAnimation(std::string_view name, double runtime);
+    bool IsFieldAnimationPlaying(std::string_view name) const;
+    bool SetFieldAnimationFrame(std::string_view name, std::int32_t frame);
+    std::int32_t FieldAnimationFrame(std::string_view name, double runtime) const;
+    std::int32_t FieldAnimationFrameCount(std::string_view name) const;
+    float FieldAnimationRate(std::string_view name) const;
+    bool  SetFieldAnimationRate(std::string_view name, float rate);
+    void  SetFieldAnimationAlphaGate(std::string_view name, bool value);
     void SetAlphaSource(SceneNode* node) { m_alpha_source = node; }
 
     const std::string& VisibleUserKey() const { return m_visible_user_binding.key; }
@@ -1330,6 +1365,11 @@ public:
 
 private:
     void MarkTransDirty();
+    void RegisterFieldAnimationControl(const SceneAnimationCurve& curve);
+    void UpdateFieldAnimationPlayback(double runtime);
+    double FieldAnimationRuntime(const SceneAnimationCurve& curve, double runtime) const;
+    SceneFieldAnimationControl* FindFieldAnimationControl(std::string_view name);
+    const SceneFieldAnimationControl* FindFieldAnimationControl(std::string_view name) const;
 
     i32         m_id { -1 };
     std::string m_name;
@@ -1355,6 +1395,7 @@ private:
     std::optional<SceneAnimationCurve> m_scale_curve;
     std::optional<SceneAnimationCurve> m_rotation_curve;
     std::optional<SceneAnimationCurve> m_alpha_curve;
+    Map<std::string, SceneFieldAnimationControl> m_field_animation_controls;
     float                              m_brightness { 1.0f };
     bool                               m_brightness_overridden { false };
     Eigen::Vector3f                    m_color { 1.0f, 1.0f, 1.0f };

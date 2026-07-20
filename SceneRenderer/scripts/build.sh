@@ -1,15 +1,10 @@
 #!/usr/bin/env bash
 #
-# SceneRenderer — macOS build helper.
+# SceneRenderer build helper.
 #
-# Wraps the CMake presets (macos-clang-release / macos-clang-debug) with
-# prerequisite checks and a default configure → build → report flow.
-#
-# macOS-only by design:
-#   * MoltenVK is the Vulkan ICD, wavsen uses Core Audio.
-#   * Mach-O @loader_path rpath (no ELF $ORIGIN), system ld (no LLD).
-#   * No conda / Mesa / Wayland / X11 tooling — those are the
-#     upstream Linux build's concerns, not ours.
+# Wraps CMake presets with prerequisite checks and a default configure → build
+# → report flow. macOS uses Homebrew LLVM/MoltenVK; Linux uses the system
+# Clang/Vulkan/X11 development packages.
 #
 # Usage:
 #   scripts/build.sh                # release build (default): configure + build + report
@@ -20,9 +15,10 @@
 #   scripts/build.sh -h|--help
 #
 # Environment overrides:
-#   BUILD_PRESET   macos-clang-release | macos-clang-debug
-#   KEEP_GOING=1   keep building past errors (cmake --keep-going)
-#   JOBS=N         parallel jobs (default: sysctl -n hw.logicalcpu)
+#   CMAKE_BIN=PATH explicit CMake executable (or CMAKE=PATH)
+#   BUILD_PRESET   platform preset, e.g. macos-clang-release or linux-clang-debug
+#   KEEP_GOING=1   keep building past errors (Ninja -k 0)
+#   JOBS=N         parallel jobs
 
 set -euo pipefail
 
@@ -48,7 +44,7 @@ die()  { printf '%sERROR:%s %s\n' "$C_RED" "$C_OFF" "$*" >&2; exit 1; }
 
 usage() {
     cat <<'EOF'
-SceneRenderer macOS build helper.
+SceneRenderer build helper.
 
 Usage:
   scripts/build.sh                configure + build + report (release, default)
@@ -56,21 +52,31 @@ Usage:
   scripts/build.sh configure      configure only
   scripts/build.sh build          build only (configures first if needed)
   scripts/build.sh clean          wipe build/<preset>
+  scripts/build.sh --cmake PATH   use an explicit CMake executable
   scripts/build.sh -h|--help      show this help
 
 Environment:
-  BUILD_PRESET   macos-clang-release | macos-clang-debug
+  CMAKE_BIN      explicit CMake executable, e.g. /opt/cmake/bin/cmake
+  BUILD_PRESET   platform preset, e.g. macos-clang-release or linux-clang-debug
   KEEP_GOING=1   keep building past errors
-  JOBS=N         parallel jobs (default: hw.logicalcpu)
+  JOBS=N         parallel jobs
 EOF
 }
 
 # --- parse args ---
 ACTION="all"
 POSITIONAL_PRESET=""
+CMAKE_BIN="${CMAKE_BIN:-${CMAKE:-cmake}}"
+CC="${CC:-clang}"
+CXX="${CXX:-clang++}"
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help) usage; exit 0 ;;
+        --cmake)
+            [[ $# -ge 2 ]] || die "--cmake requires a path"
+            CMAKE_BIN="$2"
+            shift 2
+            ;;
         configure|build|all|clean) ACTION="$1"; shift ;;
         release|debug)
             POSITIONAL_PRESET="$(scene_preset "$1")"
@@ -80,70 +86,96 @@ while [[ $# -gt 0 ]]; do
 done
 
 # --- preset resolution ---
+SYSTEM_NAME="$(uname -s)"
 DEFAULT_PRESET="$(scene_preset release)"
 PRESET="${BUILD_PRESET:-${POSITIONAL_PRESET:-$DEFAULT_PRESET}}"
 case "$PRESET" in
-    macos-clang-release|macos-clang-debug|macos-arm64-clang-release|macos-arm64-clang-debug) ;;
-    *) die "unknown preset: $PRESET (expected macos-clang-release, macos-clang-debug, macos-arm64-clang-release, or macos-arm64-clang-debug)" ;;
+    macos-clang-release|macos-clang-debug|macos-arm64-clang-release|macos-arm64-clang-debug|linux-clang-release|linux-clang-debug) ;;
+    *) die "unknown preset: $PRESET" ;;
 esac
 BUILD_DIR="$PROJECT_DIR/build/$PRESET"
 
 # --- platform + core tools ---
-[[ "$(uname -s)" == "Darwin" ]] || die "this script is macOS-only."
-command -v brew       >/dev/null || die "Homebrew not found. Install from https://brew.sh"
-command -v cmake      >/dev/null || die "cmake not found. brew install cmake"
-command -v ninja      >/dev/null || die "ninja not found. brew install ninja"
-command -v pkg-config >/dev/null || die "pkg-config not found. brew install pkg-config"
-
-BREW_PREFIX="$(brew --prefix)"
-[[ -n "$BREW_PREFIX" ]] || die "brew --prefix returned empty."
-
-# --- prerequisite Homebrew formulas (build + runtime) ---
-# Each entry: "formula|description"
-REQUIRED_FORMULAS=(
-    "llvm|Clang 22+ compiler (C++20 modules)"
-    "molten-vk|MoltenVK Vulkan ICD"
-    "vulkan-loader|libvulkan loader"
-    "vulkan-headers|Vulkan headers"
-    "glslang|glslangValidator shader compiler"
-    "glfw|GLFW (SceneViewer window)"
-    "freetype|FreeType (text rasterization)"
-    "fontconfig|Fontconfig (font discovery)"
-    "lz4|liblz4 (.pkg decompression)"
-    "ffmpeg|ffmpeg (wavsen video decode)"
-)
-
-# One brew call for the full installed set, then membership-check.
-INSTALLED_FORMULAS="$(brew list --formula -1 2>/dev/null || true)"
-missing=()
-for entry in "${REQUIRED_FORMULAS[@]}"; do
-    f="${entry%%|*}"; what="${entry##*|}"
-    if ! grep -qxF "$f" <<<"$INSTALLED_FORMULAS"; then
-        missing+=("$f")
-        warn "missing Homebrew formula: $f ($what)"
-    fi
-done
-if [[ ${#missing[@]} -gt 0 ]]; then
-    printf '\nInstall missing dependencies:\n  brew install %s\n\n' "${missing[*]}"
-    die "missing Homebrew dependencies (see above)."
+if [[ "$CMAKE_BIN" == */* ]]; then
+    [[ -x "$CMAKE_BIN" ]] || die "CMake executable not found or not executable: $CMAKE_BIN"
+else
+    command -v "$CMAKE_BIN" >/dev/null || die "cmake not found. Install CMake 4.3.1 or newer."
+    CMAKE_BIN="$(command -v "$CMAKE_BIN")"
 fi
-command -v glslangValidator >/dev/null || die "glslangValidator not found. Run: brew install glslang"
 
-# --- compiler: always use Homebrew LLVM. ---
-# The preset pins /usr/local/opt/llvm/bin/clang (Intel Mac path). On Apple
-# Silicon that path is absent, so pass -D to redirect to the actual Homebrew
-# LLVM prefix. On Intel this is the same path, so it's a no-op override.
-LLVM_PREFIX="$(brew --prefix llvm)"
-CLANG_BIN="$LLVM_PREFIX/bin/clang"
-CLANGXX_BIN="$LLVM_PREFIX/bin/clang++"
-[[ -x "$CLANG_BIN" && -x "$CLANGXX_BIN" ]] || die "Homebrew clang not at $LLVM_PREFIX/bin (brew install llvm)"
+CMAKE_VERSION="$("$CMAKE_BIN" --version | awk 'NR == 1 { print $3 }')"
+if [[ -z "$CMAKE_VERSION" ]]; then
+    die "failed to determine CMake version from $CMAKE_BIN"
+fi
+if [[ "$(printf '%s\n' "4.3.1" "$CMAKE_VERSION" | sort -V | head -n1)" != "4.3.1" ]]; then
+    die "CMake $CMAKE_VERSION is too old. Use CMake 4.3.1 or newer."
+fi
 
-# --- MoltenVK ICD (runtime Vulkan device discovery) ---
-ICD_JSON="$BREW_PREFIX/etc/vulkan/icd.d/MoltenVK_icd.json"
-[[ -f "$ICD_JSON" ]] || warn "MoltenVK ICD json not found at $ICD_JSON; runtime Vulkan may fail to pick MoltenVK."
+command -v ninja      >/dev/null || die "ninja not found. Install Ninja."
+command -v pkg-config >/dev/null || die "pkg-config not found. Install pkg-config."
+command -v glslangValidator >/dev/null || die "glslangValidator not found. Install glslang."
 
-# --- parallel jobs ---
-JOBS="${JOBS:-$(sysctl -n hw.logicalcpu 2>/dev/null || echo 8)}"
+EXTRA_CONFIGURE_ARGS=()
+
+case "$SYSTEM_NAME" in
+    Darwin)
+        command -v brew >/dev/null || die "Homebrew not found. Install from https://brew.sh"
+        BREW_PREFIX="$(brew --prefix)"
+        [[ -n "$BREW_PREFIX" ]] || die "brew --prefix returned empty."
+
+        REQUIRED_FORMULAS=(
+            "llvm|Clang 22+ compiler (C++20 modules)"
+            "molten-vk|MoltenVK Vulkan ICD"
+            "vulkan-loader|libvulkan loader"
+            "vulkan-headers|Vulkan headers"
+            "glslang|glslangValidator shader compiler"
+            "glfw|GLFW (SceneViewer window)"
+            "freetype|FreeType (text rasterization)"
+            "fontconfig|Fontconfig (font discovery)"
+            "lz4|liblz4 (.pkg decompression)"
+            "ffmpeg|ffmpeg (wavsen video decode)"
+        )
+
+        INSTALLED_FORMULAS="$(brew list --formula -1 2>/dev/null || true)"
+        missing=()
+        for entry in "${REQUIRED_FORMULAS[@]}"; do
+            f="${entry%%|*}"; what="${entry##*|}"
+            if ! grep -qxF "$f" <<<"$INSTALLED_FORMULAS"; then
+                missing+=("$f")
+                warn "missing Homebrew formula: $f ($what)"
+            fi
+        done
+        if [[ ${#missing[@]} -gt 0 ]]; then
+            printf '\nInstall missing dependencies:\n  brew install %s\n\n' "${missing[*]}"
+            die "missing Homebrew dependencies (see above)."
+        fi
+
+        LLVM_PREFIX="$(brew --prefix llvm)"
+        CLANG_BIN="$LLVM_PREFIX/bin/clang"
+        CLANGXX_BIN="$LLVM_PREFIX/bin/clang++"
+        [[ -x "$CLANG_BIN" && -x "$CLANGXX_BIN" ]] || die "Homebrew clang not at $LLVM_PREFIX/bin (brew install llvm)"
+        EXTRA_CONFIGURE_ARGS+=(
+            -DCMAKE_C_COMPILER="$CLANG_BIN"
+            -DCMAKE_CXX_COMPILER="$CLANGXX_BIN"
+        )
+
+        ICD_JSON="$BREW_PREFIX/etc/vulkan/icd.d/MoltenVK_icd.json"
+        [[ -f "$ICD_JSON" ]] || warn "MoltenVK ICD json not found at $ICD_JSON; runtime Vulkan may fail to pick MoltenVK."
+        JOBS="${JOBS:-$(sysctl -n hw.logicalcpu 2>/dev/null || echo 8)}"
+        ;;
+    Linux)
+        command -v clang >/dev/null || die "clang not found. Install clang."
+        command -v clang++ >/dev/null || die "clang++ not found. Install clang++."
+        JOBS="${JOBS:-$(nproc 2>/dev/null || echo 8)}"
+        EXTRA_CONFIGURE_ARGS+=(
+            -DCMAKE_C_COMPILER="$CC"
+            -DCMAKE_CXX_COMPILER="$CXX"
+        )
+        ;;
+    *)
+        die "unsupported platform: $SYSTEM_NAME"
+        ;;
+esac
 
 # --- actions ---
 do_clean() {
@@ -159,20 +191,23 @@ do_configure() {
     info "configuring preset: $PRESET"
     info "  project:  $PROJECT_DIR"
     info "  build dir:$BUILD_DIR"
-    info "  compiler: $CLANG_BIN"
-    cmake --preset "$PRESET" \
-        -DCMAKE_C_COMPILER="$CLANG_BIN" \
-        -DCMAKE_CXX_COMPILER="$CLANGXX_BIN"
+    info "  cmake:   $CMAKE_BIN ($CMAKE_VERSION)"
+    "$CMAKE_BIN" --preset "$PRESET" "${EXTRA_CONFIGURE_ARGS[@]}"
 }
 
 do_build() {
     [[ -f "$BUILD_DIR/CMakeCache.txt" ]] || do_configure
     info "building preset: $PRESET (jobs=$JOBS)"
     local build_args=(--build "$BUILD_DIR" --parallel "$JOBS")
+    local native_args=()
     if [[ "${KEEP_GOING:-0}" == "1" ]]; then
-        build_args+=(--keep-going)
+        native_args+=(-k 0)
     fi
-    cmake "${build_args[@]}"
+    if [[ ${#native_args[@]} -gt 0 ]]; then
+        "$CMAKE_BIN" "${build_args[@]}" -- "${native_args[@]}"
+    else
+        "$CMAKE_BIN" "${build_args[@]}"
+    fi
 }
 
 report() {
@@ -187,7 +222,6 @@ report() {
         fi
     done
     if [[ $found -eq 0 ]]; then
-        # Fallback: locate by name in case CMake's output layout differs.
         while IFS= read -r bin; do
             printf '  %s\n' "$bin"
             found=1
@@ -197,7 +231,7 @@ report() {
     if [[ $found -eq 0 ]]; then
         warn "no SceneViewer/SceneWallpaper binaries found under $BUILD_DIR (build failed or not run)."
     else
-        printf '\nRun e.g.:\n  %s/Tools/SceneViewer/SceneViewer <path/to/scene.pkg>\n' "$BUILD_DIR"
+        printf '\nRun e.g.:\n  %s/Tools/SceneViewer/SceneViewer <assets> <scene.json|scene.pkg>\n' "$BUILD_DIR"
     fi
 }
 

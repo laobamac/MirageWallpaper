@@ -1,6 +1,9 @@
 #!/bin/bash
 # Shared CMake preset naming convention.
-# SceneRenderer uses `macos-{arch}-clang-{config}` format.
+# SceneRenderer uses:
+#   macOS Intel:         macos-clang-{config}
+#   macOS Apple Silicon: macos-arm64-clang-{config}
+#   Linux:               linux-clang-{config}
 # This file is sourced by:
 #   Mirage/scripts/build.sh
 #   Mirage/scripts/bundle_renderers.sh
@@ -11,17 +14,28 @@
 #   source "${SCRIPT_DIR}/../scripts/preset.sh"      # from SceneRenderer/scripts/
 #
 # Exported function:
-#   scene_preset [config]   → prints e.g. "macos-arm64-clang-release" or "macos-clang-release"
+#   scene_preset [config]   → prints e.g. "macos-arm64-clang-release", "macos-clang-release", or "linux-clang-release"
 
 scene_preset() {
     local config="${1:-release}"
-    local arch
+    local system arch
+    system="$(uname -s)"
     arch="$(uname -m)"
-    # Intel preset names omit the architecture suffix (macos-clang-*),
-    # while Apple Silicon presets include -arm64 (macos-arm64-clang-*).
-    if [[ "$arch" == "arm64" ]]; then
-        echo "macos-arm64-clang-${config}"
-    else
-        echo "macos-clang-${config}"
-    fi
+    case "$system" in
+        Darwin)
+            # Intel preset names omit the architecture suffix (macos-clang-*),
+            # while Apple Silicon presets include -arm64 (macos-arm64-clang-*).
+            if [[ "$arch" == "arm64" ]]; then
+                echo "macos-arm64-clang-${config}"
+            else
+                echo "macos-clang-${config}"
+            fi
+            ;;
+        Linux)
+            echo "linux-clang-${config}"
+            ;;
+        *)
+            printf '%s-clang-%s\n' "$(printf '%s' "$system" | tr '[:upper:]' '[:lower:]')" "$config"
+            ;;
+    esac
 }

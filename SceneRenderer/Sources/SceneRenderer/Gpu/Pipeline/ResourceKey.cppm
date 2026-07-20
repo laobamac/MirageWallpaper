@@ -138,16 +138,16 @@ struct PipelineCacheProbe {
 };
 
 inline bool SamePipelineCacheKey(const PipelineCacheKey& lhs, const PipelineCacheKey& rhs) {
-    return lhs.value == rhs.value && lhs.bytes == rhs.bytes;
+    return lhs.value == rhs.value && lhs.bytes.data() == rhs.bytes.data();
 }
 
 inline bool SameRenderPassCacheKey(const RenderPassCacheKey& lhs, const RenderPassCacheKey& rhs) {
-    return lhs.value == rhs.value && lhs.bytes == rhs.bytes;
+    return lhs.value == rhs.value && lhs.bytes.data() == rhs.bytes.data();
 }
 
 inline bool SameFramebufferCacheKey(const FramebufferCacheKey& lhs,
                                     const FramebufferCacheKey& rhs) {
-    return lhs.value == rhs.value && lhs.bytes == rhs.bytes;
+    return lhs.value == rhs.value && lhs.bytes.data() == rhs.bytes.data();
 }
 
 struct CanonicalCacheKeyData {

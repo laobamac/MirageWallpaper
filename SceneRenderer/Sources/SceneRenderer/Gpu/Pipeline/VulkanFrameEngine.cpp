@@ -1,4 +1,9 @@
 module;
+
+#if defined(__linux__)
+#include <string>
+#endif
+
 #include <rstd/macro.hpp>
 
 #include "vvk/macros.hpp"
@@ -61,8 +66,10 @@ constexpr std::array base_inst_exts {
 constexpr std::array base_device_exts {
     Extension { false, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME },
     Extension { true, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME },
+#if defined(__APPLE__)
     Extension { true, "VK_KHR_portability_subset" },
     Extension { false, "VK_EXT_metal_objects" },
+#endif
     Extension { true, VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME },
     Extension { false, VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME },
 };
@@ -85,6 +92,14 @@ bool RequiresVulkanVideoDeviceExtensions(std::string_view hwdec) {
 #else
     return hwdec != "none";
 #endif
+}
+
+bool IsRecoverableSurfaceResult(VkResult result) {
+    return result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR;
+}
+
+bool NeedsSurfaceSwapchainRecreate(VkResult result) {
+    return result == VK_SUBOPTIMAL_KHR || result == VK_ERROR_OUT_OF_DATE_KHR;
 }
 
 struct RenderProgram {
@@ -575,9 +590,10 @@ struct VulkanRender::Impl {
     void                                UpdateCameraFillMode(Scene&, sr::FillMode);
 
     bool                       initRes();
+    bool                       recreateSurfaceSwapchain();
     std::optional<std::size_t> acquireUploadCommandSlot(RenderingResources&);
     void                       commitPreparedUploads();
-    void                       drawFrameSwapchain();
+    void                       drawFrameSwapchain(Scene&);
     void                       drawFrameOffscreen();
     bool                       onSwapchainReady(unsigned width, unsigned height);
 
@@ -1017,6 +1033,32 @@ bool VulkanRender::Impl::CreateRenderingResource(RenderingResources& rr) {
 
 void VulkanRender::Impl::DestroyRenderingResource(RenderingResources& rr) {}
 
+bool VulkanRender::Impl::recreateSurfaceSwapchain() {
+    if (! m_with_surface || ! m_device || ! m_finpass) return false;
+
+    const VkExtent2D old_extent = m_device->out_extent();
+    if (! m_device->RecreateSwapchain(*m_instance.surface(), old_extent)) return false;
+
+    m_finpass->setPresentFormat(m_device->swapchain().format());
+    m_finpass->setPresentCanTransferSrc(
+        (m_device->swapchain().usage() & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0);
+
+    VkSemaphoreCreateInfo ci { .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+                               .pNext = nullptr };
+    m_sem_swap_finish_per_image.clear();
+    m_sem_swap_finish_per_image.resize(m_device->swapchain().images().size());
+    for (auto& s : m_sem_swap_finish_per_image) {
+        VVK_CHECK_BOOL_RE(m_device->handle().CreateSemaphore(ci, s));
+    }
+
+    const VkExtent2D new_extent = m_device->swapchain().extent();
+    rstd_info("surface swapchain recreated: {}x{} images={}",
+              new_extent.width,
+              new_extent.height,
+              m_device->swapchain().images().size());
+    return true;
+}
+
 std::optional<std::size_t> VulkanRender::Impl::acquireUploadCommandSlot(RenderingResources& rr) {
     if (m_upload_cmds.empty()) return std::nullopt;
     const std::size_t slot = m_next_upload_cmd;
@@ -1050,24 +1092,37 @@ void VulkanRender::Impl::drawFrame(Scene& scene) {
     if (m_instance.offscreen()) {
         drawFrameOffscreen();
     } else {
-        drawFrameSwapchain();
+        drawFrameSwapchain(scene);
     }
 
     if (m_redraw_cb) m_redraw_cb();
 }
 
-void VulkanRender::Impl::drawFrameSwapchain() {
+void VulkanRender::Impl::drawFrameSwapchain(Scene& /*scene*/) {
     static size_t resource_index = 0;
 
     RenderingResources& rr = m_rendering_resources;
     resource_index         = (resource_index + 1) % 3;
     uint32_t image_index   = 0;
+    bool     recreate_after_present = false;
     {
-        VVK_CHECK_VOID_RE(m_device->handle().AcquireNextImageKHR(*m_device->swapchain().handle(),
-                                                                 vk_wait_time,
-                                                                 *rr.sem_swap_wait_image,
-                                                                 {},
-                                                                 &image_index));
+        const VkResult acquire_res =
+            m_device->handle().AcquireNextImageKHR(*m_device->swapchain().handle(),
+                                                   vk_wait_time,
+                                                   *rr.sem_swap_wait_image,
+                                                   {},
+                                                   &image_index);
+        if (acquire_res == VK_ERROR_OUT_OF_DATE_KHR) {
+            (void)recreateSurfaceSwapchain();
+            return;
+        }
+        if (! IsRecoverableSurfaceResult(acquire_res)) {
+            rstd_error("vkAcquireNextImageKHR failed: {} ({})",
+                       vvk::ToString(acquire_res),
+                       static_cast<int>(acquire_res));
+            return;
+        }
+        recreate_after_present = acquire_res == VK_SUBOPTIMAL_KHR;
     }
     const auto& image = m_device->swapchain().images()[image_index];
 
@@ -1135,7 +1190,14 @@ void VulkanRender::Impl::drawFrameSwapchain() {
         .pSwapchains        = m_device->swapchain().handle().address(),
         .pImageIndices      = &image_index,
     };
-    VVK_CHECK_VOID_RE(m_device->present_queue().handle.Present(present_info));
+    const VkResult present_res = m_device->present_queue().handle.Present(present_info);
+    if (NeedsSurfaceSwapchainRecreate(present_res)) {
+        recreate_after_present = true;
+    } else if (present_res != VK_SUCCESS) {
+        rstd_error("vkQueuePresentKHR failed: {} ({})",
+                   vvk::ToString(present_res),
+                   static_cast<int>(present_res));
+    }
 
     VVK_CHECK_VOID_RE(rr.fence_frame.Wait(vk_wait_time));
     ReleaseCompletedRetiredResources(rr);
@@ -1143,6 +1205,10 @@ void VulkanRender::Impl::drawFrameSwapchain() {
     m_device->tex_cache().ReleaseRecordedUploads();
     rr.pending_upload_value = 0;
     VVK_CHECK_VOID_RE(rr.fence_frame.Reset());
+
+    if (recreate_after_present) {
+        (void)recreateSurfaceSwapchain();
+    }
 }
 void VulkanRender::Impl::drawFrameOffscreen() {
     if (! m_ex_swapchain) return;

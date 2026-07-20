@@ -1,5 +1,9 @@
 module;
 
+#if defined(__linux__)
+#include <string>
+#endif
+
 export module sr.pkg.parse:shader_lex;
 import rstd.cppstd;
 

@@ -1,5 +1,9 @@
 module;
 
+#if defined(__linux__)
+#include <string>
+#endif
+
 #include <rstd/macro.hpp>
 #include <rstd/enum.hpp>
 #include "quickjs.h"
@@ -752,8 +756,9 @@ void LoadLocalStorage(EngineHostState* host) {
     if (host->ls_path.empty()) return;
     std::ifstream f(host->ls_path);
     if (! f) return;
-    std::string source(std::istreambuf_iterator<char>(f), {});
-    auto        parsed = ParseJson(source);
+    std::ostringstream ss;
+    ss << f.rdbuf();
+    auto parsed = ParseJson(ss.str());
     if (parsed.is_err()) {
         rstd_warn("localStorage parse failed: {}", parsed.unwrap_err());
         return;
@@ -2223,7 +2228,8 @@ JSValue NodeIsPlaying(JSContext* ctx, JSValueConst this_val, int, JSValueConst*)
 // script that touches `getTextureAnimation()` in the corpus uses the primary
 // (diffuse) texture animation; multi-slot would need a different API shape.
 
-static JSClassID s_texanim_class_id = 0;
+static JSClassID s_texanim_class_id   = 0;
+static JSClassID s_fieldanim_class_id = 0;
 
 JSClassDef s_texanim_class_def {
     .class_name = "WWTextureAnimation",
@@ -2289,6 +2295,115 @@ void InitTexAnimClass(JSContext* ctx, JSRuntime* rt) {
     JS_SetClassProto(ctx, s_texanim_class_id, proto);
 }
 
+struct FieldAnimationHandle {
+    EngineHostState* host { nullptr };
+    sr::SceneNode*   node { nullptr };
+    std::string      name;
+};
+
+void FieldAnimFinalizer(JSRuntime*, JSValue v) {
+    delete static_cast<FieldAnimationHandle*>(JS_GetOpaque(v, s_fieldanim_class_id));
+}
+
+JSClassDef s_fieldanim_class_def {
+    .class_name = "WWFieldAnimation",
+    .finalizer  = FieldAnimFinalizer,
+};
+
+inline FieldAnimationHandle* GetFieldAnimHandle(JSValueConst v) {
+    return static_cast<FieldAnimationHandle*>(JS_GetOpaque(v, s_fieldanim_class_id));
+}
+
+double FieldAnimRuntime(JSContext* ctx, const FieldAnimationHandle* h) {
+    if (h != nullptr && h->host != nullptr) return h->host->inputs.runtime;
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    return host != nullptr ? host->inputs.runtime : 0.0;
+}
+
+JSValue FieldAnimPlay(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* h = GetFieldAnimHandle(this_val);
+    if (h != nullptr && h->node != nullptr) h->node->PlayFieldAnimation(h->name, FieldAnimRuntime(ctx, h));
+    return JS_UNDEFINED;
+}
+
+JSValue FieldAnimStop(JSContext*, JSValueConst this_val, int, JSValueConst*) {
+    auto* h = GetFieldAnimHandle(this_val);
+    if (h != nullptr && h->node != nullptr) h->node->StopFieldAnimation(h->name);
+    return JS_UNDEFINED;
+}
+
+JSValue FieldAnimPause(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* h = GetFieldAnimHandle(this_val);
+    if (h != nullptr && h->node != nullptr) h->node->PauseFieldAnimation(h->name, FieldAnimRuntime(ctx, h));
+    return JS_UNDEFINED;
+}
+
+JSValue FieldAnimSetFrame(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_UNDEFINED;
+    auto* h = GetFieldAnimHandle(this_val);
+    if (h == nullptr || h->node == nullptr) return JS_UNDEFINED;
+    int32_t frame = 0;
+    JS_ToInt32(ctx, &frame, argv[0]);
+    h->node->SetFieldAnimationFrame(h->name, frame);
+    return JS_UNDEFINED;
+}
+
+JSValue FieldAnimGetFrame(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* h = GetFieldAnimHandle(this_val);
+    if (h == nullptr || h->node == nullptr) return JS_NewInt32(ctx, 0);
+    return JS_NewInt32(ctx, h->node->FieldAnimationFrame(h->name, FieldAnimRuntime(ctx, h)));
+}
+
+JSValue FieldAnimIsPlaying(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* h = GetFieldAnimHandle(this_val);
+    return JS_NewBool(ctx, h != nullptr && h->node != nullptr &&
+                               h->node->IsFieldAnimationPlaying(h->name));
+}
+
+JSValue FieldAnimGetRate(JSContext* ctx, JSValueConst this_val) {
+    auto* h = GetFieldAnimHandle(this_val);
+    float rate = (h != nullptr && h->node != nullptr) ? h->node->FieldAnimationRate(h->name) : 1.0f;
+    return JS_NewFloat64(ctx, rate);
+}
+
+JSValue FieldAnimSetRate(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+    auto* h = GetFieldAnimHandle(this_val);
+    if (h == nullptr || h->node == nullptr) return JS_UNDEFINED;
+    double rate = 1.0;
+    if (JS_ToFloat64(ctx, &rate, val) == 0) h->node->SetFieldAnimationRate(h->name, static_cast<float>(rate));
+    return JS_UNDEFINED;
+}
+
+JSValue FieldAnimGetFrameCount(JSContext* ctx, JSValueConst this_val) {
+    auto* h = GetFieldAnimHandle(this_val);
+    int32_t count =
+        (h != nullptr && h->node != nullptr) ? h->node->FieldAnimationFrameCount(h->name) : 1;
+    return JS_NewInt32(ctx, count);
+}
+
+const JSCFunctionListEntry s_fieldanim_proto_funcs[] = {
+    JS_CFUNC_DEF("play", 0, FieldAnimPlay),
+    JS_CFUNC_DEF("stop", 0, FieldAnimStop),
+    JS_CFUNC_DEF("pause", 0, FieldAnimPause),
+    JS_CFUNC_DEF("setFrame", 1, FieldAnimSetFrame),
+    JS_CFUNC_DEF("getFrame", 0, FieldAnimGetFrame),
+    JS_CFUNC_DEF("isPlaying", 0, FieldAnimIsPlaying),
+    JS_CGETSET_DEF("rate", FieldAnimGetRate, FieldAnimSetRate),
+    JS_CGETSET_DEF("frameCount", FieldAnimGetFrameCount, NodeSetIgnore),
+};
+
+void InitFieldAnimClass(JSContext* ctx, JSRuntime* rt) {
+    if (s_fieldanim_class_id == 0) JS_NewClassID(rt, &s_fieldanim_class_id);
+    JS_NewClass(rt, s_fieldanim_class_id, &s_fieldanim_class_def);
+    JSValue proto = JS_NewObject(ctx);
+    JS_SetPropertyFunctionList(
+        ctx,
+        proto,
+        s_fieldanim_proto_funcs,
+        sizeof(s_fieldanim_proto_funcs) / sizeof(s_fieldanim_proto_funcs[0]));
+    JS_SetClassProto(ctx, s_fieldanim_class_id, proto);
+}
+
 JSValue NodeGetTextureAnimation(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
     auto* n = GetLayerNode(this_val);
     if (! n) {
@@ -2307,17 +2422,35 @@ JSValue NodeGetTextureAnimation(JSContext* ctx, JSValueConst this_val, int, JSVa
     return obj;
 }
 
-// Sprite-image .getAnimation() and puppet-bone .getAnimationLayer(name).
-// Renderer doesn't yet expose either through the C-class, so route both
-// through the JS-side __wwCreateAnimationStub which gives scripts a
-// no-op handle with `rate` / play / stop / isPlaying.
-JSValue NodeGetAnimationStub(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+JSValue CreateAnimationStub(JSContext* ctx) {
     JSValue g = JS_GetGlobalObject(ctx);
     JSValue f = JS_GetPropertyStr(ctx, g, "__wwCreateAnimationStub");
     JSValue r = JS_Call(ctx, f, JS_UNDEFINED, 0, nullptr);
     JS_FreeValue(ctx, f);
     JS_FreeValue(ctx, g);
     return r;
+}
+
+// Field-bound named animations (`origin` / `scale` / `angles` / `alpha`) are
+// controlled by thisLayer.getAnimation(name). Unsupported sprite/puppet
+// handles still fall back to the JS-side no-op object.
+JSValue NodeGetAnimation(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* n = GetLayerNode(this_val);
+    if (n == nullptr || argc < 1 || JS_IsUndefined(argv[0]) || JS_IsNull(argv[0]))
+        return CreateAnimationStub(ctx);
+
+    const char* raw_name = JS_ToCString(ctx, argv[0]);
+    if (raw_name == nullptr) return CreateAnimationStub(ctx);
+    std::string name { raw_name };
+    JS_FreeCString(ctx, raw_name);
+
+    if (name.empty() || ! n->HasFieldAnimation(name)) return CreateAnimationStub(ctx);
+
+    JSValue obj = JS_NewObjectClass(ctx, s_fieldanim_class_id);
+    if (JS_IsException(obj)) return obj;
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    JS_SetOpaque(obj, new FieldAnimationHandle { .host = host, .node = n, .name = std::move(name) });
+    return obj;
 }
 
 JSValue NodeGetVideoTextureStub(JSContext* ctx, JSValueConst, int, JSValueConst*) {
@@ -2356,8 +2489,8 @@ const JSCFunctionListEntry s_layer_proto_funcs[] = {
     JS_CFUNC_DEF("getBoneTransform", 1, NodeGetBoneTransform),
     JS_CFUNC_DEF("getTextureAnimation", 0, NodeGetTextureAnimation),
     JS_CFUNC_DEF("getVideoTexture", 0, NodeGetVideoTextureStub),
-    JS_CFUNC_DEF("getAnimation", 0, NodeGetAnimationStub),
-    JS_CFUNC_DEF("getAnimationLayer", 1, NodeGetAnimationStub),
+    JS_CFUNC_DEF("getAnimation", 1, NodeGetAnimation),
+    JS_CFUNC_DEF("getAnimationLayer", 1, NodeGetAnimation),
     JS_CFUNC_DEF("createLayer", 1, NodeSceneCreateLayer),
     JS_CFUNC_DEF("destroyLayer", 1, NodeSceneDestroyLayer),
     JS_CFUNC_DEF("getLayerIndex", 1, NodeSceneGetLayerIndex),
@@ -2502,6 +2635,7 @@ JsRuntime::JsRuntime(): m_impl(std::make_unique<Impl>()) {
     InitLayerClass(m_impl->ctx, m_impl->rt);
     InitEffectClass(m_impl->ctx, m_impl->rt);
     InitTexAnimClass(m_impl->ctx, m_impl->rt);
+    InitFieldAnimClass(m_impl->ctx, m_impl->rt);
     InstallEngineGlobal(m_impl->ctx);
     // Bootstrap created stub `thisLayer` / `thisScene` on globalThis.
     // Capture them now so per-script binding can fall back to the stub

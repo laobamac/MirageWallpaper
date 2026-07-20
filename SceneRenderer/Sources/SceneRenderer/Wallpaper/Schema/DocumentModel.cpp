@@ -1,5 +1,9 @@
 module;
 
+#if defined(__linux__)
+#include <string>
+#endif
+
 #include <rstd/macro.hpp>
 
 module sr.pkg.scene_obj;
@@ -16,7 +20,7 @@ namespace sr::wpscene
 SceneVersion ParsePkgVersionStamp(std::string_view stamp) {
     constexpr std::string_view kPrefix = "PKGV";
     if (stamp.size() < kPrefix.size() + 1) return kSceneVersionUnknown;
-    if (stamp.substr(0, kPrefix.size()) != kPrefix) return kSceneVersionUnknown;
+    if (stamp.substr(0, kPrefix.size()).data() != kPrefix.data()) return kSceneVersionUnknown;
     SceneVersion v       = 0;
     const char*  first   = stamp.data() + kPrefix.size();
     const char*  last    = stamp.data() + stamp.size();

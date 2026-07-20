@@ -1,10 +1,15 @@
 module;
 
+#if defined(__linux__)
+#include <string>
+#endif
+
 #include <rstd/macro.hpp>
 
 module sr.pkg.scene_obj;
 import rstd.log;
 import rstd.cppstd;
+import sr.fs;
 import sr.json;
 
 using namespace sr::wpscene;
@@ -130,7 +135,7 @@ bool ImageEffect::FromJson(const sr::Json& json, fs::VFS& vfs, SceneVersion v) {
         for (const auto& jP : **array) {
             MaterialPass pass;
             pass.FromJson(jP);
-            if (filePath == kFoliageSwayEffect && v != kSceneVersionUnknown &&
+            if (filePath.c_str() == kFoliageSwayEffect.data() && v != kSceneVersionUnknown &&
                 v < kNormalizedFoliageSwayStrengthVersion)
                 NormalizeLegacyFoliageSwayStrength(pass);
             passes[i++].Update(pass);

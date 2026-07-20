@@ -18,7 +18,9 @@
     {                                                              \
         VkResult _res = (f);                                       \
         if (_res != VK_SUCCESS && _res != VK_SUBOPTIMAL_KHR) {     \
-            rstd_error("VkResult is \"{}\"", vvk::ToString(_res)); \
+            rstd_error("VkResult is \"{}\" ({})",                  \
+                       vvk::ToString(_res),                        \
+                       static_cast<int>(_res));                     \
             rstd_assert(_res == VK_SUCCESS);                       \
             {                                                      \
                 act;                                               \
