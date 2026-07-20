@@ -35,9 +35,7 @@ For build instructions, see [Building from Source](/en/advanced/build/).
 
 Mirage will continue to be developed freely and openly. If it brings value to your desktop, you're welcome to sponsor it as you see fit — every bit of support goes toward ongoing maintenance, compatibility improvements, and new features. **Sponsorship is entirely voluntary and does not affect access to any features.**
 
-- Afdian (爱发电): <https://www.ifdian.net/a/laobamac>
-- WeChat Pay / Alipay: see the QR codes in the project [README](https://github.com/laobamac/MirageWallpaper)
-- Overseas users can sponsor with USDT (see the README)
+The [Support Mirage](/en/reference/support/) page shows Afdian, WeChat Pay, Alipay, and USDT directly, without sending you to the project README.
 
 ## License
 

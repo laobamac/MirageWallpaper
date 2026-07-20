@@ -5,6 +5,10 @@ description: The three kinds of live wallpaper Mirage supports (scene, web, vide
 
 Mirage identifies a wallpaper's type from the `type` field in `project.json` and hands it to the matching renderer process for playback. The three main types are described below.
 
+![Scene, web, and video wallpapers in the Mirage library](/images/docs/library-overview.webp)
+
+*The real library identifies format and source, with filters available in the same view.*
+
 ## Scene
 
 Scene wallpapers are Wallpaper Engine's native format. They typically include a `scene.json` or a packaged `scene.pkg`, along with resources such as materials, models, particles, and shaders.

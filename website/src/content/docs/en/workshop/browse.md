@@ -5,6 +5,10 @@ description: Browse wallpapers in the Workshop tab by sort, tag, and keyword, an
 
 Once [setup](/en/workshop/overview/) is done, switch to the Workshop tab to browse Wallpaper Engine's vast library of Workshop content.
 
+![The real tag filters and result grid in Mirage Workshop](/images/docs/workshop-nature.webp)
+
+*Sorting, search, tags, and the result grid all live in the same browsing view.*
+
 ## Sort options
 
 You can sort your browsing at the top by:

@@ -134,6 +134,7 @@ export default defineConfig({
             { slug: 'reference/faq' },
             { slug: 'reference/troubleshooting' },
             { slug: 'reference/privacy' },
+            { slug: 'reference/support' },
             { slug: 'reference/community' },
           ],
         },

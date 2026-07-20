@@ -5,6 +5,10 @@ description: Mirage 支持的场景、网页、视频三类动态壁纸，以及
 
 Mirage 通过 `project.json` 中的 `type` 字段识别壁纸类型，并交给对应的渲染进程播放。三种主要类型如下。
 
+![Mirage 壁纸库中的场景、网页和视频壁纸](/images/docs/library-overview.webp)
+
+*真实壁纸库会在同一个界面中标明类型、来源并提供筛选。*
+
 ## 场景（scene）
 
 场景壁纸是 Wallpaper Engine 的原生格式，通常包含 `scene.json` 或打包后的 `scene.pkg`，以及材质、模型、粒子、着色器等资源。

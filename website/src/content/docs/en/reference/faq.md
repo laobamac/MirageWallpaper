@@ -7,7 +7,7 @@ description: Common questions about installing Mirage, wallpapers, the Workshop,
 
 ### Is Mirage free?
 
-Yes. Mirage will continue to be developed freely and openly under the GPL-3.0 license. If it brings value to your desktop, you're welcome to sponsor it through the channels listed on the [community page](/en/reference/community/) as you see fit; sponsorship is entirely voluntary and does not affect access to any features.
+Yes. Mirage will continue to be developed freely and openly under the GPL-3.0 license. If it brings value to your desktop, you're welcome to sponsor it through the [Support Mirage](/en/reference/support/) page; sponsorship is entirely voluntary and does not affect access to any features.
 
 ### Which systems does Mirage support?
 

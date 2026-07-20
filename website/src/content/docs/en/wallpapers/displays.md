@@ -9,6 +9,10 @@ Mirage supports multi-display setups. You can have all screens share a single wa
 
 Click the **Displays** button at the top of the main window to open the display settings panel.
 
+![The real display wallpaper assignment panel in Mirage](/images/docs/display-control.webp)
+
+*The panel lists the displays currently detected and the wallpaper running on each one.*
+
 ## Cover all displays
 
 **Cover all displays** applies the current wallpaper to every screen detected. You can trigger it from:

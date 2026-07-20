@@ -5,6 +5,10 @@ description: Learn how Mirage integrates with the Steam Workshop and what you ne
 
 Mirage has built-in browsing and downloading for the Steam Workshop, mapped directly to Wallpaper Engine's Workshop content (App ID `431960`). You can browse a huge library of wallpapers inside the app, with downloads handled by the SteamCMD instance Mirage manages for you.
 
+![Browsing the Steam Workshop with the Nature filter in Mirage](/images/docs/workshop-nature.webp)
+
+*The real Workshop interface after sign-in, filtered to the Nature tag.*
+
 ## How it works
 
 The Workshop feature relies on two components working together:

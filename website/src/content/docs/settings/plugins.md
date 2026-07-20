@@ -5,6 +5,10 @@ description: 设置中的插件页说明。
 
 「设置 → 插件」用于展示 Mirage 的插件扩展点。它分为两个区块：
 
+![Mirage 设置中的真实插件页面](/images/docs/settings-plugins.webp)
+
+*当前版本的插件页面。*
+
 - **内置**：Mirage 自带的插件。
 - **第三方**：由外部提供的插件。
 

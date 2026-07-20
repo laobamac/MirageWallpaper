@@ -7,6 +7,10 @@ Mirage is a **native live wallpaper manager** for macOS, and also a **Wallpaper 
 
 You can use it to read local Wallpaper Engine style wallpaper packages, or browse the Steam Workshop directly, install SteamCMD, sign in to Steam, and download wallpapers.
 
+![A live scene wallpaper actually rendered by Mirage](/images/product/rendered-scene.webp)
+
+*Actual output from Mirage's SceneWallpaper renderer.*
+
 :::note[The project is still in an early stage]
 Mirage is under active development, and compatibility with the Wallpaper Engine scene format is still being refined. Complex works may differ in how they render effects, scripts, or materials. If you run into problems, feel free to [open an issue](https://github.com/laobamac/MirageWallpaper/issues/new/choose) or join the community to share feedback. See [Community & Feedback](/en/reference/community/) for details.
 :::

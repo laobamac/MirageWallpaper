@@ -5,6 +5,10 @@ description: "The five sections of the Mirage settings window: Performance, Gene
 
 Open the settings window from the **Settings** button at the top of the main window, or from "Settings" (`,`) in the [menu bar](/en/wallpapers/menubar/). There are five section tabs at the top of the window.
 
+![The About page in Mirage's real Settings window](/images/docs/settings-about.webp)
+
+*The real Settings window; use the tabs at the top to switch between Performance, General, Plugins, Screen Saver, and About.*
+
 ## The five sections
 
 | Section | Contents |

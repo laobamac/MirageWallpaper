@@ -6,90 +6,102 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 const local = (path: string) => `${base}${path}`;
 const github = 'https://github.com/laobamac/MirageWallpaper';
 const releases = `${github}/releases`;
-const docs = isEnglish ? local('/en/guides/introduction') : local('/guides/introduction');
-const install = releases;
+const docs = isEnglish ? local('/en/guides/introduction/') : local('/guides/introduction/');
+const support = isEnglish ? local('/en/reference/support/') : local('/reference/support/');
+
 const t = isEnglish ? {
-  docs: 'Documentation', source: 'Source', language: '中文', badge: 'Native live wallpaper for macOS',
+  badge: 'Native live wallpaper for macOS',
   heroLine1: 'Your live wallpapers,', heroLine2: 'awake on Mac.',
-  heroText: 'Mirage renders scene, web, and video wallpapers natively, with Steam Workshop, multi-display control, and a standalone dynamic screen saver built in.',
-  getStarted: 'Get Mirage', readDocs: 'Read the docs', screenshot: 'The real Mirage wallpaper library running on macOS',
-  screenshotLabel: 'A real Mirage library', screenshotMeta: 'Captured from Mirage 1.0.0 on macOS',
-  formatsEyebrow: 'Three formats. One home.', formatsTitle: 'Everything your desktop can become.',
+  heroText: 'Scene, web, and video wallpapers. Steam Workshop, per-display control, smart playback rules, and a standalone live screen saver — together in one native macOS app.',
+  getStarted: 'Get Mirage', readDocs: 'Read the docs',
+  heroAlt: 'A live scene wallpaper rendered by Mirage on macOS',
+  heroCaption: 'A real scene wallpaper rendered by Mirage', heroMeta: 'Live output · Scene renderer',
+  formatsEyebrow: 'Three formats, one library', formatsTitle: 'Use the wallpapers you already love.',
   formats: [
-    ['SCENE', 'Living worlds', 'Vulkan and MoltenVK power materials, particles, lighting, effects, and user properties.'],
-    ['WEB', 'The web, behind your windows', 'WKWebView brings HTML, JavaScript, media, audio response, and mouse interaction to the desktop.'],
-    ['VIDEO', 'Motion without friction', 'AVFoundation handles smooth looping, speed, volume, and fill modes for local video wallpapers.'],
+    { name: 'SCENE', title: 'Rendered worlds', text: 'Materials, particles, lighting, effects, and user properties rendered through Vulkan and MoltenVK.', image: '/images/product/format-scene.webp', alt: 'A scene wallpaper rendered by Mirage' },
+    { name: 'WEB', title: 'Interactive canvases', text: 'HTML, JavaScript, media, mouse interaction, and audio response hosted by WKWebView.', image: '/images/product/format-web.webp', alt: 'A real web audio visualizer wallpaper in Mirage' },
+    { name: 'VIDEO', title: 'Effortless motion', text: 'Smooth looping, speed, volume, and fill modes for local video wallpapers through AVFoundation.', image: '/images/product/format-video.webp', alt: 'A real 4K 120 FPS video wallpaper in Mirage' },
   ],
-  libraryEyebrow: 'Your collection, made useful', libraryTitle: 'Find one wallpaper among hundreds.', libraryText: 'Search, sort, filter, favourite, import, and adjust a wallpaper from one native workspace. Mirage keeps local items, Workshop downloads, and presets together without hiding where they came from.',
-  libraryPoints: ['Per-display assignment', 'Live playback controls', 'Custom wallpaper properties', 'Menu-bar control'],
-  workshopEyebrow: 'Steam Workshop', workshopTitle: 'From discovery to desktop, without the detour.', workshopText: 'Browse trending, recent, popular, and tagged works. Mirage manages SteamCMD installation, sign-in, Steam Guard, downloads, queues, and preset dependencies for you.', workshopLink: 'Explore the Workshop guide',
-  considerateEyebrow: 'Quiet when it should be', considerateTitle: 'Motion that knows when to step back.', considerateText: 'Set independent rules for fullscreen apps, audio playback, display sleep, and battery power. Mirage can keep playing, mute, pause, or stop its renderer to release memory.',
-  screenSaverTitle: 'And when you leave, it becomes your screen saver.', screenSaverText: 'Install the included screen saver host and use the same scene, web, or video wallpaper — with its current preset and custom properties — without keeping Mirage open.',
-  architectureEyebrow: 'Built to stay out of your way', architectureTitle: 'Native at the surface. Isolated underneath.', architectureText: 'The SwiftUI and AppKit application coordinates three dedicated renderers. Each runs independently, so one format cannot take the entire experience down with it.',
-  architecture: [['Mirage', 'SwiftUI · AppKit'], ['Scene', 'C++20 · Vulkan'], ['Web', 'WKWebView'], ['Video', 'AVFoundation']],
-  finalTitle: 'Give your desktop another dimension.', finalText: 'Open source, built for macOS 14.2 and later, on Apple Silicon and Intel.', finalPrimary: 'Install Mirage', finalSecondary: 'Browse source',
+  libraryEyebrow: 'The real Mirage library', libraryTitle: 'Hundreds of wallpapers. Still easy to manage.',
+  libraryText: 'Search, sort, filter, favourite, import, and tune playback in one native workspace. Local items, Workshop downloads, and presets stay together with their source clearly identified.',
+  libraryPoints: ['Per-display assignment', 'Live playback controls', 'Custom properties', 'Menu-bar control'], libraryAlt: 'The real Mirage installed wallpaper library',
+  workshopEyebrow: 'Steam Workshop', workshopTitle: 'Browse, filter, and download without leaving Mirage.',
+  workshopText: 'Discover Workshop content by format, tag, popularity, rating, and recency. Mirage handles SteamCMD, sign-in, Steam Guard, download queues, and preset dependencies.', workshopLink: 'Open the Workshop guide', workshopAlt: 'Steam Workshop nature wallpapers inside Mirage',
+  rulesEyebrow: 'Smart playback', rulesTitle: 'Motion that knows when to step back.', rulesText: 'Choose what happens when another app is full screen, audio is playing, the display sleeps, or a MacBook switches to battery power.', rulesLink: 'Performance settings',
+  saverEyebrow: 'Live screen saver', saverTitle: 'Your wallpaper keeps moving when you step away.', saverText: 'Use the same scene, web, or video wallpaper as a standalone screen saver, with its preset and custom properties preserved.', saverLink: 'Screen saver guide',
+  displayEyebrow: 'Per-display control', displayTitle: 'The right wallpaper on the right screen.', displayText: 'See every connected display, apply the selected wallpaper to one screen, or stop individual renderers from a focused control panel.', displayAlt: 'Mirage display assignment panel', displayLink: 'Multi-display guide',
+  openEyebrow: 'Open, transparent, supportable', openTitle: 'Built in the open — and free to use.', openText: 'Mirage is GPL-3.0 software for macOS 14.2 and later. Sponsorship is optional and never unlocks or restricts features.', openAlt: 'Mirage About page with project and sponsorship information', supportLink: 'Support Mirage', sourceLink: 'Browse source',
+  finalTitle: 'Give your desktop another dimension.', finalText: 'Available for Apple Silicon and Intel Macs.', finalPrimary: 'Download Mirage', finalSecondary: 'Start with the docs',
   disclaimer: 'Mirage is not affiliated with or endorsed by Valve, Steam, or Wallpaper Engine.',
 } : {
-  docs: '文档', source: '源码', language: 'EN', badge: 'macOS 原生动态壁纸',
+  badge: 'macOS 原生动态壁纸',
   heroLine1: '让喜欢的动态壁纸，', heroLine2: '在 Mac 上醒来。',
-  heroText: 'Mirage 原生渲染场景、网页与视频壁纸，并把 Steam 创意工坊、多显示器控制和动态屏保放进同一个 macOS 应用。',
-  getStarted: '获取 Mirage', readDocs: '阅读文档', screenshot: '运行在 macOS 上的真实 Mirage 壁纸库界面',
-  screenshotLabel: '真实的 Mirage 壁纸库', screenshotMeta: '截取自 macOS 上的 Mirage 1.0.0',
-  formatsEyebrow: '三种格式，一个归处', formatsTitle: '桌面可以成为的每一种样子。',
+  heroText: '场景、网页与视频壁纸，Steam 创意工坊、按显示器控制、智能播放策略和独立动态屏保，都在同一个原生 macOS 应用中。',
+  getStarted: '获取 Mirage', readDocs: '阅读文档',
+  heroAlt: 'Mirage 在 macOS 上实际渲染的动态场景壁纸',
+  heroCaption: '由 Mirage 实际渲染的场景壁纸', heroMeta: '实时输出 · Scene 渲染器',
+  formatsEyebrow: '三种格式，一个壁纸库', formatsTitle: '你已经喜欢的壁纸，继续在 Mac 上使用。',
   formats: [
-    ['SCENE', '会呼吸的场景', 'Vulkan 与 MoltenVK 驱动材质、粒子、灯光、特效和作品自定义属性。'],
-    ['WEB', '藏在窗口后的网页', 'WKWebView 把 HTML、JavaScript、媒体、音频响应与鼠标交互带到桌面。'],
-    ['VIDEO', '没有负担的流动画面', 'AVFoundation 负责平滑循环、速度、音量与填充模式，直接播放本地视频壁纸。'],
+    { name: 'SCENE', title: '真正渲染的动态世界', text: '通过 Vulkan 与 MoltenVK 呈现材质、粒子、灯光、特效和作品自定义属性。', image: '/images/product/format-scene.webp', alt: 'Mirage 实际渲染的场景壁纸' },
+    { name: 'WEB', title: '可以交互的网页画布', text: 'WKWebView 承载 HTML、JavaScript、媒体、鼠标交互与音频响应。', image: '/images/product/format-web.webp', alt: 'Mirage 中真实的网页音频可视化壁纸' },
+    { name: 'VIDEO', title: '无需折腾的流动画面', text: 'AVFoundation 负责本地视频壁纸的平滑循环、速度、音量和填充模式。', image: '/images/product/format-video.webp', alt: 'Mirage 中真实的 4K 120 FPS 视频壁纸' },
   ],
-  libraryEyebrow: '让收藏真正好用', libraryTitle: '几百张壁纸，也能快速找到这一张。', libraryText: '搜索、排序、筛选、收藏、导入和播放调节都在同一个原生工作区。Mirage 把本地作品、创意工坊下载和预设放在一起，同时保留它们清晰的来源。',
-  libraryPoints: ['按显示器独立指派', '实时播放控制', '作品自定义属性', '菜单栏快捷控制'],
-  workshopEyebrow: 'Steam 创意工坊', workshopTitle: '从发现，到铺满桌面，中间不必绕路。', workshopText: '浏览趋势、最新、热门与标签分类。SteamCMD 安装、登录、Steam Guard、下载队列和预设依赖，都由 Mirage 统一处理。', workshopLink: '查看创意工坊指南',
-  considerateEyebrow: '该安静时，就安静', considerateTitle: '动态，也懂得适时退场。', considerateText: '针对全屏应用、其他应用播放音频、显示器睡眠和电池供电分别设定规则。Mirage 可以继续、静音、暂停，或停止渲染器来释放内存。',
-  screenSaverTitle: '当你离开，它又成为动态屏保。', screenSaverText: '安装内置屏保宿主，即可继续使用同一张场景、网页或视频壁纸，并保留当前预设与自定义属性；无需让 Mirage 主程序保持运行。',
-  architectureEyebrow: '不打扰，是一种能力', architectureTitle: '表面原生，底层彼此隔离。', architectureText: 'SwiftUI 与 AppKit 主应用协调三个专用渲染器。每一种格式都独立运行，单个渲染器的异常不会拖垮整个体验。',
-  architecture: [['Mirage', 'SwiftUI · AppKit'], ['Scene', 'C++20 · Vulkan'], ['Web', 'WKWebView'], ['Video', 'AVFoundation']],
-  finalTitle: '给桌面，再多一个维度。', finalText: '完全开源，支持 macOS 14.2 及更高版本、Apple Silicon 与 Intel。', finalPrimary: '安装 Mirage', finalSecondary: '浏览源码',
+  libraryEyebrow: '真实的 Mirage 壁纸库', libraryTitle: '几百张壁纸，也依然清楚好用。',
+  libraryText: '搜索、排序、筛选、收藏、导入和播放调节都在同一个原生工作区。本地作品、创意工坊下载和预设集中管理，同时保留清晰来源。',
+  libraryPoints: ['按显示器独立指派', '实时播放控制', '作品自定义属性', '菜单栏快捷控制'], libraryAlt: '真实的 Mirage 已安装壁纸库',
+  workshopEyebrow: 'Steam 创意工坊', workshopTitle: '浏览、筛选、下载，全程不必离开 Mirage。',
+  workshopText: '按格式、标签、热度、评分与时间发现创意工坊内容。SteamCMD、Steam 登录、Steam Guard、下载队列和预设依赖均由 Mirage 管理。', workshopLink: '打开创意工坊指南', workshopAlt: 'Mirage 中经过自然标签筛选的 Steam 创意工坊',
+  rulesEyebrow: '智能播放策略', rulesTitle: '动态，也知道什么时候应该退场。', rulesText: '为其他应用全屏、播放音频、显示器睡眠和 MacBook 使用电池分别决定继续、静音、暂停或停止。', rulesLink: '查看性能设置',
+  saverEyebrow: '动态屏保', saverTitle: '离开电脑后，壁纸继续流动。', saverText: '同一张场景、网页或视频壁纸可以直接成为独立屏保，并保留当前预设与自定义属性。', saverLink: '查看屏保指南',
+  displayEyebrow: '按显示器控制', displayTitle: '每一块屏幕，都可以有自己的选择。', displayText: '集中查看连接的显示器，把当前壁纸应用到指定屏幕，或单独停止某个渲染器。', displayAlt: 'Mirage 显示器壁纸指派面板', displayLink: '查看多显示器指南',
+  openEyebrow: '开放、透明、可持续', openTitle: '开源构建，也始终免费使用。', openText: 'Mirage 遵循 GPL-3.0，支持 macOS 14.2 及更高版本。赞助完全自愿，不会解锁或限制任何功能。', openAlt: 'Mirage 关于页面中的项目信息和赞助方式', supportLink: '支持 Mirage', sourceLink: '浏览源码',
+  finalTitle: '给桌面，再多一个维度。', finalText: '同时支持 Apple Silicon 与 Intel Mac。', finalPrimary: '下载 Mirage', finalSecondary: '从文档开始',
   disclaimer: 'Mirage 与 Valve、Steam 或 Wallpaper Engine 没有关联，也未获其官方认可。',
 };
 ---
 
 <div class="mirage-landing">
-  <header class="landing-nav">
-    <a class="landing-brand" href={local('/')} aria-label="Mirage home"><img src={local('/app-icon.png')} alt="" width="38" height="38" /><span>Mirage</span></a>
-    <nav aria-label="Primary navigation"><a href={docs}>{t.docs}</a><a href={github} target="_blank" rel="noreferrer">{t.source}</a><a class="nav-language" href={isEnglish ? local('/') : local('/en/')}>{t.language}</a></nav>
-  </header>
-
   <main>
-    <section class="hero-section">
-      <div class="hero-aura" aria-hidden="true"></div>
-      <div class="hero-copy landing-shell mirage-reveal">
+    <section class="hero-section landing-shell">
+      <div class="hero-copy mirage-reveal">
         <div class="product-badge"><img src={local('/app-icon.png')} alt="" width="24" height="24" /><span>{t.badge}</span></div>
         <h1>{t.heroLine1}<span>{t.heroLine2}</span></h1>
         <p>{t.heroText}</p>
-        <div class="hero-actions"><a class="primary-action" href={install} target="_blank" rel="noreferrer">{t.getStarted}<span aria-hidden="true">↗</span></a><a class="secondary-action" href={docs}>{t.readDocs}<span aria-hidden="true">→</span></a></div>
+        <div class="hero-actions"><a class="primary-action" href={releases} target="_blank" rel="noreferrer">{t.getStarted}<span aria-hidden="true">↗</span></a><a class="secondary-action" href={docs}>{t.readDocs}<span aria-hidden="true">→</span></a></div>
       </div>
-      <figure class="product-stage landing-shell hero-stage-enter">
-        <div class="stage-label"><span>{t.screenshotLabel}</span><small>{t.screenshotMeta}</small></div>
-        <img src={local('/images/docs/library-overview.webp')} alt={t.screenshot} width="2200" height="1254" loading="eager" />
+      <figure class="hero-visual hero-stage-enter">
+        <img src={local('/images/product/rendered-scene.webp')} alt={t.heroAlt} width="2200" height="1238" loading="eager" />
+        <figcaption><strong>{t.heroCaption}</strong><span>{t.heroMeta}</span></figcaption>
       </figure>
     </section>
 
     <section class="format-section landing-shell">
-      <div class="section-heading mirage-reveal"><p>{t.formatsEyebrow}</p><h2>{t.formatsTitle}</h2></div>
-      <div class="format-grid">{t.formats.map(([name, title, text], index) => <article class="format-item mirage-reveal" data-delay={index * 70}><div class={`format-orb format-${index + 1}`} aria-hidden="true"></div><span>{name}</span><h3>{title}</h3><p>{text}</p></article>)}</div>
+      <header class="section-heading mirage-reveal"><p>{t.formatsEyebrow}</p><h2>{t.formatsTitle}</h2></header>
+      <div class="format-grid">{t.formats.map((item, index) => <article class="format-item mirage-reveal" data-delay={index * 60}><img src={local(item.image)} alt={item.alt} width="900" height="900" loading="lazy" /><div><span>{item.name}</span><h3>{item.title}</h3><p>{item.text}</p></div></article>)}</div>
     </section>
 
-    <section class="library-section"><div class="landing-shell library-layout"><div class="library-copy mirage-reveal"><p class="section-kicker">{t.libraryEyebrow}</p><h2>{t.libraryTitle}</h2><p>{t.libraryText}</p><ul>{t.libraryPoints.map((point) => <li>{point}</li>)}</ul></div><div class="library-crop mirage-reveal" data-delay="90"><img src={local('/images/docs/library-overview.webp')} alt={t.screenshot} width="2200" height="1254" loading="lazy" /></div></div></section>
+    <section class="feature-section feature-light">
+      <div class="landing-shell feature-grid"><div class="feature-copy mirage-reveal"><p class="section-kicker">{t.libraryEyebrow}</p><h2>{t.libraryTitle}</h2><p>{t.libraryText}</p><ul>{t.libraryPoints.map((point) => <li>{point}</li>)}</ul></div><figure class="app-shot mirage-reveal" data-delay="80"><img src={local('/images/docs/library-overview.webp')} alt={t.libraryAlt} width="2200" height="1278" loading="lazy" /></figure></div>
+    </section>
 
-    <section class="workshop-section landing-shell"><div class="workshop-copy mirage-reveal"><p class="section-kicker">{t.workshopEyebrow}</p><h2>{t.workshopTitle}</h2><p>{t.workshopText}</p><a href={isEnglish ? local('/en/workshop/overview') : local('/workshop/overview')}>{t.workshopLink}<span aria-hidden="true">→</span></a></div><div class="workshop-motion mirage-reveal" data-delay="100" aria-hidden="true"><div class="motion-track"><span>Discover</span><i></i><span>SteamCMD</span><i></i><span>Desktop</span></div><div class="motion-art"><b></b><b></b><b></b></div></div></section>
+    <section class="workshop-section landing-shell">
+      <div class="workshop-copy mirage-reveal"><p class="section-kicker">{t.workshopEyebrow}</p><h2>{t.workshopTitle}</h2><p>{t.workshopText}</p><a class="text-link" href={isEnglish ? local('/en/workshop/overview/') : local('/workshop/overview/')}>{t.workshopLink}<span aria-hidden="true">→</span></a></div>
+      <figure class="app-shot workshop-shot mirage-reveal" data-delay="80"><img src={local('/images/docs/workshop-nature.webp')} alt={t.workshopAlt} width="2200" height="1582" loading="lazy" /></figure>
+    </section>
 
-    <section class="considerate-section"><div class="landing-shell considerate-grid"><article class="mirage-reveal"><p class="section-kicker">{t.considerateEyebrow}</p><h2>{t.considerateTitle}</h2><p>{t.considerateText}</p><a href={isEnglish ? local('/en/settings/performance') : local('/settings/performance')}>{t.docs}<span aria-hidden="true">→</span></a></article><article class="mirage-reveal" data-delay="90"><p class="section-kicker">Screen Saver</p><h2>{t.screenSaverTitle}</h2><p>{t.screenSaverText}</p><a href={isEnglish ? local('/en/screensaver/overview') : local('/screensaver/overview')}>{t.docs}<span aria-hidden="true">→</span></a></article></div></section>
+    <section class="paired-section">
+      <div class="landing-shell paired-grid">
+        <article class="paired-card mirage-reveal"><div><p class="section-kicker">{t.rulesEyebrow}</p><h2>{t.rulesTitle}</h2><p>{t.rulesText}</p><a class="text-link" href={isEnglish ? local('/en/settings/performance/') : local('/settings/performance/')}>{t.rulesLink}<span aria-hidden="true">→</span></a></div><img src={local('/images/docs/settings-performance.webp')} alt={t.rulesTitle} width="2200" height="1278" loading="lazy" /></article>
+        <article class="paired-card mirage-reveal" data-delay="70"><div><p class="section-kicker">{t.saverEyebrow}</p><h2>{t.saverTitle}</h2><p>{t.saverText}</p><a class="text-link" href={isEnglish ? local('/en/screensaver/overview/') : local('/screensaver/overview/')}>{t.saverLink}<span aria-hidden="true">→</span></a></div><img src={local('/images/docs/settings-screensaver.webp')} alt={t.saverTitle} width="2200" height="1278" loading="lazy" /></article>
+      </div>
+    </section>
 
-    <section class="architecture-section landing-shell"><div class="architecture-copy mirage-reveal"><p class="section-kicker">{t.architectureEyebrow}</p><h2>{t.architectureTitle}</h2><p>{t.architectureText}</p></div><div class="architecture-rail">{t.architecture.map(([name, stack], index) => <div class="architecture-node mirage-reveal" data-delay={index * 55}><span>0{index + 1}</span><strong>{name}</strong><small>{stack}</small></div>)}</div></section>
+    <section class="display-section landing-shell"><figure class="display-shot mirage-reveal"><img src={local('/images/docs/display-control.webp')} alt={t.displayAlt} width="1250" height="1100" loading="lazy" /></figure><div class="display-copy mirage-reveal" data-delay="70"><p class="section-kicker">{t.displayEyebrow}</p><h2>{t.displayTitle}</h2><p>{t.displayText}</p><a class="text-link" href={isEnglish ? local('/en/wallpapers/displays/') : local('/wallpapers/displays/')}>{t.displayLink}<span aria-hidden="true">→</span></a></div></section>
 
-    <section class="closing-section landing-shell"><div class="closing-aura" aria-hidden="true"></div><img src={local('/app-icon.png')} alt="" width="72" height="72" /><h2>{t.finalTitle}</h2><p>{t.finalText}</p><div class="hero-actions"><a class="primary-action" href={install} target="_blank" rel="noreferrer">{t.finalPrimary}<span aria-hidden="true">↗</span></a><a class="secondary-action" href={github} target="_blank" rel="noreferrer">{t.finalSecondary}<span aria-hidden="true">→</span></a></div></section>
+    <section class="feature-section open-section"><div class="landing-shell feature-grid"><div class="feature-copy mirage-reveal"><p class="section-kicker">{t.openEyebrow}</p><h2>{t.openTitle}</h2><p>{t.openText}</p><div class="inline-links"><a class="text-link" href={support}>{t.supportLink}<span aria-hidden="true">→</span></a><a class="text-link" href={github} target="_blank" rel="noreferrer">{t.sourceLink}<span aria-hidden="true">↗</span></a></div></div><figure class="app-shot mirage-reveal" data-delay="80"><img src={local('/images/docs/settings-about.webp')} alt={t.openAlt} width="2200" height="1292" loading="lazy" /></figure></div></section>
+
+    <section class="closing-section landing-shell"><img src={local('/app-icon.png')} alt="" width="72" height="72" /><h2>{t.finalTitle}</h2><p>{t.finalText}</p><div class="hero-actions"><a class="primary-action" href={releases} target="_blank" rel="noreferrer">{t.finalPrimary}<span aria-hidden="true">↗</span></a><a class="secondary-action" href={docs}>{t.finalSecondary}<span aria-hidden="true">→</span></a></div></section>
   </main>
-
-  <footer class="landing-footer landing-shell"><a class="landing-brand" href={local('/')}><img src={local('/app-icon.png')} alt="" width="30" height="30" /><span>Mirage</span></a><p>{t.disclaimer}</p><span>GPL-3.0</span></footer>
+  <footer class="landing-footer landing-shell"><a href={local('/')}><img src={local('/app-icon.png')} alt="" width="30" height="30" /><strong>Mirage</strong></a><p>{t.disclaimer}</p><span>GPL-3.0</span></footer>
 </div>
 <script>import '../scripts/reveal.ts';</script>
