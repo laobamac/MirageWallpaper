@@ -22,6 +22,7 @@ struct WallpaperArgs {
     int runSeconds = 0;
     VRVideoFillMode fillMode = VRVideoFillModeCover;
     BOOL controlStdin = NO;
+    BOOL loadFromMemory = NO;
 };
 
 static void PrintUsage(const char *argv0) {
@@ -33,6 +34,7 @@ static void PrintUsage(const char *argv0) {
         "  --muted                start muted\n"
         "  --fill MODE            cover | contain | stretch (default cover)\n"
         "  --control-stdin        accept live JSON control commands on stdin\n"
+        "  --load-from-memory     keep the video bytes in memory\n"
         "  --run-seconds N        exit after N seconds (test helper)\n"
         "  -h, --help             show this help\n",
         argv0);
@@ -79,6 +81,8 @@ static BOOL ParseArgs(int argc, char **argv, WallpaperArgs &out) {
             const char *v = take(i, arg); if (!v) return NO; out.runSeconds = atoi(v);
         } else if (strcmp(arg, "--control-stdin") == 0) {
             out.controlStdin = YES;
+        } else if (strcmp(arg, "--load-from-memory") == 0) {
+            out.loadFromMemory = YES;
         } else if (arg[0] == '-') {
             fprintf(stderr, "unknown option: %s\n", arg);
             return NO;
@@ -156,6 +160,7 @@ int main(int argc, char *argv[]) {
         config.initialVolume = args.volume;
         config.muted = args.muted;
         config.autoplay = YES;
+        config.loadFromMemory = args.loadFromMemory;
 
         NSRect screenFrame = screen.frame;
         VRVideoRendererEngine *engine = [[VRVideoRendererEngine alloc] initWithFrame:screenFrame

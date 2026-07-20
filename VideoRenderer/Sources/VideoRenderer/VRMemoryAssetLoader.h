@@ -1,22 +1,20 @@
-//
-//  VRMemoryAssetLoader.h
-//  VideoRenderer
-//
-//  预热视频文件到 OS 页缓存并长期持有，让 AVPlayer 循环播放时减少磁盘 I/O。
-//  AVPlayer 仍用 file:// URL（原生 MP4 demuxer），数据驻留在 OS 页缓存中。
-//
+#pragma once
 
+#import <AVFoundation/AVFoundation.h>
 #import <Foundation/Foundation.h>
 
 NS_ASSUME_NONNULL_BEGIN
 
-/// 持有视频文件的 mmap 数据，保持 OS 页缓存常驻，避免循环播放反复读盘。
-@interface VRMemoryAssetLoader : NSObject
+// Owns one immutable in-memory video and serves AVFoundation byte-range
+// requests through a custom URL. No request reopens the source file.
+@interface VRMemoryAssetLoader : NSObject <AVAssetResourceLoaderDelegate>
 
-+ (nullable instancetype)loaderWithData:(NSData *)data fileURL:(NSURL *)fileURL;
++ (nullable instancetype)loaderWithFileURL:(NSURL *)fileURL error:(NSError **)error;
 
-/// 已载入的字节数。
-@property (nonatomic, readonly) NSUInteger length;
+@property (nonatomic, strong, readonly) NSURL *assetURL;
+@property (nonatomic, assign, readonly) NSUInteger length;
+
+- (void)attachToAsset:(AVURLAsset *)asset;
 
 @end
 
