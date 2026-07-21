@@ -33,12 +33,10 @@ struct SettingsView: View {
         ]
     }
 
+    // Compares against an in-memory snapshot of the last-saved settings instead
+    // of decoding GlobalSettings JSON from UserDefaults on every footer render.
     private var hasUnsavedChanges: Bool {
-        guard let data = UserDefaults.standard.data(forKey: "GlobalSettings"),
-              let savedSettings = try? JSONDecoder().decode(GlobalSettings.self, from: data) else {
-            return false
-        }
-        return viewModel.settings != savedSettings
+        viewModel.settings != viewModel.savedSettings
     }
 
     var body: some View {

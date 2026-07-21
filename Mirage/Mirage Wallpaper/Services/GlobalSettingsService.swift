@@ -180,16 +180,24 @@ class GlobalSettingsViewModel: ObservableObject {
     var didChangeAdjustMenuBarTintCancellable: Cancellable?
     var playbackPolicySettingsCancellable: Cancellable?
     
+    // In-memory snapshot of what is persisted, so the settings UI can tell
+    // whether there are unsaved edits with a cheap value comparison instead of
+    // decoding GlobalSettings JSON from UserDefaults on every footer render.
+    @Published private(set) var savedSettings: GlobalSettings
+
     init() {
+        var initial: GlobalSettings
         if let data = UserDefaults.standard.data(forKey: "GlobalSettings"),
            let settings = try? JSONDecoder().decode(GlobalSettings.self, from: data) {
-            self.settings = settings
+            initial = settings
         } else {
-            self.settings = GlobalSettings()
+            initial = GlobalSettings()
         }
         if !MirageRegion.isMainlandChina {
-            self.settings.steamAPIEndpoint = .official
+            initial.steamAPIEndpoint = .official
         }
+        self.settings = initial
+        self.savedSettings = initial
         MirageLocalization.shared.apply(self.settings.language)
         self.didFinishLaunchingNotificationCancellable =
         NotificationCenter.default.publisher(for: NSApplication.didFinishLaunchingNotification)
@@ -364,8 +372,11 @@ class GlobalSettingsViewModel: ObservableObject {
     
     func didChangeAdjustMenuBarTint(_ newValue: Bool) {
         if newValue != true {
-            if let wallpaper = UserDefaults.standard.url(forKey: "OSWallpaper") {
-                try? NSWorkspace.shared.setDesktopImageURL(wallpaper, for: .main!)
+            // NSScreen.main can be nil while displays are asleep or being
+            // reconfigured — exactly when this handler runs — so guard it.
+            if let wallpaper = UserDefaults.standard.url(forKey: "OSWallpaper"),
+               let screen = NSScreen.main {
+                try? NSWorkspace.shared.setDesktopImageURL(wallpaper, for: screen)
             }
         } else {
             AppDelegate.shared.setPlaceholderWallpaper(
@@ -386,11 +397,13 @@ class GlobalSettingsViewModel: ObservableObject {
                 from: UserDefaults.standard.data(forKey: "GlobalSettings")
             ?? Data()))
         ?? GlobalSettings()
+        savedSettings = settings
     }
-    
+
     func save() {
-        let data = try! JSONEncoder().encode(settings)
+        guard let data = try? JSONEncoder().encode(settings) else { return }
         UserDefaults.standard.set(data, forKey: "GlobalSettings")
+        savedSettings = settings
     }
     
     func setQuality(_ quality: GSQuality) {

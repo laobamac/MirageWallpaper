@@ -49,19 +49,15 @@ struct PerformancePage: SettingsPage {
             }
 
             Section {
-                HStack(spacing: 1) {
-                    Button { viewModel.setQuality(.low) } label: { Text("低").frame(maxWidth: .infinity) }
-                    Divider()
-                    Button { viewModel.setQuality(.medium) } label: { Text("中").frame(maxWidth: .infinity) }
-                    Divider()
-                    Button { viewModel.setQuality(.high) } label: { Text("高").frame(maxWidth: .infinity) }
-                    Divider()
-                    Button { viewModel.setQuality(.ultra) } label: { Text("极致").frame(maxWidth: .infinity) }
+                HStack(spacing: 6) {
+                    QualityPresetButton(title: "低") { viewModel.setQuality(.low) }
+                    QualityPresetButton(title: "中") { viewModel.setQuality(.medium) }
+                    QualityPresetButton(title: "高") { viewModel.setQuality(.high) }
+                    QualityPresetButton(title: "极致") { viewModel.setQuality(.ultra) }
                 }
                 .padding(6)
-                .background(Color(nsColor: .unemphasizedSelectedContentBackgroundColor))
-                .buttonStyle(.borderless)
-                .clipShape(RoundedRectangle(cornerRadius: 5.0))
+                .background(Color.primary.opacity(0.06))
+                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
 
                 Picker("抗锯齿", selection: $viewModel.settings.antiAliasing) {
                     Text("关闭").tag(GSAntiAliasingQuality.none)
@@ -87,7 +83,7 @@ struct PerformancePage: SettingsPage {
                 HStack {
                     Text("帧率")
                     Spacer()
-                    Slider(value: $viewModel.settings.fps, in: 10...120, step: 1)
+                    MirageSlider(value: $viewModel.settings.fps, in: 10...120, step: 1)
                         .frame(width: 150)
                         .onChange(of: viewModel.settings.fps) { _, v in
                             AppDelegate.shared.wallpaperViewModel.renderer.setFps(Int(v))
@@ -113,5 +109,31 @@ struct PerformancePage: SettingsPage {
         }
         .formStyle(.grouped)
         .onChange(of: viewModel.settings) { _, _ in viewModel.save() }
+    }
+}
+
+// A single rounded segment in the quality-preset row. Applying a preset is a
+// one-shot action (it mutates several settings at once), so this stays a button
+// with hover feedback rather than a persistent selection.
+private struct QualityPresetButton: View {
+    let title: String
+    let action: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 5)
+                .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(hovering ? Color.accentColor.opacity(0.18) : Color.clear)
+                )
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.12), value: hovering)
     }
 }
