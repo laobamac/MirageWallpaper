@@ -7,6 +7,24 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
         <title>Mirage</title>
         <item>
             <title>1.0.0</title>
+            <pubDate>Tue, 21 Jul 2026 16:17:34 +0000</pubDate>
+            <link>https://github.com/laobamac/MirageWallpaper</link>
+            <sparkle:channel>beta</sparkle:channel>
+            <sparkle:version>180</sparkle:version>
+            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <description sparkle:format="plain-text"><![CDATA[Commit: 6b1788132f033c6eae2abfff84a05694123ac6b1
+Channel: beta
+
+fix(app): keep wallpaper playing while desktop is revealed
+
+Focus/fullscreen playback rules sampled window geometry once, mid-animation, so revealing the desktop (click-wallpaper, F11, hot corners) left playback stuck paused. Replace the single debounce with a settling burst of re-evaluations, poll on a timer while focus rules are active, and swap the fragile desktopRevealed latch for a short reveal grace window that hands back to geometry truth.
+
+]]></description>
+            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-180-6b1788132f03-macOS-x86_64.zip" length="197424305" type="application/octet-stream" sparkle:edSignature="sGP8ZB6AKEW9wSYkWaYs/iKbQBejIXp+IPoCcTBVSSoVgC4EK2UsbmHbosT1WIwy5J72d//DGEY5KrFf/kxxCQ=="/>
+        </item>
+        <item>
+            <title>1.0.0</title>
             <pubDate>Tue, 21 Jul 2026 15:40:16 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
             <sparkle:channel>beta</sparkle:channel>
@@ -90,26 +108,9 @@ chore(app): remove segmented picker
 ]]></description>
             <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-153-fd4538600eb7-macOS-x86_64.zip" length="197255030" type="application/octet-stream" sparkle:edSignature="KuSfm8faoUQXXlWjkOcWEXxhKPhCScmNjLOJCeD5VSQstN6mKGGlKW683oOXHiHhMZYe5P2F7EgTTDEwfxj2CA=="/>
         </item>
-        <item>
-            <title>1.0.0</title>
-            <pubDate>Sun, 19 Jul 2026 12:03:00 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>152</sparkle:version>
-            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <description sparkle:format="plain-text"><![CDATA[Commit: d18906a59b81a8b0f4aea06b861555c9a9b4cac9
-Channel: beta
-
-chore(app): convert settings from standalone NSWindow to main window sheet
-
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-152-d18906a59b81-macOS-x86_64.zip" length="197248747" type="application/octet-stream" sparkle:edSignature="aF8RK3JyDD6lAdvAeJetdUcHblJjqZvbyGVDYoXbbqPJTn1eW86zA9j3s0s+9xStaf2aQoOzDaI2y3PS7RiFDw=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: 4I+GlYG3RRGhiqPaIOHKVIydQAJF//mQdyA0S9NG6DxsifPVLkAD/oUiiBllBxvNNUv63AK83SLUWUUF80LTDQ==
-length: 6189
+edSignature: W/B3GonL0IymkWdFgSKkHEsaPIg2gs/Ss38qApzXV4TULu86jZ2MY6mSe6kI+8Jl1w5g7yPzXIqK3gbGylDBAQ==
+length: 6564
 -->
