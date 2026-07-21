@@ -7,6 +7,24 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
         <title>Mirage</title>
         <item>
             <title>1.0.0</title>
+            <pubDate>Tue, 21 Jul 2026 15:40:25 +0000</pubDate>
+            <link>https://github.com/laobamac/MirageWallpaper</link>
+            <sparkle:channel>beta</sparkle:channel>
+            <sparkle:version>179</sparkle:version>
+            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="plain-text"><![CDATA[Commit: 8e52e67d3568bed294b30141abd1d62f492397b0
+Channel: beta
+
+ci(app): link against macOS 26 SDK for current system UI
+
+
+]]></description>
+            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-179-8e52e67d3568-macOS-arm64.zip" length="192404440" type="application/octet-stream" sparkle:edSignature="oAK3yDM8WMUejnJidlkTpbfAVYqdVvyuhmoCieo2VyPQtsJN6m7nf0rr+OTQ5JB0XMZYVqTUWMztZdDGcWQsDQ=="/>
+        </item>
+        <item>
+            <title>1.0.0</title>
             <pubDate>Mon, 20 Jul 2026 15:35:01 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
             <sparkle:channel>beta</sparkle:channel>
@@ -95,27 +113,9 @@ chore(app): convert settings from standalone NSWindow to main window sheet
 ]]></description>
             <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-152-d18906a59b81-macOS-arm64.zip" length="192241945" type="application/octet-stream" sparkle:edSignature="n51/wpSFG3qxtAenYT2TB+SOCdVjb7r603O1aTwnp+ai0rIpoSp49mnQDM/ElrYddIevk59y3vB7UjRwOLo/DQ=="/>
         </item>
-        <item>
-            <title>1.0.0</title>
-            <pubDate>Sun, 19 Jul 2026 04:54:13 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>151</sparkle:version>
-            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="plain-text"><![CDATA[Commit: d2dee186736fde96479810cd8bef4d5cb9cf1beb
-Channel: beta
-
-fix(app): open wallpaper settings for screen saver setup
-
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-151-d2dee186736f-macOS-arm64.zip" length="192243463" type="application/octet-stream" sparkle:edSignature="Yi3GdxTm3LMO6lq+sb3sk9+jKvc3/GOI08NsWkHyr8VOlWvu7sbqFbYvGkr50XBge2TfbNQSuBGX8znum63wAA=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: ZtZQtCR5CzvLtXY02NcS0TsMqqEiQ5OP9NEVePR98TDVpET4YpkvvrmRf7CNaBmadXLPF13SpYsWj27U3t5dCw==
+edSignature: JijDmPKyzVdCZzq99poMiEax0QRWJtBsd+CnZeTnWWsYDnflasm4GCuvPexrQOQr1PW3PYIk7E2n0XtZiH9xAQ==
 length: 6657
 -->
