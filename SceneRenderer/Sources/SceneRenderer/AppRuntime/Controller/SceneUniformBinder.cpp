@@ -481,7 +481,10 @@ void SceneUniformUpdater::UpdateUniforms(SceneNode* pNode, sprite_map_t& sprites
     // WE audio-bar shaders. std140 array stride is 16 bytes per element, so
     // pack each already-smoothed amplitude into .x and leave .yzw at zero.
     auto push_audio = [&](std::string_view name, std::span<const float> visual) {
-        std::vector<float> packed(visual.size() * 4, 0.0f);
+        const std::size_t count = visual.size() * 4;
+        rstd_assert(count <= m_audio_pack_scratch.size());
+        std::span<float> packed(m_audio_pack_scratch.data(), count);
+        std::fill(packed.begin(), packed.end(), 0.0f);
         for (std::size_t i = 0; i < visual.size(); ++i) packed[i * 4] = visual[i];
         updateOp(name, std::span<const float>(packed));
     };

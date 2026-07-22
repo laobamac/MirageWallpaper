@@ -56,8 +56,13 @@ class AudioCapture::Impl {
 public:
     ~Impl() { uninit(); }
 
-    bool init() {
+    bool init(bool enable_system_capture) {
         if (is_inited()) return true;
+
+        if (! enable_system_capture) {
+            inited_.store(true, std::memory_order_release);
+            return true;
+        }
 
         int status = 0;
         std::uint32_t source_channels = kDefaultChannels;
@@ -245,7 +250,7 @@ private:
 AudioCapture::AudioCapture() : impl_(std::make_unique<Impl>()) {}
 AudioCapture::~AudioCapture() = default;
 
-bool AudioCapture::init() { return impl_->init(); }
+bool AudioCapture::init(bool enable_system_capture) { return impl_->init(enable_system_capture); }
 void AudioCapture::uninit() { impl_->uninit(); }
 bool AudioCapture::is_inited() const { return impl_->is_inited(); }
 bool AudioCapture::snapshot(AudioSpectrum& out) const { return impl_->snapshot(out); }

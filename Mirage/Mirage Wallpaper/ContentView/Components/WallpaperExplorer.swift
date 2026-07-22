@@ -9,15 +9,17 @@ import SwiftUI
 struct WallpaperExplorer: SubviewOfContentView {
     @ObservedObject var viewModel: ContentViewModel
     @ObservedObject var wallpaperViewModel: WallpaperViewModel
-    
+
     init(contentViewModel viewModel: ContentViewModel, wallpaperViewModel: WallpaperViewModel) {
         self.viewModel = viewModel
         self.wallpaperViewModel = wallpaperViewModel
     }
-    
+
     var body: some View {
+        let page = viewModel.wallpaperPage
+        let selectedDirectory = wallpaperViewModel.currentWallpaper.wallpaperDirectory
         ScrollView {
-            if viewModel.autoRefreshWallpapers.isEmpty {
+            if page.items.isEmpty {
                 HStack {
                     Spacer()
                     Text("""
@@ -35,16 +37,16 @@ struct WallpaperExplorer: SubviewOfContentView {
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 50)
             } else {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: viewModel.explorerIconSize, 
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: viewModel.explorerIconSize,
                                                        maximum: viewModel.explorerIconSize * 2)
                 )], alignment: .leading) {
-                    ForEach(Array(viewModel.autoRefreshWallpapers.enumerated()), id: \.0) { (index, wallpaper) in
-                        ExplorerItem(viewModel: viewModel, wallpaperViewModel: wallpaperViewModel, wallpaper: wallpaper, index: index)
+                    ForEach(page.items) { wallpaper in
+                        ExplorerItem(wallpaper: wallpaper,
+                                     isSelected: wallpaper.wallpaperDirectory == selectedDirectory)
                             .contextMenu {
                                 ExplorerItemMenu(contentViewModel: viewModel, wallpaperViewModel: wallpaperViewModel, current: wallpaper)
                                 ExplorerGlobalMenu(contentViewModel: viewModel, wallpaperViewModel: wallpaperViewModel)
                             }
-                            .animation(.spring(), value: viewModel.imageScaleIndex)
                     }
                 }
                 .padding(.trailing)
@@ -54,33 +56,14 @@ struct WallpaperExplorer: SubviewOfContentView {
             VStack {
                 Spacer()
                 HStack {
-                    ForEach(0..<viewModel.maxPage, id: \.self) { page in
-                        Button("\(page + 1)") {
-                            viewModel.currentPage = page + 1
+                    ForEach(0..<page.pageCount, id: \.self) { pageIndex in
+                        Button("\(pageIndex + 1)") {
+                            viewModel.currentPage = pageIndex + 1
                         }
                     }
                 }
                 .padding(.bottom)
             }
         }
-    }
-}
-
-struct SelectedItem: ViewModifier {
-    var selected: Bool
-    
-    init(_ selected: Bool) {
-        self.selected = selected
-    }
-    
-    func body(content: Content) -> some View {
-        content
-            .border(Color.accentColor, width: selected ? 3 : 0)
-    }
-}
-
-extension View {
-    func selected(_ selected: Bool = true) -> some View {
-        modifier(SelectedItem(selected))
     }
 }

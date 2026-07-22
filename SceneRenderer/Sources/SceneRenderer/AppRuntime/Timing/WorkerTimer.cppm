@@ -30,6 +30,7 @@ private:
 
     std::atomic<std::chrono::microseconds> m_interval;
     std::atomic<bool>                      m_running;
+    std::atomic<std::uint64_t>             m_interval_revision;
 };
 
 } // namespace sr

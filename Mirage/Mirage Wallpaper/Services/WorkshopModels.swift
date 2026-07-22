@@ -115,10 +115,10 @@ enum WorkshopSortOrder: Int, CaseIterable, Identifiable {
 
     var label: String {
         switch self {
-        case .trending: return "热门趋势"
-        case .mostRecent: return "最新发布"
-        case .mostSubscribed: return "订阅最多"
-        case .topRated: return "评分最高"
+        case .trending: return L("热门趋势")
+        case .mostRecent: return L("最新发布")
+        case .mostSubscribed: return L("订阅最多")
+        case .topRated: return L("评分最高")
         }
     }
 
@@ -164,30 +164,30 @@ enum WorkshopTag: String, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .anime: return "动漫"
-        case .nature: return "自然"
-        case .abstract: return "抽象"
-        case .landscape: return "风景"
-        case .sciFi: return "科幻"
-        case .cartoon: return "卡通"
-        case .cyberpunk: return "赛博朋克"
-        case .fantasy: return "奇幻"
-        case .girl: return "女孩"
-        case .game: return "游戏"
-        case .animal: return "动物"
-        case .music: return "音乐"
-        case .vehicle: return "车辆"
-        case .technology: return "科技"
-        case .retro: return "复古"
-        case .city: return "城市"
-        case .space: return "太空"
-        case .dark: return "暗黑"
-        case .pixel: return "像素"
-        case .minimal: return "极简"
-        case .underwater: return "水下"
-        case .relaxing: return "放松"
-        case .medieval: return "中世纪"
-        case .unspecified: return "未分类"
+        case .anime: return L("动漫")
+        case .nature: return L("自然")
+        case .abstract: return L("抽象")
+        case .landscape: return L("风景")
+        case .sciFi: return L("科幻")
+        case .cartoon: return L("卡通")
+        case .cyberpunk: return L("赛博朋克")
+        case .fantasy: return L("奇幻")
+        case .girl: return L("女孩")
+        case .game: return L("游戏")
+        case .animal: return L("动物")
+        case .music: return L("音乐")
+        case .vehicle: return L("车辆")
+        case .technology: return L("科技")
+        case .retro: return L("复古")
+        case .city: return L("城市")
+        case .space: return L("太空")
+        case .dark: return L("暗黑")
+        case .pixel: return L("像素")
+        case .minimal: return L("极简")
+        case .underwater: return L("水下")
+        case .relaxing: return L("放松")
+        case .medieval: return L("中世纪")
+        case .unspecified: return L("未分类")
         }
     }
 
@@ -234,11 +234,11 @@ enum WorkshopTypeFilter: String, CaseIterable, Identifiable {
 
     var label: String {
         switch self {
-        case .all: return "全部"
-        case .scene: return "场景"
-        case .web: return "网页"
-        case .video: return "视频"
-        case .preset: return "预设"
+        case .all: return L("全部")
+        case .scene: return L("场景")
+        case .web: return L("网页")
+        case .video: return L("视频")
+        case .preset: return L("预设")
         }
     }
 }
@@ -273,7 +273,7 @@ struct PresetDependencyPrompt: Identifiable {
 
     var message: String {
         let size = dependencyItem.fileSize > 0 ? "（\(dependencyItem.formattedFileSize)）" : ""
-        return "预设“\(presetTitle)”需要基础壁纸“\(dependencyItem.title)”\(size)才能使用。是否一起下载？"
+        return L("预设“%@”需要基础壁纸“%@”%@才能使用。是否一起下载？", presetTitle, dependencyItem.title, size)
     }
 }
 
@@ -307,8 +307,8 @@ enum SteamServiceState: Equatable {
 
     var summary: String {
         switch self {
-        case .unknown: return "尚未检测"
-        case .checking: return "检测中"
+        case .unknown: return L("尚未检测")
+        case .checking: return L("检测中")
         case .available(let detail): return detail
         case .needsAction(let detail): return detail
         case .unavailable(let detail): return detail

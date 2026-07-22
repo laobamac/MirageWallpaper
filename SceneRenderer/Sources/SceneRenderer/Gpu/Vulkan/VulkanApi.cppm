@@ -367,6 +367,10 @@ public:
     void Clear();
     void ClearTransientGraphResources();
 
+    // Fast path for imported textures already uploaded by another material or
+    // pass. This is intentionally checked before decoding the .tex payload.
+    std::optional<ImageSlotsRef> FindImported(std::string_view key) const;
+
     void SetVideoDecodeOptions(VideoDecodeOptions);
 
     // Render-graph compilation brackets the imported textures it actually
@@ -414,10 +418,6 @@ private:
      * VideoDecoder + stable RGBA8 VkImage and returns an ImageSlotsRef
      * pointing at that same VkImage so material binding is transparent. */
     ImageSlotsRef       CreateVideoTex(Image&);
-    void                allocateCmd();
-    vvk::CommandBuffers m_tex_cmds;
-    vvk::CommandBuffer  m_tex_cmd;
-
     const Device&                m_device;
     Map<std::string, ImageSlots> m_tex_map;
     VideoDecodeOptions           m_video_decode_options;
@@ -438,8 +438,16 @@ private:
         VkExtent3D      image_extent { 0, 0, 1 };
         VkImageLayout   old_layout { VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
         VkImageLayout   final_layout { VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        std::uint32_t   mip_level { 0 };
         VmaBufferParameters owned_stage;
     };
+    struct PendingImageInitialization {
+        ImageParameters   image;
+        VkImageLayout     final_layout { VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        VkImageAspectFlags aspect { VK_IMAGE_ASPECT_COLOR_BIT };
+        bool              clear_color { false };
+    };
+    std::vector<PendingImageInitialization> m_pending_initializations;
     std::vector<PendingImageUpload> m_pending_uploads;
     std::vector<PendingImageUpload> m_recorded_uploads;
 
@@ -496,11 +504,15 @@ public:
 
     TextureCache& tex_cache() const { return *m_tex_cache; }
     MeshCache&    mesh_cache() const { return *m_mesh_cache; }
+    VkPipelineCache pipeline_cache() const { return m_pipeline_cache; }
 
     VkDeviceSize GetUsage() const;
 
 private:
     std::vector<VkDeviceQueueCreateInfo> ChooseDeviceQueue(VkSurfaceKHR = {});
+    bool                                  initPipelineCache();
+    void                                  savePipelineCache();
+    void                                  destroyPipelineCache();
 
     vvk::DeviceDispatch     dld;
     VkInstance              m_instance { VK_NULL_HANDLE };
@@ -522,6 +534,9 @@ private:
     QueueParameters m_present_queue;
 
     VkExtent2D m_extent { 1, 1 };
+
+    VkPipelineCache m_pipeline_cache { VK_NULL_HANDLE };
+    std::string     m_pipeline_cache_path;
 
     std::unique_ptr<TextureCache> m_tex_cache;
     std::unique_ptr<MeshCache>    m_mesh_cache;

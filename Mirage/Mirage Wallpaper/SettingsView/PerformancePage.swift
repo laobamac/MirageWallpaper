@@ -49,19 +49,15 @@ struct PerformancePage: SettingsPage {
             }
 
             Section {
-                HStack(spacing: 1) {
-                    Button { viewModel.setQuality(.low) } label: { Text("低").frame(maxWidth: .infinity) }
-                    Divider()
-                    Button { viewModel.setQuality(.medium) } label: { Text("中").frame(maxWidth: .infinity) }
-                    Divider()
-                    Button { viewModel.setQuality(.high) } label: { Text("高").frame(maxWidth: .infinity) }
-                    Divider()
-                    Button { viewModel.setQuality(.ultra) } label: { Text("极致").frame(maxWidth: .infinity) }
+                HStack(spacing: 6) {
+                    QualityPresetButton(title: "低") { viewModel.setQuality(.low) }
+                    QualityPresetButton(title: "中") { viewModel.setQuality(.medium) }
+                    QualityPresetButton(title: "高") { viewModel.setQuality(.high) }
+                    QualityPresetButton(title: "极致") { viewModel.setQuality(.ultra) }
                 }
                 .padding(6)
-                .background(Color(nsColor: .unemphasizedSelectedContentBackgroundColor))
-                .buttonStyle(.borderless)
-                .clipShape(RoundedRectangle(cornerRadius: 5.0))
+                .background(Color.primary.opacity(0.06))
+                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
 
                 Picker("抗锯齿", selection: $viewModel.settings.antiAliasing) {
                     Text("关闭").tag(GSAntiAliasingQuality.none)
@@ -70,10 +66,24 @@ struct PerformancePage: SettingsPage {
                     Text("MSAA ×8").tag(GSAntiAliasingQuality.msaa_x8)
                 }
 
+                Picker("渲染分辨率", selection: $viewModel.settings.textureResolution) {
+                    Text("原生（最高画质）").tag(GSTextureResolutionQuality.highQuality)
+                    Text("75%（自动）").tag(GSTextureResolutionQuality.automatic)
+                    Text("50%（高性能）").tag(GSTextureResolutionQuality.highPerformance)
+                }
+
+                Picker("壁纸加载方式", selection: Binding(
+                    get: { viewModel.settings.wallpaperLoadSource ?? .disk },
+                    set: { viewModel.settings.wallpaperLoadSource = $0 }
+                )) {
+                    Text("从磁盘加载（较低内存占用）").tag(GSWallpaperLoadSource.disk)
+                    Text("从内存加载（减少磁盘读取）").tag(GSWallpaperLoadSource.memory)
+                }
+
                 HStack {
                     Text("帧率")
                     Spacer()
-                    Slider(value: $viewModel.settings.fps, in: 10...120, step: 1)
+                    MirageSlider(value: $viewModel.settings.fps, in: 10...120, step: 1)
                         .frame(width: 150)
                         .onChange(of: viewModel.settings.fps) { _, v in
                             AppDelegate.shared.wallpaperViewModel.renderer.setFps(Int(v))
@@ -89,15 +99,41 @@ struct PerformancePage: SettingsPage {
                     }
                 }
 
-                Toggle("启用音频频谱（网页壁纸）", isOn: $viewModel.settings.enableSpectrum)
+                Toggle("启用音频频谱（场景与网页壁纸）", isOn: $viewModel.settings.enableSpectrum)
             } header: {
                 Label("渲染质量", systemImage: "memorychip.fill")
             } footer: {
-                Text("抗锯齿在切换壁纸后生效；帧率调节实时生效。质量选项主要作用于场景壁纸。")
+                Text("抗锯齿、渲染分辨率和壁纸加载方式在切换壁纸后生效；内存模式会增加内存占用，但可避免播放期间反复读取壁纸文件。帧率调节实时生效。网页帧率限制只约束主页面动画回调，不是媒体、CSS 和 WebKit 合成的硬上限。")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
         .onChange(of: viewModel.settings) { _, _ in viewModel.save() }
+    }
+}
+
+// A single rounded segment in the quality-preset row. Applying a preset is a
+// one-shot action (it mutates several settings at once), so this stays a button
+// with hover feedback rather than a persistent selection.
+private struct QualityPresetButton: View {
+    let title: String
+    let action: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 5)
+                .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(hovering ? Color.accentColor.opacity(0.18) : Color.clear)
+                )
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.12), value: hovering)
     }
 }

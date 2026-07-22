@@ -3315,5 +3315,18 @@
 	"ui_win32_slideshow_compat_modal_check_ignore": "不再发出警告",
 	"ui_win32_slideshow_compat_settings_label": "提示禁用 Windows 幻灯片：",
 	"ui_windows_insider_warning": "检测到 Windows Beta 版本：您正在使用 Windows 的 Insider 预览版。如果 Wallpaper Engine 无法正常工作，请切换到 Windows 的稳定版以解决这些问题。",
-	"ui_settings_video_framework_prefer_media_foundation_dx11": "场景 DirectX 11 (支持 HDR)"
+	"ui_settings_video_framework_prefer_media_foundation_dx11": "场景 DirectX 11 (支持 HDR)",
+	"ui_editor_assets_folder_models": "型号",
+	"ui_editor_assets_folder_particles": "颗粒",
+	"ui_editor_assets_folder_sounds": "声音",
+	"ui_editor_particle_element_initializer_alpharandom_description": "将 alpha 值设置为随机值。",
+	"ui_editor_particle_element_operator_collisionquad": "碰撞矩形",
+	"ui_editor_particle_element_operator_collisionquad_description": "仅从一侧将粒子与有限尺寸的矩形碰撞。",
+	"ui_editor_properties_blur_size": "模糊大小",
+	"ui_editor_properties_drop_shadow_opacity": "阴影不透明度",
+	"ui_editor_properties_reflectivity_distance": "反射距离",
+	"ui_editor_properties_stiffness": "刚度",
+	"ui_settings_advanced_cef_devtools_web": "CEF 开发工具：",
+	"ui_settings_advanced_cef_devtools_web_no_wallpaper": "没有活动的网页壁纸。",
+	"ui_settings_advanced_cef_devtools_web_open": "打开开发工具"
 }

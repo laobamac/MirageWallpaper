@@ -10,13 +10,16 @@
 @implementation WRDesktopInputForwarder {
     WKWebView *_webView;
     NSScreen  *_screen;
-    id _mouseDownMonitor;
-    id _mouseDragMonitor;
-    id _mouseUpMonitor;
-    id _mouseMoveMonitor;
+    id _eventMonitor;
     NSPoint _lastMovePos;
     BOOL _dragging;        // between mousedown and mouseup on the desktop
     NSPoint _downPoint;    // where the gesture started
+    NSArray<NSDictionary *> *_windowSnapshot;
+    CFTimeInterval _windowSnapshotTime;
+    BOOL _moveScheduled;
+    BOOL _movePending;
+    NSPoint _pendingMovePoint;
+    int _pendingMoveButtons;
 }
 
 - (instancetype)initWithWebView:(WKWebView *)webView screen:(NSScreen *)screen {
@@ -31,16 +34,22 @@
 }
 
 - (void)start {
-    if (_mouseDownMonitor) return;
+    if (_eventMonitor) return;
 
-    _mouseDownMonitor = [NSEvent addGlobalMonitorForEventsMatchingMask:
-        NSEventMaskLeftMouseDown handler:^(NSEvent *e) { [self handleMouseDown:e]; }];
-    _mouseDragMonitor = [NSEvent addGlobalMonitorForEventsMatchingMask:
-        NSEventMaskLeftMouseDragged handler:^(NSEvent *e) { [self handleMouseDragged:e]; }];
-    _mouseUpMonitor = [NSEvent addGlobalMonitorForEventsMatchingMask:
-        NSEventMaskLeftMouseUp handler:^(NSEvent *e) { [self handleMouseUp:e]; }];
-    _mouseMoveMonitor = [NSEvent addGlobalMonitorForEventsMatchingMask:
-        NSEventMaskMouseMoved handler:^(NSEvent *e) { [self handleMouseMove:e]; }];
+    NSEventMask mask = NSEventMaskLeftMouseDown | NSEventMaskLeftMouseDragged |
+                       NSEventMaskLeftMouseUp | NSEventMaskMouseMoved;
+    __weak WRDesktopInputForwarder *weakSelf = self;
+    _eventMonitor = [NSEvent addGlobalMonitorForEventsMatchingMask:mask handler:^(NSEvent *event) {
+        WRDesktopInputForwarder *self = weakSelf;
+        if (self == nil) return;
+        switch (event.type) {
+        case NSEventTypeLeftMouseDown: [self handleMouseDown:event]; break;
+        case NSEventTypeLeftMouseDragged: [self handleMouseDragged:event]; break;
+        case NSEventTypeLeftMouseUp: [self handleMouseUp:event]; break;
+        case NSEventTypeMouseMoved: [self handleMouseMove:event]; break;
+        default: break;
+        }
+    }];
 
     if (getenv("WR_DEBUG")) {
         fprintf(stderr, "WebRenderer: input forwarder started (global monitors), screen=%.0fx%.0f\n",
@@ -49,22 +58,31 @@
 }
 
 - (void)stop {
-    if (_mouseDownMonitor) { [NSEvent removeMonitor:_mouseDownMonitor]; _mouseDownMonitor = nil; }
-    if (_mouseDragMonitor) { [NSEvent removeMonitor:_mouseDragMonitor]; _mouseDragMonitor = nil; }
-    if (_mouseUpMonitor)   { [NSEvent removeMonitor:_mouseUpMonitor];   _mouseUpMonitor = nil; }
-    if (_mouseMoveMonitor) { [NSEvent removeMonitor:_mouseMoveMonitor]; _mouseMoveMonitor = nil; }
+    if (_eventMonitor) { [NSEvent removeMonitor:_eventMonitor]; _eventMonitor = nil; }
     _dragging = NO;
+    _movePending = NO;
+    _windowSnapshot = nil;
+}
+
+- (void)setPaused:(BOOL)paused {
+    if (paused) [self stop];
+    else [self start];
 }
 
 #pragma mark - Desktop hit detection
 
 - (BOOL)pointIsOnDesktop:(NSPoint)p {
-    CFArrayRef arr = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, kCGNullWindowID);
-    if (arr == NULL) return NO;
-    NSArray *windows = CFBridgingRelease(arr);
-    CGFloat screenH = NSHeight(_screen.frame);
-    CGPoint cgPt = CGPointMake((CGFloat)p.x, screenH - (CGFloat)p.y);
-    for (NSDictionary *w in windows) {
+    NSTimeInterval now = NSDate.timeIntervalSinceReferenceDate;
+    if (_windowSnapshot == nil || now - _windowSnapshotTime >= 0.20) {
+        CFArrayRef arr = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly,
+                                                   kCGNullWindowID);
+        if (arr == NULL) return NO;
+        _windowSnapshot = CFBridgingRelease(arr);
+        _windowSnapshotTime = now;
+    }
+    const CGRect mainBounds = CGDisplayBounds(CGMainDisplayID());
+    CGPoint cgPt = CGPointMake((CGFloat)p.x, CGRectGetHeight(mainBounds) - (CGFloat)p.y);
+    for (NSDictionary *w in _windowSnapshot) {
         CGRect bounds = CGRectZero;
         NSDictionary *b = w[(__bridge NSString *)kCGWindowBounds];
         if (b) CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)b, &bounds);
@@ -77,6 +95,31 @@
 }
 
 #pragma mark - Dispatch
+
+- (void)queueMouseMoveAtPoint:(NSPoint)p buttons:(int)buttons {
+    _pendingMovePoint = p;
+    _pendingMoveButtons = buttons;
+    _movePending = YES;
+    if (_moveScheduled) return;
+    _moveScheduled = YES;
+    __weak WRDesktopInputForwarder *weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(NSEC_PER_SEC / 60)),
+                   dispatch_get_main_queue(), ^{
+        WRDesktopInputForwarder *self = weakSelf;
+        if (self == nil) return;
+        self->_moveScheduled = NO;
+        [self flushPendingMouseMove];
+    });
+}
+
+- (void)flushPendingMouseMove {
+    if (!_movePending || _eventMonitor == nil) return;
+    _movePending = NO;
+    NSPoint point = _pendingMovePoint;
+    if (!NSPointInRect(point, _screen.frame)) return;
+    if (!_dragging && ![self pointIsOnDesktop:point]) return;
+    [self dispatchMouseType:@"mousemove" atPoint:point buttons:_pendingMoveButtons];
+}
 
 - (void)dispatchMouseType:(NSString *)type atPoint:(NSPoint)p buttons:(int)buttons {
     NSRect sf = _screen.frame;
@@ -103,6 +146,7 @@
                 p.x, p.y, desktop ? 1 : 0);
     }
     if (!desktop) return;
+    _movePending = NO;
     _dragging = YES;
     _downPoint = p;
     [self dispatchMouseType:@"mousedown" atPoint:p buttons:1];
@@ -113,12 +157,13 @@
     if (!_dragging) return;
     NSPoint p = NSEvent.mouseLocation;
     if (!NSPointInRect(p, _screen.frame)) return;
-    [self dispatchMouseType:@"mousemove" atPoint:p buttons:1];
+    [self queueMouseMoveAtPoint:p buttons:1];
 }
 
 - (void)handleMouseUp:(NSEvent *)e {
     (void)e;
     if (!_dragging) return;
+    [self flushPendingMouseMove];
     _dragging = NO;
     NSPoint p = NSEvent.mouseLocation;
     if (!NSPointInRect(p, _screen.frame)) return;
@@ -137,9 +182,7 @@
     NSPoint p = NSEvent.mouseLocation;
     if (NSEqualPoints(p, _lastMovePos)) return;
     _lastMovePos = p;
-    if (NSPointInRect(p, _screen.frame) && [self pointIsOnDesktop:p]) {
-        [self dispatchMouseType:@"mousemove" atPoint:p buttons:0];
-    }
+    if (NSPointInRect(p, _screen.frame)) [self queueMouseMoveAtPoint:p buttons:0];
 }
 
 @end

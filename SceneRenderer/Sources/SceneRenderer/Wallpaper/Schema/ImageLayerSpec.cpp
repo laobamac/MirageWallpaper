@@ -72,7 +72,8 @@ bool ObjectInstance::FromJson(const sr::Json& json) {
         if (array.is_some()) {
             for (const auto& value : **array) {
                 auto texture = value.as_str();
-                if (texture.is_some()) textures.push_back(rstd::cppstd::to_string(*texture));
+                textures.push_back(texture.is_some() ? rstd::cppstd::to_string(*texture)
+                                                       : std::string {});
             }
         }
     }

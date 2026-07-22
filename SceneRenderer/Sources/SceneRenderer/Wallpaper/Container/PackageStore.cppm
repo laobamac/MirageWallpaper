@@ -13,7 +13,8 @@ export namespace sr::fs
 class WPPkgFs : public Fs {
 public:
     virtual ~WPPkgFs() = default;
-    static std::unique_ptr<WPPkgFs> CreatePkgFs(std::string_view pkgpath);
+    static std::unique_ptr<WPPkgFs> CreatePkgFs(std::string_view pkgpath,
+                                                bool load_from_memory = false);
 
 private:
     WPPkgFs() = default;
@@ -39,6 +40,7 @@ private:
         idx length { 0 };
     };
     std::string                              m_pkgPath;
+    std::shared_ptr<const std::vector<uint8_t>> m_pkgData;
     std::string                              m_pkg_version;
     std::unordered_map<std::string, PkgFile> m_files;
 };

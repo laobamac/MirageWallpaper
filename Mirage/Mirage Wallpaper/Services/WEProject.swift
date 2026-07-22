@@ -67,31 +67,34 @@ enum WEPropertyValue: Codable, Equatable, Hashable {
         case .string(let s): return s
         }
     }
+
+    // Value suitable for JSONSerialization while preserving the manifest's
+    // primitive type. In particular, WE combo values may be numbers or bools;
+    // converting them to display strings breaks strict JavaScript comparisons.
+    var jsonObjectValue: Any {
+        switch self {
+        case .bool(let b): return b
+        case .number(let d): return d
+        case .string(let s): return s
+        }
+    }
 }
 
 // MARK: - 属性选项
 
 struct WEProjectPropertyOption: Codable, Equatable, Hashable {
     var label: String
-    var value: String
+    var value: WEPropertyValue
     var condition: String?
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.label = (try? c.decode(String.self, forKey: .label)) ?? ""
         self.condition = try? c.decode(String.self, forKey: .condition)
-        if let s = try? c.decode(String.self, forKey: .value) {
-            self.value = s
-        } else if let i = try? c.decode(Int.self, forKey: .value) {
-            self.value = String(i)
-        } else if let d = try? c.decode(Double.self, forKey: .value) {
-            self.value = String(d)
-        } else {
-            self.value = ""
-        }
+        self.value = (try? c.decode(WEPropertyValue.self, forKey: .value)) ?? .string("")
     }
 
-    init(label: String, value: String, condition: String? = nil) {
+    init(label: String, value: WEPropertyValue, condition: String? = nil) {
         self.label = label
         self.value = value
         self.condition = condition
@@ -141,6 +144,15 @@ struct WEProjectProperty: Codable, Equatable, Hashable {
 
     var propertyType: WEPropertyType { WEPropertyType(raw: type) }
 
+    // Runtime data written by older Mirage versions stored every combo as a
+    // string. Map such values back to the exact typed option from project.json.
+    // Exact matches win so legitimate string-valued combos remain strings.
+    func normalizedComboValue(_ candidate: WEPropertyValue) -> WEPropertyValue {
+        guard propertyType == .combo, let options, !options.isEmpty else { return candidate }
+        if options.contains(where: { $0.value == candidate }) { return candidate }
+        return options.first(where: { $0.value.stringValue == candidate.stringValue })?.value ?? candidate
+    }
+
     func displayText(fallbackKey key: String) -> String {
         if let t = text, !t.isEmpty {
             return WELocalization.resolve(t)
@@ -181,27 +193,45 @@ struct WEProjectProperty: Codable, Equatable, Hashable {
 
 // MARK: - Localization
 
-// Resolves WE `ui_*` label keys via the bundled official ui_zh-chs.json.
-// Unmatched ui_ keys degrade to readable text; everything else is returned as-is.
+// Resolves WE `ui_*` labels with the official table matching Mirage's selected
+// language.  Wallpaper metadata itself is intentionally never translated.
 enum WELocalization {
-    private static let table: [String: String] = {
-        guard let url = Bundle.main.url(forResource: "ui_zh-chs", withExtension: "json"),
+    private static var tables: [String: [String: String]] = [:]
+    private static let lock = NSLock()
+
+    private static var resourceName: String {
+        switch MirageLocalization.shared.locale.identifier {
+        case let id where id.hasPrefix("zh-Hant"): return "ui_zh-cht"
+        case let id where id.hasPrefix("zh-Hans"): return "ui_zh-chs"
+        default: return "ui_en-us"
+        }
+    }
+
+    private static func table(named name: String) -> [String: String] {
+        lock.lock()
+        defer { lock.unlock() }
+        if let cached = tables[name] { return cached }
+        guard let url = Bundle.main.url(forResource: name, withExtension: "json"),
               let data = try? Data(contentsOf: url),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return [:] }
+        else {
+            tables[name] = [:]
+            return [:]
+        }
         var out: [String: String] = [:]
         out.reserveCapacity(obj.count)
         for (k, v) in obj {
             if let s = v as? String { out[k] = s }
         }
+        tables[name] = out
         return out
-    }()
+    }
 
     static func resolve(_ raw: String) -> String {
         let key = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if key.isEmpty { return raw }
         guard key.hasPrefix("ui_") else { return raw }
-        if let mapped = table[key] { return mapped }
+        if let mapped = table(named: resourceName)[key] { return mapped }
         return humanize(key)
     }
 
@@ -500,10 +530,10 @@ enum WallpaperKind: String {
 
     var displayName: String {
         switch self {
-        case .scene: return "场景"
-        case .web: return "网页"
-        case .video: return "视频"
-        case .unsupported: return "不支持"
+        case .scene: return L("场景")
+        case .web: return L("网页")
+        case .video: return L("视频")
+        case .unsupported: return L("不支持")
         }
     }
 }
@@ -538,9 +568,9 @@ struct WEWallpaper: Codable, RawRepresentable, Identifiable, Equatable, Hashable
     var presetStatusDescription: String? {
         switch presetStatus {
         case .notPreset, .resolved: return nil
-        case .missingDependency: return "缺少基础壁纸"
-        case .invalidDependency: return "基础壁纸无效"
-        case .circularDependency: return "预设循环依赖"
+        case .missingDependency: return L("缺少基础壁纸")
+        case .invalidDependency: return L("基础壁纸无效")
+        case .circularDependency: return L("预设循环依赖")
         }
     }
     var isValid: Bool {
@@ -555,9 +585,16 @@ struct WEWallpaper: Codable, RawRepresentable, Identifiable, Equatable, Hashable
 
     var wallpaperSize: Int {
         let path = wallpaperDirectory.path(percentEncoded: false)
-        if let cached = Self.sizeCache[path] { return cached }
+        Self.sizeCacheLock.lock()
+        if let cached = Self.sizeCache[path] {
+            Self.sizeCacheLock.unlock()
+            return cached
+        }
+        Self.sizeCacheLock.unlock()
         let size = (try? wallpaperDirectory.directoryTotalAllocatedSize(includingSubfolders: true)) ?? 0
+        Self.sizeCacheLock.lock()
         Self.sizeCache[path] = size
+        Self.sizeCacheLock.unlock()
         return size
     }
 
@@ -586,8 +623,13 @@ struct WEWallpaper: Codable, RawRepresentable, Identifiable, Equatable, Hashable
     }
 
     nonisolated(unsafe) static var sizeCache: [String: Int] = [:]
+    static let sizeCacheLock = NSLock()
 
-    static func invalidateSizeCache() { sizeCache.removeAll() }
+    static func invalidateSizeCache() {
+        sizeCacheLock.lock()
+        sizeCache.removeAll()
+        sizeCacheLock.unlock()
+    }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)

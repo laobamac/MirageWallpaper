@@ -2,15 +2,12 @@
 
 #import <Cocoa/Cocoa.h>
 #import <CoreGraphics/CGWindowLevel.h>
+#import <Metal/Metal.h>
+#import <QuartzCore/CAMetalLayer.h>
 
 #include <algorithm>
 #include <atomic>
 #include <cmath>
-
-extern "C" void* SceneRendererMacMetalDisplayCreateForNSView(void* ns_view);
-extern "C" void  SceneRendererMacMetalDisplayDestroy(void* handle);
-extern "C" void  SceneRendererMacMetalDisplayDraw(void* handle, void* texture, std::uint32_t width,
-                                                  std::uint32_t height);
 
 // --- media-status routing --------------------------------------------------
 //
@@ -57,14 +54,13 @@ struct MacDesktopHost {
     NSUInteger                       screen_index { 0 };
     NSTimer*                         input_timer { nil };
     SRHostRef*                       hostRef { nil };  // ObjC wrapper for safe weak reference
-    void*                            metal_display { nullptr };
+    CAMetalLayer*                    surface_layer { nil };
     NSUInteger                       last_buttons { 0 };
     bool                             mouse_inside { false };
     bool                             sent_enter { false };
-    std::atomic<void*>               pending_texture { nullptr };
-    std::atomic<std::uint32_t>       pending_width { 0 };
-    std::atomic<std::uint32_t>       pending_height { 0 };
-    std::atomic<bool>                present_scheduled { false };
+    std::atomic<bool>                first_frame_presented { false };
+    std::atomic<bool>                activation_requested { false };
+    std::atomic<bool>                activation_confirmed { false };
 };
 
 // Resolve the target NSScreen fresh from the current screen list. Returns the
@@ -127,27 +123,6 @@ void PollInput(MacDesktopHost* host) {
     host->last_buttons = buttons;
 }
 
-void SchedulePresent(MacDesktopHost* host) {
-    if (host == nullptr) return;
-    if (host->present_scheduled.exchange(true)) return;
-
-    SRHostRef* ref = host->hostRef;
-    if (ref == nil) return;
-    dispatch_async(dispatch_get_main_queue(), ^{
-      MacDesktopHost* h = static_cast<MacDesktopHost*>(ref.hostPtr);
-      if (h == nullptr) return;
-      if (h->metal_display != nullptr) {
-          void* texture = h->pending_texture.load();
-          const std::uint32_t width = h->pending_width.load();
-          const std::uint32_t height = h->pending_height.load();
-          if (texture != nullptr && width > 0 && height > 0) {
-              SceneRendererMacMetalDisplayDraw(h->metal_display, texture, width, height);
-          }
-      }
-      h->present_scheduled.store(false);
-    });
-}
-
 void StopApplicationOnMainThread() {
     dispatch_async(dispatch_get_main_queue(), ^{
       [NSApp stop:nil];
@@ -205,8 +180,10 @@ extern "C" void* SceneRendererMacDesktopCreate(const SceneRendererMacDesktopConf
         window.collectionBehavior    = NSWindowCollectionBehaviorCanJoinAllSpaces |
                                     NSWindowCollectionBehaviorStationary |
                                     NSWindowCollectionBehaviorIgnoresCycle;
-        window.opaque                = YES;
-        window.backgroundColor       = NSColor.blackColor;
+        const bool deferred_show     = config != nullptr && config->deferred_show;
+        window.opaque                = deferred_show ? NO : YES;
+        window.backgroundColor       = deferred_show ? NSColor.clearColor : NSColor.blackColor;
+        window.alphaValue            = deferred_show ? 0.0 : 1.0;
         window.hasShadow             = NO;
         window.ignoresMouseEvents    = YES;
         window.releasedWhenClosed    = NO;
@@ -217,9 +194,19 @@ extern "C" void* SceneRendererMacDesktopCreate(const SceneRendererMacDesktopConf
         host->window = window;
         [window orderFrontRegardless];
 
-        host->metal_display =
-            SceneRendererMacMetalDisplayCreateForNSView((__bridge void*)window.contentView);
-        if (host->metal_display == nullptr) {
+        NSView* content_view = window.contentView;
+        content_view.wantsLayer = YES;
+        CAMetalLayer* surface_layer = [CAMetalLayer layer];
+        surface_layer.device = MTLCreateSystemDefaultDevice();
+        surface_layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+        surface_layer.framebufferOnly = YES;
+        surface_layer.opaque = deferred_show ? NO : YES;
+        surface_layer.contentsScale = screen.backingScaleFactor;
+        surface_layer.frame = content_view.bounds;
+        surface_layer.drawableSize = [content_view convertRectToBacking:content_view.bounds].size;
+        content_view.layer = surface_layer;
+        host->surface_layer = surface_layer;
+        if (surface_layer.device == nil) {
             [window orderOut:nil];
             delete host;
             return nullptr;
@@ -264,10 +251,7 @@ extern "C" void SceneRendererMacDesktopDestroy(void* handle) {
           [host->input_timer invalidate];
           host->input_timer = nil;
       }
-      if (host->metal_display != nullptr) {
-          SceneRendererMacMetalDisplayDestroy(host->metal_display);
-          host->metal_display = nullptr;
-      }
+      host->surface_layer = nil;
       if (host->window != nil) {
           [host->window orderOut:nil];
           host->window = nil;
@@ -295,38 +279,63 @@ extern "C" int SceneRendererMacDesktopRun(void* handle) {
 
 extern "C" void SceneRendererMacDesktopStop(void*) { StopApplicationOnMainThread(); }
 
-extern "C" void SceneRendererMacDesktopWake(void*) {
+extern "C" void SceneRendererMacDesktopWake(void* handle) {
+    auto* host = static_cast<MacDesktopHost*>(handle);
+    if (host == nullptr || host->hostRef == nil) return;
+    SRHostRef* ref = host->hostRef;
     dispatch_async(dispatch_get_main_queue(), ^{
+      auto* current = static_cast<MacDesktopHost*>(ref.hostPtr);
+      if (current == nullptr) return;
+      if (! current->first_frame_presented.exchange(true) &&
+          current->callbacks.first_frame_presented != nullptr) {
+          current->callbacks.first_frame_presented(current->callbacks.userdata);
+      }
+      if (current->activation_requested.load() &&
+          ! current->activation_confirmed.exchange(true) &&
+          current->callbacks.activated != nullptr) {
+          current->callbacks.activated(current->callbacks.userdata);
+      }
     });
 }
 
-extern "C" void SceneRendererMacDesktopPresent(void* handle, void* texture, std::uint32_t width,
-                                               std::uint32_t height) {
+extern "C" void SceneRendererMacDesktopActivate(void* handle) {
     auto* host = static_cast<MacDesktopHost*>(handle);
-    if (host == nullptr || texture == nullptr || width == 0 || height == 0) return;
-    host->pending_texture.store(texture);
-    host->pending_width.store(width);
-    host->pending_height.store(height);
-    SchedulePresent(host);
+    if (host == nullptr) return;
+    auto activate = ^{
+      if (host->window == nil) return;
+      host->window.backgroundColor = NSColor.blackColor;
+      host->window.opaque          = YES;
+      host->window.alphaValue      = 1.0;
+      if (host->surface_layer != nil) host->surface_layer.opaque = YES;
+      [host->window orderFrontRegardless];
+      host->activation_requested.store(true);
+    };
+    if (NSThread.isMainThread) {
+        activate();
+    } else {
+        dispatch_sync(dispatch_get_main_queue(), activate);
+    }
+}
+
+extern "C" void* SceneRendererMacDesktopMetalLayer(void* handle) {
+    auto* host = static_cast<MacDesktopHost*>(handle);
+    return host != nullptr && host->surface_layer != nil
+               ? (__bridge void*)host->surface_layer
+               : nullptr;
 }
 
 extern "C" std::uint32_t SceneRendererMacDesktopPixelWidth(void* handle) {
     auto* host = static_cast<MacDesktopHost*>(handle);
     if (host == nullptr || host->window == nil) return 0;
-    NSScreen*     screen = ResolveScreen(host);
-    const CGFloat fallbackScale = screen != nil ? screen.backingScaleFactor : 1.0;
-    const CGFloat scale = host->window.backingScaleFactor > 0.0 ? host->window.backingScaleFactor
-                                                                : fallbackScale;
-    return static_cast<std::uint32_t>(std::lround(NSWidth(host->window.contentView.bounds) * scale));
+    NSView* view = host->window.contentView;
+    const NSSize backing = [view convertRectToBacking:view.bounds].size;
+    return static_cast<std::uint32_t>(std::lround(backing.width));
 }
 
 extern "C" std::uint32_t SceneRendererMacDesktopPixelHeight(void* handle) {
     auto* host = static_cast<MacDesktopHost*>(handle);
     if (host == nullptr || host->window == nil) return 0;
-    NSScreen*     screen = ResolveScreen(host);
-    const CGFloat fallbackScale = screen != nil ? screen.backingScaleFactor : 1.0;
-    const CGFloat scale = host->window.backingScaleFactor > 0.0 ? host->window.backingScaleFactor
-                                                                : fallbackScale;
-    return static_cast<std::uint32_t>(
-        std::lround(NSHeight(host->window.contentView.bounds) * scale));
+    NSView* view = host->window.contentView;
+    const NSSize backing = [view convertRectToBacking:view.bounds].size;
+    return static_cast<std::uint32_t>(std::lround(backing.height));
 }

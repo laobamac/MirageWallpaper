@@ -73,6 +73,10 @@ public:
         return {};
     }
     virtual bool setTextureBinding(uint32_t, TextureBindingRequest) { return false; }
+    // Update CPU-side per-frame data before the dynamic staging buffer is
+    // copied to the GPU. Command-buffer work remains in execute()/the render
+    // scope hooks below.
+    virtual void prepareFrameData(RenderingResources&) {}
     virtual bool supportsRenderScope() const { return false; }
     virtual bool canJoinRenderScopeAfter(const VulkanPass&) const { return false; }
     virtual void prepareRenderScopeDraw(RenderingResources&) {}

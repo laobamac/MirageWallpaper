@@ -15,6 +15,7 @@ VK_ICD_DIR="$RENDERERS/vulkan/icd.d"
 
 SCENE_PRESET="$(scene_preset release)"
 SCENE_BIN="$ROOT/SceneRenderer/build/$SCENE_PRESET/Tools/SceneWallpaper/SceneWallpaper"
+SCENE_SAVER_LIB="$ROOT/SceneRenderer/build/$SCENE_PRESET/Tools/SceneScreenSaver/libMirageSceneSaver.dylib"
 WEB_BIN="$ROOT/WebRenderer/build/release/Tools/WebWallpaper/WebWallpaper"
 VIDEO_BIN="$ROOT/VideoRenderer/build/release/Tools/VideoWallpaper/VideoWallpaper"
 RMSKIN_BIN="$ROOT/RmskinRenderer/build/release/Tools/RmskinWallpaper/RmskinWallpaper"
@@ -26,7 +27,7 @@ MOLTENVK="$BREW_PREFIX/opt/molten-vk/lib/libMoltenVK.dylib"
 echo "[bundle] App:  $APP"
 echo "[bundle] Root: $ROOT"
 
-for f in "$SCENE_BIN" "$WEB_BIN" "$VIDEO_BIN" "$RMSKIN_BIN"; do
+for f in "$SCENE_BIN" "$SCENE_SAVER_LIB" "$WEB_BIN" "$VIDEO_BIN" "$RMSKIN_BIN"; do
     [ -f "$f" ] || { echo "[bundle] 缺少渲染器: $f" >&2; exit 1; }
 done
 [ -d "$ASSETS_DIR" ] || { echo "[bundle] 缺少 assets 目录: $ASSETS_DIR" >&2; exit 1; }
@@ -89,6 +90,7 @@ collect_deps() {
 
 echo "[bundle] 收集场景引擎依赖..."
 collect_deps "$RENDERERS/SceneWallpaper"
+collect_deps "$SCENE_SAVER_LIB"
 
 MVK_BASE=$(basename "$MOLTENVK")
 if ! is_copied "$MVK_BASE"; then
@@ -172,6 +174,33 @@ echo "[bundle] 拷贝 assets (~85MB)..."
 rm -rf "$RESOURCES/assets"
 cp -R "$ASSETS_DIR" "$RESOURCES/assets"
 
+SAVER="$RESOURCES/Screen Savers/MirageScreenSaver.saver"
+if [ -d "$SAVER" ]; then
+    SAVER_FRAMEWORKS="$SAVER/Contents/Frameworks"
+    SAVER_RESOURCES="$SAVER/Contents/Resources"
+    mkdir -p "$SAVER_FRAMEWORKS" "$SAVER_RESOURCES/vulkan/icd.d"
+    cp -f "$SCENE_SAVER_LIB" "$SAVER_FRAMEWORKS/libMirageSceneSaver.dylib"
+    chmod u+w "$SAVER_FRAMEWORKS/libMirageSceneSaver.dylib"
+    retarget_lib "$SAVER_FRAMEWORKS/libMirageSceneSaver.dylib"
+    install_name_tool -add_rpath "@loader_path" "$SAVER_FRAMEWORKS/libMirageSceneSaver.dylib" 2>/dev/null || true
+    for lib in "$FRAMEWORKS"/*.dylib; do
+        [ -f "$lib" ] || continue
+        cp -f "$lib" "$SAVER_FRAMEWORKS/$(basename "$lib")"
+    done
+    rm -rf "$SAVER_RESOURCES/assets"
+    cp -R "$ASSETS_DIR" "$SAVER_RESOURCES/assets"
+    cat > "$SAVER_RESOURCES/vulkan/icd.d/MoltenVK_icd.json" <<EOF
+{
+    "file_format_version" : "1.0.0",
+    "ICD": {
+        "library_path": "../../../Frameworks/$MVK_BASE",
+        "api_version" : "1.4.0",
+        "is_portability_driver" : true
+    }
+}
+EOF
+fi
+
 echo "[bundle] 重新签名..."
 for lib in "$FRAMEWORKS"/*.dylib; do
     [ -f "$lib" ] || continue
@@ -180,6 +209,13 @@ done
 for bin in "$RENDERERS/SceneWallpaper" "$RENDERERS/WebWallpaper" "$RENDERERS/VideoWallpaper" "$RENDERERS/RmskinWallpaper"; do
     codesign --force --sign - --timestamp=none "$bin" 2>/dev/null || true
 done
+if [ -d "${SAVER:-}" ]; then
+    for lib in "$SAVER_FRAMEWORKS"/*.dylib; do
+        [ -f "$lib" ] || continue
+        codesign --force --sign - --timestamp=none "$lib" 2>/dev/null || true
+    done
+    codesign --force --deep --sign - --timestamp=none "$SAVER" 2>/dev/null || true
+fi
 codesign --force --deep --sign - "$APP" 2>/dev/null || true
 
 echo "[bundle] 完成"

@@ -279,10 +279,12 @@ bool StagingBuffer::recordUpload(vvk::CommandBuffer& cmd) {
         }
     }
 
-    if (m_stage_raw != nullptr) {
-        m_stage_buf.handle.UnMapMemory();
-        m_stage_raw = nullptr;
-    }
+    // Keep the staging allocation persistently mapped: it is HOST_VISIBLE
+    // (VMA CPU_ONLY) so the pointer stays valid for the buffer's lifetime, and
+    // vmaFlushAllocation makes writes visible to the GPU regardless of map
+    // state. Previously this unmapped every frame and writeToBuf/fillBuf
+    // remapped on the next frame — pure per-frame overhead. The map obtained in
+    // allocate()/increaseBuf() is now released once, in destroy().
     VVK_CHECK_BOOL_RE(vmaFlushAllocation(
         m_device.vma_allocator(), m_stage_buf.handle.Allocation(), 0, VK_WHOLE_SIZE));
     RecordCopyBuffer(m_gpu_buf, m_stage_buf, merged, cmd);

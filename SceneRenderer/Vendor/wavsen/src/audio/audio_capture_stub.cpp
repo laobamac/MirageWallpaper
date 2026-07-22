@@ -24,7 +24,7 @@ public:
 AudioCapture::AudioCapture() : impl_(std::make_unique<Impl>()) {}
 AudioCapture::~AudioCapture() = default;
 
-bool AudioCapture::init() { return impl_->init(); }
+bool AudioCapture::init(bool) { return impl_->init(); }
 void AudioCapture::uninit() { impl_->uninit(); }
 bool AudioCapture::is_inited() const { return impl_->is_inited(); }
 

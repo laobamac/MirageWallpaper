@@ -6,36 +6,44 @@
 
 import SwiftUI
 
-struct ExplorerItem: SubviewOfContentView {
-    @ObservedObject var viewModel: ContentViewModel
-    @ObservedObject var wallpaperViewModel: WallpaperViewModel
+struct ExplorerItem: View {
+    let wallpaper: WEWallpaper
+    // Selection is passed in as a plain value so the cell no longer observes the
+    // shared view models. Hovering or selecting one cell then cannot force every
+    // other cell in the grid to rebuild.
+    let isSelected: Bool
 
-    private let animates = true
+    @State private var hovering = false
 
-    var wallpaper: WEWallpaper
-    var index: Int
-    
     var body: some View {
         ZStack(alignment: .bottom) {
             GifImage(contentsOf: wallpaper.project.preview.isEmpty
                 ? Bundle.main.url(forResource: "WallpaperNotFound", withExtension: "mp4")!
-                : wallpaper.previewURL, animates: animates)
+                : wallpaper.previewURL,
+                     // Only the hovered cell or the active wallpaper animates its
+                     // preview; every other cell stays a cheap static thumbnail.
+                     animates: hovering || isSelected)
             .resizable()
-            .scaleEffect(viewModel.imageScaleIndex == index ? 1.2 : 1.0)
+            .scaleEffect(hovering ? 1.03 : 1.0)
             .aspectRatio(1.0, contentMode: .fit)
             .clipped()
-            
+
             Text(wallpaper.project.title)
                 .lineLimit(2)
                 .frame(maxWidth: .infinity, minHeight: 30)
                 .padding(4)
-                .background(Color(white: 0, opacity: viewModel.imageScaleIndex == index ? 0.4 : 0.2))
+                .background(Color(white: 0, opacity: hovering ? 0.4 : 0.2))
                 .font(.footnote)
                 .multilineTextAlignment(.center)
-                .foregroundStyle(Color(white: viewModel.imageScaleIndex == index ? 0.9 : 0.7))
+                .foregroundStyle(Color(white: hovering ? 0.9 : 0.7))
         }
-        .selected(wallpaper.wallpaperDirectory == wallpaperViewModel.currentWallpaper.wallpaperDirectory)
-        .border(Color.accentColor, width: viewModel.imageScaleIndex == index ? 1.0 : 0)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Color.accentColor,
+                              lineWidth: isSelected ? 3 : (hovering ? 1 : 0))
+        )
+        .shadow(color: .black.opacity(hovering ? 0.25 : 0), radius: hovering ? 8 : 0, y: 2)
         .overlay(alignment: .topLeading) {
             if wallpaper.isPreset {
                 VStack(alignment: .leading, spacing: 3) {
@@ -55,8 +63,10 @@ struct ExplorerItem: SubviewOfContentView {
                 .padding(6)
             }
         }
+        .animation(.easeOut(duration: 0.15), value: hovering)
         .onTapGesture {
             AppDelegate.shared.workshopViewModel.openInstalledWallpaper(wallpaper)
         }
+        .onHover { hovering = $0 }
     }
 }

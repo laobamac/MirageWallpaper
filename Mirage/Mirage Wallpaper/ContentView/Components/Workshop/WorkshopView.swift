@@ -90,30 +90,29 @@ struct WorkshopView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 220, maximum: 440))], alignment: .leading, spacing: 12) {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 240, maximum: 340), spacing: 14)],
+                              alignment: .leading, spacing: 14) {
                         ForEach(workshopViewModel.items) { item in
-                            let isDownloaded = SteamWebAPI.shared.isItemDownloaded(item.publishedFileId)
-                            let installed = item.isPreset && isDownloaded
-                                ? workshopViewModel.installedItem(workshopId: item.publishedFileId)
-                                : nil
+                            // O(1) lookups against the cached installed-state set;
+                            // no filesystem access during card rendering.
                             WorkshopItemCard(
                                 item: item,
                                 isHovered: hoveredId == item.id,
-                                isDownloaded: isDownloaded,
-                                presetNeedsDependency: installed?.needsPresetDependency == true,
+                                isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
+                                presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
                                 downloadState: workshopViewModel.downloadState(for: item.publishedFileId)
                             )
+                            .overlay {
+                                if workshopViewModel.selectedItem?.id == item.id {
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .stroke(Color.accentColor, lineWidth: 2)
+                                }
+                            }
                             .onHover { hovered in
                                 hoveredId = hovered ? item.id : nil
                             }
                             .onTapGesture {
                                 workshopViewModel.selectWorkshopItem(item)
-                            }
-                            .overlay {
-                                if workshopViewModel.selectedItem?.id == item.id {
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .stroke(Color.accentColor, lineWidth: 2)
-                                }
                             }
                         }
                     }
@@ -132,6 +131,7 @@ struct WorkshopView: View {
         .onAppear {
             presentAPIKeyReminderIfNeeded()
             workshopViewModel.checkSteamSetup()
+            workshopViewModel.refreshInstalledState()
             if workshopViewModel.items.isEmpty {
                 workshopViewModel.search()
             }

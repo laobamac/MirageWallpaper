@@ -132,6 +132,13 @@ private struct RichHTMLWebView: NSViewRepresentable {
         <style>
         :root { color-scheme: light dark; }
         html, body { margin:0; padding:0; background:transparent; }
+        /* Property labels are display-only: retain link clicks while disabling
+           WebKit's default text selection and drag sources. */
+        html, body, body * {
+            -webkit-user-select: none;
+            user-select: none;
+            -webkit-user-drag: none;
+        }
         body {
             font: -apple-system-body, system-ui;
             font-size: 13px; line-height: 1.45;
@@ -141,7 +148,10 @@ private struct RichHTMLWebView: NSViewRepresentable {
         }
         a { color: -apple-system-blue; text-decoration: none; }
         a:hover { text-decoration: underline; }
-        img { max-width: 100%; height: auto; border-radius: 6px; display: block; margin: 4px 0; }
+        img {
+            max-width: 100%; height: auto; border-radius: 6px; display: block; margin: 4px 0;
+            -webkit-user-drag: none;
+        }
         big { font-size: 1.2em; }
         center { text-align: center; }
         p { margin: 4px 0; }

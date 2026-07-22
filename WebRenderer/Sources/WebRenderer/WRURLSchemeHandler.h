@@ -24,6 +24,10 @@ NS_ASSUME_NONNULL_BEGIN
 // directory is known, so this is updated in openWallpaper.
 @property (nonatomic, copy) NSString *baseDirectory;
 @property (nonatomic, copy) NSArray<NSString *> *overlayDirectories;
+@property (nonatomic, assign) BOOL loadFromMemory;
+
+// Drops all bytes retained by memory mode. Called before opening a new wallpaper.
+- (void)clearMemoryCache;
 
 - (instancetype)init;
 - (instancetype)initWithBaseDirectory:(NSString *)baseDirectory;

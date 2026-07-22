@@ -183,7 +183,7 @@ struct WallpaperPreview: SubviewOfContentView {
                         HStack {
                             Label("音量", systemImage: "speaker.wave.3.fill")
                             Spacer()
-                            Slider(value: $wallpaperViewModel.playVolume, in: 0...1).frame(width: 100)
+                            MirageSlider(value: $wallpaperViewModel.playVolume, in: 0...1).frame(width: 100)
                             Text(String(format: "%.0f", wallpaperViewModel.playVolume * 100) + "%")
                                 .frame(width: 35)
                         }
@@ -191,7 +191,7 @@ struct WallpaperPreview: SubviewOfContentView {
                             HStack {
                                 Label("速度", systemImage: "gauge.with.dots.needle.67percent")
                                 Spacer()
-                                Slider(value: $wallpaperViewModel.playRate, in: 0...2, step: 0.1).frame(width: 100)
+                                MirageSlider(value: $wallpaperViewModel.playRate, in: 0...2, step: 0.1).frame(width: 100)
                                 Text(String(format: "%.01fx", wallpaperViewModel.playRate))
                                 .frame(width: 35)
                             }

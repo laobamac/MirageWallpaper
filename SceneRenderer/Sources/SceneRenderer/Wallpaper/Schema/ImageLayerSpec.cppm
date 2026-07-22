@@ -36,9 +36,7 @@ public:
     bool        unique { false };
 };
 
-// objects[].instance — PKGV0018+. Embedded WE-format material binding
-// (compiled-shader id + textures + combos). The renderer doesn't currently
-// substitute it, but the parser needs to accept the shape.
+// objects[].instance — PKGV0018+ embedded material overrides.
 class ObjectInstance {
 public:
     bool                                          FromJson(const sr::Json&);

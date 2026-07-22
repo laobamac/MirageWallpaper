@@ -2,7 +2,11 @@ module;
 
 #include <rstd/macro.hpp>
 
+#include <array>
+#include <atomic>
+#include <chrono>
 #include <ctime>
+#include <mutex>
 
 module sr.scene_wallpaper;
 import sr.types;
@@ -803,6 +807,27 @@ bool ApplyUserPropertyToNodeVisibility(Scene& scene, const std::string& key, con
     return scene.ApplyUserNodeVisibilityBindings(key, prop);
 }
 
+void ApplyUserPropertyBeforeFirstGraph(Scene& scene, const std::string& key, const Json& prop) {
+    sr::script::SetSceneUserProperty(scene, key, prop);
+    ApplyUserPropertyToClear(scene, key, prop);
+    ApplyUserPropertyToShaderUniforms(scene, key, prop);
+    (void)ApplyUserPropertyToMaterialTextures(scene, key, prop);
+    (void)ApplyUserPropertyToShaderCombos(scene, key, prop);
+    ApplyUserPropertyToImageColor(scene, key, prop);
+    ApplyUserPropertyToImageAlpha(scene, key, prop);
+    ApplyUserPropertyToText(scene, key, prop);
+    ApplyUserPropertyToPointSize(scene, key, prop);
+    ApplyUserPropertyToTextColor(scene, key, prop);
+    ApplyUserPropertyToTextAlpha(scene, key, prop);
+    ApplyUserPropertyToParticles(scene, key, prop);
+    ApplyUserPropertyToSoundVolume(scene, key, prop);
+    ApplyUserPropertyToCameraParallax(scene, key, prop);
+    ApplyUserPropertyToCameraShake(scene, key, prop);
+    ApplyUserPropertyToCameraPath(scene, key, prop);
+    (void)ApplyUserPropertyToNodeVisibility(scene, key, prop);
+    (void)scene.ApplyUserImageEffectVisibilityBindings(key, prop);
+}
+
 void MergeProjectUserProperties(const std::filesystem::path& project_dir, rstd::json::Map& out) {
     const auto    project_path = project_dir / "project.json";
     std::ifstream is(project_path);
@@ -888,9 +913,11 @@ public:
     bool isGenGraphviz() const { return m_config.graphviz; }
 
     void setOnClearColor(ClearColorCallback cb) { m_clear_color_cb = std::move(cb); }
+    void setOnAudioDemand(AudioDemandCallback cb) { m_audio_demand_cb = std::move(cb); }
 
 private:
     void loadScene();
+    void publishPreparedScene();
 
     bool m_inited { false };
 
@@ -902,7 +929,13 @@ private:
     FirstFrameCallback                           m_first_frame_callback;
     UserPropertyDiagnosticCallback               m_user_property_diagnostic_cb;
     ClearColorCallback                           m_clear_color_cb;
+    AudioDemandCallback                          m_audio_demand_cb;
     uint64_t                                     m_audio_pause_generation { 0 };
+    uint64_t                                     m_config_generation { 0 };
+    uint64_t                                     m_prepared_scene_generation { 0 };
+    uint64_t                                     m_submitted_scene_generation { 0 };
+    bool                                         m_render_ready { false };
+    std::shared_ptr<Scene>                       m_prepared_scene;
 
     msgloop::MessageLoop<MainMsg>          m_main_loop;
     msgloop::MessageLoop<RenderMsg>        m_render_loop;
@@ -911,11 +944,7 @@ private:
 
 class SceneRenderController {
 public:
-    explicit SceneRenderController(SceneRuntimeController& main): m_main(main) {
-        // Best-effort: a failing init just leaves snapshots returning false
-        // and audio_average at zeros — wallpapers still render fine.
-        (void)m_audio_capture.init();
-    }
+    explicit SceneRenderController(SceneRuntimeController& main): m_main(main) {}
     ~SceneRenderController() {
         m_render->destroy();
         rstd_info("render handler deleted");
@@ -936,7 +965,7 @@ public:
     vulkan::VulkanRender* render() const { return m_render.get(); }
 
     bool renderInited() const { return m_render->inited(); }
-    bool sceneReady() const { return m_scene != nullptr; }
+    bool sceneReady() const { return m_scene_ready.load(std::memory_order_acquire); }
 
     void setMousePos(double x, double y) { m_mouse_pos.store(std::array { (float)x, (float)y }); }
 
@@ -960,6 +989,22 @@ public:
     uint32_t consumePressed() { return m_buttons_pressed.exchange(0); }
     uint32_t consumeReleased() { return m_buttons_released.exchange(0); }
     bool     cursorInWindow() const { return m_cursor_in_window.load(); }
+
+    void configureAudioCapture(bool enabled, bool external) {
+        m_audio_enabled.store(enabled, std::memory_order_release);
+        m_external_audio.store(enabled && external, std::memory_order_release);
+        if (enabled) (void)m_audio_capture.init(! external);
+    }
+
+    void setExternalAudioSpectrum(std::array<float, 64> left,
+                                  std::array<float, 64> right) {
+        std::lock_guard lock(m_external_audio_mu);
+        m_external_left  = std::move(left);
+        m_external_right = std::move(right);
+        m_external_publish_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    std::chrono::steady_clock::now().time_since_epoch())
+                                    .count();
+    }
 
     void setSenders(RenderSender render_tx, MainSender main_tx) {
         m_render_tx.emplace(std::move(render_tx));
@@ -986,10 +1031,26 @@ private:
     void refreshPreparedMeshDirtyEvents();
     void refreshPreparedMaterialDirtyEvents();
 
+    bool snapshotExternalAudio(wavsen::audio::AudioSpectrum& out) {
+        if (! m_external_audio.load(std::memory_order_acquire)) return false;
+        std::lock_guard lock(m_external_audio_mu);
+        if (m_external_publish_ms == 0) return false;
+        out.clear();
+        out.left       = m_external_left;
+        out.right      = m_external_right;
+        out.publish_ms = m_external_publish_ms;
+        for (std::size_t i = 0; i < out.average.size(); ++i) {
+            out.average[i] = 0.5f * (out.left[i] + out.right[i]);
+            out.bins[i]    = out.average[i];
+        }
+        return true;
+    }
+
     SceneRuntimeController& m_main;
 
     std::unique_ptr<vulkan::VulkanRender> m_render { std::make_unique<vulkan::VulkanRender>() };
     std::shared_ptr<Scene>                m_scene { nullptr };
+    std::atomic<bool>                     m_scene_ready { false };
     RenderSceneSnapshot                   m_render_scene;
     std::unique_ptr<rg::RenderGraph>      m_rg { nullptr };
     float                                 m_speed { 1.0f };
@@ -1011,6 +1072,12 @@ private:
     std::shared_ptr<RenderSender> m_swapchain_tx;
 
     wavsen::audio::AudioCapture m_audio_capture;
+    std::atomic<bool>            m_audio_enabled { true };
+    std::atomic<bool>            m_external_audio { false };
+    std::mutex                   m_external_audio_mu;
+    std::array<float, 64>        m_external_left {};
+    std::array<float, 64>        m_external_right {};
+    std::int64_t                 m_external_publish_ms { 0 };
 };
 
 // ---- SceneRenderController message handlers ---------------------------------
@@ -1057,7 +1124,25 @@ void SceneRenderController::on(RenderDraw&&) {
             fi.mouse_buttons_pressed  = consumePressed();
             fi.mouse_buttons_released = consumeReleased();
             wavsen::audio::AudioSpectrum spec;
-            const bool                   primed = m_audio_capture.snapshot(spec);
+            bool primed = false;
+            if (m_audio_enabled.load(std::memory_order_acquire)) {
+                primed = m_audio_capture.snapshot(spec);
+                wavsen::audio::AudioSpectrum external;
+                if (snapshotExternalAudio(external)) {
+                    if (! primed) {
+                        spec = external;
+                    } else {
+                        for (std::size_t i = 0; i < spec.average.size(); ++i) {
+                            spec.left[i]    = std::max(spec.left[i], external.left[i]);
+                            spec.right[i]   = std::max(spec.right[i], external.right[i]);
+                            spec.average[i] = std::max(spec.average[i], external.average[i]);
+                            spec.bins[i]    = spec.average[i];
+                        }
+                        spec.publish_ms = std::max(spec.publish_ms, external.publish_ms);
+                    }
+                    primed = true;
+                }
+            }
             // Treat as silence if wavsen hasn't published recently. Without
             // this, a disconnected sink / suspended pipeline leaves the
             // last snapshot frozen and bars stick at the last live value.
@@ -1204,8 +1289,10 @@ void SceneRenderController::refreshPreparedMaterialDirtyEvents() {
 }
 
 void SceneRenderController::on(RenderSetScene&& m) {
+    m_scene_ready.store(false, std::memory_order_release);
     m_scene = std::move(m.scene);
     rebuildRenderGraph(vulkan::RenderGraphResourceRetention::ReleaseSceneTextures, true);
+    m_scene_ready.store(m_scene != nullptr && m_render->readyToDraw(), std::memory_order_release);
 }
 
 void SceneRenderController::on(RenderSetSpeed&& m) { m_speed = m.speed; }
@@ -1301,7 +1388,7 @@ void SceneRenderController::on(RenderSetMediaStatus&& m) {
 }
 
 void SceneRenderController::on(RenderInit&& m) {
-    m_render->init(std::move(*m.info));
+    const bool initialized = m_render->init(std::move(*m.info));
 
     // Subscribe to ExSwapchain ready/extent/format changes. The
     // callback runs on the render thread (sync for Local, from
@@ -1324,7 +1411,7 @@ void SceneRenderController::on(RenderInit&& m) {
     }
 
     // inited, callback to load scene
-    if (m_main_tx) (void)m_main_tx->send(MainMsg { MainLoadScene {} });
+    if (initialized && m_main_tx) (void)m_main_tx->send(MainMsg { MainLoadScene {} });
 }
 
 void SceneRenderController::on(RenderSwapchainReady&& m) {
@@ -1355,21 +1442,39 @@ void SceneRenderController::on(RenderRequestPreparedPassDiagnostics&& m) {
 // ---- SceneRuntimeController message handlers --------------------------------
 
 void SceneRuntimeController::on(MainLoadScene&&) {
-    if (m_render_controller->renderInited()) {
-        loadScene();
-    }
+    // This message is emitted only after VulkanRender::init succeeds. Keep a
+    // main-loop-owned readiness bit instead of reading VulkanRender::m_inited
+    // across threads, then publish a scene that may already have finished CPU
+    // preparation in parallel.
+    m_render_ready = true;
+    publishPreparedScene();
 }
 
 void SceneRuntimeController::on(MainConfigure&& m) {
     m_config          = std::move(m.config);
+    m_render_controller->configureAudioCapture(
+        m_config.spectrum_enabled, m_config.external_spectrum);
     m_user_properties = NormalizeUserProperties(m_config.user_properties);
+    ++m_config_generation;
+    // Preserve zero as the "not configured" sentinel after wraparound.
+    if (m_config_generation == 0) {
+        ++m_config_generation;
+        m_prepared_scene_generation     = 0;
+        m_submitted_scene_generation    = 0;
+    }
+    m_prepared_scene.reset();
+    m_prepared_scene_generation = 0;
     on(MainSetFps { m_config.fps });
     on(MainSetVolume { m_config.volume });
     on(MainSetVolumeScale { 1.0f });
     on(MainSetMuted { m_config.muted });
     on(MainSetFillMode { m_config.fill_mode });
     on(MainSetSpeed { m_config.speed });
-    on(MainLoadScene {});
+
+    // MainConfigure and RenderInit run on separate message loops. Start the
+    // VFS/scene/image-header work immediately so it overlaps Vulkan/MoltenVK
+    // initialization; publishPreparedScene is the single join point.
+    loadScene();
 }
 
 void SceneRuntimeController::on(MainSetFps&& m) {
@@ -1410,8 +1515,16 @@ void SceneRuntimeController::on(MainSetUserProperty&& m) {
                                     prop.clone());
     m_user_properties.insert(::alloc::string::String::make(rstd::cppstd::as_str(property)),
                              prop.clone());
-    (void)m_render_loop.sender().send(
-        RenderMsg { RenderSetUserProperty { property, std::move(prop) } });
+    if (m_prepared_scene && m_prepared_scene_generation == m_config_generation &&
+        m_submitted_scene_generation != m_config_generation) {
+        // A property arriving while Vulkan is still initializing must update
+        // the private prepared Scene; sending it to the render loop now would
+        // be consumed before RenderSetScene and silently lost.
+        ApplyUserPropertyBeforeFirstGraph(*m_prepared_scene, property, prop);
+    } else {
+        (void)m_render_loop.sender().send(
+            RenderMsg { RenderSetUserProperty { property, std::move(prop) } });
+    }
 }
 
 void SceneRuntimeController::on(MainSetFirstFrameCallback&& m) {
@@ -1501,7 +1614,7 @@ void SceneRuntimeController::loadScene() {
     // pass it to the scene parser; on fallback (loose dir) we have no
     // version info and use kSceneVersionUnknown.
     wpscene::SceneVersion pkg_v = wpscene::kSceneVersionUnknown;
-    auto                  wfs   = fs::WPPkgFs::CreatePkgFs(pkgPath);
+    auto                  wfs   = fs::WPPkgFs::CreatePkgFs(pkgPath, m_config.load_from_memory);
     if (wfs) pkg_v = wpscene::ParsePkgVersionStamp(wfs->pkg_version_stamp());
     if (! wfs || ! vfs.Mount("/assets", std::move(wfs))) {
         rstd_info("load pkg file {} failed, fallback to use dir", pkgPath);
@@ -1545,12 +1658,16 @@ void SceneRuntimeController::loadScene() {
         // branch above would skip start and silence all BGM. start() is a
         // no-op if the device isn't inited (e.g. muted) or already running.
         if (! m_config.muted) m_sound_manager->play();
+        // Apply initial bindings while the parsed Scene is still private to
+        // this preparation loop. The VFS must be attached first for shader
+        // combo and text asset resolution. Doing this before RenderSetScene
+        // keeps the initial render graph to a single build.
+        scene->vfs.reset(pVfs.release());
         m_user_properties.iter().for_each([&](auto entry) {
             auto [entry_key, entry_value] = entry;
             auto        key                = rstd::cppstd::to_string(entry_key->as_str());
             const auto& prop               = *entry_value;
-            ApplyUserPropertyToClear(*scene, key, prop);
-            sr::script::SetSceneUserProperty(*scene, key, prop);
+            ApplyUserPropertyBeforeFirstGraph(*scene, key, prop);
         });
         if (! m_config.cache_dir.empty() && scene) {
             std::filesystem::path ls_dir =
@@ -1560,8 +1677,6 @@ void SceneRuntimeController::loadScene() {
             std::string ls_file = (ls_dir / (scene_id + ".json")).native();
             sr::script::SetScenePersistence(*scene, std::move(ls_file));
         }
-        scene->vfs.reset(pVfs.release());
-
         // Surface the parsed clear color before the scene is shipped
         // off to the render thread; downstream callers use it to keep
         // letterbox/background fill aligned with the scene.
@@ -1569,20 +1684,25 @@ void SceneRuntimeController::loadScene() {
             const auto& c = scene->clearColor;
             m_clear_color_cb(c[0], c[1], c[2]);
         }
+        if (m_audio_demand_cb) m_audio_demand_cb(scene->uses_audio_spectrum);
     }
 
+    m_prepared_scene            = std::move(scene);
+    m_prepared_scene_generation = m_config_generation;
+    publishPreparedScene();
+}
+
+void SceneRuntimeController::publishPreparedScene() {
+    if (! m_render_ready || ! m_prepared_scene ||
+        m_prepared_scene_generation != m_config_generation ||
+        m_submitted_scene_generation == m_config_generation)
+        return;
+
+    auto scene = std::exchange(m_prepared_scene, nullptr);
+    m_submitted_scene_generation = m_config_generation;
+
     auto rtx = m_render_loop.sender();
-    (void)rtx.send(RenderMsg { RenderSetScene { scene } });
-    // First-frame default push: now that the render thread owns the scene,
-    // replay every collected user property (project.json defaults + any
-    // mutations the host already pushed during scene load) so the shader
-    // cbuffer matches what the host UI displays.
-    m_user_properties.iter().for_each([&](auto entry) {
-        auto [entry_key, entry_value] = entry;
-        auto        key               = rstd::cppstd::to_string(entry_key->as_str());
-        const auto& prop              = *entry_value;
-        (void)rtx.send(RenderMsg { RenderSetUserProperty { rstd::move(key), prop.clone() } });
-    });
+    (void)rtx.send(RenderMsg { RenderSetScene { std::move(scene) } });
     // draw first frame
     (void)rtx.send(RenderMsg { RenderDraw {} });
 }
@@ -1727,6 +1847,12 @@ void SceneWallpaper::setMediaStatus(MediaStatus status) {
     (void)m_runtime->renderSender().send(RenderMsg { RenderSetMediaStatus { std::move(status) } });
 }
 
+void SceneWallpaper::setAudioSpectrum(std::array<float, 64> left,
+                                      std::array<float, 64> right) {
+    m_runtime->renderController()->setExternalAudioSpectrum(
+        std::move(left), std::move(right));
+}
+
 void SceneWallpaper::setUserPropertyRaw(std::string_view name, std::string value) {
     (void)m_runtime->mainSender().send(
         MainMsg { MainSetUserProperty { std::string(name), RawUserProperty(value) } });
@@ -1739,6 +1865,10 @@ void SceneWallpaper::setUserPropertyJson(std::string_view name, Json value) {
 
 void SceneWallpaper::setOnClearColor(ClearColorCallback cb) {
     m_runtime->setOnClearColor(std::move(cb));
+}
+
+void SceneWallpaper::setOnAudioDemand(AudioDemandCallback cb) {
+    m_runtime->setOnAudioDemand(std::move(cb));
 }
 
 void SceneWallpaper::setOnFirstFrame(FirstFrameCallback cb) {

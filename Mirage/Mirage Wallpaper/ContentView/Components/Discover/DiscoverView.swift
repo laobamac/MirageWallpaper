@@ -163,6 +163,7 @@ struct DiscoverView: View {
             if workshopViewModel.bannerItems.isEmpty {
                 workshopViewModel.loadDiscover()
             }
+            workshopViewModel.refreshInstalledState()
         }
         .alert("建议设置专属 Steam API Key", isPresented: $showAPIKeyReminder) {
             Button("立即设置") { AppDelegate.shared.openSteamAPIKeySettings() }

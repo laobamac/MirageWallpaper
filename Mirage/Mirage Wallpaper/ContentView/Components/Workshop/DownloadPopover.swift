@@ -129,19 +129,9 @@ struct DownloadRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            AsyncImage(url: task.workshopItem.previewImageURL) { phase in
-                switch phase {
-                case .success(let image):
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                default:
-                    Rectangle()
-                        .fill(Color.secondary.opacity(0.1))
-                }
-            }
-            .frame(width: 64, height: 36)
-            .clipShape(RoundedRectangle(cornerRadius: 4))
+            WorkshopImage(url: task.workshopItem.previewImageURL, contentMode: .fill)
+                .frame(width: 64, height: 36)
+                .clipShape(RoundedRectangle(cornerRadius: 4))
 
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {

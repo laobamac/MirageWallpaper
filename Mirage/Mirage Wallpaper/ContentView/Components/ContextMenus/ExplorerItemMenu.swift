@@ -22,6 +22,13 @@ struct ExplorerItemMenu: SubviewOfContentView {
     var body: some View {
         Group {
             Section {
+                Button(action: setAsScreenSaver) {
+                    Label("设为屏保", systemImage: "sparkles.tv")
+                }
+                .disabled(!hoveredWallpaper.isValid || hoveredWallpaper.kind == .unsupported)
+            }
+
+            Section {
                 Button {
                     
                 } label: {
@@ -83,5 +90,40 @@ struct ExplorerItemMenu: SubviewOfContentView {
             }
         }
         .labelStyle(.titleAndIcon)
+    }
+
+    private func setAsScreenSaver() {
+        let wallpaper = hoveredWallpaper
+        let runtime = wallpaperViewModel.loadRuntime(for: wallpaper)
+        let properties = wallpaperViewModel.effectiveProperties(for: wallpaper, runtime: runtime)
+        let fps = Int(AppDelegate.shared.globalSettingsViewModel.settings.fps)
+        let manager = ScreenSaverManager.shared
+        let needsInstallation = !manager.isInstalled
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = Result {
+                if needsInstallation { try manager.install() }
+                try manager.configure(
+                    with: wallpaper,
+                    runtime: runtime,
+                    properties: properties,
+                    fps: fps
+                )
+            }
+            DispatchQueue.main.async {
+                switch result {
+                case .success:
+                    viewModel.screenSaverFeedback = ScreenSaverFeedback(
+                        title: "已设为屏保",
+                        message: "“\(wallpaper.project.title)”将在下次启动屏保时显示。"
+                    )
+                case .failure(let error):
+                    viewModel.screenSaverFeedback = ScreenSaverFeedback(
+                        title: "设置屏保失败",
+                        message: error.localizedDescription
+                    )
+                }
+            }
+        }
     }
 }

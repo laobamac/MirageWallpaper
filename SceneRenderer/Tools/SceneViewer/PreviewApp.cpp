@@ -28,7 +28,8 @@ extern "C" void SceneRendererSetLiveMetalFrameCallback(
 extern "C" void* SceneRendererMacMetalDisplayCreate(GLFWwindow* window);
 extern "C" void  SceneRendererMacMetalDisplayDestroy(void* handle);
 extern "C" void  SceneRendererMacMetalDisplayDraw(void* handle, void* texture, uint32_t width,
-                                                  uint32_t height);
+                                                  uint32_t height, void (*presented)(void*),
+                                                  void* userdata);
 
 struct LiveFrameState {
     std::mutex           mutex;
@@ -85,7 +86,7 @@ void draw_live_metal_frame(void* display, LiveMetalFrameState& state) {
         state.dirty = false;
     }
     if (display != nullptr && texture != nullptr) {
-        SceneRendererMacMetalDisplayDraw(display, texture, width, height);
+        SceneRendererMacMetalDisplayDraw(display, texture, width, height, nullptr, nullptr);
     }
 }
 

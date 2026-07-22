@@ -33,6 +33,13 @@ struct ProjectFeedbackBanner: View {
             Spacer(minLength: 8)
 
             if showsActions {
+                Button {
+                    AppDelegate.shared.showAboutUs()
+                } label: {
+                    Label("支持 Mirage", systemImage: "heart")
+                }
+                .buttonStyle(.bordered)
+
                 Link(destination: issuesURL) {
                     Label("提交 Issue", systemImage: "square.and.pencil")
                 }

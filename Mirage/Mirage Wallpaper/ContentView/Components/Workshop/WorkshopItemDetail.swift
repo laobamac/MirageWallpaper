@@ -62,29 +62,13 @@ struct WorkshopItemDetail: View {
                     .background(Color.secondary.opacity(0.08))
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                 } else {
-                    AsyncImage(url: item.previewImageURL) { phase in
-                        switch phase {
-                        case .success(let image):
-                            image
-                                .resizable()
-                                .aspectRatio(contentMode: .fit)
-                        case .failure:
-                            Rectangle()
-                                .fill(Color.secondary.opacity(0.2))
-                                .overlay {
-                                    Image(systemName: "photo")
-                                        .font(.title)
-                                        .foregroundStyle(.tertiary)
-                                }
-                        default:
-                            Rectangle()
-                                .fill(Color.secondary.opacity(0.1))
-                                .overlay { ProgressView() }
-                        }
-                    }
-                    .frame(width: 280, height: 158)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                    .border(Color.white, width: 3)
+                    WorkshopImage(url: item.previewImageURL, contentMode: .fill)
+                        .frame(width: 280, height: 158)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .strokeBorder(Color.white.opacity(0.7), lineWidth: 3)
+                        )
                 }
 
                 Text(item.title)

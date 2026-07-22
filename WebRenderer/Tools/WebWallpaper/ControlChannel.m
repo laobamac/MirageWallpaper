@@ -42,9 +42,11 @@
                     if (bytes[i] == '\n') { nl = i; break; }
                 }
                 if (nl == NSNotFound) break;
-                NSData *lineData = [buffer subdataWithRange:NSMakeRange(0, nl)];
-                [buffer replaceBytesInRange:NSMakeRange(0, nl + 1) withBytes:NULL length:0];
-                [self handleLineData:lineData];
+                @autoreleasepool {
+                    NSData *lineData = [buffer subdataWithRange:NSMakeRange(0, nl)];
+                    [buffer replaceBytesInRange:NSMakeRange(0, nl + 1) withBytes:NULL length:0];
+                    [self handleLineData:lineData];
+                }
             }
         }
         [self signalEOF];

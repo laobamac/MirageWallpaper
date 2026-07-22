@@ -3,6 +3,7 @@ module;
 
 #include "vvk/macros.hpp"
 
+#include <atomic>
 #include <unistd.h>
 #include <vulkan/vulkan.h>
 
@@ -459,6 +460,13 @@ struct RenderProgram {
         return 0;
     }
 
+    void prepareFrameData(RenderingResources& rr) {
+        for (auto& record : pass_records) {
+            if (record.pass != nullptr && record.pass->prepared())
+                record.pass->prepareFrameData(rr);
+        }
+    }
+
     void rebuildScopes() {
         scopes.clear();
         std::vector<PreparedPassRecord*> pending_scope_passes;
@@ -592,8 +600,8 @@ struct VulkanRender::Impl {
     std::size_t                     m_next_upload_cmd { 0 };
     vvk::CommandBuffer              m_render_cmd;
 
-    bool m_with_surface { false };
-    bool m_inited { false };
+    bool              m_with_surface { false };
+    std::atomic<bool> m_inited { false };
 
     // MSAA sample count for the screen RT only. 1bit = disabled.
     // Resolved against device's framebufferColorSampleCounts in init().
@@ -612,6 +620,7 @@ VulkanRender::VulkanRender(): pImpl(std::make_unique<Impl>()) {}
 VulkanRender::~VulkanRender() {};
 
 bool VulkanRender::inited() const { return pImpl->m_inited; }
+bool VulkanRender::readyToDraw() const { return pImpl->m_inited && pImpl->m_program.loaded; }
 
 VkInstance VulkanRender::vkInstance() const {
     if (! pImpl->m_inited) return VK_NULL_HANDLE;
@@ -1040,11 +1049,10 @@ void VulkanRender::Impl::drawFrame(Scene& scene) {
 
     if (m_instance.offscreen()) {
         drawFrameOffscreen();
+        if (m_redraw_cb) m_redraw_cb();
     } else {
         drawFrameSwapchain();
     }
-
-    if (m_redraw_cb) m_redraw_cb();
 }
 
 void VulkanRender::Impl::drawFrameSwapchain() {
@@ -1063,6 +1071,9 @@ void VulkanRender::Impl::drawFrameSwapchain() {
     const auto& image = m_device->swapchain().images()[image_index];
 
     m_finpass->setPresent(image);
+    // Dynamic vertices, instance counts and uniforms must reach the staging
+    // buffer before recordUpload emits the GPU copy commands for this frame.
+    m_program.prepareFrameData(rr);
 
     (void)rr.command.Begin(VkCommandBufferBeginInfo {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -1124,6 +1135,7 @@ void VulkanRender::Impl::drawFrameSwapchain() {
         .pImageIndices      = &image_index,
     };
     VVK_CHECK_VOID_RE(m_device->present_queue().handle.Present(present_info));
+    if (m_redraw_cb) m_redraw_cb();
 
     VVK_CHECK_VOID_RE(rr.fence_frame.Wait(vk_wait_time));
     ReleaseCompletedRetiredResources(rr);
@@ -1155,6 +1167,7 @@ void VulkanRender::Impl::drawFrameOffscreen() {
     }
 
     m_finpass->setPresent(image);
+    m_program.prepareFrameData(rr);
 
     (void)rr.command.Begin(VkCommandBufferBeginInfo {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,

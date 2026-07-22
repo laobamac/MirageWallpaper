@@ -260,12 +260,12 @@ enum SteamAPIError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .invalidURL: return "无效的 API 地址"
-        case .invalidResponse: return "无效的服务器响应"
-        case .httpError(401), .httpError(403): return "Steam API Key 无效、权限不足或当前线路拒绝访问"
-        case .httpError(429): return "Steam Web API 请求过于频繁，请稍后重试或设置专属 API Key"
-        case .httpError(let code): return "HTTP 错误: \(code)"
-        case .decodingError(let msg): return "数据解析错误: \(msg)"
+        case .invalidURL: return L("无效的 API 地址")
+        case .invalidResponse: return L("无效的服务器响应")
+        case .httpError(401), .httpError(403): return L("Steam API Key 无效、权限不足或当前线路拒绝访问")
+        case .httpError(429): return L("Steam Web API 请求过于频繁，请稍后重试或设置专属 API Key")
+        case .httpError(let code): return L("HTTP 错误: %@", String(code))
+        case .decodingError(let msg): return L("数据解析错误: %@", msg)
         }
     }
 }

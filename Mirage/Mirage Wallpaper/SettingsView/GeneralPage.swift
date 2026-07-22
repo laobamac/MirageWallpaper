@@ -9,7 +9,7 @@ import SwiftUI
 struct GeneralPage: SettingsPage {
     @ObservedObject var viewModel: GlobalSettingsViewModel
 
-    @State private var pathRefresh = 0
+    @State private var librarySources: [WallpaperLibrarySource]
     @State private var showMirrorWarning = false
 
     private var apiKeyIsEmpty: Bool {
@@ -18,6 +18,7 @@ struct GeneralPage: SettingsPage {
 
     init(globalSettings viewModel: GlobalSettingsViewModel) {
         self.viewModel = viewModel
+        _librarySources = State(initialValue: WallpaperLibrary.shared.librarySources)
     }
 
     private func applyEndpointChange() {
@@ -26,16 +27,89 @@ struct GeneralPage: SettingsPage {
         AppDelegate.shared.workshopViewModel.search()
     }
 
+    private func refreshLibrarySources() {
+        librarySources = WallpaperLibrary.shared.librarySources
+    }
+
     private func chooseDirectory(message: String, completion: @escaping (URL) -> Void) {
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
         panel.canCreateDirectories = true
-        panel.prompt = "选择"
-        panel.message = message
+        panel.prompt = L("选择")
+        panel.message = L(message)
         panel.begin { resp in
             if resp == .OK, let url = panel.url { completion(url) }
+        }
+    }
+
+    @ViewBuilder
+    private func librarySourceRow(_ source: WallpaperLibrarySource) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text(source.title).font(.callout)
+                if source.role == .managedSteamCMD {
+                    Text("当前下载位置")
+                        .font(.caption2)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.accentColor.opacity(0.15))
+                        .clipShape(Capsule())
+                } else if !source.exists {
+                    Text("尚未创建")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Text(source.detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(source.url.path(percentEncoded: false))
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+                .truncationMode(.middle)
+                .textSelection(.enabled)
+            HStack {
+                if source.role == .steam || source.role == .customSteam {
+                    Button("选择目录…") {
+                        chooseDirectory(message: "选择 Wallpaper Engine 创意工坊壁纸所在目录（431960）") { url in
+                            WallpaperLibrary.shared.setWorkshopDirectory(url)
+                            refreshLibrarySources()
+                            AppDelegate.shared.contentViewModel.refresh()
+                        }
+                    }
+                } else if source.role == .imported {
+                    Button("选择目录…") {
+                        chooseDirectory(message: "选择用于存放导入壁纸的目录") { url in
+                            WallpaperLibrary.shared.setImportedDirectory(url)
+                            refreshLibrarySources()
+                            AppDelegate.shared.contentViewModel.refresh()
+                        }
+                    }
+                }
+                Button("在访达中显示") {
+                    if !source.exists {
+                        try? FileManager.default.createDirectory(at: source.url, withIntermediateDirectories: true)
+                    }
+                    NSWorkspace.shared.activateFileViewerSelecting([source.url])
+                    refreshLibrarySources()
+                }
+                if source.role == .customSteam && WallpaperLibrary.shared.isWorkshopDirectoryCustomized {
+                    Button("恢复默认") {
+                        WallpaperLibrary.shared.setWorkshopDirectory(nil)
+                        refreshLibrarySources()
+                        AppDelegate.shared.contentViewModel.refresh()
+                    }
+                } else if source.role == .imported && WallpaperLibrary.shared.isImportedDirectoryCustomized {
+                    Button("恢复默认") {
+                        WallpaperLibrary.shared.setImportedDirectory(nil)
+                        refreshLibrarySources()
+                        AppDelegate.shared.contentViewModel.refresh()
+                    }
+                }
+            }
         }
     }
 
@@ -45,6 +119,41 @@ struct GeneralPage: SettingsPage {
                 Toggle("开机时自动启动 Mirage", isOn: $viewModel.settings.autoStart)
             } header: {
                 Label("启动", systemImage: "star.fill")
+            }
+
+            Section {
+                Toggle("自动检查并下载更新", isOn: Binding(
+                    get: { viewModel.settings.shouldAutomaticallyUpdate },
+                    set: { viewModel.settings.automaticUpdatesEnabled = $0 }
+                ))
+                    .onChange(of: viewModel.settings.shouldAutomaticallyUpdate) { _, _ in
+                        UpdateManager.shared.applyAutomaticUpdatePreference()
+                    }
+                Toggle("接收测试版更新", isOn: Binding(
+                    get: { viewModel.settings.shouldReceivePrereleaseUpdates },
+                    set: { viewModel.settings.receivePrereleaseUpdates = $0 }
+                ))
+                .onChange(of: viewModel.settings.shouldReceivePrereleaseUpdates) { _, _ in
+                    if viewModel.settings.shouldAutomaticallyUpdate {
+                        UpdateManager.shared.checkForUpdates(nil)
+                    }
+                }
+                Text("关闭自动更新后，Mirage 不会在后台检查或下载；仍可通过菜单中的“检查更新…”手动检查。开启测试版后，Mirage 会在正式更新之外检查最新的测试版。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } header: {
+                Label("软件更新", systemImage: "arrow.triangle.2.circlepath")
+            }
+
+            Section {
+                Picker("语言", selection: $viewModel.settings.language) {
+                    Text("跟随系统").tag(GSLocalization.followSystem)
+                    Text("English").tag(GSLocalization.en_US)
+                    Text("简体中文").tag(GSLocalization.zh_CN)
+                    Text("繁體中文").tag(GSLocalization.zh_TW)
+                }
+            } header: {
+                Label("语言", systemImage: "character.bubble")
             }
 
             Section {
@@ -60,7 +169,7 @@ struct GeneralPage: SettingsPage {
             Section {
                 HStack {
                     Text("全局音量")
-                    Slider(value: $viewModel.settings.masterVolume, in: 0...1)
+                    MirageSlider(value: $viewModel.settings.masterVolume, in: 0...1)
                         .onChange(of: viewModel.settings.masterVolume) { _, _ in
                             AppDelegate.shared.wallpaperViewModel.reapplyVolume()
                         }
@@ -76,65 +185,14 @@ struct GeneralPage: SettingsPage {
             }
 
             Section {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("创意工坊目录").font(.callout)
-                    Text(WallpaperLibrary.shared.steamWorkshopDirectory.path(percentEncoded: false))
-                        .font(.caption).foregroundStyle(.secondary)
-                        .lineLimit(2).truncationMode(.middle)
-                        .textSelection(.enabled)
-                    HStack {
-                        Button("选择目录…") {
-                            chooseDirectory(message: "选择 Wallpaper Engine 创意工坊壁纸所在目录（431960）") { url in
-                                WallpaperLibrary.shared.setWorkshopDirectory(url)
-                                pathRefresh += 1
-                                AppDelegate.shared.contentViewModel.refresh()
-                            }
-                        }
-                        Button("在访达中显示") {
-                            NSWorkspace.shared.activateFileViewerSelecting([WallpaperLibrary.shared.steamWorkshopDirectory])
-                        }
-                        if WallpaperLibrary.shared.isWorkshopDirectoryCustomized {
-                            Button("恢复默认") {
-                                WallpaperLibrary.shared.setWorkshopDirectory(nil)
-                                pathRefresh += 1
-                                AppDelegate.shared.contentViewModel.refresh()
-                            }
-                        }
-                    }
-                }
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("导入壁纸目录").font(.callout)
-                    Text(WallpaperLibrary.shared.importedDirectory.path(percentEncoded: false))
-                        .font(.caption).foregroundStyle(.secondary)
-                        .lineLimit(2).truncationMode(.middle)
-                        .textSelection(.enabled)
-                    HStack {
-                        Button("选择目录…") {
-                            chooseDirectory(message: "选择用于存放导入壁纸的目录") { url in
-                                WallpaperLibrary.shared.setImportedDirectory(url)
-                                pathRefresh += 1
-                                AppDelegate.shared.contentViewModel.refresh()
-                            }
-                        }
-                        Button("在访达中显示") {
-                            NSWorkspace.shared.activateFileViewerSelecting([WallpaperLibrary.shared.importedDirectory])
-                        }
-                        if WallpaperLibrary.shared.isImportedDirectoryCustomized {
-                            Button("恢复默认") {
-                                WallpaperLibrary.shared.setImportedDirectory(nil)
-                                pathRefresh += 1
-                                AppDelegate.shared.contentViewModel.refresh()
-                            }
-                        }
-                    }
+                ForEach(librarySources) { source in
+                    librarySourceRow(source)
                 }
 
                 Toggle("自动刷新壁纸库", isOn: $viewModel.settings.autoRefresh)
             } header: {
                 Label("壁纸库", systemImage: "folder.fill")
             }
-            .id(pathRefresh)
 
             if MirageRegion.isMainlandChina {
                 Section {

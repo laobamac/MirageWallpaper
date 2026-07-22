@@ -4,6 +4,22 @@
 <dict>
 	<key>MirageSteamWebAPIKey</key>
 	<string>$(MIRAGE_STEAM_WEB_API_KEY)</string>
+	<key>MirageGitCommit</key>
+	<string>$(MIRAGE_GIT_COMMIT)</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Mirage captures system audio to drive audio-responsive wallpapers.</string>
+	<key>SUAutomaticallyUpdate</key>
+	<true/>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUFeedURL</key>
+	<string>https://raw.githubusercontent.com/laobamac/MirageWallpaper/update-feeds/appcast-$(MIRAGE_UPDATE_ARCH).xml</string>
+	<key>SUPublicEDKey</key>
+	<string>/klI6Qh2rkydyEwm7lIAgZppwGitkU1YtQhoy75hkXg=</string>
+	<key>SURequireSignedFeed</key>
+	<true/>
+	<key>SUVerifyUpdateBeforeExtraction</key>
+	<true/>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>

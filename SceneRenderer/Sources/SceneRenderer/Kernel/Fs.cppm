@@ -2,6 +2,7 @@ module;
 
 #include <rstd/macro.hpp>
 #include <cstdio>
+#include <cstring>
 
 export module sr.fs;
 import sr.core;
@@ -332,6 +333,52 @@ private:
 
     idx                  m_pos;
     std::vector<uint8_t> m_data;
+};
+
+// Read-only cursor over shared immutable bytes. Each caller gets an independent
+// cursor while every stream keeps the same backing allocation alive.
+class SharedMemBinaryStream : public IBinaryStream {
+public:
+    SharedMemBinaryStream(std::shared_ptr<const std::vector<uint8_t>> data,
+                          idx start = 0, isize length = -1)
+        : m_data(std::move(data)), m_start(start), m_pos(0) {
+        const isize available = m_data && start >= 0 && (usize)start <= m_data->size()
+                                    ? (isize)m_data->size() - start
+                                    : 0;
+        m_size = length < 0 ? available : std::clamp<isize>(length, 0, available);
+    }
+
+    usize Read(void* buffer, usize sizeInByte) override {
+        const isize remaining = m_size - m_pos;
+        const usize count = std::min<usize>(sizeInByte, remaining > 0 ? (usize)remaining : 0);
+        if (count > 0) {
+            std::memcpy(buffer, m_data->data() + m_start + m_pos, count);
+            m_pos += (idx)count;
+        }
+        return count;
+    }
+    char* Gets(char* buffer, usize sizeStr) override {
+        Read(buffer, sizeStr);
+        return buffer;
+    }
+    idx Tell() const override { return m_pos; }
+    bool SeekSet(idx offset) override {
+        if (offset < 0 || offset > m_size) return false;
+        m_pos = offset;
+        return true;
+    }
+    bool SeekCur(idx offset) override { return SeekSet(m_pos + offset); }
+    bool SeekEnd(idx offset) override { return SeekSet(m_size + offset); }
+    isize Size() const override { return m_size; }
+
+protected:
+    usize Write_impl(const void*, usize) override { return 0; }
+
+private:
+    std::shared_ptr<const std::vector<uint8_t>> m_data;
+    idx m_start { 0 };
+    idx m_pos { 0 };
+    isize m_size { 0 };
 };
 
 // -- LimitedBinaryStream ---------------------------------------------------

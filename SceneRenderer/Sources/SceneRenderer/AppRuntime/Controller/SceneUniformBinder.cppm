@@ -144,6 +144,12 @@ private:
     std::array<float, 64> m_audio_64_l {};
     std::array<float, 64> m_audio_64_r {};
 
+    // Reused std140 packing buffer for the audio-bar uniforms. Each of the up
+    // to six per-frame audio uploads packs one amplitude into .x of a vec4, so
+    // the widest case is 64 bands * 4 = 256 floats. Kept as a member to avoid
+    // heap-allocating a fresh std::vector on every band, every frame.
+    std::array<float, 64 * 4> m_audio_pack_scratch {};
+
     Map<void*, SceneUniformNodeData> m_nodeDataMap;
     Map<void*, SceneUniformInfo>     m_nodeUniformInfoMap;
 };

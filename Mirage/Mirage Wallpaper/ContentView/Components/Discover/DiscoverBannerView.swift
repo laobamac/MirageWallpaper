@@ -89,31 +89,9 @@ struct BannerCard: View {
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .bottomLeading) {
-                AsyncImage(url: item.previewImageURL) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: geo.size.width, height: geo.size.height)
-                            .clipped()
-                    case .failure:
-                        Rectangle()
-                            .fill(
-                                LinearGradient(
-                                    colors: [.blue.opacity(0.3), .purple.opacity(0.3)],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
-                            )
-                    default:
-                        Rectangle()
-                            .fill(Color.secondary.opacity(0.08))
-                            .overlay {
-                                ProgressView()
-                            }
-                    }
-                }
+                WorkshopImage(url: item.previewImageURL, contentMode: .fill)
+                    .frame(width: geo.size.width, height: geo.size.height)
+                    .clipped()
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text(item.title)

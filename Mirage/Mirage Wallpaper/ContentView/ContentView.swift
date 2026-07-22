@@ -12,6 +12,7 @@ protocol SubviewOfContentView: View {
 
 struct ContentView: View {
     @EnvironmentObject var globalSettingsViewModel: GlobalSettingsViewModel
+    @ObservedObject private var localization = MirageLocalization.shared
 
     @ObservedObject var viewModel: ContentViewModel
     @ObservedObject var wallpaperViewModel: WallpaperViewModel
@@ -164,6 +165,13 @@ struct ContentView: View {
             Text("确定要删除“\(viewModel.hoveredWallpaper?.project.title ?? "该壁纸")”吗？")
         }
         .alert(isPresented: $viewModel.importAlertPresented, error: viewModel.importAlertError) { }
+        .alert(item: $viewModel.screenSaverFeedback) { feedback in
+            Alert(
+                title: Text(feedback.title),
+                message: Text(feedback.message),
+                dismissButton: .default(Text("好"))
+            )
+        }
         .alert(
             "需要基础壁纸",
             isPresented: Binding(
@@ -198,6 +206,15 @@ struct ContentView: View {
             SteamSetupView(viewModel: SteamSetupViewModel())
                 .frame(width: 560, height: 640)
         }
+        .sheet(isPresented: $globalSettingsViewModel.isSettingsPresented, onDismiss: {
+            // Match the previous window-close behavior: discard any in-flight
+            // edits that were not committed via "好".
+            globalSettingsViewModel.reset()
+        }) {
+            SettingsView()
+                .environmentObject(globalSettingsViewModel)
+        }
+        .environment(\.locale, localization.locale)
     }
 }
 

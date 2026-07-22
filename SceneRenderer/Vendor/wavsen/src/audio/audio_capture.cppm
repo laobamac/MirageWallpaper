@@ -37,7 +37,7 @@ public:
     AudioCapture(const AudioCapture&)            = delete;
     AudioCapture& operator=(const AudioCapture&) = delete;
 
-    auto init() -> bool;
+    auto init(bool enable_system_capture = true) -> bool;
     void uninit();
     auto is_inited() const -> bool;
 

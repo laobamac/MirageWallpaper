@@ -4,6 +4,14 @@ on:
   push:
     branches:
       - main
+    # Docs-only changes shouldn't rebuild the app. paths-ignore skips a push
+    # only when *every* changed file matches, so any app source change still
+    # triggers a build. Tag pushes (v*) ignore paths filters and always build.
+    paths-ignore:
+      - "website/**"
+      - "docs/**"
+      - ".github/workflows/deploy-website.yml"
+      - "**/*.md"
     tags:
       - "v*"
   workflow_dispatch:
@@ -11,9 +19,10 @@ on:
 permissions:
   contents: write
 
+# Publishing must be serial: both architectures update the same signed feeds.
 concurrency:
-  group: build-macos-${{ github.ref }}
-  cancel-in-progress: true
+  group: mirage-release-publication
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -36,6 +45,24 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+
+      - name: Select newest Xcode
+        shell: bash
+        run: |
+          newest="$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -1)"
+          if [[ -z "$newest" ]]; then
+            echo "::error::No Xcode found on the runner."
+            exit 1
+          fi
+          sudo xcode-select -s "$newest/Contents/Developer"
+          xcodebuild -version
+          sdk="$(xcrun --sdk macosx --show-sdk-version)"
+          echo "Selected macOS SDK: $sdk"
+          major="${sdk%%.*}"
+          if (( major < 26 )); then
+            echo "::error::macOS 26 SDK is required to link the current system UI, but the newest available SDK is $sdk. Update the runner image or install Xcode 26."
+            exit 1
+          fi
 
       - name: Validate build secret
         shell: bash
@@ -64,42 +91,48 @@ jobs:
       - name: Build app bundle
         shell: bash
         env:
+          MIRAGE_ARCH: ${{ matrix.arch }}
           MIRAGE_STEAM_WEB_API_KEY: ${{ secrets.MIRAGE_STEAM_WEB_API_KEY }}
+          MIRAGE_GIT_COMMIT: ${{ github.sha }}
         run: ./Mirage/scripts/build.sh Release
 
       - name: Verify app bundle
         shell: bash
         run: |
-          test -d "Mirage/dist/Mirage.app"
-          test -x "Mirage/dist/Mirage.app/Contents/Resources/Renderers/SceneWallpaper"
-          test -x "Mirage/dist/Mirage.app/Contents/Resources/Renderers/WebWallpaper"
-          test -x "Mirage/dist/Mirage.app/Contents/Resources/Renderers/VideoWallpaper"
-          test -x "Mirage/dist/Mirage.app/Contents/Resources/Renderers/RmskinWallpaper"
-          codesign --verify --deep --strict "Mirage/dist/Mirage.app"
-          built_in_key="$(/usr/libexec/PlistBuddy -c 'Print :MirageSteamWebAPIKey' \
-            "Mirage/dist/Mirage.app/Contents/Info.plist")"
+          app="Mirage/dist/Mirage.app"
+          expected_build="$(git rev-list --count "$GITHUB_SHA")"
+          test -d "$app"
+          test -x "$app/Contents/Resources/Renderers/SceneWallpaper"
+          test -x "$app/Contents/Resources/Renderers/WebWallpaper"
+          test -x "$app/Contents/Resources/Renderers/VideoWallpaper"
+          test -x "$app/Contents/Resources/Renderers/RmskinWallpaper"
+          test -d "$app/Contents/Frameworks/Sparkle.framework"
+          codesign --verify --deep --strict "$app"
+          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Contents/Info.plist")" == "$expected_build" ]]
+          [[ "$(/usr/libexec/PlistBuddy -c 'Print :MirageGitCommit' "$app/Contents/Info.plist")" == "$GITHUB_SHA" ]]
+          [[ "$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' "$app/Contents/Info.plist")" == '/klI6Qh2rkydyEwm7lIAgZppwGitkU1YtQhoy75hkXg=' ]]
+          [[ "$(/usr/libexec/PlistBuddy -c 'Print :SUFeedURL' "$app/Contents/Info.plist")" == *"appcast-${{ matrix.arch }}.xml" ]]
+          built_in_key="$(/usr/libexec/PlistBuddy -c 'Print :MirageSteamWebAPIKey' "$app/Contents/Info.plist")"
           [[ "$built_in_key" =~ ^[A-Fa-f0-9]{32}$ ]]
 
       - name: Package app
         id: package
         shell: bash
         run: |
-          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
-            version="$GITHUB_REF_NAME"
-          else
-            version="${GITHUB_SHA:0:7}"
-          fi
-          package="Mirage-${version}-macOS-${{ matrix.arch }}.zip"
+          set -euo pipefail
+          build_number="$(git rev-list --count "$GITHUB_SHA")"
+          short_commit="${GITHUB_SHA:0:12}"
+          package="Mirage-${build_number}-${short_commit}-macOS-${{ matrix.arch }}.zip"
           ditto -c -k --sequesterRsrc --keepParent \
             "Mirage/dist/Mirage.app" "Mirage/dist/$package"
           shasum -a 256 "Mirage/dist/$package" > "Mirage/dist/$package.sha256"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "build_number=$build_number" >> "$GITHUB_OUTPUT"
           echo "package=$package" >> "$GITHUB_OUTPUT"
 
       - name: Upload package
         uses: actions/upload-artifact@v7
         with:
-          name: Mirage-${{ steps.package.outputs.version }}-macOS-${{ matrix.arch }}
+          name: Mirage-${{ steps.package.outputs.build_number }}-macOS-${{ matrix.arch }}
           path: |
             Mirage/dist/${{ steps.package.outputs.package }}
             Mirage/dist/${{ steps.package.outputs.package }}.sha256
@@ -108,81 +141,142 @@ jobs:
           compression-level: 0
 
   publish:
-    name: Publish rolling pre-release
+    name: Publish ${{ github.ref_type == 'tag' && 'stable release' || 'pre-release' }} and update feeds
     needs: build
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    runs-on: macos-15
+    timeout-minutes: 30
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - name: Download artifacts
+      - name: Download packages
         uses: actions/download-artifact@v7
         with:
           path: artifacts
 
-      - name: Process and publish
+      - name: Resolve Sparkle publishing tools
+        shell: bash
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project 'Mirage/Mirage Wallpaper.xcodeproj' \
+            -scheme 'Mirage Wallpaper' \
+            -derivedDataPath Mirage/build/DD
+
+      - name: Create or replace the GitHub Release
+        id: release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          build_number="$(git rev-list --count "$GITHUB_SHA")"
+          short_commit="${GITHUB_SHA:0:12}"
+          mkdir -p release-assets
+          find artifacts -type f \( -name '*.zip' -o -name '*.sha256' \) -exec cp {} release-assets/ \;
 
-          notes_file="$RUNNER_TEMP/prerelease-notes.md"
-          release_tag="prerelease-${GITHUB_SHA:0:7}"
-          stable_tag="$(
-            gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
-              --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name' \
-              | sed -n '1p'
-          )"
-
-          if [[ -n "$stable_tag" ]]; then
-            git rev-parse --verify "refs/tags/$stable_tag^{commit}" >/dev/null
-            revision_range="$stable_tag..$GITHUB_SHA"
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            release_tag="$GITHUB_REF_NAME"
+            release_title="Mirage ${GITHUB_REF_NAME}"
+            prerelease_flag=()
           else
-            revision_range="$GITHUB_SHA"
-          fi
-
-          git log "$revision_range" --format='- `%h` %s' > "$RUNNER_TEMP/all_commits.txt"
-          total_commits=$(wc -l < "$RUNNER_TEMP/all_commits.txt" | xargs)
-
-          if [ "$total_commits" -le 8 ]; then
-            cat "$RUNNER_TEMP/all_commits.txt" > "$notes_file"
-          else
-            head -n 8 "$RUNNER_TEMP/all_commits.txt" > "$notes_file"
-            echo "<details><summary>More commits...</summary>" >> "$notes_file"
-            echo "" >> "$notes_file"
-            tail -n +9 "$RUNNER_TEMP/all_commits.txt" >> "$notes_file"
-            echo "" >> "$notes_file"
-            echo "</details>" >> "$notes_file"
-          fi
-
-          if [[ ! -s "$notes_file" ]]; then
-            echo "::error::No commits found for the pre-release notes."
-            exit 1
-          fi
-
-          while IFS=$'\t' read -r release_id old_release_tag; do
-            [[ -z "$release_id" ]] && continue
-            gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/$release_id"
-            if [[ -n "$old_release_tag" ]] && \
-               git ls-remote --exit-code --tags origin "refs/tags/$old_release_tag" >/dev/null 2>&1; then
-              git push origin ":refs/tags/$old_release_tag"
+            release_tag="prerelease"
+            release_title="Mirage Pre-release ${short_commit}"
+            prerelease_flag=(--prerelease)
+            if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              gh release delete "$release_tag" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
             fi
-          done < <(
-            gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
-              --jq '.[] | select(.prerelease == true) | [.id, .tag_name] | @tsv'
-          )
+          fi
 
-          mkdir -p dist
-          find artifacts -type f \( -name "*.zip" -o -name "*.sha256" \) -exec cp {} dist/ \;
+          notes_file="$RUNNER_TEMP/release-notes.md"
+          {
+            echo "Commit: \`${GITHUB_SHA}\`"
+            echo
+            git log -1 --format='%s%n%n%b' "$GITHUB_SHA"
+          } > "$notes_file"
 
-          gh release create "$release_tag" \
-            dist/* \
+          gh release create "$release_tag" release-assets/* \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
-            --title "Mirage Pre-release ${GITHUB_SHA:0:7}" \
+            --title "$release_title" \
             --notes-file "$notes_file" \
-            --prerelease
+            "${prerelease_flag[@]}"
+
+          echo "tag=$release_tag" >> "$GITHUB_OUTPUT"
+          echo "build_number=$build_number" >> "$GITHUB_OUTPUT"
+          echo "channel=$([[ "$GITHUB_REF_TYPE" == "tag" ]] && printf stable || printf beta)" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure update-feed branch exists
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if ! gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/update-feeds" >/dev/null 2>&1; then
+            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+              -f ref='refs/heads/update-feeds' \
+              -f sha="$GITHUB_SHA"
+          fi
+
+      - name: Check out update feeds
+        uses: actions/checkout@v6
+        with:
+          ref: update-feeds
+          path: update-feeds
+          fetch-depth: 1
+
+      - name: Generate signed architecture appcasts
+        shell: bash
+        env:
+          MIRAGE_SPARKLE_PRIVATE_KEY: ${{ secrets.MIRAGE_SPARKLE_PRIVATE_KEY }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_CHANNEL: ${{ steps.release.outputs.channel }}
+          BUILD_NUMBER: ${{ steps.release.outputs.build_number }}
+        run: |
+          set -euo pipefail
+          [[ -n "$MIRAGE_SPARKLE_PRIVATE_KEY" ]] || {
+            echo '::error::Repository secret MIRAGE_SPARKLE_PRIVATE_KEY is missing.'
+            exit 1
+          }
+          tool='Mirage/build/DD/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_appcast'
+          test -x "$tool"
+
+          for arch in x86_64 arm64; do
+            archive="$(find artifacts -type f -name "*macOS-${arch}.zip" -print -quit)"
+            test -n "$archive"
+            appcast_dir="$RUNNER_TEMP/appcast-${arch}"
+            mkdir -p "$appcast_dir"
+            cp "$archive" "$appcast_dir/"
+            if [[ -f "update-feeds/appcast-${arch}.xml" ]]; then
+              cp "update-feeds/appcast-${arch}.xml" "$appcast_dir/appcast-${arch}.xml"
+            fi
+            archive_name="$(basename "$archive" .zip)"
+            {
+              echo "Commit: ${GITHUB_SHA}"
+              echo "Channel: ${RELEASE_CHANNEL}"
+              echo
+              git log -1 --format='%s%n%n%b' "$GITHUB_SHA"
+            } > "$appcast_dir/${archive_name}.txt"
+
+            command=("$tool" --ed-key-file - --download-url-prefix "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/" --link "https://github.com/${GITHUB_REPOSITORY}" --embed-release-notes --versions "$BUILD_NUMBER" --maximum-versions 6 --maximum-deltas 0)
+            if [[ "$RELEASE_CHANNEL" == beta ]]; then
+              command+=(--channel beta)
+            fi
+            command+=("$appcast_dir")
+            printf '%s' "$MIRAGE_SPARKLE_PRIVATE_KEY" | "${command[@]}"
+            cp "$appcast_dir/appcast-${arch}.xml" "update-feeds/appcast-${arch}.xml"
+          done
+
+      - name: Publish update feeds
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C update-feeds config user.name 'github-actions[bot]'
+          git -C update-feeds config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git -C update-feeds add appcast-x86_64.xml appcast-arm64.xml
+          if ! git -C update-feeds diff --cached --quiet; then
+            git -C update-feeds commit -m "chore(update): publish ${{ steps.release.outputs.channel }} ${{ github.sha }}"
+            git -C update-feeds push origin HEAD:update-feeds
+          fi

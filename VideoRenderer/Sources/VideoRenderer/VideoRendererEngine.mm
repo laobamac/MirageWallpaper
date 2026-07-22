@@ -1,5 +1,4 @@
 #import "VideoRendererEngine.h"
-
 #import "VRMemoryAssetLoader.h"
 
 #import <QuartzCore/QuartzCore.h>
@@ -38,12 +37,13 @@ static float VRClampVolume(float value) {
 @property (nonatomic, strong) AVPlayerLayer *playerLayer;
 @property (nonatomic, strong) AVPlayerLooper *looper;
 @property (nonatomic, strong) id activity;
-@property (nonatomic, strong) VRMemoryAssetLoader *memLoader;   // 持有内存加载器，避免释放
 @property (nonatomic, assign) BOOL loaded;
 @property (nonatomic, assign) float volume;
 @property (nonatomic, assign) BOOL muted;
 @property (nonatomic, assign) VRVideoFillMode fillMode;
 @property (nonatomic, assign) BOOL autoplay;
+@property (nonatomic, assign) BOOL loadFromMemory;
+@property (nonatomic, strong) VRMemoryAssetLoader *memoryAssetLoader;
 @end
 
 @implementation VRVideoRendererEngine
@@ -54,6 +54,7 @@ static float VRClampVolume(float value) {
     config.initialVolume = 1.0f;
     config.muted = NO;
     config.autoplay = YES;
+    config.loadFromMemory = NO;
     return config;
 }
 
@@ -81,6 +82,7 @@ static float VRClampVolume(float value) {
         _volume = _player.volume;
         _muted = config.muted;
         _autoplay = config.autoplay;
+        _loadFromMemory = config.loadFromMemory;
         [self setFillMode:config.fillMode];
     }
     return self;
@@ -110,32 +112,23 @@ static float VRClampVolume(float value) {
     [self.player pause];
     [self.player removeAllItems];
     self.looper = nil;
-    self.memLoader = nil;
+    self.memoryAssetLoader = nil;
     self.loaded = NO;
-
-    NSError *readErr = nil;
-    NSData *prewarm = [NSData dataWithContentsOfURL:manifest.videoURL
-                                            options:NSDataReadingMappedIfSafe
-                                              error:&readErr];
-    if (prewarm != nil) {
-        volatile char c = 0;
-        const uint8_t *bytes = (const uint8_t *)prewarm.bytes;
-        NSUInteger len = prewarm.length;
-        NSUInteger step = 4096;
-        for (NSUInteger i = 0; i < len; i += step) {
-            c = bytes[i];
-        }
-        (void)c;
-        // 用一个长生命周期的 loader 持有这份数据，保证页缓存常驻
-        self.memLoader = [VRMemoryAssetLoader loaderWithData:prewarm fileURL:manifest.videoURL];
-    }
 
     NSDictionary *assetOptions = @{
         AVURLAssetPreferPreciseDurationAndTimingKey: @NO,
     };
-    AVURLAsset *asset = [AVURLAsset URLAssetWithURL:manifest.videoURL options:assetOptions];
+    NSURL *assetURL = manifest.videoURL;
+    if (self.loadFromMemory) {
+        VRMemoryAssetLoader *loader = [VRMemoryAssetLoader loaderWithFileURL:manifest.videoURL
+                                                                       error:error];
+        if (loader == nil) return NO;
+        self.memoryAssetLoader = loader;
+        assetURL = loader.assetURL;
+    }
+    AVURLAsset *asset = [AVURLAsset URLAssetWithURL:assetURL options:assetOptions];
+    [self.memoryAssetLoader attachToAsset:asset];
     AVPlayerItem *item = [AVPlayerItem playerItemWithAsset:asset];
-    item.preferredForwardBufferDuration = 0;   // 不限制缓冲，尽量多预读
 
     if (![self.player canInsertItem:item afterItem:nil]) {
         if (error != NULL) {

@@ -94,6 +94,62 @@ class WorkshopViewModel: ObservableObject {
                 self?.refreshSetupState()
             }
             .store(in: &serviceStateCancellables)
+
+        // Keep the "already installed" lookup off the card render path: a newly
+        // finished download refreshes the cached id set once, instead of every
+        // card touching the filesystem on every rebuild.
+        NotificationCenter.default.publisher(for: .workshopItemDownloaded)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.refreshInstalledState() }
+            .store(in: &serviceStateCancellables)
+
+        refreshInstalledState()
+    }
+
+    // MARK: - Installed-state cache
+    //
+    // Card views must never hit the filesystem while rendering. We keep a
+    // snapshot of which workshop ids are installed (and which installed presets
+    // still need their base wallpaper), rebuilt on a background queue whenever
+    // the library could have changed.
+
+    @Published private(set) var installedWorkshopIDs: Set<String> = []
+    @Published private(set) var presetsNeedingDependency: Set<String> = []
+
+    private let installedScanQueue = DispatchQueue(
+        label: "cn.laobamac.Mirage.workshop.installed", qos: .utility)
+
+    func refreshInstalledState() {
+        installedScanQueue.async { [weak self] in
+            guard let self else { return }
+            let directories = WallpaperLibrary.shared.allWorkshopIDDirectories()
+            var installed = Set<String>()
+            var needsDependency = Set<String>()
+            installed.reserveCapacity(directories.count)
+            for (workshopID, url) in directories {
+                installed.insert(workshopID)
+                let wallpaper = WEWallpaper.load(from: url)
+                if wallpaper.needsPresetDependency {
+                    needsDependency.insert(workshopID)
+                }
+            }
+            DispatchQueue.main.async {
+                if self.installedWorkshopIDs != installed {
+                    self.installedWorkshopIDs = installed
+                }
+                if self.presetsNeedingDependency != needsDependency {
+                    self.presetsNeedingDependency = needsDependency
+                }
+            }
+        }
+    }
+
+    func isInstalled(_ workshopId: String) -> Bool {
+        installedWorkshopIDs.contains(workshopId)
+    }
+
+    func presetNeedsDependency(_ workshopId: String) -> Bool {
+        presetsNeedingDependency.contains(workshopId)
     }
 
     // MARK: - Setup Check

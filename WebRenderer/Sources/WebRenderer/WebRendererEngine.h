@@ -14,6 +14,7 @@ typedef struct {
     BOOL enableAudioPlayback;        // allow media autoplay with sound
     float initialVolume;             // master volume 0..1 (applied via "audio" property)
     int  frameRate;                  // target fps (0 or ≥60 ⇒ no throttle)
+    BOOL loadFromMemory;             // cache wallpaper resource bytes for process lifetime
     NSString *_Nullable userAgent;   // nil ⇒ Chrome-on-mac default
     NSArray<NSString *> *_Nullable assetOverlayDirectories;
 } WREngineConfig;
@@ -35,13 +36,15 @@ typedef struct {
 - (instancetype)initWithFrame:(NSRect)frame config:(WREngineConfig)config;
 
 @property (nonatomic, strong, readonly) WKWebView *webView;
+/// Called when page listener demand changes. The value is false while paused.
+@property (nonatomic, copy, nullable) void (^audioSpectrumDemandHandler)(BOOL needed);
 
 // Load via we-wallpaper://wallpaper/<entry> (served by WRURLSchemeHandler).
 - (void)openWallpaper:(WRManifest *)manifest;
 
 // wallpaperPropertyListener.applyUserProperties({key: {value: ...}}).
 - (void)applyUserProperty:(NSString *)key value:(id)value;
-- (void)applyAllUserProperties;
+- (void)applyUserProperties:(NSDictionary<NSString *, id> *)properties generation:(NSString *)generation;
 
 // Freezes page animation clocks, timers, CSS animations and playing media, then
 // calls wallpaperPropertyListener.setPaused (the Wallpaper Engine contract).
@@ -57,6 +60,7 @@ typedef struct {
 
 - (void)startAudioSpectrum;
 - (void)stopAudioSpectrum;
+- (void)pushAudioSpectrum:(NSArray<NSNumber *> *)spectrum;
 
 @end
 

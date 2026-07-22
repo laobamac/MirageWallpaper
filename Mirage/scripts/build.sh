@@ -10,23 +10,42 @@ PROJECT="$PROJ_DIR/Mirage Wallpaper.xcodeproj"
 SCHEME="Mirage Wallpaper"
 TARGET_ARCH="${MIRAGE_ARCH:-$(uname -m)}"
 STEAM_API_KEY="${MIRAGE_STEAM_WEB_API_KEY:-}"
+GIT_COMMIT="${MIRAGE_GIT_COMMIT:-$(git -C "$ROOT" rev-parse HEAD)}"
+BUILD_NUMBER="${MIRAGE_BUILD_NUMBER:-$(git -C "$ROOT" rev-list --count HEAD)}"
 LOCAL_SECRET="$ROOT/.secrets/steam_web_api_key"
 TEMP_XCCONFIG=""
+
+case "$TARGET_ARCH" in
+    arm64|x86_64) ;;
+    *) echo "[build] 不支持的更新架构: $TARGET_ARCH" >&2; exit 1 ;;
+esac
+
+[[ "$GIT_COMMIT" =~ ^[A-Fa-f0-9]{40}$ ]] || {
+    echo "[build] MIRAGE_GIT_COMMIT 必须是完整 Git commit SHA" >&2
+    exit 1
+}
+[[ "$BUILD_NUMBER" =~ ^[1-9][0-9]*$ ]] || {
+    echo "[build] MIRAGE_BUILD_NUMBER 必须是正整数" >&2
+    exit 1
+}
 
 if [ -z "$STEAM_API_KEY" ] && [ -f "$LOCAL_SECRET" ]; then
     IFS= read -r STEAM_API_KEY < "$LOCAL_SECRET"
 fi
 
 XCCONFIG_ARGS=()
+TEMP_XCCONFIG="$(mktemp -t mirage-build-settings)"
+chmod 600 "$TEMP_XCCONFIG"
+printf 'CURRENT_PROJECT_VERSION = %s\n' "$BUILD_NUMBER" >> "$TEMP_XCCONFIG"
+printf 'MIRAGE_GIT_COMMIT = %s\n' "$GIT_COMMIT" >> "$TEMP_XCCONFIG"
+printf 'MIRAGE_UPDATE_ARCH = %s\n' "$TARGET_ARCH" >> "$TEMP_XCCONFIG"
+XCCONFIG_ARGS=(-xcconfig "$TEMP_XCCONFIG")
 if [ -n "$STEAM_API_KEY" ]; then
     [[ "$STEAM_API_KEY" =~ ^[A-Fa-f0-9]{32}$ ]] || {
         echo "[build] Steam Web API Key 必须是 32 位十六进制字符" >&2
         exit 1
     }
-    TEMP_XCCONFIG="$(mktemp -t mirage-secrets)"
-    chmod 600 "$TEMP_XCCONFIG"
-    printf 'MIRAGE_STEAM_WEB_API_KEY = %s\n' "$STEAM_API_KEY" > "$TEMP_XCCONFIG"
-    XCCONFIG_ARGS=(-xcconfig "$TEMP_XCCONFIG")
+    printf 'MIRAGE_STEAM_WEB_API_KEY = %s\n' "$STEAM_API_KEY" >> "$TEMP_XCCONFIG"
 else
     echo "[build] 未提供内置 Steam Web API Key；App 仍可构建，用户需在设置中填写自己的 Key" >&2
 fi

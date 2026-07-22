@@ -3,6 +3,9 @@ module;
 #include <rstd/macro.hpp>
 #include "Utils/StringUtil.h"
 
+#include <mutex>
+#include <unordered_map>
+
 module sr.pkg.parse;
 import sr.json;
 import sr.spec_texs;
@@ -1888,6 +1891,59 @@ void MaybeRecordCompile(std::string_view scene_id, std::span<const WPShaderUnit>
     }
 }
 
+struct ProcessShaderCacheEntry {
+    std::vector<WPShaderUnit> units;
+    std::vector<ShaderCode>   codes;
+    std::uint64_t             last_use { 0 };
+};
+
+std::mutex g_process_shader_cache_mutex;
+std::unordered_map<std::string, ProcessShaderCacheEntry> g_process_shader_cache;
+std::uint64_t g_process_shader_cache_clock { 0 };
+constexpr std::size_t kMaxProcessShaderCacheEntries = 128;
+
+std::string ProcessShaderCacheKey(std::span<const WPShaderUnit> units,
+                                  const WPShaderInfo* shader_info,
+                                  std::span<const WPShaderTexInfo> texs) {
+    // BuildShaderRecord contains raw per-stage sources, combo values and
+    // texture-component configuration. Salt it independently from the disk
+    // SPIR-V format so either cache can evolve without accepting stale data.
+    std::string material { "SceneRenderer-process-shader-v1\n" };
+    material += Dump(BuildShaderRecord({}, units, shader_info, texs));
+    return utils::genSha1(material);
+}
+
+bool LoadProcessShaderCache(std::string_view key, std::span<WPShaderUnit> units,
+                            std::vector<ShaderCode>& codes) {
+    std::lock_guard lock(g_process_shader_cache_mutex);
+    auto it = g_process_shader_cache.find(std::string(key));
+    if (it == g_process_shader_cache.end() || it->second.units.size() != units.size()) return false;
+    std::copy(it->second.units.begin(), it->second.units.end(), units.begin());
+    codes               = it->second.codes;
+    it->second.last_use = ++g_process_shader_cache_clock;
+    return true;
+}
+
+void SaveProcessShaderCache(std::string key, std::span<const WPShaderUnit> units,
+                            const std::vector<ShaderCode>& codes) {
+    std::lock_guard lock(g_process_shader_cache_mutex);
+    if (g_process_shader_cache.size() >= kMaxProcessShaderCacheEntries &&
+        ! g_process_shader_cache.contains(key)) {
+        auto oldest = std::min_element(
+            g_process_shader_cache.begin(),
+            g_process_shader_cache.end(),
+            [](const auto& lhs, const auto& rhs) { return lhs.second.last_use < rhs.second.last_use; });
+        if (oldest != g_process_shader_cache.end()) g_process_shader_cache.erase(oldest);
+    }
+    g_process_shader_cache.insert_or_assign(
+        std::move(key),
+        ProcessShaderCacheEntry {
+            .units    = std::vector<WPShaderUnit>(units.begin(), units.end()),
+            .codes    = codes,
+            .last_use = ++g_process_shader_cache_clock,
+        });
+}
+
 } // namespace
 
 bool WPShaderParser::CompileToSpv(std::string_view scene_id, std::span<WPShaderUnit> units,
@@ -1895,6 +1951,9 @@ bool WPShaderParser::CompileToSpv(std::string_view scene_id, std::span<WPShaderU
                                   WPShaderInfo*                    shader_info,
                                   std::span<const WPShaderTexInfo> texs) {
     MaybeRecordCompile(scene_id, units, shader_info, texs);
+
+    auto process_cache_key = ProcessShaderCacheKey(units, shader_info, texs);
+    if (LoadProcessShaderCache(process_cache_key, units, codes)) return true;
 
     std::for_each(units.begin(), units.end(), [shader_info](auto& unit) {
         unit.src = Preprocessor(unit.src, unit.stage, shader_info->combos, unit.preprocess_info);
@@ -1991,10 +2050,13 @@ bool WPShaderParser::CompileToSpv(std::string_view scene_id, std::span<WPShaderU
                 ::SaveShaderToFile(codes, *cache_file);
             }
         }
+        SaveProcessShaderCache(std::move(process_cache_key), units, codes);
         return true;
 
     } else {
-        return compile(units, codes);
+        if (! compile(units, codes)) return false;
+        SaveProcessShaderCache(std::move(process_cache_key), units, codes);
+        return true;
     }
 }
 

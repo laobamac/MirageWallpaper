@@ -20,6 +20,7 @@ typedef struct {
     float initialVolume;
     BOOL muted;
     BOOL autoplay;
+    BOOL loadFromMemory;
 } VRVideoEngineConfig;
 
 @interface VRVideoRendererEngine : NSView

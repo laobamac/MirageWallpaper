@@ -10,13 +10,10 @@ using namespace std::chrono;
 
 FrameTimer::FrameTimer(std::function<void()> cb)
     : m_callback(cb), m_frame_busy_count(0), m_timer([this]() {
-          microseconds wait_time = m_frametime.load();
-          auto         ideatime  = m_ideatime.load();
-          wait_time              = wait_time > ideatime ? wait_time / 2 : ideatime;
-          m_timer.SetInterval(wait_time);
-
-          if (m_callback && m_frame_busy_count <= 3) {
-              m_frame_busy_count++;
+          i32 expected = 0;
+          if (m_callback &&
+              m_frame_busy_count.compare_exchange_strong(expected, 1,
+                                                         std::memory_order_acq_rel)) {
               m_callback();
           }
       }) {
@@ -45,9 +42,11 @@ void FrameTimer::UpdateFrametime() {
 }
 
 void FrameTimer::SetRequiredFps(u16 value) {
+    if (value == 0) value = 1;
     m_req_fps             = value;
     microseconds ideatime = microseconds(1'000'000 / m_req_fps);
     m_ideatime            = ideatime;
+    m_timer.SetInterval(ideatime);
     for (usize i = 0; i < FrameTimer::FRAMETIME_QUEUE_SIZE; i++) {
         AddFrametime(ideatime);
     }
@@ -67,12 +66,7 @@ void FrameTimer::FrameEnd() {
     AddFrametime(duration_cast<microseconds>(now - m_clock));
     UpdateFrametime();
 
-    i32 expected = m_frame_busy_count.load();
-    while (expected > 0) {
-        if (m_frame_busy_count.compare_exchange_weak(expected, expected - 1)) {
-            break;
-        }
-    }
+    m_frame_busy_count.store(0, std::memory_order_release);
 }
 
 void FrameTimer::SetCallback(const std::function<void()>& cb) {

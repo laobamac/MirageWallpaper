@@ -123,7 +123,7 @@ struct PropertyRow: View {
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
-                Slider(
+                MirageSlider(
                     value: Binding(
                         get: { currentValue.doubleValue },
                         set: { newVal in
@@ -146,8 +146,8 @@ struct PropertyRow: View {
                 labelView(lineLimit: 2, expand: false)
                 Spacer()
                 Picker("", selection: Binding(
-                    get: { currentValue.stringValue },
-                    set: { wallpaperViewModel.setProperty(key: key, value: .string($0)) })) {
+                    get: { property.normalizedComboValue(currentValue) },
+                    set: { wallpaperViewModel.setProperty(key: key, value: $0) })) {
                     ForEach(visibleOptions, id: \.value) { opt in
                         Text(WELocalization.resolve(opt.label)).tag(opt.value)
                     }

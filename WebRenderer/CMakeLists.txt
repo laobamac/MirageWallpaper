@@ -6,7 +6,7 @@ cmake_minimum_required(VERSION 3.20)
 
 project(WebRenderer
     VERSION 0.1.0
-    LANGUAGES CXX OBJCXX)
+    LANGUAGES CXX OBJC OBJCXX)
 
 set(WEBRENDERER_VERSION 0.1.0)
 
@@ -24,7 +24,8 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 # All ObjC/ObjC++ sources are written for ARC.
-add_compile_options($<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
+add_compile_options($<$<COMPILE_LANGUAGE:OBJC>:-fobjc-arc>
+                    $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
 add_link_options($<$<LINK_LANGUAGE:OBJCXX>:-fobjc-arc>)
 
 find_library(COCOA_FRAMEWORK        Cocoa            REQUIRED)

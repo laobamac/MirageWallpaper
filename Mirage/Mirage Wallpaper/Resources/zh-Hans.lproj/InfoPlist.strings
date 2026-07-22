@@ -1,0 +1,6 @@
+/*
+ Mirage Wallpaper
+ Copyright © 2026 王孝慈. All rights reserved.
+*/
+
+"NSAudioCaptureUsageDescription" = "Mirage 会采集系统音频，以驱动音频响应式壁纸。";

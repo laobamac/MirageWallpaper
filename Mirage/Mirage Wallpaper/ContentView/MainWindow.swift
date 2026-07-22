@@ -19,14 +19,14 @@ class MainWindowController: NSWindowController, NSWindowDelegate {
     
     override init(window: NSWindow?) {
         let win = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1029, height: 669),
+            contentRect: NSRect(x: 0, y: 0, width: 1000, height: 640),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered, defer: false)
         win.isRestorable = false
         super.init(window: win)
         self.window.delegate = self
         self.window.isReleasedWhenClosed = false
-        self.window.title = "Mirage \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0")"
+        refreshLocalizedTitle()
         self.window.titlebarAppearsTransparent = true
         self.window.setFrameAutosaveName("MainWindow")
         self.window.isMovableByWindowBackground = true
@@ -64,10 +64,10 @@ class MainWindowController: NSWindowController, NSWindowDelegate {
     
     func windowWillClose(_ notification: Notification) {
         AppDelegate.shared.contentViewModel.isStaging = false
-        if !AppDelegate.shared.settingsWindow.isVisible {
-            DispatchQueue.main.async {
-                NSApp.setActivationPolicy(.accessory)
-            }
+        // The settings panel is now a sheet hosted by this window, so it can no
+        // longer be visible on its own once the main window closes.
+        DispatchQueue.main.async {
+            NSApp.setActivationPolicy(.accessory)
         }
     }
     
@@ -80,5 +80,13 @@ class MainWindowController: NSWindowController, NSWindowDelegate {
         DispatchQueue.main.async {
             AppDelegate.shared.contentViewModel.isStaging = true
         }
+    }
+
+    func refreshLocalizedTitle() {
+        // The brand name "Mirage" is never localized. Build the title from a
+        // literal so it stays "Mirage" in every language even if the string
+        // generator re-harvests the "Mirage" literal into the localization table.
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
+        window?.title = "Mirage \(version)"
     }
 }

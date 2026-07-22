@@ -11,38 +11,55 @@ final class FavoritesManager {
 
     private let key = "FavoriteWallpapers"
 
-    private var ids: Set<String> {
-        get {
-            Set(UserDefaults.standard.stringArray(forKey: key) ?? [])
-        }
-        set {
-            UserDefaults.standard.set(Array(newValue), forKey: key)
-        }
+    // Guards `ids` so the wallpaper filtering pipeline can read favourites off
+    // the main thread while the UI mutates them.
+    private let lock = NSLock()
+    private var ids: Set<String>
+
+    private init() {
+        ids = Set(UserDefaults.standard.stringArray(forKey: key) ?? [])
+    }
+
+    private func persist() {
+        UserDefaults.standard.set(Array(ids), forKey: key)
     }
 
     func isFavorite(_ id: String) -> Bool {
-        ids.contains(id)
+        lock.lock()
+        defer { lock.unlock() }
+        return ids.contains(id)
+    }
+
+    /// Immutable copy for use inside the background filtering pipeline, so it
+    /// does not take the lock once per wallpaper.
+    func snapshot() -> Set<String> {
+        lock.lock()
+        defer { lock.unlock() }
+        return ids
     }
 
     func toggle(_ id: String) {
-        var current = ids
-        if current.contains(id) {
-            current.remove(id)
+        lock.lock()
+        if ids.contains(id) {
+            ids.remove(id)
         } else {
-            current.insert(id)
+            ids.insert(id)
         }
-        ids = current
+        persist()
+        lock.unlock()
     }
 
     func add(_ id: String) {
-        var current = ids
-        current.insert(id)
-        ids = current
+        lock.lock()
+        ids.insert(id)
+        persist()
+        lock.unlock()
     }
 
     func remove(_ id: String) {
-        var current = ids
-        current.remove(id)
-        ids = current
+        lock.lock()
+        ids.remove(id)
+        persist()
+        lock.unlock()
     }
 }

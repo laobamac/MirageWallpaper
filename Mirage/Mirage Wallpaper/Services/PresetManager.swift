@@ -20,7 +20,7 @@ final class PresetManager {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.json]
         panel.nameFieldStringValue = "\(wallpaper.project.title.isEmpty ? "壁纸" : wallpaper.project.title)-预设.json"
-        panel.prompt = "导出"
+        panel.prompt = L("导出")
         panel.begin { resp in
             guard resp == .OK, let url = panel.url else { return }
             let file = PresetFile(wallpaperTitle: wallpaper.project.title, runtime: runtime)
@@ -34,7 +34,7 @@ final class PresetManager {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.json]
         panel.allowsMultipleSelection = false
-        panel.prompt = "导入"
+        panel.prompt = L("导入")
         guard panel.runModal() == .OK, let url = panel.url,
               let data = try? Data(contentsOf: url),
               let file = try? JSONDecoder().decode(PresetFile.self, from: data) else {

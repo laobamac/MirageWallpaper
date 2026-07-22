@@ -98,6 +98,7 @@ public:
     void prepare(Scene&, const Device&, RenderingResources&) override;
     void execute(const Device&, RenderingResources&) override;
     void destory(const Device&, RenderingResources&) override;
+    void prepareFrameData(RenderingResources&) override;
     bool supportsRenderScope() const override;
     bool canJoinRenderScopeAfter(const VulkanPass& previous) const override;
     void prepareRenderScopeDraw(RenderingResources&) override;

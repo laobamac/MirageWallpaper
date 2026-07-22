@@ -58,9 +58,23 @@ std::string RootedComponentPath(RstdPath path) {
 std::string PkgLookupKey(RstdPath path) { return LowerPath(RootedComponentPath(path)); }
 } // namespace
 
-std::unique_ptr<WPPkgFs> WPPkgFs::CreatePkgFs(std::string_view pkgpath) {
-    auto ppkg = fs::CreateCBinaryStream(pkgpath);
-    if (! ppkg) return nullptr;
+std::unique_ptr<WPPkgFs> WPPkgFs::CreatePkgFs(std::string_view pkgpath,
+                                              bool load_from_memory) {
+    std::shared_ptr<std::vector<uint8_t>> memory_data;
+    std::shared_ptr<IBinaryStream> ppkg;
+    if (load_from_memory) {
+        auto disk = fs::CreateCBinaryStream(pkgpath);
+        if (! disk || disk->Size() < 0) return nullptr;
+        memory_data = std::make_shared<std::vector<uint8_t>>((usize)disk->Size());
+        if (disk->Read(memory_data->data(), memory_data->size()) != memory_data->size()) {
+            return nullptr;
+        }
+        ppkg = std::make_shared<SharedMemBinaryStream>(memory_data);
+        rstd_info("loaded pkg into memory: {} ({} bytes)", pkgpath, memory_data->size());
+    } else {
+        ppkg = fs::CreateCBinaryStream(pkgpath);
+        if (! ppkg) return nullptr;
+    }
 
     auto& pkg       = *ppkg;
     auto  maybe_ver = ReadSizedString(pkg, 64);
@@ -82,6 +96,7 @@ std::unique_ptr<WPPkgFs> WPPkgFs::CreatePkgFs(std::string_view pkgpath) {
     }
     auto pkgfs           = std::unique_ptr<WPPkgFs>(new WPPkgFs());
     pkgfs->m_pkgPath     = pkgpath;
+    pkgfs->m_pkgData     = std::move(memory_data);
     pkgfs->m_pkg_version = std::move(ver);
     idx headerSize       = pkg.Tell();
     for (auto& el : pkgfiles) {
@@ -94,10 +109,14 @@ std::unique_ptr<WPPkgFs> WPPkgFs::CreatePkgFs(std::string_view pkgpath) {
 bool WPPkgFs::Contains(RstdPath path) const { return m_files.count(PkgLookupKey(path)) > 0; }
 
 std::shared_ptr<IBinaryStream> WPPkgFs::Open(RstdPath path) {
-    auto pkg = fs::CreateCBinaryStream(m_pkgPath);
-    if (! pkg) return nullptr;
     auto it = m_files.find(PkgLookupKey(path));
     if (it != m_files.end()) {
+        if (m_pkgData) {
+            return std::make_shared<SharedMemBinaryStream>(
+                m_pkgData, it->second.offset, it->second.length);
+        }
+        auto pkg = fs::CreateCBinaryStream(m_pkgPath);
+        if (! pkg) return nullptr;
         return std::make_shared<LimitedBinaryStream>(pkg, it->second.offset, it->second.length);
     }
     return nullptr;

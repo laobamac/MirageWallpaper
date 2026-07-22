@@ -220,8 +220,11 @@ void ParticleSubSystem::Warmup() {
 }
 
 void ParticleSubSystem::Advance(double frame_time, bool update_mesh) {
-    double emitter_time    = frame_time * m_rate;
-    double simulation_time = frame_time;
+    // WE's particle instance `rate` is the simulation-rate factor, while
+    // `count` is the emission-rate factor. Advance every time-based part of
+    // the subsystem with the same scaled delta so emission, lifetime,
+    // operators and sprite animation stay synchronized.
+    double simulation_time = frame_time * m_rate;
     m_time += simulation_time;
 
     // Most particle systems neither consume the cursor nor transform a
@@ -335,7 +338,7 @@ void ParticleSubSystem::Advance(double frame_time, bool update_mesh) {
                 emittOp(inst->ParticlesVec(),
                         m_initializers,
                         m_maxcount,
-                        emitter_time,
+                        simulation_time,
                         audio_signal,
                         std::span<const ParticleControlpoint> { m_controlpoints });
             }

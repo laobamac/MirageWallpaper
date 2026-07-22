@@ -281,6 +281,7 @@ public:
     ImportedTextureProvider()          = default;
     virtual ~ImportedTextureProvider() = default;
 
+    virtual std::string ResolveImportedTextureKey(const TextureRequest&) const = 0;
     virtual std::shared_ptr<Image> ParseImportedTexture(const TextureRequest&) const = 0;
 };
 
@@ -290,10 +291,13 @@ public:
                                     IImageParser*              image_parser)
         : m_render_scene(&render_scene), m_image_parser(image_parser) {}
 
+    std::string ResolveImportedTextureKey(const TextureRequest& request) const override {
+        return ResolveImportedTextureName(*m_render_scene, request).value_or(request.name);
+    }
+
     std::shared_ptr<Image> ParseImportedTexture(const TextureRequest& request) const override {
         if (m_image_parser == nullptr) return nullptr;
-        auto name = ResolveImportedTextureName(*m_render_scene, request).value_or(request.name);
-        return m_image_parser->Parse(name);
+        return m_image_parser->Parse(ResolveImportedTextureKey(request));
     }
 
 private:
@@ -322,6 +326,11 @@ public:
         }
 
         if (m_imported_textures == nullptr) return std::nullopt;
+        const auto imported_key = m_imported_textures->ResolveImportedTextureKey(request);
+        if (auto cached = m_device->tex_cache().FindImported(imported_key)) {
+            m_device->tex_cache().MarkVideoTextureActive(imported_key);
+            return cached;
+        }
         auto image = m_imported_textures->ParseImportedTexture(request);
         if (! image) {
             rstd_error("parse tex \"{}\" failed", request.name);

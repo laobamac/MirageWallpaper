@@ -288,7 +288,9 @@ private:
 AudioCapture::AudioCapture() : impl_(std::make_unique<Impl>()) {}
 AudioCapture::~AudioCapture() = default;
 
-bool AudioCapture::init()           { return impl_->init(); }
+bool AudioCapture::init(bool enable_system_capture) {
+    return ! enable_system_capture || impl_->init();
+}
 void AudioCapture::uninit()         { impl_->uninit(); }
 bool AudioCapture::is_inited() const { return impl_->is_inited(); }
 bool AudioCapture::snapshot(AudioSpectrum& out) const { return impl_->snapshot(out); }

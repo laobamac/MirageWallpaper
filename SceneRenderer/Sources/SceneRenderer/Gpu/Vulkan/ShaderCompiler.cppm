@@ -40,7 +40,10 @@ struct ShaderReflected {
         unsigned    size;
         std::string name;
 
-        Map<std::string, BlockedUniform> member_map;
+        // Hashed (not tree) map: UpdateUniform probes this once per uniform per
+        // frame with a string_view; iteration order is never relied upon (the
+        // two walk sites sort their own output / only check overlaps).
+        HashMap<BlockedUniform> member_map;
     };
     std::vector<Block> blocks;
 

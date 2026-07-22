@@ -33,10 +33,12 @@ struct WallpaperArgs {
     int   fps = 60;
     float volume = 1.0f;
     BOOL  spectrum = YES;
+    BOOL  externalSpectrum = NO;
     int   screen = 0;
     int   runSeconds = 0;
     BOOL  diag = NO;
     BOOL  controlStdin = NO;
+    BOOL  loadFromMemory = NO;
     std::vector<std::string> assetOverlays;
 };
 
@@ -47,9 +49,11 @@ static void PrintUsage(const char *argv0) {
         "  --fps N                target frame rate (default 60)\n"
         "  --volume 0..1          master volume (default 1.0)\n"
         "  --no-spectrum          disable audio-spectrum capture\n"
+        "  --external-spectrum    receive spectrum from the control channel\n"
         "  --screen N             screen index to cover (default 0 = main)\n"
         "  --asset-overlay DIR    serve preset assets before base assets\n"
         "  --control-stdin        accept live JSON control commands on stdin\n"
+        "  --load-from-memory     cache wallpaper resources in memory\n"
         "  --run-seconds N        exit after N seconds (test helper)\n"
         "  --diag                 test the click-forward path (synthetic click)\n"
         "  -h, --help             show this help\n",
@@ -71,6 +75,8 @@ static BOOL ParseArgs(int argc, char **argv, WallpaperArgs &out) {
             const char *v = take(i, arg); if (!v) return false; out.volume = strtof(v, nullptr);
         } else if (strcmp(arg, "--no-spectrum") == 0) {
             out.spectrum = NO;
+        } else if (strcmp(arg, "--external-spectrum") == 0) {
+            out.externalSpectrum = YES;
         } else if (strcmp(arg, "--screen") == 0) {
             const char *v = take(i, arg); if (!v) return false; out.screen = atoi(v);
         } else if (strcmp(arg, "--asset-overlay") == 0) {
@@ -81,6 +87,8 @@ static BOOL ParseArgs(int argc, char **argv, WallpaperArgs &out) {
             out.diag = YES;
         } else if (strcmp(arg, "--control-stdin") == 0) {
             out.controlStdin = YES;
+        } else if (strcmp(arg, "--load-from-memory") == 0) {
+            out.loadFromMemory = YES;
         } else if (arg[0] == '-') {
             fprintf(stderr, "unknown option: %s\n", arg); return false;
         } else {
@@ -140,9 +148,10 @@ int main(int argc, char *argv[]) {
 
         WREngineConfig cfg = [WebRendererEngine defaultConfig];
         cfg.enableInspector = NO;
-        cfg.enableAudioSpectrum = args.spectrum;
+        cfg.enableAudioSpectrum = args.spectrum && !args.externalSpectrum;
         cfg.initialVolume = args.volume;
         cfg.frameRate = args.fps;
+        cfg.loadFromMemory = args.loadFromMemory;
         NSMutableArray<NSString *> *assetOverlays = [NSMutableArray arrayWithCapacity:args.assetOverlays.size()];
         for (const auto &path : args.assetOverlays) {
             NSString *overlay = [NSString stringWithUTF8String:path.c_str()];
@@ -152,6 +161,11 @@ int main(int argc, char *argv[]) {
 
         WebRendererEngine *engine = [[WebRendererEngine alloc] initWithFrame:screenFrame config:cfg];
         delegate.engine = engine;
+        engine.audioSpectrumDemandHandler = ^(BOOL needed) {
+            fprintf(stdout, "{\"event\":\"audio-demand\",\"needed\":%s}\n",
+                    needed ? "true" : "false");
+            fflush(stdout);
+        };
 
         WebWallpaperWindow *window = [[WebWallpaperWindow alloc]
             initWithContentRect:screenFrame
@@ -204,10 +218,20 @@ int main(int argc, char *argv[]) {
                             // WE property listener expects {key:{value:...}}.
                             [eng applyUserProperty:key value:@{@"value": value}];
                         }
+                    } else if ([name isEqualToString:@"setProperties"]) {
+                        NSDictionary *values = [cmd[@"values"] isKindOfClass:[NSDictionary class]] ? cmd[@"values"] : nil;
+                        NSString *generation = [cmd[@"generation"] isKindOfClass:[NSString class]] ? cmd[@"generation"] : @"snapshot";
+                        if (values != nil) {
+                            fprintf(stderr, "WebRenderer: received property snapshot generation=%s count=%ld\n",
+                                    generation.UTF8String ?: "snapshot", (long)values.count);
+                            [eng applyUserProperties:values generation:generation];
+                        }
                     } else if ([name isEqualToString:@"pause"]) {
                         [eng setPaused:YES];
+                        [delegate.inputForwarder setPaused:YES];
                     } else if ([name isEqualToString:@"resume"] || [name isEqualToString:@"play"]) {
                         [eng setPaused:NO];
+                        [delegate.inputForwarder setPaused:NO];
                     } else if ([name isEqualToString:@"volume"]) {
                         if ([value isKindOfClass:[NSNumber class]]) [eng setVolume:[value floatValue]];
                     } else if ([name isEqualToString:@"muted"]) {
@@ -216,6 +240,9 @@ int main(int argc, char *argv[]) {
                         }
                     } else if ([name isEqualToString:@"fps"]) {
                         if ([value isKindOfClass:[NSNumber class]]) [eng setFrameRate:[value intValue]];
+                    } else if ([name isEqualToString:@"audioSpectrum"]) {
+                        NSArray *data = [cmd[@"data"] isKindOfClass:[NSArray class]] ? cmd[@"data"] : nil;
+                        if (data.count == 128) [eng pushAudioSpectrum:data];
                     }
                 }
                 onEOF:^{

@@ -751,7 +751,7 @@ bool CustomShaderPass::canJoinRenderScopeAfter(const VulkanPass& previous) const
     return true;
 }
 
-void CustomShaderPass::prepareRenderScopeDraw(RenderingResources& rr) {
+void CustomShaderPass::prepareFrameData(RenderingResources&) {
     if (m_desc.update_op) m_desc.update_op();
 
     // Re-sync clear_value from the live scene.clearColor when this pass
@@ -764,7 +764,9 @@ void CustomShaderPass::prepareRenderScopeDraw(RenderingResources& rr) {
         m_desc.clear_value.color.float32[2] = sc[2];
         m_desc.clear_value.color.float32[3] = 1.0f;
     }
+}
 
+void CustomShaderPass::prepareRenderScopeDraw(RenderingResources& rr) {
     recordSampledImageBarriers(rr);
 }
 

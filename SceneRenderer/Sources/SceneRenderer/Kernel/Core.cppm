@@ -63,9 +63,38 @@ using Map = std::map<Key, Value, std::less<>>;
 template<class Key>
 using Set = std::set<Key, std::less<>>;
 
+// Transparent hash + equal so a string-keyed unordered_map can be probed with a
+// std::string_view (or const char*) without materialising a std::string. Used
+// for hot-path lookups where std::map's O(log n) node-chasing shows up in a
+// per-frame profile but iteration order is irrelevant.
+struct TransparentStringHash {
+    using is_transparent = void;
+    std::size_t operator()(std::string_view s) const noexcept {
+        return std::hash<std::string_view> {}(s);
+    }
+    std::size_t operator()(const std::string& s) const noexcept {
+        return std::hash<std::string_view> {}(s);
+    }
+    std::size_t operator()(const char* s) const noexcept {
+        return std::hash<std::string_view> {}(std::string_view { s });
+    }
+};
+
+template<class Value>
+using HashMap = std::unordered_map<std::string, Value, TransparentStringHash, std::equal_to<>>;
+
 template<class Key, class Value, class KeyLike, class Allocator>
 inline bool exists(const std::map<Key, Value, std::less<>, Allocator>& m,
                    const KeyLike&                                      key) noexcept {
+    auto iter = m.find(key);
+    return iter != m.end();
+}
+
+template<class Value, class KeyLike, class Allocator>
+inline bool exists(
+    const std::unordered_map<std::string, Value, TransparentStringHash, std::equal_to<>, Allocator>&
+                   m,
+    const KeyLike& key) noexcept {
     auto iter = m.find(key);
     return iter != m.end();
 }

@@ -268,6 +268,7 @@ bool GraphicsPipeline::create(const Device& device, VkRenderPass pass,
         .renderPass          = pass,
         .subpass             = m_subpass,
     };
-    VVK_CHECK_BOOL_RE(device.handle().CreateGraphicsPipeline(create, pipeline.handle));
+    VVK_CHECK_BOOL_RE(
+        device.handle().CreateGraphicsPipeline(create, pipeline.handle, device.pipeline_cache()));
     return true;
 }

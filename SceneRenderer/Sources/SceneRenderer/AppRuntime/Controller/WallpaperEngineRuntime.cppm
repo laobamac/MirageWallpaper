@@ -26,6 +26,7 @@ using RenderPassDiagnosticCallback =
 // Components are 0..=1 sRGB. Alpha is fixed at 1.0 by the host because the
 // rendered frame is always opaque.
 using ClearColorCallback = std::function<void(float r, float g, float b)>;
+using AudioDemandCallback = std::function<void(bool needed)>;
 
 struct MediaStatus {
     uint32_t    state { 0 };
@@ -49,6 +50,9 @@ struct SceneWallpaperConfig {
     FillMode                                fill_mode { FillMode::ASPECTCROP };
     float                                   speed { 1.0f };
     bool                                    graphviz { false };
+    bool                                    spectrum_enabled { true };
+    bool                                    external_spectrum { false };
+    bool                                    load_from_memory { false };
 };
 
 class SceneRuntimeController;
@@ -82,6 +86,7 @@ public:
     void setFillMode(FillMode);
     void setSpeed(float);
     void setMediaStatus(MediaStatus);
+    void setAudioSpectrum(std::array<float, 64>, std::array<float, 64>);
     void setUserPropertyRaw(std::string_view, std::string);
     void setUserPropertyJson(std::string_view, Json);
     void setOnFirstFrame(FirstFrameCallback);
@@ -92,6 +97,7 @@ public:
     // main thread after each scene is parsed, carrying the scene's
     // `general.clearcolor`. Set once before initVulkan.
     void setOnClearColor(ClearColorCallback);
+    void setOnAudioDemand(AudioDemandCallback);
 
     ExSwapchain* exSwapchain() const;
 

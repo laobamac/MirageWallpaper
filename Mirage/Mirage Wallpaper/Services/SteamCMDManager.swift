@@ -68,10 +68,14 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
         steamCMDHomeDirectory.appending(path: "Library/Application Support/Steam")
     }
 
+    var isolatedSteamCMDContentDirectory: URL {
+        isolatedSteamDataDirectory.appending(path: "steamapps/workshop/content/431960")
+    }
+
     var steamCMDContentDirectories: [URL] {
         [
             steamCMDContentDirectory,
-            isolatedSteamDataDirectory.appending(path: "steamapps/workshop/content/431960")
+            isolatedSteamCMDContentDirectory
         ]
     }
 
@@ -1212,29 +1216,29 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
     private func validateDownloadedItem(at directory: URL) -> String? {
         let projectURL = directory.appending(path: "project.json")
         guard fm.fileExists(atPath: projectURL.path) else {
-            return "下载未完成：未找到 project.json"
+            return L("下载未完成：未找到 project.json")
         }
         let wallpaper = WEWallpaper.load(from: directory)
         if wallpaper.isPreset {
             switch wallpaper.presetStatus {
             case .resolved:
                 guard fm.fileExists(atPath: wallpaper.resolvedEntryURL.path) else {
-                    return "下载内容不完整：基础壁纸缺少主文件"
+                    return L("下载内容不完整：基础壁纸缺少主文件")
                 }
                 return nil
             case .missingDependency, .invalidDependency:
                 return nil
             case .circularDependency:
-                return "预设包含循环依赖"
+                return L("预设包含循环依赖")
             case .notPreset:
                 break
             }
         }
         guard wallpaper.isValid, wallpaper.kind != .unsupported else {
-            return "下载内容无效或壁纸类型不受支持"
+            return L("下载内容无效或壁纸类型不受支持")
         }
         guard fm.fileExists(atPath: wallpaper.resolvedEntryURL.path) else {
-            return "下载内容不完整：缺少壁纸主文件"
+            return L("下载内容不完整：缺少壁纸主文件")
         }
         return nil
     }
@@ -1300,32 +1304,32 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
     private func loginFailureMessage(_ output: String, status: Int32) -> String {
         let lower = output.lowercased()
         if lower.contains("invalid password") || lower.contains("login failure") {
-            return "登录失败，请检查用户名和密码"
+            return L("登录失败，请检查用户名和密码")
         }
         if lower.contains("access denied") || lower.contains("no subscription") {
-            return "该 Steam 账号没有 Wallpaper Engine 的可用所有权"
+            return L("该 Steam 账号没有 Wallpaper Engine 的可用所有权")
         }
         if lower.contains("network") || lower.contains("connection") || lower.contains("timeout") || lower.contains("no connection") {
-            return "无法连接 Steam 登录服务，请检查网络后重试"
+            return L("无法连接 Steam 登录服务，请检查网络后重试")
         }
-        return "Steam 登录失败 (exit \(status))"
+        return L("Steam 登录失败 (exit %@)", String(status))
     }
 
     private func downloadFailureMessage(_ output: String, status: Int32, hasProject: Bool) -> String {
         let lower = output.lowercased()
         if lower.contains("no subscription") || lower.contains("access denied") {
-            return "下载被 Steam 拒绝：请确认该账号拥有 Wallpaper Engine 并有权访问此项目"
+            return L("下载被 Steam 拒绝：请确认该账号拥有 Wallpaper Engine 并有权访问此项目")
         }
         if isAuthenticationFailure(output) {
-            return "Steam 会话已失效，请重新登录后再试"
+            return L("Steam 会话已失效，请重新登录后再试")
         }
         if lower.contains("network") || lower.contains("connection") || lower.contains("timeout") || lower.contains("no connection") {
-            return "下载网络连接失败，请检查网络后重试"
+            return L("下载网络连接失败，请检查网络后重试")
         }
         if !hasProject {
-            return "下载未完成：未找到有效的 project.json (exit \(status))"
+            return L("下载未完成：未找到有效的 project.json (exit %@)", String(status))
         }
-        return "SteamCMD 未确认下载成功 (exit \(status))"
+        return L("SteamCMD 未确认下载成功 (exit %@)", String(status))
     }
 
     // MARK: - Shell helper
@@ -1526,8 +1530,8 @@ enum SteamCMDError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .downloadFailed(let message): return "SteamCMD 下载失败：\(message)"
-        case .installFailed(let message): return "SteamCMD 安装失败：\(message)"
+        case .downloadFailed(let message): return L("SteamCMD 下载失败：%@", message)
+        case .installFailed(let message): return L("SteamCMD 安装失败：%@", message)
         case .operationFailed(let message): return message
         }
     }

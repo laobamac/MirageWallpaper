@@ -67,13 +67,20 @@ float animation_frame(const SceneAnimationCurve& curve, double runtime) {
     float end   = curve_end_frame(curve);
     if (end <= 0.0f) return frame;
 
-    bool loop = curve.wraploop || curve.mode == "loop" || curve.mode == "repeat";
+    const float end_frame = end;
+    bool        loop = curve.wraploop || curve.mode == "loop" || curve.mode == "repeat";
     if (loop) {
-        frame = std::fmod(frame, static_cast<float>(end));
-        if (frame < 0.0f) frame += static_cast<float>(end);
+        frame = std::fmod(frame, end_frame);
+        if (frame < 0.0f) frame += end_frame;
         return frame;
     }
-    return std::clamp(frame, 0.0f, static_cast<float>(end));
+    if (curve.mode == "mirror") {
+        const float period = 2.0f * end_frame;
+        float       folded = std::fmod(frame, period);
+        if (folded < 0.0f) folded += period;
+        return folded <= end_frame ? folded : (period - folded);
+    }
+    return std::clamp(frame, 0.0f, end_frame);
 }
 
 float eval_segment(const SceneAnimationKey& a, const SceneAnimationKey& b, float frame) {
@@ -1130,13 +1137,19 @@ std::vector<SceneMaterialDirtyEvent> Scene::ConsumePreparedMaterialDirtyEvents()
 void Scene::TickCameraPaths() {
     if (camera_paths.empty()) return;
 
-    std::unordered_map<std::string, bool> has_enabled;
+    // Recycle the scratch containers' capacity across frames; clear() keeps the
+    // allocated buckets so a steady-state scene does no per-frame heap churn.
+    auto& has_enabled = m_camera_path_has_enabled;
+    auto& touched     = m_camera_path_touched;
+    auto& reset       = m_camera_path_reset;
+    has_enabled.clear();
+    touched.clear();
+    reset.clear();
+
     for (const auto& path : camera_paths) {
         if (path && path->enabled) has_enabled[path->camera_name] = true;
     }
 
-    std::unordered_set<std::string> touched;
-    std::unordered_set<std::string> reset;
     for (const auto& path : camera_paths) {
         if (! path || ! path->enabled) continue;
         if (path->Tick(elapsingTime)) touched.insert(path->camera_name);
