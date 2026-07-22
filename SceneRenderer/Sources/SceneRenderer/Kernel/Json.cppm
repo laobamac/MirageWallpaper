@@ -1,3 +1,6 @@
+module;
+#include <array>
+
 export module sr.json;
 import rstd.cppstd;
 export import rstd.json;

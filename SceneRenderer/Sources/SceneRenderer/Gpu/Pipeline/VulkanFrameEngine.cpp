@@ -4,7 +4,9 @@ module;
 #include "vvk/macros.hpp"
 
 #include <atomic>
+#if !defined(_WIN32)
 #include <unistd.h>
+#endif
 #include <vulkan/vulkan.h>
 
 module sr.vulkan_render;

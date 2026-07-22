@@ -182,7 +182,7 @@ class Arc : public DefaultInClass<Arc<T>, Clone> {
     constexpr Arc(ArcData<T> s): self(s) {}
 
 public:
-    USE_TRAIT(Arc)
+    USE_TRAIT_WIN(Arc)
 
     using Target       = T;
     using element_type = T;
@@ -355,8 +355,10 @@ export template<class T>
 class Weak : public DefaultInClass<Weak<T>, Clone> {
     ArcData<T> self;
 
+#if !defined(RSTD_OS_WINDOWS)
     template<typename, typename>
     friend struct rstd::Impl;
+#endif
     friend class Arc<T>;
 
     constexpr Weak(ArcData<T> s) noexcept: self(s) {}

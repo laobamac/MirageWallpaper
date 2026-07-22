@@ -37,7 +37,7 @@ struct Impl<ptr_::Pointee, ffi::OsStr> {
 /// A borrowed reference to a platform-native string.
 template<>
 struct ref<ffi::OsStr> : ref_base<ref<ffi::OsStr>, u8[], false> {
-    USE_TRAIT(ref)
+    USE_TRAIT_WIN(ref)
 
     using Target = ffi::OsStr;
 

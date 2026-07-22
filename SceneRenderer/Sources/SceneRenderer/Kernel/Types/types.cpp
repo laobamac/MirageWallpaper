@@ -1,7 +1,9 @@
 module;
 
 #include <cstdio>
+#if !defined(_WIN32)
 #include <dlfcn.h>
+#endif
 
 module sr.types;
 import rstd.cppstd;
@@ -58,18 +60,30 @@ DynamicLibrary& DynamicLibrary::operator=(DynamicLibrary&& o) noexcept {
     return *this;
 }
 bool DynamicLibrary::Open(const char* filename) {
+#if defined(_WIN32)
+    handle = static_cast<void*>(LoadLibraryA(filename));
+#else
     handle = dlopen(filename, RTLD_NOW);
+#endif
     return IsOpen();
 }
 bool DynamicLibrary::IsOpen() const { return handle != nullptr; }
 void DynamicLibrary::Close() {
     if (IsOpen()) {
+#if defined(_WIN32)
+        FreeLibrary(static_cast<HMODULE>(handle));
+#else
         dlclose(handle);
+#endif
         handle = nullptr;
     }
 }
 void* DynamicLibrary::GetSymbolAddr(const char* name) const {
+#if defined(_WIN32)
+    return reinterpret_cast<void*>(GetProcAddress(static_cast<HMODULE>(handle), name));
+#else
     return reinterpret_cast<void*>(dlsym(handle, name));
+#endif
 }
 
 } // namespace utils

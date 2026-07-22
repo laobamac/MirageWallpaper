@@ -43,7 +43,7 @@ export class Context {
     Context(Arc<Inner> inner): inner(rstd::move(inner)) {}
 
 public:
-    USE_TRAIT(Context)
+    USE_TRAIT_WIN(Context)
     Context(const Context& other): inner(other.inner.clone()) {}
     Context(Context&&) noexcept = default;
     Context& operator=(const Context& other) {

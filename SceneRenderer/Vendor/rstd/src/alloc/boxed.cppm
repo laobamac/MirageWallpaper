@@ -25,7 +25,7 @@ class Box {
     constexpr explicit Box(NonNull<T> ptr) noexcept: m_ptr(ptr) {}
 
 public:
-    USE_TRAIT(Box)
+    USE_TRAIT_WIN(Box)
 
     using Target = T;
 

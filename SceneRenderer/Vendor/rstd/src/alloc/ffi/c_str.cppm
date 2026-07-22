@@ -29,7 +29,7 @@ export class CString {
 public:
     ::alloc::boxed::Box<u8[]> inner;
 
-    USE_TRAIT(CString)
+    USE_TRAIT_WIN(CString)
 
     CString(::alloc::boxed::Box<u8[]>&& b) noexcept: inner(rstd::move(b)) {}
     CString(CString&&) noexcept;

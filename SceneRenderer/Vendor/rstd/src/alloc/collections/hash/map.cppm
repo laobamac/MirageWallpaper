@@ -174,7 +174,7 @@ class HashMap {
     }
 
 public:
-    USE_TRAIT(HashMap)
+    USE_TRAIT_WIN(HashMap)
     using IntoIter = HashMapIntoIter<K, V>;
 
     HashMap(): table(), hash_builder(), equal() {}

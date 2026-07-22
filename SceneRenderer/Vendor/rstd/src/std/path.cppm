@@ -235,7 +235,7 @@ constexpr auto Components::remaining_start() const noexcept -> usize {
 /// A borrowed reference to a filesystem path.
 template<>
 struct ref<path::Path> : ref_base<ref<path::Path>, u8[], false> {
-    USE_TRAIT(ref)
+    USE_TRAIT_WIN(ref)
 
     using Target = path::Path;
 

@@ -220,7 +220,7 @@ template<typename T>
 struct ref : ref_base<ref<T>, T, false> {
     static_assert(! mtp::is_const<T>);
 
-    USE_TRAIT(ref)
+    USE_TRAIT_WIN(ref)
 
     using Target = T;
 
@@ -233,7 +233,7 @@ template<mtp::DSTArray T>
 struct ref<T> : ref_base<ref<T>, T, false> {
     static_assert(! mtp::is_const<T>);
 
-    USE_TRAIT(ref)
+    USE_TRAIT_WIN(ref)
 
     using Target        = T;
     using value_type    = mtp::rm_ext<T>;
@@ -249,7 +249,7 @@ template<typename T>
 struct mut_ref : ref_base<mut_ref<T>, T, true> {
     static_assert(! mtp::is_const<T>);
 
-    USE_TRAIT(mut_ref)
+    USE_TRAIT_WIN(mut_ref)
 
     using Target = T;
 
@@ -263,7 +263,7 @@ template<mtp::DSTArray T>
 struct mut_ref<T> : ref_base<mut_ref<T>, T, true> {
     static_assert(! mtp::is_const<T>);
 
-    USE_TRAIT(mut_ref)
+    USE_TRAIT_WIN(mut_ref)
 
     using Target     = T;
     using value_type = mtp::rm_ext<T>;

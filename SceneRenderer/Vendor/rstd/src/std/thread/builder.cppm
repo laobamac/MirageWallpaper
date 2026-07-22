@@ -27,7 +27,7 @@ export struct Builder {
 
     Fields d;
 
-    USE_TRAIT(Builder)
+    USE_TRAIT_WIN(Builder)
 
     /// Creates a new Builder with default configuration.
     static auto make() -> Builder {

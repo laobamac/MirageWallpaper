@@ -31,7 +31,7 @@ class BufReader {
     }
 
 public:
-    USE_TRAIT(BufReader)
+    USE_TRAIT_WIN(BufReader)
 
     /// Creates a new BufReader with the specified buffer capacity.
     /// \param inner The underlying reader.
@@ -93,11 +93,13 @@ class BufWriter {
         return Ok(empty {});
     }
 
+#if !defined(RSTD_OS_WINDOWS)
     friend struct rstd::Impl<io::Write, BufWriter<W>>;
     friend struct rstd::Impl<io::Seek, BufWriter<W>>;
+#endif
 
 public:
-    USE_TRAIT(BufWriter)
+    USE_TRAIT_WIN(BufWriter)
 
     /// Creates a new BufWriter with the specified buffer capacity.
     /// \param inner The underlying writer.

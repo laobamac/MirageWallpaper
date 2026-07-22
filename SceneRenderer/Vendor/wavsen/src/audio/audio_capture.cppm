@@ -1,3 +1,6 @@
+module;
+#include <array>
+
 export module wavsen.audio:capture;
 
 import rstd.cppstd;

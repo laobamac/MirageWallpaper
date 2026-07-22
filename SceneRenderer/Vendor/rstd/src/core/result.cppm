@@ -574,8 +574,10 @@ export template<typename T, typename E>
 class Result : public detail::result_impl<T, E> {
     template<typename, typename>
     friend struct detail::result_base;
+#if !defined(RSTD_OS_WINDOWS)
     template<typename, typename>
     friend struct rstd::Impl;
+#endif
 
     using traits        = detail::result_traits<Result<T, E>>;
     using union_value_t = typename traits::union_value_t;

@@ -47,6 +47,7 @@ enum class Category : u8
 };
 
 class Error {
+public:
     detail::ErrorCode code_;
     usize             line_;
     usize             column_;
@@ -55,10 +56,10 @@ class Error {
         : code_(code), line_(line), column_(column) {}
 
     friend class detail::Parser;
+#if !defined(RSTD_OS_WINDOWS)
     template<typename, typename>
     friend struct rstd::Impl;
-
-public:
+#endif
     [[nodiscard]]
     constexpr auto line() const noexcept -> usize {
         return line_;

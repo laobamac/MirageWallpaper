@@ -84,7 +84,7 @@ export struct StdoutLock {
 /// Handle to the standard output stream.
 /// Thread-safe: concurrent writes are serialised by an internal mutex.
 export struct Stdout {
-    USE_TRAIT(Stdout)
+    USE_TRAIT_WIN(Stdout)
 
     /// Acquire a lock and return a handle whose writes are atomic.
     auto lock() -> StdoutLock { return {}; }
@@ -115,7 +115,7 @@ export struct StdinLock {
 
 /// Handle to the standard input stream.
 export struct Stdin {
-    USE_TRAIT(Stdin)
+    USE_TRAIT_WIN(Stdin)
 
     /// Locks stdin and returns a guard providing exclusive read access.
     auto lock() -> StdinLock { return {}; }

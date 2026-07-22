@@ -1,6 +1,8 @@
 module;
 
+#if !defined(_WIN32)
 #include <unistd.h>
+#endif
 
 // Vk types/enumerators/PFN typedefs flow in via `import vulkan;` (purview
 // below). vk_mem_alloc.h still needs the raw vulkan.h declarations, so we

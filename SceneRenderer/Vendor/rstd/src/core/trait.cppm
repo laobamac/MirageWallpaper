@@ -1,3 +1,5 @@
+module;
+#include <rstd/macro.hpp>
 export module rstd.core:trait;
 export import rstd.basic;
 
@@ -466,10 +468,12 @@ struct ImplBase<default_tag<A>> : ImplBase<A> {};
 // This is used as a base class for the user class, not for an external Impl.
 template<typename A>
 struct ImplBase<in_class_default_tag<A>> {
+#if !defined(RSTD_OS_WINDOWS)
     template<typename, typename>
     friend struct Impl;
+#endif
 
-private:
+public:
     auto self() -> A& { return *static_cast<A*>(this); }
     auto self() const -> A const& { return *static_cast<A const*>(this); }
 };

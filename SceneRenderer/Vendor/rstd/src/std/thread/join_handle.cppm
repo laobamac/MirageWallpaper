@@ -17,7 +17,7 @@ class JoinHandle {
     JoinHandle(lifecycle::JoinInner<T> inner): inner(rstd::move(inner)) {}
 
 public:
-    USE_TRAIT(JoinHandle)
+    USE_TRAIT_WIN(JoinHandle)
 
     using ret_t = mtp::void_empty_t<T>;
 

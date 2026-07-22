@@ -1,6 +1,8 @@
 module;
 
+#if !defined(_WIN32)
 #include <unistd.h>
+#endif
 
 #define VK_USE_PLATFORM_METAL_EXT
 #include <rstd/macro.hpp>

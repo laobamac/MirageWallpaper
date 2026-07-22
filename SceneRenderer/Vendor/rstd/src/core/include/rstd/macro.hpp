@@ -52,6 +52,18 @@
     RSTD_DETAIL_PARTIAL_EQ_OPERATORS() \
     RSTD_DETAIL_DEREF_OPERATORS()
 
+// On Windows with Clang modules, friend declarations of Impl across module
+// partitions cause "attached to named module" errors. USE_TRAIT_WIN provides
+// the same operators without the problematic friend declaration.
+#if defined(RSTD_OS_WINDOWS)
+#define USE_TRAIT_WIN(Class)           \
+    using Self = Class;                \
+    RSTD_DETAIL_PARTIAL_EQ_OPERATORS() \
+    RSTD_DETAIL_DEREF_OPERATORS()
+#else
+#define USE_TRAIT_WIN(Class) USE_TRAIT(Class)
+#endif
+
 #define RSTD_STR(a, ...)   #a
 #define RSTD_FIRST(a, ...) a
 #define RSTD_REST(a, ...)  __VA_ARGS__

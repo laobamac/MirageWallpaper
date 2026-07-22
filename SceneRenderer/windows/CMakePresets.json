@@ -1,0 +1,64 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 28, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "_win-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CMAKE_CXX_STANDARD": "20"
+      }
+    },
+    {
+      "name": "windows-clang-release",
+      "displayName": "Windows · Clang-cl · Release (x64)",
+      "description": "SceneRenderer engine + wallpaper host for Windows (Clang-cl + Ninja).",
+      "inherits": "_win-base",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_COMPILER": "clang-cl",
+        "CMAKE_CXX_COMPILER": "clang-cl",
+        "VCPKG_TARGET_TRIPLET": "x64-windows"
+      }
+    },
+    {
+      "name": "windows-clang-debug",
+      "displayName": "Windows · Clang-cl · Debug (x64)",
+      "inherits": "windows-clang-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "windows-msvc-release",
+      "displayName": "Windows · MSVC · Release (x64)",
+      "description": "SceneRenderer engine + wallpaper host for Windows (MSVC + Ninja).",
+      "inherits": "_win-base",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_COMPILER": "cl",
+        "CMAKE_CXX_COMPILER": "cl",
+        "VCPKG_TARGET_TRIPLET": "x64-windows"
+      }
+    },
+    {
+      "name": "windows-msvc-debug",
+      "displayName": "Windows · MSVC · Debug (x64)",
+      "inherits": "windows-msvc-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "windows-clang-release", "configurePreset": "windows-clang-release" },
+    { "name": "windows-clang-debug",   "configurePreset": "windows-clang-debug" },
+    { "name": "windows-msvc-release",  "configurePreset": "windows-msvc-release" },
+    { "name": "windows-msvc-debug",    "configurePreset": "windows-msvc-debug" }
+  ]
+}

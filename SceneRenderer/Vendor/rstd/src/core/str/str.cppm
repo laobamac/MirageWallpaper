@@ -41,7 +41,7 @@ struct Impl<ptr_::Pointee, str_::Str> {
 template<>
 struct ref<str_::Str> : ref_base<ref<str_::Str>, u8[], false> {
 public:
-    USE_TRAIT(ref)
+    USE_TRAIT_WIN(ref)
 
     using Target = str_::Str;
 

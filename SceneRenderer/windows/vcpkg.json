@@ -1,0 +1,14 @@
+{
+  "name": "scenerenderer-win",
+  "version-string": "0.1.8",
+  "description": "SceneRenderer Windows build dependencies",
+  "dependencies": [
+    "vulkan",
+    "vulkan-headers",
+    "ffmpeg",
+    "freetype",
+    "lz4",
+    "fontconfig",
+    "pkgconf"
+  ]
+}

@@ -461,7 +461,9 @@ export class PollWake {
 
     explicit PollWake(sync::Arc<PollWakeState> state): m_state(rstd::move(state)) {}
 
+#if !defined(RSTD_OS_WINDOWS)
     friend class Poll;
+#endif
 
 public:
     PollWake(const PollWake&)                        = delete;
@@ -507,6 +509,9 @@ struct PollTimer {
 };
 
 export class PollState {
+#if defined(RSTD_OS_WINDOWS)
+public:
+#endif
     PollStateKind         m_kind { PollStateKind::Closed };
     sys::fd::OwnedFd      m_poll_fd {};
     sys::fd::OwnedFd      m_wake_fd {};
@@ -534,7 +539,9 @@ export class PollState {
 #endif
     }
 
+#if !defined(RSTD_OS_WINDOWS)
     friend class Poll;
+#endif
 
 public:
     PollState()                                        = default;
@@ -578,12 +585,14 @@ export class Poll {
 #endif
     }
 
+#if !defined(RSTD_OS_WINDOWS)
     static auto duration_to_timespec(time::Duration duration) noexcept -> libc::timespec_t {
         return libc::timespec_t {
             .tv_sec  = static_cast<libc::time_t>(duration.as_secs()),
             .tv_nsec = static_cast<long>(duration.subsec_nanos()),
         };
     }
+#endif
 
     static auto backend_interest(Interest interest) noexcept -> u32 {
         auto events = u32 {};

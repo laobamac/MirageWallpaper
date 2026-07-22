@@ -15,11 +15,11 @@ namespace rstd::io
 /// Supported inner types: `Vec<u8>` (R+W+Seek+BufRead), `slice<u8>` (R+Seek+BufRead).
 export template<typename T>
 class Cursor {
+public:
     T   inner_;
     u64 pos_ = 0;
 
-public:
-    USE_TRAIT(Cursor)
+    USE_TRAIT_WIN(Cursor)
 
     explicit Cursor(T inner) noexcept: inner_(rstd::move(inner)), pos_(0) {}
 

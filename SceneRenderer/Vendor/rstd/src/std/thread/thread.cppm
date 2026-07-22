@@ -23,10 +23,10 @@ namespace sys::thread::thread_name_string
 // Like a `String` it's guaranteed UTF-8 and like a `CString` it's null terminated.
 // (C++ side we assume std::string is UTF-8 by convention, and CString validates no interior '\0')
 class ThreadNameString {
+public:
     ffi::CString inner;
 
-public:
-    USE_TRAIT(ThreadNameString)
+    USE_TRAIT_WIN(ThreadNameString)
 
     explicit ThreadNameString(ffi::CString c): inner(rstd::move(c)) {}
 
@@ -80,7 +80,7 @@ export class Thread : public DefaultInClass<Thread, clone::Clone> {
     explicit Thread(Arc<Inner> inner): inner(rstd::move(inner)) {}
 
 public:
-    USE_TRAIT(Thread)
+    USE_TRAIT_WIN(Thread)
 
     Thread(const Thread& other) noexcept: inner(as<clone::Clone>(other.inner).clone()) {}
     Thread(Thread&&) noexcept = default;

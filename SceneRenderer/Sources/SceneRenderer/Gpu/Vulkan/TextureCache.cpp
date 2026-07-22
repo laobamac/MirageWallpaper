@@ -11,7 +11,9 @@ module;
 #include <cmath>
 #include <limits>
 #include <unordered_set>
+#if !defined(_WIN32)
 #include <unistd.h>
+#endif
 
 module sr.vulkan;
 import sr.core;

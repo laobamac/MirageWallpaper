@@ -43,12 +43,12 @@ export struct Chars : rstd::DefaultInClass<Chars, rstd::iter::Iterator> {
 
 /// A UTF-8 encoded, growable string, analogous to Rust's `String`.
 export class String {
+public:
     Vec<u8> vec;
 
     constexpr String(Vec<u8>&& p): vec(rstd::move(p)) {}
 
-public:
-    USE_TRAIT(String)
+    USE_TRAIT_WIN(String)
     constexpr String()                 = default;
     constexpr String(Self&&) noexcept  = default;
     String& operator=(Self&&) noexcept = default;

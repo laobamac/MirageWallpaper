@@ -32,3 +32,4 @@ cmake-build-debug
 .secrets/
 xcuserdata
 .reasonix
+docs

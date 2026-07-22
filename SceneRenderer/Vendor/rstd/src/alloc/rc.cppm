@@ -488,7 +488,7 @@ class Rc final : public RcAdaptor<T> {
     explicit Rc(inner_t* p) noexcept: RcAdaptor<T>(p) {}
 
 public:
-    USE_TRAIT(Rc)
+    USE_TRAIT_WIN(Rc)
 
     using Target = mtp::rm_const<T>;
 

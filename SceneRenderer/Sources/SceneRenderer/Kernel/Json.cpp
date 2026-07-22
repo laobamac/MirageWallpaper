@@ -1,5 +1,6 @@
 module;
 
+#include <array>
 #include <rstd/macro.hpp>
 
 module sr.json;

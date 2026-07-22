@@ -25,7 +25,7 @@ class MutexGuard {
     auto raw_lock() noexcept -> sys_mutex_t& { return *m_lock; }
 
 public:
-    USE_TRAIT(MutexGuard)
+    USE_TRAIT_WIN(MutexGuard)
 
     using Target = T;
 

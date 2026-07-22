@@ -37,7 +37,7 @@ struct Impl<ptr_::Pointee, CStr> {
 
 template<>
 struct ref<CStr> : ref_base<ref<CStr>, CStr, false> {
-    USE_TRAIT(ref)
+    USE_TRAIT_WIN(ref)
 
     using Target = CStr;
 
@@ -55,7 +55,7 @@ struct ref<CStr> : ref_base<ref<CStr>, CStr, false> {
 
 template<>
 struct mut_ref<CStr> : ref_base<mut_ref<CStr>, CStr, true> {
-    USE_TRAIT(mut_ref)
+    USE_TRAIT_WIN(mut_ref)
 
     using Target = CStr;
 

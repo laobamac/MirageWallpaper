@@ -93,7 +93,7 @@ class Vec {
     constexpr explicit Vec(RawVec<T> buf, usize len): m_buf(buf), m_len(len) {}
 
 public:
-    USE_TRAIT(Vec)
+    USE_TRAIT_WIN(Vec)
 
     using Target = T[];
 

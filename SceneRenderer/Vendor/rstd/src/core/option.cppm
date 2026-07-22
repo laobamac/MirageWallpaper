@@ -426,7 +426,7 @@ class Option : public detail::option_adapter<T> {
     }
 
 public:
-    USE_TRAIT(Option)
+    USE_TRAIT_WIN(Option)
 
     using value_type = T;
 

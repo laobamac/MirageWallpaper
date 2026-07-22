@@ -59,7 +59,20 @@ struct NonZero<T> {
     Impl<ZeroablePrimitive, T>::NonZeroInner val;
 
     constexpr static auto make(T n) noexcept -> Option<Self> {
-        return rstd::bit_cast<Option<Self>>(n);
+        if constexpr (sizeof(Option<Self>) == sizeof(T)) {
+            return rstd::bit_cast<Option<Self>>(n);
+        } else {
+            // Windows MSVC ABI: [[no_unique_address]] not fully supported,
+            // Option<NonZero<T>> is larger than T. Fall back to explicit
+            // construction.
+            if (n == T{0}) {
+                return rstd::None();
+            } else {
+                Self s{};
+                s.val = typename Impl<ZeroablePrimitive, T>::NonZeroInner{n};
+                return rstd::Some(rstd::move(s));
+            }
+        }
     }
 
     constexpr static auto make_unchecked(T n) -> Self {
@@ -71,8 +84,11 @@ struct NonZero<T> {
     }
 
     constexpr auto get() const noexcept -> T {
-        static_assert(sizeof(T) == sizeof(Self));
-        return rstd::bit_cast<T>(*this);
+        if constexpr (sizeof(T) == sizeof(Self)) {
+            return rstd::bit_cast<T>(*this);
+        } else {
+            return static_cast<T>(val.get());
+        }
     }
     friend constexpr bool operator==(NonZero<T> a, NonZero<T> b) noexcept { return a.val == b.val; }
 };
@@ -99,5 +115,10 @@ ImplNonZero(NonZeroIsizeInner, isize);
 namespace rstd
 {
 static_assert(sizeof(rstd::num::nonzero::NonZero<u64>) == sizeof(u64));
+// NOTE: On MSVC ABI (including Clang on Windows), [[no_unique_address]]
+// is not fully supported. zero_niche_option_storage may be larger than T.
+// This niche-size assertion only holds on LP64 ABIs (macOS/Linux).
+#if !defined(_MSC_VER) && !(defined(__clang__) && defined(_WIN32))
 static_assert(sizeof(rstd::option::Option<rstd::num::nonzero::NonZero<u64>>) == sizeof(u64));
+#endif
 } // namespace rstd

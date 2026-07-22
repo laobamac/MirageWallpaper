@@ -193,5 +193,48 @@ using ::SetEnvironmentVariableA;
 
 using ::_putenv_s;
 
+/// Windows errno accessor — returns a writable reference to thread-local
+/// errno, matching the signature of the Unix version.
+inline auto get_errno() noexcept -> int& { return *_errno(); }
+
+// Windows stdio seek constants — undef the <stdio.h> macros here
+// (placed after module declaration to ensure they're clean)
+#if defined(SEEK_SET)
+#undef SEEK_SET
+#endif
+#if defined(SEEK_CUR)
+#undef SEEK_CUR
+#endif
+#if defined(SEEK_END)
+#undef SEEK_END
+#endif
+constexpr auto SEEK_SET = 0;
+constexpr auto SEEK_CUR = 1;
+constexpr auto SEEK_END = 2;
+
+// POSIX file I/O stubs (not available on Windows; wavsen byte_stream uses
+// these for file-based audio sources which go through FFmpeg on Windows).
+#if defined(O_RDONLY)
+#undef O_RDONLY
+#endif
+#if defined(O_CLOEXEC)
+#undef O_CLOEXEC
+#endif
+constexpr auto O_RDONLY  = 0;
+constexpr auto O_CLOEXEC = 0;
+
+inline auto open(const char*, int, ...) -> int { return -1; }
+inline auto close(int) -> int { return -1; }
+inline auto read(int, void*, unsigned int) -> int { return -1; }
+inline auto lseek(int, long long, int) -> long long { return -1; }
+inline auto write(int, const void*, unsigned int) -> int { return -1; }
+
+// POSIX errno constants (used in byte_stream error handling)
+#if defined(EINTR)
+#undef EINTR
+#endif
+constexpr auto EINTR = 4;
+using off_t = long long;
+
 } // namespace rstd::sys::libc
 #endif

@@ -42,7 +42,7 @@ struct NonNull {
     // static_assert(mtp::triv_copy<pointer_t>);
     pointer_t pointer;
 
-    USE_TRAIT(NonNull)
+    USE_TRAIT_WIN(NonNull)
 
     /// \name T: Sized
     /// @{

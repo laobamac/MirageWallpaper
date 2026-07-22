@@ -608,7 +608,7 @@ class BTreeMap {
     }
 
 public:
-    USE_TRAIT(BTreeMap)
+    USE_TRAIT_WIN(BTreeMap)
 
     BTreeMap(): root(None()), length(0) {}
     BTreeMap(const BTreeMap&)            = delete;

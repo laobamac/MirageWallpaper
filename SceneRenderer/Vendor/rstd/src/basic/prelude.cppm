@@ -50,6 +50,7 @@ export {
     using f32 = float;
     /// 64-bit IEEE 754 floating-point.
     using f64 = double;
+#if defined(__SIZEOF_INT128__) || defined(__int128)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wpedantic"
     /// 128-bit unsigned integer.
@@ -57,6 +58,13 @@ export {
     /// 128-bit signed integer.
     using i128 = __int128;
 #pragma GCC diagnostic pop
+#else
+    // MSVC does not support __int128. Fall back to a 128-bit struct placeholder.
+    // Most rstd code uses u128/i128 only through trait-based generic paths
+    // that don't require physical 128-bit registers.
+    struct u128 { std::uint64_t lo; std::uint64_t hi; };
+    struct i128 { std::uint64_t lo; std::int64_t hi; };
+#endif
 
     /// Signed index type, equivalent to Rust's `isize` used for offsets.
     using idx = ::ptrdiff_t;

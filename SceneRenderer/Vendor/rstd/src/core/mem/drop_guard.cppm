@@ -20,7 +20,7 @@ struct DropGuard {
     ManuallyDrop<T> inner;
     ManuallyDrop<F> f;
 
-    USE_TRAIT(DropGuard)
+    USE_TRAIT_WIN(DropGuard)
 
     ~DropGuard() {
         auto inner = rstd::move(this->inner).take();

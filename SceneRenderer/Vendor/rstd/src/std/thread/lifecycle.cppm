@@ -36,7 +36,7 @@ struct JoinInner {
     Arc<Packet<T>> packet;
     imp::Thread    native;
 
-    USE_TRAIT(JoinInner)
+    USE_TRAIT_WIN(JoinInner)
 
     auto is_finished() const -> bool { return packet->strong_count() == 1; }
 

@@ -55,11 +55,11 @@ DEFINE_VALID_RANGE_TYPE(NonZeroI32Inner, i32, u32, 1, 0xffffffff)
 DEFINE_VALID_RANGE_TYPE(NonZeroI64Inner, i64, u64, 1, 0xffffffffffffffff)
 DEFINE_VALID_RANGE_TYPE(NonZeroCharInner, char, u32, 1, 0x10ffff)
 
-#if __SIZEOF_POINTER__ == 8
+#if __SIZEOF_POINTER__ == 8 || defined(_M_AMD64) || defined(__x86_64__)
 DEFINE_VALID_RANGE_TYPE(UsizeNoHighBit, usize, usize, 0, 0x7fffffffffffffff)
 DEFINE_VALID_RANGE_TYPE(NonZeroUsizeInner, usize, usize, 1, 0xffffffffffffffff)
 DEFINE_VALID_RANGE_TYPE(NonZeroIsizeInner, isize, usize, 1, 0xffffffffffffffff)
-#elif __SIZEOF_POINTER__ == 4
+#elif __SIZEOF_POINTER__ == 4 || defined(_M_IX86)
 DEFINE_VALID_RANGE_TYPE(UsizeNoHighBit, usize, usize, 0, 0x7fffffff)
 DEFINE_VALID_RANGE_TYPE(NonZeroUsizeInner, usize, usize, 1, 0xffffffff)
 DEFINE_VALID_RANGE_TYPE(NonZeroIsizeInner, isize, usize, 1, 0xffffffff)
