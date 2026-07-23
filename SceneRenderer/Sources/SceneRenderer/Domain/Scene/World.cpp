@@ -832,6 +832,7 @@ bool SceneMaterial::SetShaderValueAnimation(std::string                         
 }
 
 bool SceneMaterial::TickShaderValueAnimations(double runtime) {
+    if (customShader.valueAnimations.empty()) return false;
     bool changed = false;
     for (auto& [uniform_name, animation] : customShader.valueAnimations) {
         ShaderValue value = eval_shader_value_animation(animation, runtime);
@@ -1173,13 +1174,16 @@ void Scene::TickMaterialShaderAnimations() {
 }
 
 void Scene::TickNodeFieldAnimations() {
-    auto tick_node = [runtime = elapsingTime](auto&                             self,
-                                              const rstd::sync::Arc<SceneNode>& node) -> void {
-        if (! node) return;
-        node->TickFieldAnimations(runtime);
-        for (const auto& child : node->GetChildren()) self(self, child);
-    };
-    tick_node(tick_node, sceneGraph);
+    if (! m_field_animated_nodes_built) {
+        auto collect = [this](auto& self, const rstd::sync::Arc<SceneNode>& node) -> void {
+            if (! node) return;
+            if (node->HasFieldAnimations()) m_field_animated_nodes.push_back(node.as_ptr());
+            for (const auto& child : node->GetChildren()) self(self, child);
+        };
+        collect(collect, sceneGraph);
+        m_field_animated_nodes_built = true;
+    }
+    for (auto* node : m_field_animated_nodes) node->TickFieldAnimations(elapsingTime);
 }
 
 void Scene::TickTransformUpdaters() {

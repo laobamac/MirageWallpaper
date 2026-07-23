@@ -187,15 +187,19 @@ void SceneUniformUpdater::UpdateUniforms(SceneNode* pNode, sprite_map_t& sprites
     // auto& shadervs = material->customShader.updateValueList;
     // const auto& valueSet = material->customShader.valueSet;
 
-    rstd_assert(exists(m_nodeUniformInfoMap, pNode));
-    const auto& info = m_nodeUniformInfoMap[pNode];
+    auto info_it = m_nodeUniformInfoMap.find(pNode);
+    rstd_assert(info_it != m_nodeUniformInfoMap.end());
+    const auto& info = info_it->second;
 
-    bool hasNodeData = exists(m_nodeDataMap, pNode);
+    auto  node_data_it = m_nodeDataMap.find(pNode);
+    bool  hasNodeData  = node_data_it != m_nodeDataMap.end();
+    auto* nodeDataPtr  = hasNodeData ? &node_data_it->second : nullptr;
     if (hasNodeData) {
-        auto& nodeData = m_nodeDataMap.at(pNode);
+        auto& nodeData = *nodeDataPtr;
         for (const auto& el : nodeData.renderTargets) {
-            if (m_scene->renderTargets.count(el.second) == 0) continue;
-            const auto& rt = m_scene->renderTargets[el.second];
+            auto rt_it = m_scene->renderTargets.find(el.second);
+            if (rt_it == m_scene->renderTargets.end()) continue;
+            const auto& rt = rt_it->second;
 
             const auto& unifrom_tex = info.texs[el.first];
 
@@ -246,14 +250,14 @@ void SceneUniformUpdater::UpdateUniforms(SceneNode* pNode, sprite_map_t& sprites
     if (info.has_VP) {
         updateOp(G_VP, ShaderValue::fromMatrix(viewProTrans));
     }
-    if (info.has_EYEPOSITION && hasNodeData && m_nodeDataMap.at(pNode).use_camera_eye_position) {
+    if (info.has_EYEPOSITION && hasNodeData && nodeDataPtr->use_camera_eye_position) {
         const auto eye = camera->GetPosition().cast<float>();
         updateOp(G_EYEPOSITION, std::array<float, 3> { eye.x(), eye.y(), eye.z() });
     }
     if (reqM || reqMVP || reqMI || reqMVPI || reqEffectModel) {
         Matrix4d modelTrans = pNode->ModelTrans();
         if (hasNodeData && cam_name != "effect") {
-            const auto& nodeData   = m_nodeDataMap.at(pNode);
+            const auto& nodeData   = *nodeDataPtr;
             auto        cameraNode = camera->GetAttachedNode();
             const bool  layerLocalEffectSource =
                 camera->HasImgEffect() && cameraNode.is_some() && *cameraNode == pNode;
@@ -305,8 +309,8 @@ void SceneUniformUpdater::UpdateUniforms(SceneNode* pNode, sprite_map_t& sprites
         if (reqEffectModel) {
             Matrix4d layerModel  = modelTrans;
             Matrix4d effectModel = modelTrans;
-            if (hasNodeData && m_nodeDataMap.at(pNode).effect_projection_node != nullptr) {
-                const auto& nodeData = m_nodeDataMap.at(pNode);
+            if (hasNodeData && nodeDataPtr->effect_projection_node != nullptr) {
+                const auto& nodeData = *nodeDataPtr;
                 auto*       source   = nodeData.effect_projection_node;
                 source->UpdateTrans();
                 layerModel  = source->ModelTrans();

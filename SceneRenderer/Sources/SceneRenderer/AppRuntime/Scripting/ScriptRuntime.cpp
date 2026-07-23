@@ -358,6 +358,10 @@ struct EngineHostState {
     bool        media_initialized { false };
     sr::Scene* scene { nullptr };
     JSValue     audio_buffer { JS_UNDEFINED };
+    JSValue     audio_left_arr { JS_UNDEFINED };
+    JSValue     audio_right_arr { JS_UNDEFINED };
+    JSValue     audio_avg_arr { JS_UNDEFINED };
+    JSValue     audio_buf_arr { JS_UNDEFINED };
     uint32_t    audio_buffer_resolution { 64 };
     bool        audio_buffer_built { false };
     // Cached `globalThis.Vec3` ctor, populated lazily on first node access.
@@ -369,6 +373,24 @@ struct EngineHostState {
     // backing SceneNode.
     JSValue default_layer { JS_UNDEFINED };
     JSValue default_scene { JS_UNDEFINED };
+    // Retained global object + interned atoms for per-frame thisLayer/
+    // thisObject/thisScene rebinding without string hashing.
+    JSValue global_obj { JS_UNDEFINED };
+    JSAtom  atom_this_layer { JS_ATOM_NULL };
+    JSAtom  atom_this_object { JS_ATOM_NULL };
+    JSAtom  atom_this_scene { JS_ATOM_NULL };
+    // Snapshot of the exact fields UpdateInputObject writes to globalThis.input.
+    // The per-frame write is skipped when unchanged.
+    struct InputSnapshot {
+        float    cursor_x { 0.0f }, cursor_y { 0.0f };
+        float    screen_w { 0.0f }, screen_h { 0.0f };
+        float    canvas_w { 0.0f }, canvas_h { 0.0f };
+        uint32_t buttons_down { 0 }, buttons_pressed { 0 }, buttons_released { 0 };
+        bool     in_window { false };
+        bool     valid { false };
+        bool operator==(const InputSnapshot&) const = default;
+    };
+    InputSnapshot input_snapshot;
     // engine.setTimeout / setInterval queue. Swept once per frame in
     // JsRuntime::TickAll before the script update loop runs.
     std::vector<DeferredCb> deferred;
@@ -578,8 +600,12 @@ JSValue EngineGetterScreenRes(JSContext* ctx, JSValueConst, int, JSValueConst*) 
     return MakeVec2Value(ctx, host->inputs.screen_w, host->inputs.screen_h);
 }
 
-void SetAudioArrayValue(JSContext* ctx, JSValueConst arr, uint32_t index, float value) {
+void DefineAudioArrayValue(JSContext* ctx, JSValueConst arr, uint32_t index, float value) {
     JS_DefinePropertyValueUint32(ctx, arr, index, JS_NewFloat64(ctx, value), JS_PROP_C_W_E);
+}
+
+void SetAudioArrayValue(JSContext* ctx, JSValueConst arr, uint32_t index, float value) {
+    JS_SetPropertyUint32(ctx, arr, index, JS_NewFloat64(ctx, value));
 }
 
 // engine.registerAudioBuffers(resolution) → { left, right, average, buffer }
@@ -607,16 +633,20 @@ JSValue EngineRegisterAudioBuffers(JSContext* ctx, JSValueConst /*this_val*/, in
                 AudioBufferValue(host->inputs.audio_right, host->audio_buffer_resolution, i);
             const float a =
                 AudioBufferValue(host->inputs.audio_average, host->audio_buffer_resolution, i);
-            SetAudioArrayValue(ctx, left, i, l);
-            SetAudioArrayValue(ctx, right, i, r);
-            SetAudioArrayValue(ctx, avg, i, a);
-            SetAudioArrayValue(ctx, buf, i, a);
+            DefineAudioArrayValue(ctx, left, i, l);
+            DefineAudioArrayValue(ctx, right, i, r);
+            DefineAudioArrayValue(ctx, avg, i, a);
+            DefineAudioArrayValue(ctx, buf, i, a);
         }
-        JS_DefinePropertyValueStr(ctx, obj, "left", left, JS_PROP_C_W_E);
-        JS_DefinePropertyValueStr(ctx, obj, "right", right, JS_PROP_C_W_E);
-        JS_DefinePropertyValueStr(ctx, obj, "average", avg, JS_PROP_C_W_E);
-        JS_DefinePropertyValueStr(ctx, obj, "buffer", buf, JS_PROP_C_W_E);
+        JS_DefinePropertyValueStr(ctx, obj, "left", JS_DupValue(ctx, left), JS_PROP_C_W_E);
+        JS_DefinePropertyValueStr(ctx, obj, "right", JS_DupValue(ctx, right), JS_PROP_C_W_E);
+        JS_DefinePropertyValueStr(ctx, obj, "average", JS_DupValue(ctx, avg), JS_PROP_C_W_E);
+        JS_DefinePropertyValueStr(ctx, obj, "buffer", JS_DupValue(ctx, buf), JS_PROP_C_W_E);
         host->audio_buffer       = obj;
+        host->audio_left_arr     = left;
+        host->audio_right_arr    = right;
+        host->audio_avg_arr      = avg;
+        host->audio_buf_arr      = buf;
         host->audio_buffer_built = true;
     }
     return JS_DupValue(ctx, host->audio_buffer);
@@ -629,25 +659,17 @@ JSValue EngineRegisterAudioBuffers(JSContext* ctx, JSValueConst /*this_val*/, in
 void RefreshAudioBuffer(JSContext* ctx) {
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
     if (! host->audio_buffer_built) return;
-    JSValue left  = JS_GetPropertyStr(ctx, host->audio_buffer, "left");
-    JSValue right = JS_GetPropertyStr(ctx, host->audio_buffer, "right");
-    JSValue avg   = JS_GetPropertyStr(ctx, host->audio_buffer, "average");
-    JSValue buf   = JS_GetPropertyStr(ctx, host->audio_buffer, "buffer");
     for (uint32_t i = 0; i < host->audio_buffer_resolution; ++i) {
         const float l = AudioBufferValue(host->inputs.audio_left, host->audio_buffer_resolution, i);
         const float r =
             AudioBufferValue(host->inputs.audio_right, host->audio_buffer_resolution, i);
         const float a =
             AudioBufferValue(host->inputs.audio_average, host->audio_buffer_resolution, i);
-        SetAudioArrayValue(ctx, left, i, l);
-        SetAudioArrayValue(ctx, right, i, r);
-        SetAudioArrayValue(ctx, avg, i, a);
-        SetAudioArrayValue(ctx, buf, i, a);
+        SetAudioArrayValue(ctx, host->audio_left_arr, i, l);
+        SetAudioArrayValue(ctx, host->audio_right_arr, i, r);
+        SetAudioArrayValue(ctx, host->audio_avg_arr, i, a);
+        SetAudioArrayValue(ctx, host->audio_buf_arr, i, a);
     }
-    JS_FreeValue(ctx, left);
-    JS_FreeValue(ctx, right);
-    JS_FreeValue(ctx, avg);
-    JS_FreeValue(ctx, buf);
 }
 
 // Cancel CFunction returned by setTimeout / setInterval. data[0] holds the
@@ -859,6 +881,23 @@ void SetVec3Fields(JSContext* ctx, JSValueConst obj, double x, double y, double 
 void UpdateInputObject(JSContext* ctx) {
     auto*       host  = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
     const auto& fi    = host->inputs;
+
+    EngineHostState::InputSnapshot snap {
+        .cursor_x         = fi.cursor_x,
+        .cursor_y         = fi.cursor_y,
+        .screen_w         = fi.screen_w,
+        .screen_h         = fi.screen_h,
+        .canvas_w         = fi.canvas_w,
+        .canvas_h         = fi.canvas_h,
+        .buttons_down     = fi.mouse_buttons_down,
+        .buttons_pressed  = fi.mouse_buttons_pressed,
+        .buttons_released = fi.mouse_buttons_released,
+        .in_window        = fi.cursor_in_window,
+        .valid            = true,
+    };
+    if (host->input_snapshot == snap) return;
+    host->input_snapshot = snap;
+
     JSValue     g     = JS_GetGlobalObject(ctx);
     JSValue     input = JS_GetPropertyStr(ctx, g, "input");
     if (! JS_IsObject(input)) {
@@ -2400,21 +2439,22 @@ void CaptureDefaultBindings(JSContext* ctx) {
     JSValue g           = JS_GetGlobalObject(ctx);
     host->default_layer = JS_GetPropertyStr(ctx, g, "thisLayer");
     host->default_scene = JS_GetPropertyStr(ctx, g, "thisScene");
-    JS_FreeValue(ctx, g);
+    host->global_obj        = g; // retained for lifetime; freed in dtor
+    host->atom_this_layer   = JS_NewAtom(ctx, "thisLayer");
+    host->atom_this_object  = JS_NewAtom(ctx, "thisObject");
+    host->atom_this_scene   = JS_NewAtom(ctx, "thisScene");
 }
 
 // Write `globalThis.thisLayer = val`. `val` is duplicated; ownership of
 // the original ref stays with the caller.
 void BindThisLayer(JSContext* ctx, JSValueConst val) {
-    JSValue g = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, g, "thisLayer", JS_DupValue(ctx, val));
-    JS_SetPropertyStr(ctx, g, "thisObject", JS_DupValue(ctx, val));
-    JS_FreeValue(ctx, g);
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    JS_SetProperty(ctx, host->global_obj, host->atom_this_layer, JS_DupValue(ctx, val));
+    JS_SetProperty(ctx, host->global_obj, host->atom_this_object, JS_DupValue(ctx, val));
 }
 void BindThisScene(JSContext* ctx, JSValueConst val) {
-    JSValue g = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, g, "thisScene", JS_DupValue(ctx, val));
-    JS_FreeValue(ctx, g);
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    JS_SetProperty(ctx, host->global_obj, host->atom_this_scene, JS_DupValue(ctx, val));
 }
 
 JSValue MakeMediaPlaybackEvent(JSContext* ctx, const MediaStatus& status) {
@@ -2532,8 +2572,20 @@ JsRuntime::~JsRuntime() {
         JS_FreeValue(m_impl->ctx, m_impl->host.default_layer);
     if (! JS_IsUndefined(m_impl->host.default_scene))
         JS_FreeValue(m_impl->ctx, m_impl->host.default_scene);
+    if (m_impl->host.atom_this_layer != JS_ATOM_NULL)
+        JS_FreeAtom(m_impl->ctx, m_impl->host.atom_this_layer);
+    if (m_impl->host.atom_this_object != JS_ATOM_NULL)
+        JS_FreeAtom(m_impl->ctx, m_impl->host.atom_this_object);
+    if (m_impl->host.atom_this_scene != JS_ATOM_NULL)
+        JS_FreeAtom(m_impl->ctx, m_impl->host.atom_this_scene);
+    if (! JS_IsUndefined(m_impl->host.global_obj))
+        JS_FreeValue(m_impl->ctx, m_impl->host.global_obj);
     if (m_impl->host.audio_buffer_built) {
         JS_FreeValue(m_impl->ctx, m_impl->host.audio_buffer);
+        JS_FreeValue(m_impl->ctx, m_impl->host.audio_left_arr);
+        JS_FreeValue(m_impl->ctx, m_impl->host.audio_right_arr);
+        JS_FreeValue(m_impl->ctx, m_impl->host.audio_avg_arr);
+        JS_FreeValue(m_impl->ctx, m_impl->host.audio_buf_arr);
         m_impl->host.audio_buffer_built = false;
     }
     for (auto& d : m_impl->host.deferred) {

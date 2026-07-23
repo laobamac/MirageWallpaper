@@ -201,7 +201,11 @@ bool ParseFloatList(std::string_view s, std::vector<float>& out) {
 // day/night scenes track the user's actual clock.
 float LocalTimeOfDay() {
     const std::time_t now = std::time(nullptr);
-    std::tm           tm_local {};
+    static std::time_t s_cached_second { -1 };
+    static float       s_cached_frac { 0.0f };
+    if (now == s_cached_second) return s_cached_frac;
+
+    std::tm tm_local {};
 #if defined(_WIN32)
     localtime_s(&tm_local, &now);
 #else
@@ -213,6 +217,8 @@ float LocalTimeOfDay() {
     float frac = seconds / 86400.0f;
     if (! std::isfinite(frac) || frac < 0.0f) frac = 0.0f;
     if (frac > 1.0f) frac = 1.0f;
+    s_cached_second = now;
+    s_cached_frac   = frac;
     return frac;
 }
 
@@ -1175,9 +1181,11 @@ void SceneRenderController::on(RenderDraw&&) {
                 const float old   = slot.load(std::memory_order_relaxed);
                 slot.store(std::max(old * 0.75f, level), std::memory_order_relaxed);
             }
-            m_scene->shaderValueUpdater->SetAudioSpectrum(
-                std::span<const float, 64>(fi.audio_left),
-                std::span<const float, 64>(fi.audio_right));
+            if (m_scene->uses_audio_spectrum) {
+                m_scene->shaderValueUpdater->SetAudioSpectrum(
+                    std::span<const float, 64>(fi.audio_left),
+                    std::span<const float, 64>(fi.audio_right));
+            }
             m_scene->TickNodeFieldAnimations();
             sr::script::TickSceneScripts(*m_scene, fi);
             m_scene->CommitNodeVisibilityChanges();

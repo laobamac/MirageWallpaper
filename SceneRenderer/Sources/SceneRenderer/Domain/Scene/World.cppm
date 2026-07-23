@@ -1150,14 +1150,17 @@ public:
     const auto& Rotation() const { return m_rotation; }
     const auto& Scale() const { return m_scale; }
     void        SetRotation(Eigen::Vector3f v) {
+        if (m_rotation == v) return;
         m_rotation = v;
         MarkTransDirty();
     }
     void SetTranslate(Eigen::Vector3f v) {
+        if (m_translate == v) return;
         m_translate = v;
         MarkTransDirty();
     }
     void SetScale(Eigen::Vector3f v) {
+        if (m_scale == v) return;
         m_scale = v;
         MarkTransDirty();
     }
@@ -1207,6 +1210,9 @@ public:
     }
     void SetAlphaAnimation(SceneAnimationCurve curve) { m_alpha_curve = std::move(curve); }
     void TickFieldAnimations(double runtime);
+    bool HasFieldAnimations() const {
+        return m_origin_curve || m_scale_curve || m_rotation_curve || m_alpha_curve;
+    }
     void SetAlphaSource(SceneNode* node) { m_alpha_source = node; }
 
     const std::string& VisibleUserKey() const { return m_visible_user_binding.key; }
@@ -1286,8 +1292,8 @@ public:
         MarkTransDirty();
     }
 
-    void            UpdateTrans();
-    Eigen::Matrix4d ModelTrans() const { return m_trans; };
+    void                   UpdateTrans();
+    const Eigen::Matrix4d& ModelTrans() const { return m_trans; };
 
     SceneMesh*                        Mesh() { return m_mesh.get(); }
     const std::shared_ptr<SceneMesh>& MeshShared() const { return m_mesh; }
@@ -2389,6 +2395,11 @@ public:
     std::unordered_map<std::string, bool> m_camera_path_has_enabled;
     std::unordered_set<std::string>       m_camera_path_touched;
     std::unordered_set<std::string>       m_camera_path_reset;
+
+    // Flat list of nodes carrying a field-animation curve, built once on
+    // first tick. sceneGraph shape is immutable after parse.
+    std::vector<SceneNode*> m_field_animated_nodes;
+    bool                    m_field_animated_nodes_built { false };
 
     // WE layer IDs the render-graph build may elide when nothing links to
     // them, or route to `_rt_link_<id>` when something does. Two flavours
