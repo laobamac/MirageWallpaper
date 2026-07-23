@@ -76,7 +76,8 @@ struct ContentView: View {
                         default:
                             EmptyView()
                         }
-                        ExplorerBottomBar()
+                        ExplorerBottomBar(contentViewModel: viewModel,
+                                          wallpaperViewModel: wallpaperViewModel)
                     }
                     .padding()
 

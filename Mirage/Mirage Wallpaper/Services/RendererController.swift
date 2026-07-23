@@ -414,7 +414,7 @@ final class RendererController {
         }
 
         let stdinPipe = Pipe()
-        let stdoutPipe = (deferredScene || wallpaper.kind == .web) ? Pipe() : nil
+        let stdoutPipe = (deferredScene || wallpaper.kind == .web || wallpaper.kind == .video) ? Pipe() : nil
         let stderrPipe = Pipe()
         proc.standardInput = stdinPipe
         if let stdoutPipe {
@@ -550,6 +550,19 @@ final class RendererController {
                       self.candidates[handle.screenIndex] === handle else { return }
                 handle.spectrumDemanded = (message["needed"] as? NSNumber)?.boolValue ?? false
                 SystemAudioSpectrumService.shared.setEnabled(self.hasSpectrumConsumersLocked())
+                return
+            }
+
+            if event == "video-did-end" {
+                guard self.running[handle.screenIndex] === handle else { return }
+                let screen = handle.screenIndex
+                DispatchQueue.main.async {
+                    NotificationCenter.default.post(
+                        name: .rendererVideoDidEnd,
+                        object: nil,
+                        userInfo: ["screen": screen]
+                    )
+                }
                 return
             }
 

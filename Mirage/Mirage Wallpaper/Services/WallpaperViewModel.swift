@@ -64,8 +64,11 @@ class WallpaperViewModel: ObservableObject {
             }
             UserDefaults.standard.set(try? JSONEncoder().encode(currentWallpaper), forKey: "CurrentWallpaper")
             applyCurrent()
+            currentByScreen[0] = currentWallpaper.isValid ? currentWallpaper : nil
         }
     }
+
+    @Published var currentByScreen: [Int: WEWallpaper] = [:]
 
     @Published var runtime = WallpaperRuntimeState()
 
@@ -434,6 +437,7 @@ class WallpaperViewModel: ObservableObject {
                 renderer.render(w, on: screen, options: opts)
             }
             applyPlaybackPolicy(currentPlaybackPolicy, runtime: saved, on: screen)
+            currentByScreen[screen] = w
         }
     }
 

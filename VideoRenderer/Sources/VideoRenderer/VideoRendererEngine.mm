@@ -44,6 +44,7 @@ static float VRClampVolume(float value) {
 @property (nonatomic, assign) BOOL autoplay;
 @property (nonatomic, assign) BOOL loadFromMemory;
 @property (nonatomic, strong) VRMemoryAssetLoader *memoryAssetLoader;
+@property (nonatomic, strong) id itemEndObserver;
 @end
 
 @implementation VRVideoRendererEngine
@@ -99,6 +100,10 @@ static float VRClampVolume(float value) {
 
 - (void)dealloc {
     [self pause];
+    if (self.itemEndObserver) {
+        [[NSNotificationCenter defaultCenter] removeObserver:self.itemEndObserver];
+        self.itemEndObserver = nil;
+    }
     [self.player removeAllItems];
 }
 
@@ -143,6 +148,27 @@ static float VRClampVolume(float value) {
     self.player.volume = self.volume;
     self.player.muted = self.muted;
     self.loaded = YES;
+
+    if (self.itemEndObserver) {
+        [[NSNotificationCenter defaultCenter] removeObserver:self.itemEndObserver];
+        self.itemEndObserver = nil;
+    }
+    __weak __typeof__(self) weakSelf = self;
+    self.itemEndObserver = [[NSNotificationCenter defaultCenter]
+        addObserverForName:AVPlayerItemDidPlayToEndTimeNotification
+                    object:nil
+                     queue:[NSOperationQueue mainQueue]
+                usingBlock:^(NSNotification * _Nonnull note) {
+        __strong __typeof__(weakSelf) strongSelf = weakSelf;
+        if (strongSelf == nil) return;
+        AVPlayerItem *ended = note.object;
+        BOOL ours = NO;
+        for (AVPlayerItem *queued in strongSelf.player.items) {
+            if (queued == ended) { ours = YES; break; }
+        }
+        if (!ours) return;
+        if (strongSelf.videoDidEndBlock) strongSelf.videoDidEndBlock();
+    }];
 
     if (self.autoplay) [self play];
     return YES;

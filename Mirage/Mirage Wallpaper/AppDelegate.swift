@@ -76,6 +76,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         UpdateManager.shared.start()
 
+        PlaylistManager.shared.startRotators(wallpaperViewModel: wallpaperViewModel)
+
         DispatchQueue.global(qos: .utility).async {
             ScreenSaverManager.shared.refreshInstalledVersionIfNeeded()
         }

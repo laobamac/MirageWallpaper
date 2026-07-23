@@ -29,11 +29,27 @@ struct ExplorerItemMenu: SubviewOfContentView {
             }
 
             Section {
-                Button {
-                    
-                } label: {
-                    Label("加入播放列表", systemImage: "plus")
-                }.disabled(true)
+                if NSScreen.screens.count > 1 {
+                    Menu {
+                        ForEach(0..<NSScreen.screens.count, id: \.self) { idx in
+                            Button {
+                                PlaylistManager.shared.add(hoveredWallpaper, to: idx)
+                            } label: {
+                                Label(L("屏幕 %d", idx + 1), systemImage: "display")
+                            }
+                        }
+                    } label: {
+                        Label("加入播放列表", systemImage: "plus")
+                    }
+                    .disabled(!hoveredWallpaper.isValid)
+                } else {
+                    Button {
+                        PlaylistManager.shared.add(hoveredWallpaper, to: 0)
+                    } label: {
+                        Label("加入播放列表", systemImage: "plus")
+                    }
+                    .disabled(!hoveredWallpaper.isValid)
+                }
                 Button {
                     viewModel.hoveredWallpaper = hoveredWallpaper
                     viewModel.isUnsubscribeConfirming = true

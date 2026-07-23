@@ -38,6 +38,8 @@ typedef struct {
 - (void)setMuted:(BOOL)muted;
 - (void)setFillMode:(VRVideoFillMode)fillMode;
 
+@property (nonatomic, copy, nullable) void (^videoDidEndBlock)(void);
+
 @property (nonatomic, strong, readonly) AVQueuePlayer *player;
 @property (nonatomic, assign, readonly) BOOL loaded;
 @property (nonatomic, assign, readonly) float volume;
