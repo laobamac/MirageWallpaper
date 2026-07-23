@@ -18,10 +18,12 @@ class MainWindowController: NSWindowController, NSWindowDelegate {
     }
     
     override init(window: NSWindow?) {
-        super.init(window: NSWindow(
+        let win = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1000, height: 640),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
-            backing: .buffered, defer: false))
+            backing: .buffered, defer: false)
+        win.isRestorable = false
+        super.init(window: win)
         self.window.delegate = self
         self.window.isReleasedWhenClosed = false
         refreshLocalizedTitle()
@@ -29,13 +31,27 @@ class MainWindowController: NSWindowController, NSWindowDelegate {
         self.window.setFrameAutosaveName("MainWindow")
         self.window.isMovableByWindowBackground = true
         self.window.contentMinSize = NSSize(width: 1000, height: 640)
-        let hostingView = NSHostingView(rootView: ContentView(
+
+        // 使用 NSHostingController 作为 contentViewController，而非将
+        // NSHostingView 直接设为 contentView。
+        //
+        // 根因: NSHostingView 直接作为窗口 contentView 时，其在每次 SwiftUI
+        // graph 变更时对 setNeedsUpdateConstraints 的调用会直接进入窗口的
+        // display-cycle 约束更新 pass。当窗口内含 HSplitView + 多个相互
+        // 依赖的 @ObservedObject（本项目在引入第 4 个 rmskinViewModel 后
+        // 依赖图更易抖动）时，会在初始 display cycle 形成
+        // updateConstraints ↔ setNeedsUpdateConstraints 无限循环
+        // (表现为窗口高度 668↔669 1px 振荡)。
+        //
+        // NSHostingController 由 AppKit 托管其 hosting view 的生命周期与
+        // 约束集成，走独立的布局路径，可规避该循环。
+        let hostingController = NSHostingController(rootView: ContentView(
                 viewModel: AppDelegate.shared.contentViewModel,
                 wallpaperViewModel: AppDelegate.shared.wallpaperViewModel
             ).environmentObject(AppDelegate.shared.globalSettingsViewModel)
         )
-        hostingView.sizingOptions = []
-        self.window.contentView = hostingView
+        hostingController.sizingOptions = []
+        self.window.contentViewController = hostingController
     }
     
     required init?(coder: NSCoder) {
@@ -60,10 +76,9 @@ class MainWindowController: NSWindowController, NSWindowDelegate {
     func windowDidResignMain(_ notification: Notification) { }
     
     func windowDidBecomeKey(_ notification: Notification) {
+        // 延迟到下一个 runloop 周期，避免在 display cycle 中触发约束更新循环
         DispatchQueue.main.async {
-            withAnimation {
-                AppDelegate.shared.contentViewModel.isStaging = true
-            }
+            AppDelegate.shared.contentViewModel.isStaging = true
         }
     }
 

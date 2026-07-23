@@ -86,6 +86,7 @@ jobs:
           ./SceneRenderer/scripts/build.sh release
           ./WebRenderer/scripts/build.sh release
           ./VideoRenderer/scripts/build.sh release
+          ./RmskinRenderer/scripts/build.sh release
 
       - name: Build app bundle
         shell: bash
@@ -104,6 +105,7 @@ jobs:
           test -x "$app/Contents/Resources/Renderers/SceneWallpaper"
           test -x "$app/Contents/Resources/Renderers/WebWallpaper"
           test -x "$app/Contents/Resources/Renderers/VideoWallpaper"
+          test -x "$app/Contents/Resources/Renderers/RmskinWallpaper"
           test -d "$app/Contents/Frameworks/Sparkle.framework"
           codesign --verify --deep --strict "$app"
           [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Contents/Info.plist")" == "$expected_build" ]]

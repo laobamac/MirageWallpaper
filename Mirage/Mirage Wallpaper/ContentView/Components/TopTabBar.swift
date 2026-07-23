@@ -23,6 +23,7 @@ struct TopTabBar: SubviewOfContentView {
                 tab(index: 0, title: "已安装", systemImage: "square.and.arrow.down.fill")
                 tab(index: 1, title: "发现", systemImage: "sparkle.magnifyingglass")
                 tab(index: 2, title: "创意工坊", systemImage: "cloud.fill", badge: downloadCount)
+                tab(index: 3, title: "小组件", systemImage: "square.grid.2x2.fill")
             }
             .padding(4)
             .background(.quaternary.opacity(0.6), in: Capsule())

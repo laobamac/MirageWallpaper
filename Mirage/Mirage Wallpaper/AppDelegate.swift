@@ -19,6 +19,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var wallpaperViewModel = WallpaperViewModel()
     var globalSettingsViewModel = GlobalSettingsViewModel()
     var workshopViewModel = WorkshopViewModel()
+    var rmskinViewModel = RmskinViewModel()
 
     var importOpenPanel: NSOpenPanel!
     private var localizationObserver: NSObjectProtocol?
@@ -31,6 +32,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     static var shared = AppDelegate()
 
     func applicationWillFinishLaunching(_ notification: Notification) {
+        // 禁用窗口状态恢复，防止 restoreWindowWithIdentifier 错误
+        UserDefaults.standard.set(false, forKey: "NSQuitAlwaysKeepsWindows")
         setMainMenu()
         setStatusMenu()
         self.mainWindowController = MainWindowController()
@@ -95,6 +98,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         wallpaperViewModel.saveRuntime()
         wallpaperViewModel.renderer.stopAll()
+        rmskinViewModel.stopAll()
 
         // NSScreen.main can be nil (all displays asleep / disconnected / app in
         // background). Never force-unwrap it or the app crashes on quit.

@@ -17,18 +17,20 @@ struct ContentView: View {
     @ObservedObject var viewModel: ContentViewModel
     @ObservedObject var wallpaperViewModel: WallpaperViewModel
     @ObservedObject var workshopViewModel: WorkshopViewModel
+    @ObservedObject var rmskinViewModel: RmskinViewModel
 
-    init(viewModel: ContentViewModel, wallpaperViewModel: WallpaperViewModel, workshopViewModel: WorkshopViewModel = AppDelegate.shared.workshopViewModel) {
+    init(viewModel: ContentViewModel, wallpaperViewModel: WallpaperViewModel, workshopViewModel: WorkshopViewModel = AppDelegate.shared.workshopViewModel, rmskinViewModel: RmskinViewModel = AppDelegate.shared.rmskinViewModel) {
         self.viewModel = viewModel
         self.wallpaperViewModel = wallpaperViewModel
         self.workshopViewModel = workshopViewModel
+        self.rmskinViewModel = rmskinViewModel
     }
 
     var body: some View {
         ZStack {
             HSplitView {
-                if viewModel.isStaging {
-                    VStack(spacing: 5) {
+                VStack(spacing: 5) {
+                    if viewModel.isStaging {
                         TopTabBar(contentViewModel: viewModel)
                         ProjectFeedbackBanner()
                         switch viewModel.topTabBarSelection {
@@ -41,7 +43,6 @@ struct ContentView: View {
                                 }
                                 .frame(width: viewModel.isFilterReveal ? 225 : 0)
                                 .opacity(viewModel.isFilterReveal ? 1 : 0)
-                                .animation(.spring(), value: viewModel.isFilterReveal)
 
                                 WallpaperExplorer(contentViewModel: viewModel, wallpaperViewModel: wallpaperViewModel)
                                     .onDrop(of: [.fileURL], delegate: viewModel)
@@ -57,6 +58,32 @@ struct ContentView: View {
                                 workshopViewModel: workshopViewModel,
                                 viewModel: viewModel
                             )
+                        case 3:
+                            HStack(spacing: 0) {
+                                HStack(alignment: .center) {
+                                    Button {
+                                        viewModel.toggleFilter()
+                                    } label: {
+                                        Label("筛选", systemImage: "line.3.horizontal.decrease.circle")
+                                    }
+                                    .buttonStyle(.plain)
+                                    TextField("搜索小组件", text: $rmskinViewModel.searchText)
+                                        .textFieldStyle(.roundedBorder)
+                                    Spacer()
+                                }
+                                .padding(.bottom, 4)
+                            }
+                            HStack(spacing: 0) {
+                                HStack(spacing: 0) {
+                                    WidgetFilterSidebar(viewModel: rmskinViewModel)
+                                }
+                                .frame(width: viewModel.isFilterReveal ? 225 : 0)
+                                .opacity(viewModel.isFilterReveal ? 1 : 0)
+
+                                WidgetExplorer(viewModel: rmskinViewModel)
+                                    .padding(.leading, viewModel.isFilterReveal ? 10 : 0)
+                            }
+                            .animation(.default, value: viewModel.isFilterReveal)
                         case 2:
                             ExplorerTopBar(contentViewModel: viewModel)
                                 .environmentObject(globalSettingsViewModel)
@@ -64,7 +91,6 @@ struct ContentView: View {
                                 WorkshopFilterSidebar(workshopViewModel: workshopViewModel)
                                     .frame(width: viewModel.isFilterReveal ? 225 : 0)
                                     .opacity(viewModel.isFilterReveal ? 1 : 0)
-                                    .animation(.spring(), value: viewModel.isFilterReveal)
 
                                 WorkshopView(
                                     workshopViewModel: workshopViewModel,
@@ -78,10 +104,15 @@ struct ContentView: View {
                         }
                         ExplorerBottomBar()
                     }
-                    .padding()
+                }
+                .padding()
 
+                if viewModel.isStaging {
                     if viewModel.topTabBarSelection == 0 {
                         WallpaperPreview(contentViewModel: viewModel, wallpaperViewModel: wallpaperViewModel)
+                            .frame(maxWidth: 320)
+                    } else if viewModel.topTabBarSelection == 3 {
+                        WidgetPreview(viewModel: rmskinViewModel)
                             .frame(maxWidth: 320)
                     } else if workshopViewModel.showCustomization {
                         WallpaperPreview(contentViewModel: viewModel, wallpaperViewModel: wallpaperViewModel)

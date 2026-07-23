@@ -18,6 +18,7 @@ SCENE_BIN="$ROOT/SceneRenderer/build/$SCENE_PRESET/Tools/SceneWallpaper/SceneWal
 SCENE_SAVER_LIB="$ROOT/SceneRenderer/build/$SCENE_PRESET/Tools/SceneScreenSaver/libMirageSceneSaver.dylib"
 WEB_BIN="$ROOT/WebRenderer/build/release/Tools/WebWallpaper/WebWallpaper"
 VIDEO_BIN="$ROOT/VideoRenderer/build/release/Tools/VideoWallpaper/VideoWallpaper"
+RMSKIN_BIN="$ROOT/RmskinRenderer/build/release/Tools/RmskinWallpaper/RmskinWallpaper"
 ASSETS_DIR="$ROOT/assets"
 
 BREW_PREFIX="$(brew --prefix)"
@@ -26,7 +27,7 @@ MOLTENVK="$BREW_PREFIX/opt/molten-vk/lib/libMoltenVK.dylib"
 echo "[bundle] App:  $APP"
 echo "[bundle] Root: $ROOT"
 
-for f in "$SCENE_BIN" "$SCENE_SAVER_LIB" "$WEB_BIN" "$VIDEO_BIN"; do
+for f in "$SCENE_BIN" "$SCENE_SAVER_LIB" "$WEB_BIN" "$VIDEO_BIN" "$RMSKIN_BIN"; do
     [ -f "$f" ] || { echo "[bundle] 缺少渲染器: $f" >&2; exit 1; }
 done
 [ -d "$ASSETS_DIR" ] || { echo "[bundle] 缺少 assets 目录: $ASSETS_DIR" >&2; exit 1; }
@@ -37,6 +38,7 @@ mkdir -p "$FRAMEWORKS" "$RENDERERS" "$VK_ICD_DIR"
 cp -f "$SCENE_BIN" "$RENDERERS/SceneWallpaper"
 cp -f "$WEB_BIN"   "$RENDERERS/WebWallpaper"
 cp -f "$VIDEO_BIN" "$RENDERERS/VideoWallpaper"
+cp -f "$RMSKIN_BIN" "$RENDERERS/RmskinWallpaper"
 chmod +x "$RENDERERS"/*
 
 is_bundleable() {
@@ -149,7 +151,7 @@ retarget_bin() {
 }
 
 echo "[bundle] 重写渲染器可执行文件的 install name..."
-for bin in "$RENDERERS/SceneWallpaper" "$RENDERERS/WebWallpaper" "$RENDERERS/VideoWallpaper"; do
+for bin in "$RENDERERS/SceneWallpaper" "$RENDERERS/WebWallpaper" "$RENDERERS/VideoWallpaper" "$RENDERERS/RmskinWallpaper"; do
     retarget_bin "$bin"
 done
 
@@ -204,7 +206,7 @@ for lib in "$FRAMEWORKS"/*.dylib; do
     [ -f "$lib" ] || continue
     codesign --force --sign - --timestamp=none "$lib" 2>/dev/null || true
 done
-for bin in "$RENDERERS/SceneWallpaper" "$RENDERERS/WebWallpaper" "$RENDERERS/VideoWallpaper"; do
+for bin in "$RENDERERS/SceneWallpaper" "$RENDERERS/WebWallpaper" "$RENDERERS/VideoWallpaper" "$RENDERERS/RmskinWallpaper"; do
     codesign --force --sign - --timestamp=none "$bin" 2>/dev/null || true
 done
 if [ -d "${SAVER:-}" ]; then
