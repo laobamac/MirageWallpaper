@@ -11,6 +11,8 @@ struct ExplorerBottomBar: View {
     @ObservedObject var wallpaperViewModel: WallpaperViewModel
     @ObservedObject private var manager = PlaylistManager.shared
 
+    @AppStorage("PlaylistCollapsed") private var isCollapsed = false
+
     @State private var targetScreen = 0
     @State private var selectedItemID: String?
     @State private var isOpenPresented = false
@@ -27,12 +29,15 @@ struct ExplorerBottomBar: View {
     var body: some View {
         VStack(spacing: 8) {
             header
-            PlaylistStrip(manager: manager,
-                          wallpaperViewModel: wallpaperViewModel,
-                          screen: targetScreen,
-                          selectedItemID: $selectedItemID)
-            footer
+            if !isCollapsed {
+                PlaylistStrip(manager: manager,
+                              wallpaperViewModel: wallpaperViewModel,
+                              screen: targetScreen,
+                              selectedItemID: $selectedItemID)
+                footer
+            }
         }
+        .animation(.easeInOut(duration: 0.2), value: isCollapsed)
         .onAppear { manager.ensureScreen(targetScreen) }
         .onChange(of: targetScreen) { _ in
             manager.ensureScreen(targetScreen)
@@ -61,6 +66,17 @@ struct ExplorerBottomBar: View {
 
     private var header: some View {
         HStack(spacing: 8) {
+            Button {
+                isCollapsed.toggle()
+            } label: {
+                Image(systemName: isCollapsed ? "chevron.up" : "chevron.down")
+                    .font(.body.bold())
+                    .foregroundStyle(.secondary)
+                    .frame(width: 20)
+            }
+            .buttonStyle(.plain)
+            .help(isCollapsed ? L("展开播放列表") : L("收起播放列表"))
+
             Text(itemCount > 0 ? L("播放列表 (%d)", itemCount) : L("播放列表"))
                 .font(.title2.bold())
                 .lineLimit(1)

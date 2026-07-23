@@ -57,7 +57,7 @@ struct PlaylistStrip: View {
                 }
             }
         }
-        .frame(height: 92)
+        .frame(height: 124)
         .background(
             RoundedRectangle(cornerRadius: 10)
                 .fill(Color.primary.opacity(0.05))
@@ -103,47 +103,50 @@ private struct PlaylistThumb: View {
 
     @State private var hovering = false
 
-    var body: some View {
-        ZStack(alignment: .bottomLeading) {
-            thumbnail
-                .frame(width: 128, height: 72)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .strokeBorder(borderColor, lineWidth: borderWidth)
-                )
-                .shadow(color: .black.opacity(hovering ? 0.25 : 0), radius: hovering ? 6 : 0, y: 2)
+    private let side: CGFloat = 72
 
-            HStack(spacing: 3) {
+    var body: some View {
+        VStack(spacing: 4) {
+            ZStack(alignment: .bottomLeading) {
+                thumbnail
+                    .frame(width: side, height: side)
+                    .background(Color.black.opacity(0.85))
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(borderColor, lineWidth: borderWidth)
+                    )
+                    .shadow(color: .black.opacity(hovering ? 0.25 : 0), radius: hovering ? 6 : 0, y: 2)
+
                 if isPlaying {
                     Image(systemName: "play.fill")
                         .font(.system(size: 8, weight: .bold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 5)
-                        .padding(.vertical, 2)
+                        .padding(.vertical, 3)
                         .background(Color.accentColor, in: Capsule())
+                        .padding(5)
                 }
-                Text(wallpaper?.project.title ?? item.wallpaperID)
-                    .font(.system(size: 10))
-                    .lineLimit(1)
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 2)
-                    .background(Color.black.opacity(0.55), in: Capsule())
             }
-            .padding(4)
-        }
-        .overlay(alignment: .topTrailing) {
-            if hovering {
-                Button(action: onRemove) {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 14))
-                        .foregroundStyle(.white, .black.opacity(0.65))
-                        .symbolRenderingMode(.palette)
+            .overlay(alignment: .topTrailing) {
+                if hovering {
+                    Button(action: onRemove) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 14))
+                            .foregroundStyle(.white, .black.opacity(0.65))
+                            .symbolRenderingMode(.palette)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(4)
                 }
-                .buttonStyle(.plain)
-                .padding(4)
             }
+
+            Text(wallpaper?.project.title ?? item.wallpaperID)
+                .font(.system(size: 10))
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .foregroundStyle(hovering || isPlaying ? .primary : .secondary)
+                .frame(width: side)
         }
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
@@ -168,7 +171,7 @@ private struct PlaylistThumb: View {
         if let wallpaper, !wallpaper.project.preview.isEmpty {
             GifImage(contentsOf: wallpaper.previewURL, animates: hovering || isPlaying)
                 .resizable()
-                .aspectRatio(contentMode: .fill)
+                .aspectRatio(1.0, contentMode: .fit)
         } else {
             ZStack {
                 Color.gray.opacity(0.3)

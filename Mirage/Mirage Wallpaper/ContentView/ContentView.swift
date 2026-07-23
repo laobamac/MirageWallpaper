@@ -76,8 +76,10 @@ struct ContentView: View {
                         default:
                             EmptyView()
                         }
-                        ExplorerBottomBar(contentViewModel: viewModel,
-                                          wallpaperViewModel: wallpaperViewModel)
+                        if viewModel.topTabBarSelection == 0 {
+                            ExplorerBottomBar(contentViewModel: viewModel,
+                                              wallpaperViewModel: wallpaperViewModel)
+                        }
                     }
                     .padding()
 

@@ -660,3 +660,5 @@
 "读取" = "Load";
 "尚未添加壁纸，右键壁纸选择“加入播放列表”，或点击右上角“添加壁纸”。" = "No wallpapers yet. Right-click a wallpaper and choose \"Add to Playlist\", or click \"Add Wallpaper\" above.";
 "移除壁纸" = "Remove Wallpaper";
+"展开播放列表" = "Expand playlist";
+"收起播放列表" = "Collapse playlist";
