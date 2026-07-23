@@ -27,7 +27,7 @@ class MainWindowController: NSWindowController, NSWindowDelegate {
         refreshLocalizedTitle()
         self.window.titlebarAppearsTransparent = true
         self.window.setFrameAutosaveName("MainWindow")
-        self.window.isMovableByWindowBackground = true
+        self.window.isMovableByWindowBackground = false
         self.window.contentMinSize = NSSize(width: 1000, height: 640)
         let hostingView = NSHostingView(rootView: ContentView(
                 viewModel: AppDelegate.shared.contentViewModel,
