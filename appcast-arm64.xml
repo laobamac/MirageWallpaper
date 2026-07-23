@@ -7,6 +7,31 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
         <title>Mirage</title>
         <item>
             <title>1.0.0</title>
+            <pubDate>Thu, 23 Jul 2026 17:43:14 +0000</pubDate>
+            <link>https://github.com/laobamac/MirageWallpaper</link>
+            <sparkle:channel>beta</sparkle:channel>
+            <sparkle:version>186</sparkle:version>
+            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="plain-text"><![CDATA[Commit: d148391e0e1a57b0bb1c5d6548012e098c6f6162
+Channel: beta
+
+feat(app): Wallpaper Engine-style playlists with per-screen rotation
+
+Add playlist data model, manager and per-screen rotator driving the
+bottom-bar strip: ordered/random playback, timer/time-of-day/day-of-week/
+logon timing, transition overlay, and save/open/settings sheets.
+
+Add a video-end IPC event (VideoRenderer -> host) so timer switches can
+defer until the current video finishes its loop, and track per-screen
+current wallpaper in WallpaperViewModel for independent playlists.
+
+]]></description>
+            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-186-d148391e0e1a-macOS-arm64.zip" length="192665986" type="application/octet-stream" sparkle:edSignature="t9fzGUpfVO5aHPND4V0MNnqNq92XwVNgD8BaGmVxHQVQ3BQAlRaPIjvWuKXSCwLXZIZhdw48SMCNwDzxAgKfDw=="/>
+        </item>
+        <item>
+            <title>1.0.0</title>
             <pubDate>Thu, 23 Jul 2026 15:56:50 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
             <sparkle:channel>beta</sparkle:channel>
@@ -96,27 +121,9 @@ ci(app): link against macOS 26 SDK for current system UI
 ]]></description>
             <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-179-8e52e67d3568-macOS-arm64.zip" length="192404440" type="application/octet-stream" sparkle:edSignature="oAK3yDM8WMUejnJidlkTpbfAVYqdVvyuhmoCieo2VyPQtsJN6m7nf0rr+OTQ5JB0XMZYVqTUWMztZdDGcWQsDQ=="/>
         </item>
-        <item>
-            <title>1.0.0</title>
-            <pubDate>Mon, 20 Jul 2026 15:35:01 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>169</sparkle:version>
-            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="plain-text"><![CDATA[Commit: f13f4715420126e713fcde2a065f307dfda8b683
-Channel: beta
-
-fix(render): rewrite preset background URLs after property updates
-
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-169-f13f47154201-macOS-arm64.zip" length="192337615" type="application/octet-stream" sparkle:edSignature="QGq228FuaRmIxBDlTGUT1xABgpnURqXxatMrZUu4KRVZr1d1Vy6UWNQiDxaqGu1RRnjN6DumEv/ORo/vEPsiCQ=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: BK4PakBzvOFoPL17sFmeez3FPzj0HYX681IalHguFYK1TwOlSBJ8+bmkKGYhqrOLO3q3N/HzSPbRS8oTHzH+Dw==
-length: 7094
+edSignature: 7ogWAK3R8A7NMOQwHvAtHkdCdtPRVGE+dHEaXNY/w5o9bs1xO/+2rGnldyVnsdmowGLbOOjr2i1Be0L3YHw4Aw==
+length: 7513
 -->
