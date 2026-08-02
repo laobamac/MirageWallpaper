@@ -404,8 +404,14 @@ QWidget* WallpaperPreviewWidget::sectionHeader(const QString& title) {
 
 void WallpaperPreviewWidget::updateTags() {
     auto* layout = qobject_cast<QHBoxLayout*>(m_tags->layout());
+    // Defer deletion (same reason as PropertyEditorWidget::clear()): the tag row
+    // is rebuilt from setWallpaper(), which may run while the user is interacting
+    // with the preview panel.
     while (QLayoutItem* item = layout->takeAt(0)) {
-        delete item->widget();
+        if (QWidget* widget = item->widget()) {
+            widget->hide();
+            widget->deleteLater();
+        }
         delete item;
     }
     if (m_wallpaper.project.tags.isEmpty()) {

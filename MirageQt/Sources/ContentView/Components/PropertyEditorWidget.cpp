@@ -534,8 +534,17 @@ QWidget* PropertyEditorWidget::widgetFor(const QString& key, ProjectProperty pro
 }
 
 void PropertyEditorWidget::clear() {
+    // Defer deletion so widgets are never destroyed while Qt is still processing
+    // a click on them (e.g. a checkbox toggling a property triggers a rebuild
+    // from inside its own signal handler, or a wallpaper switch rebuilds the
+    // editor while the mouse button is held down). Destroying them synchronously
+    // here leaves dangling pointers in Qt's mouse/press tracking and causes a
+    // use-after-free crash in QCheckBox::checkStateSet() on release.
     while (QLayoutItem* item = m_layout->takeAt(0)) {
-        delete item->widget();
+        if (QWidget* widget = item->widget()) {
+            widget->hide();
+            widget->deleteLater();
+        }
         delete item;
     }
 }
