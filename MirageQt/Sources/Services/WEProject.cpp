@@ -93,6 +93,23 @@ QString ProjectProperty::stringValue() const {
     return value.toString();
 }
 
+QVariant ProjectProperty::normalizedComboValue(const QVariant& candidate) const {
+    if (propertyKind() != PropertyKind::Combo || options.isEmpty()) return candidate;
+
+    for (const auto& option : options) {
+        if (option.value == candidate) return candidate;
+    }
+
+    ProjectProperty probe;
+    probe.value = candidate;
+    const QString candidateText = probe.stringValue();
+    for (const auto& option : options) {
+        probe.value = option.value;
+        if (probe.stringValue() == candidateText) return option.value;
+    }
+    return candidate;
+}
+
 WallpaperKind Project::kind() const {
     return wallpaperKindFromString(type);
 }
@@ -373,7 +390,7 @@ ProjectProperty propertyFromJson(const QJsonObject& object) {
         const QJsonObject optObject = item.toObject();
         ProjectPropertyOption opt;
         opt.label = optObject.value("label").toString();
-        opt.value = jsonStringOrNumber(optObject.value("value"));
+        opt.value = jsonValueToVariant(optObject.value("value"));
         opt.condition = optObject.value("condition").toString();
         property.options.push_back(opt);
     }
@@ -400,7 +417,7 @@ QJsonObject propertyToJson(const ProjectProperty& property) {
         for (const auto& opt : property.options) {
             QJsonObject optObject;
             optObject.insert("label", opt.label);
-            optObject.insert("value", opt.value);
+            optObject.insert("value", variantToJsonValue(opt.value));
             if (!opt.condition.isEmpty()) optObject.insert("condition", opt.condition);
             array.push_back(optObject);
         }

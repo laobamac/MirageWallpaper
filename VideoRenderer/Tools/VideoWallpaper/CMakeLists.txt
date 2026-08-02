@@ -8,6 +8,10 @@ if(APPLE)
     target_compile_options(VideoWallpaper PRIVATE -Wno-deprecated-declarations)
 elseif(UNIX AND NOT APPLE)
     find_package(X11 REQUIRED COMPONENTS Xfixes Xext)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(MIRAGE_FFMPEG REQUIRED IMPORTED_TARGET
+        libavformat>=58 libavcodec>=58 libavutil>=56 libswscale>=5 libswresample>=3)
+    pkg_check_modules(MIRAGE_PULSE REQUIRED IMPORTED_TARGET libpulse-simple>=1.0)
 
     add_executable(VideoWallpaper
         Linux/VideoWallpaper.cpp
@@ -15,6 +19,18 @@ elseif(UNIX AND NOT APPLE)
         Linux/ControlChannel.cpp
         Linux/X11DesktopWindow.h
         Linux/X11DesktopWindow.cpp)
+    if(VIDEORENDERER_ENABLE_MIRAGE_DISPLAY)
+        target_sources(VideoWallpaper PRIVATE
+            Linux/ProtocolVideoRenderer.h
+            Linux/ProtocolVideoRenderer.cpp)
+        target_compile_definitions(VideoWallpaper PRIVATE
+            VIDEORENDERER_MIRAGE_DISPLAY=1)
+        target_link_libraries(VideoWallpaper PRIVATE
+            mirage_display_vulkan_static
+            PkgConfig::MIRAGE_FFMPEG
+            PkgConfig::MIRAGE_PULSE
+            Threads::Threads)
+    endif()
     target_link_libraries(VideoWallpaper PRIVATE
         VideoRendererEngine
         X11::X11

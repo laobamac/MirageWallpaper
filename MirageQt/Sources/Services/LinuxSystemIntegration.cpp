@@ -76,7 +76,14 @@ bool LinuxSystemIntegration::isWaylandSession() {
 
 QString LinuxSystemIntegration::wallpaperUnsupportedReason() {
     if (isX11Session()) return {};
-    if (isWaylandSession()) return QStringLiteral("当前 Wayland 会话不支持动态桌面壁纸，请在 X11 会话下应用壁纸。");
+    if (isWaylandSession() &&
+        qEnvironmentVariable("XDG_CURRENT_DESKTOP").contains(QStringLiteral("KDE"),
+                                                              Qt::CaseInsensitive)) {
+        return {};
+    }
+    if (isWaylandSession()) {
+        return QStringLiteral("当前 Wayland 桌面尚未安装受支持的 Mirage 显示适配器。");
+    }
     return QStringLiteral("当前桌面会话不支持动态桌面壁纸，请在 X11 会话下应用壁纸。");
 }
 

@@ -9,6 +9,7 @@
 #include <QPainter>
 #include <QPixmap>
 #include <QScrollArea>
+#include <QSignalBlocker>
 #include <QVBoxLayout>
 
 namespace Mirage {
@@ -275,6 +276,7 @@ WallpaperPreviewWidget::WallpaperPreviewWidget(FavoritesManager* favorites, QWid
     resetPreset->setProperty("danger", true);
     presetRow->addWidget(importPreset);
     presetRow->addWidget(exportPreset);
+    presetRow->addWidget(resetPreset);
     body->addWidget(presetRowWidget);
     body->addWidget(resetPreset);
     body->addStretch(1);
@@ -321,6 +323,7 @@ WallpaperPreviewWidget::WallpaperPreviewWidget(FavoritesManager* favorites, QWid
         emit fillModeChanged(static_cast<FillMode>(m_fill->currentData().toInt()));
     });
     connect(m_properties, &PropertyEditorWidget::propertyChanged, this, &WallpaperPreviewWidget::propertyChanged);
+    connect(resetPreset, &QPushButton::clicked, this, &WallpaperPreviewWidget::resetDefaultsRequested);
     connect(applyAll, &QPushButton::clicked, this, [this] { emit applyAllRequested(m_wallpaper); });
     connect(stop, &QPushButton::clicked, this, &WallpaperPreviewWidget::stopRequested);
     connect(confirm, &QPushButton::clicked, this, &WallpaperPreviewWidget::closeRequested);
@@ -358,6 +361,29 @@ void WallpaperPreviewWidget::setWallpaper(const Wallpaper& wallpaper) {
     m_fillRow->setVisible(wallpaper.kind() == WallpaperKind::Video);
     m_properties->setWallpaper(wallpaper);
     updateTags();
+}
+
+void WallpaperPreviewWidget::setRuntime(const WallpaperRuntimeState& runtime) {
+    const QSignalBlocker volumeBlocker(m_volume);
+    const QSignalBlocker speedBlocker(m_speed);
+    const QSignalBlocker fillBlocker(m_fill);
+
+    const int volumePercent = qBound(0, qRound(runtime.volume * 100.0), 100);
+    m_volume->setValue(volumePercent);
+    m_volumeValue->setText(QStringLiteral("%1%").arg(volumePercent));
+
+    const int speedPercent = qBound(0, qRound(runtime.speed * 100.0), 200);
+    m_speed->setValue(speedPercent);
+    m_speedValue->setText(QStringLiteral("%1x").arg(runtime.speed, 0, 'f', 1));
+
+    const int fillIndex = m_fill->findData(QVariant::fromValue(int(runtime.fillMode)));
+    if (fillIndex >= 0) m_fill->setCurrentIndex(fillIndex);
+
+    setPropertyOverrides(runtime.propertyOverrides);
+}
+
+void WallpaperPreviewWidget::setPropertyOverrides(const QHash<QString, QVariant>& overrides) {
+    m_properties->setPropertyOverrides(overrides);
 }
 
 QWidget* WallpaperPreviewWidget::sectionHeader(const QString& title) {

@@ -23,6 +23,8 @@ export namespace sr
 
 using ReDrawCB = std::function<void()>;
 using MetalFrameCB = std::function<void(void* mtl_texture, uint32_t width, uint32_t height)>;
+using ExSwapchainFactory = std::function<std::unique_ptr<ExSwapchain>(
+    VkInstance, VkPhysicalDevice, VkDevice, VkQueue, uint32_t, unsigned, unsigned)>;
 
 struct VulkanSurfaceInfo {
     std::function<VkResult(VkInstance, VkSurfaceKHR*)> createSurfaceOp;
@@ -45,6 +47,7 @@ struct RenderInitInfo {
     uint32_t msaa_samples { 1 };
     ReDrawCB redraw_callback;
     MetalFrameCB metal_frame_callback;
+    ExSwapchainFactory ex_swapchain_factory;
 };
 
 std::unique_ptr<rg::RenderGraph> sceneToRenderGraph(Scene&);

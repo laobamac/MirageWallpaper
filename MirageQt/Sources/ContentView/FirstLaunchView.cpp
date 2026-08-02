@@ -9,7 +9,7 @@ namespace Mirage {
 FirstLaunchView::FirstLaunchView(QWidget* parent)
     : QDialog(parent) {
     setWindowTitle(QStringLiteral("欢迎使用 MirageQt"));
-    auto* label = new QLabel(QStringLiteral("MirageQt 会扫描本机 Wallpaper Engine 创意工坊目录、MirageQt 导入目录和 SteamCMD 下载目录。X11 支持动态桌面壁纸；Wayland 会保留主界面和预览，但不能应用动态桌面壁纸。"), this);
+    auto* label = new QLabel(QStringLiteral("MirageQt 会扫描本机 Wallpaper Engine 创意工坊目录、MirageQt 导入目录和 SteamCMD 下载目录。KDE Plasma 6 可通过 Mirage 壁纸插件在 Wayland 与 X11 会话显示动态壁纸。"), this);
     label->setWordWrap(true);
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok, this);
     auto* layout = new QVBoxLayout(this);

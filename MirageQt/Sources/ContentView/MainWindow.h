@@ -17,14 +17,17 @@
 #include "Services/SteamCMDManager.h"
 #include "Services/SteamWebAPI.h"
 #include "Services/WallpaperLibrary.h"
+#include "Services/WallpaperRuntimeStore.h"
 
-#include <QLabel>
 #include <QDialog>
+#include <QHash>
+#include <QLabel>
 #include <QMainWindow>
 #include <QPointer>
 #include <QStackedWidget>
 #include <QSplitter>
 #include <QSystemTrayIcon>
+#include <QTimer>
 
 namespace Mirage {
 
@@ -50,7 +53,15 @@ private:
     QWidget* buildWorkshopPage();
     void openSettingsPage(int page);
     void setFilterVisible(bool visible);
-    RenderOptions currentRenderOptions() const;
+    RenderOptions renderOptionsFor(const Wallpaper& wallpaper) const;
+    void selectWallpaper(const Wallpaper& wallpaper);
+    void handleVolumeChanged(double volume);
+    void handleSpeedChanged(double speed);
+    void handleFillModeChanged(FillMode mode);
+    void handlePropertyChanged(const QString& key, const ProjectProperty& property);
+    void handleResetDefaults();
+    void flushPendingPropertyCommands();
+    void reapplyPlayingWallpaper(const Wallpaper& wallpaper);
     void setupTray();
     void showMessage(const QString& message);
 
@@ -62,6 +73,7 @@ private:
     WorkshopViewModel* m_workshopViewModel = nullptr;
     RendererController* m_renderer = nullptr;
     PlaylistManager* m_playlist = nullptr;
+    WallpaperRuntimeStore* m_runtimeStore = nullptr;
     ExplorerBottomBarWidget* m_bottomBar = nullptr;
 
     TopTabBarWidget* m_topTabs = nullptr;
@@ -78,6 +90,9 @@ private:
     WorkshopFilterSidebar* m_workshopFilter = nullptr;
     WorkshopItemDetail* m_workshopDetail = nullptr;
     bool m_showWorkshopCustomization = false;
+    Wallpaper m_selectedWallpaper;
+    QHash<QString, ProjectProperty> m_pendingPropertyCommands;
+    QTimer* m_propertyCommandTimer = nullptr;
     QSystemTrayIcon* m_tray = nullptr;
     QPointer<QDialog> m_settingsDialog;
 };

@@ -1,8 +1,13 @@
 #include "DesktopHost.h"
 #include "ControlChannel.h"
+#if defined(SCENERENDERER_MIRAGE_DISPLAY)
+#include <mirage_display_producer.h>
+#include <mirage_display_vulkan_export.h>
+#endif
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cerrno>
 #include <charconv>
 #include <chrono>
@@ -13,7 +18,9 @@
 #include <cstring>
 #include <execinfo.h>
 #include <fstream>
+#include <functional>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <sstream>
@@ -21,6 +28,11 @@
 #include <thread>
 #include <utility>
 #include <vector>
+#if defined(SCENERENDERER_MIRAGE_DISPLAY)
+#include <poll.h>
+#include <sys/sysmacros.h>
+#include <unistd.h>
+#endif
 #if defined(__APPLE__)
 #include <xlocale.h>
 #else
@@ -32,6 +44,9 @@ import rstd.log;
 import sr.json;
 import sr.scene_wallpaper;
 import sr.utils;
+#if defined(SCENERENDERER_MIRAGE_DISPLAY)
+import sr.vulkan;
+#endif
 
 namespace
 {
@@ -76,6 +91,8 @@ struct Options {
     std::string               scene_pkg;
     std::string               cache_dir;
     std::string               user_properties;
+    std::string               display_output_id;
+    std::string               display_socket;
     std::optional<Resolution> resolution;
     std::optional<std::array<double, 2>> mouse_position;
     std::uint32_t             fps { 30 };
@@ -140,21 +157,21 @@ public:
     StopTimer(const StopTimer&) = delete;
     StopTimer& operator=(const StopTimer&) = delete;
 
-    void start(void* desktop, int seconds) {
+    void start(std::function<void()> stop_callback, int seconds) {
         stop();
-        if (desktop == nullptr || seconds <= 0) return;
+        if (!stop_callback || seconds <= 0) return;
 
         {
             std::lock_guard lock(mutex_);
             stop_requested_ = false;
         }
-        worker_ = std::thread([this, desktop, seconds]() {
+        worker_ = std::thread([this, stop_callback = std::move(stop_callback), seconds]() {
             std::unique_lock lock(mutex_);
             const bool stopped = cv_.wait_for(lock, std::chrono::seconds(seconds), [this]() {
                 return stop_requested_;
             });
             lock.unlock();
-            if (! stopped) sr::host::DesktopStop(desktop);
+            if (! stopped) stop_callback();
         });
     }
 
@@ -189,6 +206,8 @@ void PrintUsage(const char* argv0) {
         << "      --mouse-position X,Y    Initial normalized mouse position\n"
         << "      --input-hz N            Desktop mouse polling rate (default 60)\n"
         << "      --screen N              Screen index to cover (default 0 = main)\n"
+        << "      --display-output-id ID  Stable DE output identity for protocol mode\n"
+        << "      --display-socket PATH   mirage-display broker socket\n"
         << "      --muted                 Start with audio muted\n"
         << "      --control-stdin         Accept live JSON control commands on stdin\n"
         << "      --deferred-show         Keep the window transparent until activated\n"
@@ -292,6 +311,14 @@ bool ParseArgs(int argc, char** argv, Options& out) {
         } else if (arg == "--screen") {
             const char* value = require_value(i, arg);
             if (value == nullptr || ! ParseUInt(value, out.screen)) return false;
+        } else if (arg == "--display-output-id") {
+            const char* value = require_value(i, arg);
+            if (value == nullptr || *value == '\0') return false;
+            out.display_output_id = value;
+        } else if (arg == "--display-socket") {
+            const char* value = require_value(i, arg);
+            if (value == nullptr || *value == '\0') return false;
+            out.display_socket = value;
         } else if (arg == "-f" || arg == "--fps") {
             const char* value = require_value(i, arg);
             if (value == nullptr || ! ParseUInt(value, out.fps)) return false;
@@ -418,6 +445,505 @@ void ActivatedCallback(void* userdata) {
     EmitLifecycleEvent(state, "activated");
 }
 
+#if defined(SCENERENDERER_MIRAGE_DISPLAY)
+
+constexpr std::uint32_t MirageDrmFormat(char a, char b, char c, char d) {
+    return static_cast<std::uint32_t>(static_cast<unsigned char>(a)) |
+           (static_cast<std::uint32_t>(static_cast<unsigned char>(b)) << 8u) |
+           (static_cast<std::uint32_t>(static_cast<unsigned char>(c)) << 16u) |
+           (static_cast<std::uint32_t>(static_cast<unsigned char>(d)) << 24u);
+}
+
+constexpr std::uint32_t MirageDrmXrgb8888 = MirageDrmFormat('X', 'R', '2', '4');
+constexpr std::uint32_t MirageDrmArgb8888 = MirageDrmFormat('A', 'R', '2', '4');
+constexpr std::uint32_t MirageDrmXbgr8888 = MirageDrmFormat('X', 'B', '2', '4');
+constexpr std::uint32_t MirageDrmAbgr8888 = MirageDrmFormat('A', 'B', '2', '4');
+
+class MirageProtocolHost {
+public:
+    MirageProtocolHost(std::string socket_path, std::string output_id,
+                       sr::host::DesktopCallbacks callbacks)
+        : m_socket_path(std::move(socket_path)),
+          m_output_id(std::move(output_id)),
+          m_callbacks(callbacks) {}
+
+    ~MirageProtocolHost() { stop(); }
+
+    MirageProtocolHost(const MirageProtocolHost&) = delete;
+    MirageProtocolHost& operator=(const MirageProtocolHost&) = delete;
+
+    bool start() {
+        if (m_socket_path.empty() || m_output_id.empty()) return false;
+        {
+            std::lock_guard lock(m_producer_mutex);
+            if (!connectProducerLocked()) return false;
+        }
+        m_running.store(true);
+        m_io_thread = std::thread([this] { ioLoop(); });
+        std::unique_lock state_lock(m_state_mutex);
+        return m_state_cv.wait_for(state_lock, std::chrono::seconds(10), [this] {
+            return m_config_version != 0 || !m_running.load();
+        }) && m_config_version != 0;
+    }
+
+    void stop() {
+        const bool was_running = m_running.exchange(false);
+        m_state_cv.notify_all();
+        m_run_cv.notify_all();
+        if (was_running) {
+            std::lock_guard lock(m_producer_mutex);
+            if (m_producer != nullptr) md_producer_close(m_producer);
+        }
+        if (m_io_thread.joinable()) m_io_thread.join();
+        std::lock_guard lock(m_producer_mutex);
+        if (m_producer != nullptr) {
+            md_producer_free(m_producer);
+            m_producer = nullptr;
+        }
+    }
+
+    int run() {
+        std::unique_lock lock(m_run_mutex);
+        m_run_cv.wait(lock, [this] { return !m_running.load(); });
+        return 1;
+    }
+
+    bool snapshotConfig(std::uint64_t last_version, std::uint64_t last_epoch,
+                        md_producer_config_t& config, std::uint64_t& version,
+                        std::uint64_t& epoch) const {
+        std::lock_guard lock(m_state_mutex);
+        if (m_config_version == 0 ||
+            (m_config_version == last_version && m_connection_epoch == last_epoch)) {
+            return false;
+        }
+        config = m_config;
+        version = m_config_version;
+        epoch = m_connection_epoch;
+        return true;
+    }
+
+    bool currentConfig(md_producer_config_t& config, std::uint64_t& version,
+                       std::uint64_t& epoch) const {
+        return snapshotConfig(0, 0, config, version, epoch);
+    }
+
+    std::uint64_t takeRetireGeneration() {
+        std::lock_guard lock(m_state_mutex);
+        return std::exchange(m_retire_generation, UINT64_C(0));
+    }
+
+    std::uint64_t nextGeneration() { return m_next_generation.fetch_add(1); }
+
+    int offerPool(const md_buffer_pool_t* pool) {
+        if (pool == nullptr) return MD_ERR_INVALID;
+        std::lock_guard lock(m_producer_mutex);
+        if (m_producer == nullptr ||
+            md_producer_connection_state(m_producer) != MD_CONNECTION_READY) {
+            return MD_ERR_DISCONNECTED;
+        }
+        int result = md_producer_offer_buffers(m_producer, pool);
+        if (result != MD_OK) return result;
+        md_display_config_t display_config {
+            .generation = pool->generation,
+            .source = {0.0f, 0.0f, static_cast<float>(pool->width),
+                       static_cast<float>(pool->height)},
+            .destination = {0.0f, 0.0f, static_cast<float>(pool->width),
+                            static_cast<float>(pool->height)},
+            .transform = MD_TRANSFORM_NORMAL,
+            .clear_color = {0.0f, 0.0f, 0.0f, 1.0f},
+        };
+        return md_producer_set_config(m_producer, &display_config);
+    }
+
+    int submitFrame(std::uint64_t generation, std::uint32_t index, std::uint64_t sequence,
+                    int acquire_fd, int release_fd) {
+        std::lock_guard lock(m_producer_mutex);
+        if (m_producer == nullptr ||
+            md_producer_connection_state(m_producer) != MD_CONNECTION_READY) {
+            if (acquire_fd >= 0) close(acquire_fd);
+            if (release_fd >= 0) close(release_fd);
+            return MD_ERR_DISCONNECTED;
+        }
+        return md_producer_submit_frame(m_producer, generation, index, sequence,
+                                        acquire_fd, release_fd);
+    }
+
+    void retireDone(std::uint64_t generation) {
+        std::lock_guard lock(m_producer_mutex);
+        if (m_producer != nullptr &&
+            md_producer_connection_state(m_producer) == MD_CONNECTION_READY) {
+            (void)md_producer_retire_done(m_producer, generation);
+        }
+    }
+
+    void notifyFirstFrame() {
+        if (!m_first_frame.exchange(true) && m_callbacks.first_frame_presented != nullptr) {
+            m_callbacks.first_frame_presented(m_callbacks.userdata);
+        }
+    }
+
+    void notifyActivated() {
+        if (m_callbacks.activated != nullptr) m_callbacks.activated(m_callbacks.userdata);
+    }
+
+private:
+    static void OnConnected(void* opaque, std::uint64_t, std::uint64_t) {
+        auto* self = static_cast<MirageProtocolHost*>(opaque);
+        {
+            std::lock_guard lock(self->m_state_mutex);
+            ++self->m_connection_epoch;
+            self->m_retire_generation = 0;
+        }
+        self->m_state_cv.notify_all();
+    }
+
+    static void OnOutputConfig(void* opaque, const md_producer_config_t* config) {
+        auto* self = static_cast<MirageProtocolHost*>(opaque);
+        if (config == nullptr) return;
+        {
+            std::lock_guard lock(self->m_state_mutex);
+            self->m_config = *config;
+            ++self->m_config_version;
+        }
+        self->m_state_cv.notify_all();
+    }
+
+    static void OnRetire(void* opaque, std::uint64_t generation) {
+        auto* self = static_cast<MirageProtocolHost*>(opaque);
+        std::lock_guard lock(self->m_state_mutex);
+        self->m_retire_generation = generation;
+    }
+
+    static void OnPointerEnter(void* opaque, const md_pointer_enter_t*) {
+        auto* self = static_cast<MirageProtocolHost*>(opaque);
+        if (self->m_callbacks.mouse_enter != nullptr) {
+            self->m_callbacks.mouse_enter(1, self->m_callbacks.userdata);
+        }
+    }
+
+    static void OnPointerLeave(void* opaque, std::uint64_t) {
+        auto* self = static_cast<MirageProtocolHost*>(opaque);
+        if (self->m_callbacks.mouse_enter != nullptr) {
+            self->m_callbacks.mouse_enter(0, self->m_callbacks.userdata);
+        }
+    }
+
+    static void OnPointerMotion(void* opaque, const md_pointer_motion_t* event) {
+        auto* self = static_cast<MirageProtocolHost*>(opaque);
+        if (event == nullptr || self->m_callbacks.mouse_move == nullptr) return;
+        md_producer_config_t config {};
+        {
+            std::lock_guard lock(self->m_state_mutex);
+            config = self->m_config;
+        }
+        if (config.physical_width == 0 || config.physical_height == 0) return;
+        const double x = std::clamp(static_cast<double>(event->x) /
+                                        static_cast<double>(config.physical_width),
+                                    0.0, 1.0);
+        const double y = std::clamp(static_cast<double>(event->y) /
+                                        static_cast<double>(config.physical_height),
+                                    0.0, 1.0);
+        self->m_callbacks.mouse_move(x, y, self->m_callbacks.userdata);
+    }
+
+    static void OnPointerButton(void* opaque, const md_pointer_button_t* event) {
+        auto* self = static_cast<MirageProtocolHost*>(opaque);
+        if (event == nullptr || self->m_callbacks.mouse_button == nullptr) return;
+        int button = -1;
+        switch (event->button) {
+        case 0x110u: button = 0; break;
+        case 0x111u: button = 1; break;
+        case 0x112u: button = 2; break;
+        default: return;
+        }
+        self->m_callbacks.mouse_button(button,
+                                       event->state == MD_BUTTON_PRESSED ? 1 : 0,
+                                       self->m_callbacks.userdata);
+    }
+
+    static void OnPointerAxis(void*, const md_pointer_axis_t*) {}
+
+    static void OnDisconnected(void* opaque, md_result_t, const char*) {
+        auto* self = static_cast<MirageProtocolHost*>(opaque);
+        self->m_state_cv.notify_all();
+    }
+
+    bool connectProducerLocked() {
+        if (m_producer != nullptr) md_producer_free(m_producer);
+        md_producer_callbacks_t callbacks {
+            .on_connected = OnConnected,
+            .on_output_config = OnOutputConfig,
+            .on_retire_buffers = OnRetire,
+            .on_pointer_enter = OnPointerEnter,
+            .on_pointer_leave = OnPointerLeave,
+            .on_pointer_motion = OnPointerMotion,
+            .on_pointer_button = OnPointerButton,
+            .on_pointer_axis = OnPointerAxis,
+            .on_disconnected = OnDisconnected,
+            .user_data = this,
+        };
+        m_producer = md_producer_new(&callbacks);
+        if (m_producer == nullptr) return false;
+        /* Offer only R8G8B8A8-mapped fourccs (XBGR/ABGR). The Qt Quick
+         * Vulkan consumer's QSGVulkanTexture::fromNative assumes RGBA8 for
+         * external images, so a B8G8R8A8 slot (XRGB/ARGB) would render with
+         * swapped R/B channels. */
+        const md_format_cap_t formats[] = {
+            {.fourcc = MirageDrmXbgr8888, .plane_count = 1, .modifier = 0},
+            {.fourcc = MirageDrmAbgr8888, .plane_count = 1, .modifier = 0},
+        };
+        md_producer_info_t info {
+            .stable_output_id = m_output_id.c_str(),
+            .kind = "scene",
+            .drm_render_major = 0,
+            .drm_render_minor = 0,
+            .device_uuid = {},
+            .driver_uuid = {},
+            .formats = formats,
+            .format_count = static_cast<std::uint32_t>(std::size(formats)),
+        };
+        const int result = md_producer_connect(m_producer, m_socket_path.c_str(),
+                                               "SceneWallpaper", "0.1.0", &info, 3000);
+        if (result == MD_OK) return true;
+        md_producer_free(m_producer);
+        m_producer = nullptr;
+        return false;
+    }
+
+    void ioLoop() {
+        while (m_running.load()) {
+            int fd = -1;
+            bool wants_write = false;
+            {
+                std::lock_guard lock(m_producer_mutex);
+                if (m_producer != nullptr) {
+                    fd = md_producer_get_fd(m_producer);
+                    wants_write = md_producer_wants_writable(m_producer);
+                }
+            }
+            if (fd < 0) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                std::lock_guard lock(m_producer_mutex);
+                if (m_running.load()) (void)connectProducerLocked();
+                continue;
+            }
+            pollfd descriptor {
+                .fd = fd,
+                .events = static_cast<short>(POLLIN | (wants_write ? POLLOUT : 0)),
+                .revents = 0,
+            };
+            int ready = poll(&descriptor, 1, 100);
+            if (ready < 0 && errno == EINTR) continue;
+            bool reconnect = ready < 0 ||
+                             (descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0;
+            if (!reconnect && ready > 0) {
+                std::lock_guard lock(m_producer_mutex);
+                if (m_producer == nullptr) continue;
+                if ((descriptor.revents & POLLIN) != 0 &&
+                    md_producer_dispatch(m_producer) < 0) {
+                    reconnect = true;
+                }
+                if (!reconnect && (descriptor.revents & POLLOUT) != 0 &&
+                    md_producer_handle_writable(m_producer) < 0) {
+                    reconnect = true;
+                }
+            }
+            if (reconnect && m_running.load()) {
+                std::lock_guard lock(m_producer_mutex);
+                if (m_producer != nullptr) {
+                    md_producer_free(m_producer);
+                    m_producer = nullptr;
+                }
+            }
+        }
+        m_run_cv.notify_all();
+    }
+
+    std::string m_socket_path;
+    std::string m_output_id;
+    sr::host::DesktopCallbacks m_callbacks;
+
+    mutable std::mutex m_state_mutex;
+    std::condition_variable m_state_cv;
+    md_producer_config_t m_config {};
+    std::uint64_t m_config_version { 0 };
+    std::uint64_t m_connection_epoch { 0 };
+    std::uint64_t m_retire_generation { 0 };
+    std::atomic_uint64_t m_next_generation { 1 };
+    std::atomic_bool m_first_frame { false };
+
+    std::mutex m_producer_mutex;
+    md_producer_t* m_producer { nullptr };
+    std::atomic_bool m_running { false };
+    std::thread m_io_thread;
+    std::mutex m_run_mutex;
+    std::condition_variable m_run_cv;
+};
+
+class MirageProtocolSwapchain final : public sr::ExSwapchain {
+public:
+    MirageProtocolSwapchain(MirageProtocolHost& host, VkInstance instance,
+                            VkPhysicalDevice physical_device, VkDevice device,
+                            VkQueue queue, std::uint32_t queue_family,
+                            unsigned width, unsigned height)
+        : m_host(host), m_device(device), m_width(width), m_height(height) {
+        VkPhysicalDeviceDrmPropertiesEXT drm {};
+        drm.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRM_PROPERTIES_EXT;
+        VkPhysicalDeviceProperties2 properties {};
+        properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+        properties.pNext = &drm;
+        vkGetPhysicalDeviceProperties2(physical_device, &properties);
+        md_vk_export_context_t context {
+            .instance = instance,
+            .physical_device = physical_device,
+            .device = device,
+            .queue = queue,
+            .queue_family_index = queue_family,
+            .drm_render_fd = -1,
+            .drm_render_major = drm.hasRender == VK_TRUE
+                                    ? static_cast<std::uint32_t>(drm.renderMajor)
+                                    : 0u,
+            .drm_render_minor = drm.hasRender == VK_TRUE
+                                    ? static_cast<std::uint32_t>(drm.renderMinor)
+                                    : 0u,
+        };
+        m_exporter = md_vk_exporter_new(&context);
+        md_producer_config_t config {};
+        if (m_exporter != nullptr && m_host.currentConfig(config, m_config_version,
+                                                          m_connection_epoch)) {
+            rebuild(config);
+        }
+    }
+
+    ~MirageProtocolSwapchain() override { md_vk_exporter_free(m_exporter); }
+
+    void poll() override {
+        const std::uint64_t retire_generation = m_host.takeRetireGeneration();
+        if (retire_generation != 0 && retire_generation == m_generation) {
+            setReady(false);
+            md_vk_exporter_release_pool(m_exporter);
+            m_generation = 0;
+            m_acquired.reset();
+            m_host.retireDone(retire_generation);
+        }
+        md_producer_config_t config {};
+        std::uint64_t version = 0;
+        std::uint64_t epoch = 0;
+        if (m_host.snapshotConfig(m_config_version, m_connection_epoch,
+                                  config, version, epoch)) {
+            m_config_version = version;
+            m_connection_epoch = epoch;
+            rebuild(config);
+        }
+    }
+
+    bool acquireRenderTarget(sr::vulkan::ImageParameters& out) override {
+        if (!m_ready || m_exporter == nullptr || m_acquired.has_value()) return false;
+        std::uint32_t index = 0;
+        if (md_vk_exporter_acquire(m_exporter, &index) != MD_OK) return false;
+        m_acquired = index;
+        out = {};
+        out.handle = md_vk_exporter_image(m_exporter, index);
+        out.extent = {m_width, m_height, 1};
+        out.mipmap_level = 1;
+        out.generation = m_generation;
+        return out.handle != VK_NULL_HANDLE;
+    }
+
+    void submitRendered(VkSemaphore acquire_semaphore) override {
+        if (!m_acquired.has_value()) return;
+        const std::uint32_t index = *m_acquired;
+        m_acquired.reset();
+        int acquire_fd = -1;
+        int release_fd = -1;
+        int result = md_vk_exporter_export_frame(m_exporter, index, acquire_semaphore,
+                                                 &acquire_fd, &release_fd);
+        if (result == MD_OK) {
+            result = m_host.submitFrame(m_generation, index, m_sequence++,
+                                        acquire_fd, release_fd);
+        }
+        if (result != MD_OK) {
+            md_vk_exporter_cancel_frame(m_exporter, index);
+            return;
+        }
+        m_host.notifyFirstFrame();
+    }
+
+    unsigned width() const override { return m_width; }
+    unsigned height() const override { return m_height; }
+    VkFormat format() const override { return md_vk_exporter_format(m_exporter); }
+    VkImageLayout producerOutputLayout() const override { return VK_IMAGE_LAYOUT_GENERAL; }
+    std::uint32_t releaseTargetQueueFamily() const override {
+        return VK_QUEUE_FAMILY_FOREIGN_EXT;
+    }
+    bool ready() const override { return m_ready; }
+
+    void setOnReadyChanged(std::function<void(const sr::ExSwapchainReadyEvent&)> callback) override {
+        m_ready_callback = std::move(callback);
+        notifyReady();
+    }
+
+private:
+    void rebuild(const md_producer_config_t& config) {
+        if (m_exporter == nullptr || config.physical_width == 0 ||
+            config.physical_height == 0) return;
+        setReady(false);
+        const std::uint64_t generation = m_host.nextGeneration();
+        md_vk_export_pool_info_t pool_info {
+            .generation = generation,
+            .buffer_count = 3,
+            .width = config.physical_width,
+            .height = config.physical_height,
+            .fourcc = config.fourcc,
+            .plane_count = config.plane_count,
+            .modifier = config.modifier,
+        };
+        if (md_vk_exporter_create_pool(m_exporter, &pool_info) != MD_OK) return;
+        const md_buffer_pool_t* pool = md_vk_exporter_pool(m_exporter);
+        if (m_host.offerPool(pool) != MD_OK) {
+            md_vk_exporter_release_pool(m_exporter);
+            return;
+        }
+        m_generation = generation;
+        m_width = config.physical_width;
+        m_height = config.physical_height;
+        m_format = md_vk_exporter_format(m_exporter);
+        setReady(true);
+    }
+
+    void setReady(bool value) {
+        if (m_ready == value) return;
+        m_ready = value;
+        notifyReady();
+    }
+
+    void notifyReady() {
+        if (!m_ready_callback) return;
+        m_ready_callback(sr::ExSwapchainReadyEvent {
+            .ready = m_ready,
+            .width = m_width,
+            .height = m_height,
+            .format = m_format,
+        });
+    }
+
+    MirageProtocolHost& m_host;
+    VkDevice m_device { VK_NULL_HANDLE };
+    md_vk_exporter_t* m_exporter { nullptr };
+    std::optional<std::uint32_t> m_acquired;
+    std::function<void(const sr::ExSwapchainReadyEvent&)> m_ready_callback;
+    unsigned m_width { 0 };
+    unsigned m_height { 0 };
+    VkFormat m_format { VK_FORMAT_UNDEFINED };
+    std::uint64_t m_generation { 0 };
+    std::uint64_t m_sequence { 1 };
+    std::uint64_t m_config_version { 0 };
+    std::uint64_t m_connection_epoch { 0 };
+    bool m_ready { false };
+};
+
+#endif
+
 std::uint32_t ClampRenderExtent(std::uint32_t value, std::uint32_t fallback) {
     if (value == 0) value = fallback;
     return std::clamp<std::uint32_t>(value, 500u, 65535u);
@@ -434,16 +960,30 @@ int main(int argc, char** argv) {
 
     Options options;
     if (! ParseArgs(argc, argv, options)) return 1;
+    const bool protocol_mode = !options.display_output_id.empty();
+#if !defined(SCENERENDERER_MIRAGE_DISPLAY)
+    if (protocol_mode) {
+        std::cerr << "This SceneWallpaper build has no mirage-display support\n";
+        return 1;
+    }
+#endif
+    if (protocol_mode && options.display_socket.empty()) {
+        std::cerr << "--display-socket is required with --display-output-id\n";
+        return 1;
+    }
 
 #if defined(__APPLE__)
     setenv("MVK_CONFIG_PRESENT_WITH_COMMAND_BUFFER", "1", /*overwrite=*/0);
     setenv("MVK_CONFIG_SYNCHRONOUS_QUEUE_SUBMITS", "1", /*overwrite=*/0);
 #endif
 
-    DesktopHandle      desktop;
+    AppState      state;
+    DesktopHandle desktop;
+#if defined(SCENERENDERER_MIRAGE_DISPLAY)
+    std::unique_ptr<MirageProtocolHost> protocol_host;
+#endif
     sr::SceneWallpaper wallpaper;
     StopTimer          run_timer;
-    AppState           state;
     state.wallpaper = &wallpaper;
 
     sr::host::DesktopConfig desktop_config {
@@ -461,15 +1001,37 @@ int main(int argc, char** argv) {
         .activated             = ActivatedCallback,
         .userdata              = &state,
     };
-    desktop.reset(sr::host::DesktopCreate(&desktop_config, callbacks));
-    state.desktop = desktop.get();
-    if (! desktop) {
-        std::cerr << "Failed to create desktop wallpaper host\n";
-        return 1;
+    std::uint32_t render_width = 0;
+    std::uint32_t render_height = 0;
+#if defined(SCENERENDERER_MIRAGE_DISPLAY)
+    if (protocol_mode) {
+        protocol_host = std::make_unique<MirageProtocolHost>(
+            options.display_socket, options.display_output_id, callbacks);
+        if (!protocol_host->start()) {
+            std::cerr << "Failed to connect to the mirage-display broker or receive output configuration\n";
+            return 1;
+        }
+        md_producer_config_t producer_config {};
+        std::uint64_t config_version = 0;
+        std::uint64_t connection_epoch = 0;
+        if (!protocol_host->currentConfig(producer_config, config_version, connection_epoch)) {
+            std::cerr << "mirage-display did not provide an output configuration\n";
+            return 1;
+        }
+        render_width = producer_config.physical_width;
+        render_height = producer_config.physical_height;
+    } else
+#endif
+    {
+        desktop.reset(sr::host::DesktopCreate(&desktop_config, callbacks));
+        state.desktop = desktop.get();
+        if (!desktop) {
+            std::cerr << "Failed to create desktop wallpaper host\n";
+            return 1;
+        }
+        render_width = sr::host::DesktopPixelWidth(desktop.get());
+        render_height = sr::host::DesktopPixelHeight(desktop.get());
     }
-
-    std::uint32_t render_width  = sr::host::DesktopPixelWidth(desktop.get());
-    std::uint32_t render_height = sr::host::DesktopPixelHeight(desktop.get());
     if (options.resolution) {
         render_width  = options.resolution->width;
         render_height = options.resolution->height;
@@ -514,21 +1076,39 @@ int main(int argc, char** argv) {
 #if defined(__APPLE__)
     info.offscreen = true;
 #else
-    info.offscreen = false;
-    sr::host::DesktopSurfaceInfo surface_info;
-    if (! sr::host::DesktopGetSurfaceInfo(desktop.get(), surface_info)) {
-        std::cerr << "Failed to create desktop Vulkan surface info\n";
-        return 1;
+#if defined(SCENERENDERER_MIRAGE_DISPLAY)
+    if (protocol_mode) {
+        info.offscreen = true;
+        MirageProtocolHost* host = protocol_host.get();
+        info.ex_swapchain_factory =
+            [host](VkInstance instance, VkPhysicalDevice physical_device, VkDevice device,
+                   VkQueue queue, std::uint32_t queue_family, unsigned width,
+                   unsigned height) -> std::unique_ptr<sr::ExSwapchain> {
+                return std::make_unique<MirageProtocolSwapchain>(
+                    *host, instance, physical_device, device, queue, queue_family,
+                    width, height);
+            };
+    } else
+#endif
+    {
+        info.offscreen = false;
+        sr::host::DesktopSurfaceInfo surface_info;
+        if (!sr::host::DesktopGetSurfaceInfo(desktop.get(), surface_info)) {
+            std::cerr << "Failed to create desktop Vulkan surface info\n";
+            return 1;
+        }
+        info.surface_info.instanceExts = std::move(surface_info.instance_extensions);
+        info.surface_info.createSurfaceOp = std::move(surface_info.create_surface);
     }
-    info.surface_info.instanceExts = std::move(surface_info.instance_extensions);
-    info.surface_info.createSurfaceOp = std::move(surface_info.create_surface);
 #endif
     info.width           = ClampRenderExtent(render_width, 1920);
     info.height          = ClampRenderExtent(render_height, 1080);
     info.msaa_samples    = options.msaa;
-    info.redraw_callback = [desktop = desktop.get()]() {
-        sr::host::DesktopWake(desktop);
-    };
+    if (!protocol_mode) {
+        info.redraw_callback = [desktop = desktop.get()]() {
+            sr::host::DesktopWake(desktop);
+        };
+    }
 
     wallpaper.configure(std::move(config));
     wallpaper.initVulkan(std::move(info));
@@ -539,7 +1119,17 @@ int main(int argc, char** argv) {
     }
 
     if (options.run_seconds > 0) {
-        run_timer.start(desktop.get(), options.run_seconds);
+#if defined(SCENERENDERER_MIRAGE_DISPLAY)
+        if (protocol_mode) {
+            run_timer.start([host = protocol_host.get()] { host->stop(); },
+                            options.run_seconds);
+        } else
+#endif
+        {
+            run_timer.start([desktop = desktop.get()] {
+                sr::host::DesktopStop(desktop);
+            }, options.run_seconds);
+        }
     }
 
     // Live control channel: Mirage.app pipes JSON commands on stdin to drive
@@ -570,15 +1160,33 @@ int main(int argc, char** argv) {
     EmitLifecycleEvent(&state, "scene-ready");
     std::optional<mirage::SceneControlChannel> control;
     if (options.control_stdin) {
-        void* desktop_handle = desktop.get();
-        control.emplace(
-            wallpaper,
-            [desktop_handle]() { sr::host::DesktopStop(desktop_handle); },
-            [desktop_handle]() { sr::host::DesktopActivate(desktop_handle); });
+#if defined(SCENERENDERER_MIRAGE_DISPLAY)
+        if (protocol_mode) {
+            MirageProtocolHost* host = protocol_host.get();
+            control.emplace(wallpaper,
+                            [host]() { host->stop(); },
+                            [host]() { host->notifyActivated(); });
+        } else
+#endif
+        {
+            void* desktop_handle = desktop.get();
+            control.emplace(
+                wallpaper,
+                [desktop_handle]() { sr::host::DesktopStop(desktop_handle); },
+                [desktop_handle]() { sr::host::DesktopActivate(desktop_handle); });
+        }
         control->start();
     }
 
-    const int ok = sr::host::DesktopRun(desktop.get());
+    int ok = 0;
+#if defined(SCENERENDERER_MIRAGE_DISPLAY)
+    if (protocol_mode) {
+        ok = protocol_host->run();
+    } else
+#endif
+    {
+        ok = sr::host::DesktopRun(desktop.get());
+    }
 
     if (control) control->stop();
     run_timer.stop();

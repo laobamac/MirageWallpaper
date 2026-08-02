@@ -11,10 +11,26 @@ find_package(Qt6 6.11 REQUIRED COMPONENTS
     Gui
     Widgets
     Network
+    Qml
     WebEngineCore
     WebEngineWidgets
     DBus)
 find_package(X11 REQUIRED)
+
+set(MIRAGE_LINUX_DISPLAY_SOURCE_DIR
+    "${CMAKE_CURRENT_LIST_DIR}/../../MirageLinuxDisplay"
+    CACHE PATH "Path to the MirageLinuxDisplay source tree")
+if(NOT EXISTS "${MIRAGE_LINUX_DISPLAY_SOURCE_DIR}/CMakeLists.txt")
+    message(FATAL_ERROR
+        "MirageLinuxDisplay was not found at ${MIRAGE_LINUX_DISPLAY_SOURCE_DIR}")
+endif()
+set(MIRAGE_DISPLAY_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(MIRAGE_DISPLAY_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(MIRAGE_DISPLAY_PLUGIN_QML OFF CACHE BOOL "" FORCE)
+set(MIRAGE_DISPLAY_WITH_VULKAN OFF CACHE BOOL "" FORCE)
+set(MIRAGE_DISPLAY_WITH_EGL OFF CACHE BOOL "" FORCE)
+add_subdirectory("${MIRAGE_LINUX_DISPLAY_SOURCE_DIR}"
+    "${CMAKE_CURRENT_BINARY_DIR}/MirageLinuxDisplay")
 
 qt_standard_project_setup()
 
@@ -28,6 +44,8 @@ endif()
 add_library(MirageQtCore STATIC
     Sources/Services/FavoritesManager.cpp
     Sources/Services/FavoritesManager.h
+    Sources/Services/DisplayBrokerService.cpp
+    Sources/Services/DisplayBrokerService.h
     Sources/Services/GlobalSettingsService.cpp
     Sources/Services/GlobalSettingsService.h
     Sources/Services/LinuxSystemIntegration.cpp
@@ -52,6 +70,10 @@ add_library(MirageQtCore STATIC
     Sources/Services/ThumbnailGenerator.h
     Sources/Services/WallpaperLibrary.cpp
     Sources/Services/WallpaperLibrary.h
+    Sources/Services/WallpaperRuntimeStore.cpp
+    Sources/Services/WallpaperRuntimeStore.h
+    Sources/Services/WEConditionEvaluator.cpp
+    Sources/Services/WEConditionEvaluator.h
     Sources/Services/WEProject.cpp
     Sources/Services/WEProject.h
     Sources/Services/WorkshopModels.cpp
@@ -68,7 +90,9 @@ target_link_libraries(MirageQtCore PUBLIC
     Qt6::Gui
     Qt6::Widgets
     Qt6::Network
+    Qt6::Qml
     Qt6::DBus
+    mirage_display_static
     X11::X11)
 
 qt_add_executable(MirageQt

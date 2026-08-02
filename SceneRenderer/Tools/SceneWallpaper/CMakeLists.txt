@@ -46,5 +46,10 @@ else()
     message(FATAL_ERROR "No SceneWallpaper host backend enabled for this platform")
 endif()
 
+if(UNIX AND NOT APPLE AND SCENERENDERER_ENABLE_MIRAGE_DISPLAY)
+    target_compile_definitions(SceneWallpaper PRIVATE SCENERENDERER_MIRAGE_DISPLAY=1)
+    target_link_libraries(SceneWallpaper PRIVATE mirage_display_vulkan_static)
+endif()
+
 target_compile_features(SceneWallpaper PRIVATE cxx_std_20)
 set_target_properties(SceneWallpaper PROPERTIES CXX_SCAN_FOR_MODULES ON)

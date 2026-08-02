@@ -43,7 +43,7 @@ enum class PresetStatus {
 
 struct ProjectPropertyOption {
     QString label;
-    QString value;
+    QVariant value;
     QString condition;
 };
 
@@ -70,6 +70,7 @@ struct ProjectProperty {
     bool boolValue() const;
     double doubleValue() const;
     QString stringValue() const;
+    QVariant normalizedComboValue(const QVariant& candidate) const;
 };
 
 struct Project {

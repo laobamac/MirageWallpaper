@@ -24,7 +24,9 @@
 #include <QWebEngineSettings>
 #include <QWebEngineView>
 
+#include <algorithm>
 #include <cmath>
+#include <climits>
 
 namespace Mirage {
 namespace {
@@ -244,15 +246,56 @@ PropertyEditorWidget::PropertyEditorWidget(QWidget* parent)
 
 void PropertyEditorWidget::setWallpaper(const Wallpaper& wallpaper) {
     m_wallpaper = wallpaper;
+    m_overrides.clear();
+    m_effectiveProperties = wallpaper.project.properties;
+    rebuild();
+}
+
+void PropertyEditorWidget::setPropertyOverrides(const QHash<QString, QVariant>& overrides) {
+    m_overrides = overrides;
+    m_effectiveProperties = m_wallpaper.project.properties;
+    for (auto it = overrides.constBegin(); it != overrides.constEnd(); ++it) {
+        if (!m_effectiveProperties.contains(it.key())) continue;
+        ProjectProperty property = m_effectiveProperties.value(it.key());
+        property.value = property.normalizedComboValue(it.value());
+        m_effectiveProperties.insert(it.key(), property);
+    }
+    rebuild();
+}
+
+void PropertyEditorWidget::setEffectiveProperties(const QHash<QString, ProjectProperty>& properties) {
+    m_effectiveProperties = properties;
+    rebuild();
+}
+
+ProjectProperty PropertyEditorWidget::effectiveProperty(const QString& key) const {
+    if (m_effectiveProperties.contains(key)) return m_effectiveProperties.value(key);
+    return m_wallpaper.project.properties.value(key);
+}
+
+void PropertyEditorWidget::applyLocalOverride(const QString& key, const QVariant& value, bool rebuildNow) {
+    if (key.isEmpty() || !m_wallpaper.project.properties.contains(key)) return;
+
+    ProjectProperty property = m_wallpaper.project.properties.value(key);
+    const QVariant normalized = property.normalizedComboValue(value);
+    property.value = normalized;
+    m_overrides.insert(key, normalized);
+    m_effectiveProperties.insert(key, property);
+    m_conditions.updateContext(m_wallpaper.project.properties, m_overrides);
+    if (rebuildNow) rebuild();
+}
+
+void PropertyEditorWidget::rebuild() {
     clear();
+    m_conditions.updateContext(m_wallpaper.project.properties, m_overrides);
 
     QVector<QString> keys;
-    for (auto it = wallpaper.project.properties.constBegin(); it != wallpaper.project.properties.constEnd(); ++it) {
+    for (auto it = m_wallpaper.project.properties.constBegin(); it != m_wallpaper.project.properties.constEnd(); ++it) {
         if (!it.value().presetOnly) keys.push_back(it.key());
     }
     std::sort(keys.begin(), keys.end(), [&](const QString& a, const QString& b) {
-        const ProjectProperty pa = wallpaper.project.properties.value(a);
-        const ProjectProperty pb = wallpaper.project.properties.value(b);
+        const ProjectProperty pa = m_wallpaper.project.properties.value(a);
+        const ProjectProperty pb = m_wallpaper.project.properties.value(b);
         const int oa = pa.order >= 0 ? pa.order : (pa.index >= 0 ? pa.index : INT_MAX);
         const int ob = pb.order >= 0 ? pb.order : (pb.index >= 0 ? pb.index : INT_MAX);
         if (oa != ob) return oa < ob;
@@ -264,9 +307,20 @@ void PropertyEditorWidget::setWallpaper(const Wallpaper& wallpaper) {
         empty->setStyleSheet(QStringLiteral("color: #aaa59f; font-size: 12px;"));
         m_layout->addWidget(empty);
     } else {
+        bool anyVisible = false;
         for (const QString& key : keys) {
-            QWidget* widget = widgetFor(key, wallpaper.project.properties.value(key));
-            if (widget) m_layout->addWidget(widget);
+            const ProjectProperty base = m_wallpaper.project.properties.value(key);
+            if (!m_conditions.evaluate(base.condition)) continue;
+            QWidget* widget = widgetFor(key, effectiveProperty(key));
+            if (widget) {
+                m_layout->addWidget(widget);
+                anyVisible = true;
+            }
+        }
+        if (!anyVisible) {
+            auto* empty = wrappingLabel(QStringLiteral("此壁纸没有可调节的属性。"), this);
+            empty->setStyleSheet(QStringLiteral("color: #aaa59f; font-size: 12px;"));
+            m_layout->addWidget(empty);
         }
     }
     updateGeometry();
@@ -281,6 +335,7 @@ QWidget* PropertyEditorWidget::widgetFor(const QString& key, ProjectProperty pro
         check->setChecked(property.boolValue());
         connect(check, &QCheckBox::toggled, this, [this, key, property](bool checked) mutable {
             property.value = checked;
+            applyLocalOverride(key, checked, true);
             emit propertyChanged(key, property);
         });
         return horizontalRow(wrappingLabel(labelText, this), check, this);
@@ -299,35 +354,31 @@ QWidget* PropertyEditorWidget::widgetFor(const QString& key, ProjectProperty pro
         auto* layout = new QVBoxLayout(row);
         layout->setContentsMargins(0, 0, 0, 0);
         layout->setSpacing(4);
+
         auto* header = new QHBoxLayout;
         header->setContentsMargins(0, 0, 0, 0);
-        auto* label = wrappingLabel(labelText, row);
-        auto* value = new QLabel(row);
-        value->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        value->setStyleSheet(QStringLiteral("color: #aaa59f; font-family: monospace; font-size: 12px;"));
-        fitLabelToWidth(label, 220);
-        header->addWidget(label, 1);
-        header->addWidget(value);
+        header->addWidget(wrappingLabel(labelText, row), 1);
+        auto* valueLabel = new QLabel(row);
+        valueLabel->setStyleSheet(QStringLiteral("color: #aaa59f; font-size: 12px;"));
+        auto updateValueText = [property, valueLabel](double value) {
+            if (property.fraction) valueLabel->setText(QString::number(value, 'f', 2));
+            else valueLabel->setText(QString::number(qRound(value)));
+        };
+        updateValueText(property.doubleValue());
+        header->addWidget(valueLabel);
 
         auto* slider = new QSlider(Qt::Horizontal, row);
         slider->setRange(0, positions);
-        slider->setValue(qBound(0, qRound((property.doubleValue() - minimum) / (maximum - minimum) * positions), positions));
-        const auto numberFor = [minimum, maximum, positions, property](int position) {
-            double number = minimum + (maximum - minimum) * position / positions;
-            if (!property.fraction) number = qRound(number);
-            return number;
-        };
-        const auto textFor = [property](double number) {
-            return property.fraction ? QString::number(number, 'f', 2) : QString::number(qRound64(number));
-        };
-        value->setText(textFor(numberFor(slider->value())));
-        connect(slider, &QSlider::valueChanged, this,
-                [this, key, property, value, numberFor, textFor](int position) mutable {
-                    const double number = numberFor(position);
-                    value->setText(textFor(number));
-                    property.value = number;
-                    emit propertyChanged(key, property);
-                });
+        const double clamped = qBound(minimum, property.doubleValue(), maximum);
+        slider->setValue(qRound((clamped - minimum) / (maximum - minimum) * positions));
+        connect(slider, &QSlider::valueChanged, this, [this, key, property, minimum, maximum, positions, updateValueText](int pos) mutable {
+            double value = minimum + (maximum - minimum) * (double(pos) / double(positions));
+            if (!property.fraction) value = std::round(value);
+            property.value = value;
+            updateValueText(value);
+            applyLocalOverride(key, value, false);
+            emit propertyChanged(key, property);
+        });
         layout->addLayout(header);
         layout->addWidget(slider);
         fixWidgetToLayoutHeight(row, layout);
@@ -338,12 +389,13 @@ QWidget* PropertyEditorWidget::widgetFor(const QString& key, ProjectProperty pro
         swatch->setFixedSize(48, 26);
         const QColor initial = parseColor(property.stringValue());
         styleColorButton(swatch, initial);
-        connect(swatch, &QPushButton::clicked, this, [this, key, property, swatch, initial]() mutable {
+        connect(swatch, &QPushButton::clicked, this, [this, key, property, swatch]() mutable {
             const QColor selected = QColorDialog::getColor(parseColor(property.stringValue()), this,
                                                            QStringLiteral("选择颜色"), QColorDialog::DontUseNativeDialog);
             if (!selected.isValid()) return;
             property.value = encodeColor(selected);
             styleColorButton(swatch, selected);
+            applyLocalOverride(key, property.value, true);
             emit propertyChanged(key, property);
         });
         return horizontalRow(wrappingLabel(labelText, this), swatch, this);
@@ -351,16 +403,24 @@ QWidget* PropertyEditorWidget::widgetFor(const QString& key, ProjectProperty pro
     case PropertyKind::Combo: {
         auto* combo = new QComboBox(this);
         combo->setMaximumWidth(170);
-        int selected = 0;
-        for (int i = 0; i < property.options.size(); ++i) {
-            const auto& option = property.options.at(i);
-            const QString optionLabel = plainText(option.label.isEmpty() ? option.value : option.label);
+        const QVariant current = property.normalizedComboValue(property.value);
+        int selectedIndex = -1;
+        for (const auto& option : property.options) {
+            if (!m_conditions.evaluate(option.condition)) continue;
+            const QString optionLabel = resolveLocalization(option.label.isEmpty() ? option.value.toString() : option.label);
             combo->addItem(optionLabel, option.value);
-            if (option.value == property.stringValue()) selected = i;
+            ProjectProperty probe;
+            probe.value = option.value;
+            ProjectProperty currentProbe;
+            currentProbe.value = current;
+            if (option.value == current || probe.stringValue() == currentProbe.stringValue()) {
+                selectedIndex = combo->count() - 1;
+            }
         }
-        combo->setCurrentIndex(selected);
+        if (selectedIndex >= 0) combo->setCurrentIndex(selectedIndex);
         connect(combo, &QComboBox::currentIndexChanged, this, [this, combo, key, property](int) mutable {
-            property.value = combo->currentData().toString();
+            property.value = combo->currentData();
+            applyLocalOverride(key, property.value, true);
             emit propertyChanged(key, property);
         });
         return horizontalRow(wrappingLabel(labelText, this), combo, this);
@@ -375,6 +435,7 @@ QWidget* PropertyEditorWidget::widgetFor(const QString& key, ProjectProperty pro
         auto* edit = new QLineEdit(property.stringValue(), row);
         connect(edit, &QLineEdit::textChanged, this, [this, key, property](const QString& text) mutable {
             property.value = text;
+            applyLocalOverride(key, text, false);
             emit propertyChanged(key, property);
         });
         layout->addWidget(edit);
@@ -438,6 +499,7 @@ QWidget* PropertyEditorWidget::widgetFor(const QString& key, ProjectProperty pro
             property.value = QString();
             path->setText(QStringLiteral("未选择"));
             clear->hide();
+            applyLocalOverride(key, QString(), true);
             emit propertyChanged(key, property);
         });
         connect(choose, &QPushButton::clicked, this, [this, key, property, path, clear]() mutable {
@@ -448,6 +510,7 @@ QWidget* PropertyEditorWidget::widgetFor(const QString& key, ProjectProperty pro
             property.value = selected;
             path->setText(QFileInfo(selected).fileName());
             clear->show();
+            applyLocalOverride(key, selected, true);
             emit propertyChanged(key, property);
         });
         fixWidgetToLayoutHeight(row, layout);
@@ -459,6 +522,7 @@ QWidget* PropertyEditorWidget::widgetFor(const QString& key, ProjectProperty pro
         edit->setPlaceholderText(QStringLiteral("快捷方式"));
         connect(edit, &QLineEdit::textChanged, this, [this, key, property](const QString& text) mutable {
             property.value = text;
+            applyLocalOverride(key, text, false);
             emit propertyChanged(key, property);
         });
         return horizontalRow(wrappingLabel(labelText, this), edit, this);

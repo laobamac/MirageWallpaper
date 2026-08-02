@@ -24,6 +24,7 @@
 #include <QSettings>
 #include <QSplitter>
 #include <QStatusBar>
+#include <QTimer>
 #include <QVBoxLayout>
 
 namespace Mirage {
@@ -45,6 +46,11 @@ MainWindow::MainWindow(QWidget* parent)
     m_steamAPI = new SteamWebAPI(m_settings, this);
     m_workshopViewModel = new WorkshopViewModel(m_steamAPI, m_steamCMD, m_library, this);
     m_renderer = new RendererController(m_settings, this);
+    m_runtimeStore = new WallpaperRuntimeStore(this);
+    m_propertyCommandTimer = new QTimer(this);
+    m_propertyCommandTimer->setSingleShot(true);
+    m_propertyCommandTimer->setInterval(1000 / 60);
+    connect(m_propertyCommandTimer, &QTimer::timeout, this, &MainWindow::flushPendingPropertyCommands);
     m_playlist = new PlaylistManager(m_library, m_renderer, this);
 
     m_topTabs = new TopTabBarWidget(this);
@@ -102,28 +108,21 @@ MainWindow::MainWindow(QWidget* parent)
     });
     connect(m_topTabs, &TopTabBarWidget::settingsRequested, this, &MainWindow::openSettings);
     connect(m_topTabs, &TopTabBarWidget::displaySettingsRequested, this, [this] {
-        QMessageBox::information(this, QStringLiteral("显示器"), QStringLiteral("X11 下按屏幕索引应用壁纸；Wayland 会提示当前会话不支持动态桌面壁纸。"));
+        QMessageBox::information(this, QStringLiteral("显示器"), QStringLiteral("KDE Plasma 使用稳定显示器标识路由动态壁纸；显示表面由 Plasma 壁纸插件管理。"));
     });
     connect(m_topTabs, &TopTabBarWidget::mobileRequested, this, [this] {
         QMessageBox::information(this, QStringLiteral("移动端"), QStringLiteral("移动端同步暂未在 LinuxQt 版本实现。"));
     });
     connect(m_preview, &WallpaperPreviewWidget::favoriteRequested, this, [this](const Wallpaper& wallpaper) {
         m_favorites->toggle(wallpaper.id());
-        m_preview->setWallpaper(wallpaper);
+        selectWallpaper(wallpaper);
         m_wallpaperList->reload();
     });
-    connect(m_preview, &WallpaperPreviewWidget::volumeChanged, this, [this](double volume) {
-        m_renderer->setVolume(volume);
-    });
-    connect(m_preview, &WallpaperPreviewWidget::speedChanged, this, [this](double speed) {
-        m_renderer->setSpeed(speed);
-    });
-    connect(m_preview, &WallpaperPreviewWidget::fillModeChanged, this, [this](FillMode mode) {
-        m_renderer->setFillMode(mode);
-    });
-    connect(m_preview, &WallpaperPreviewWidget::propertyChanged, this, [this](const QString& key, const ProjectProperty& property) {
-        m_renderer->setProperty(key, property);
-    });
+    connect(m_preview, &WallpaperPreviewWidget::volumeChanged, this, &MainWindow::handleVolumeChanged);
+    connect(m_preview, &WallpaperPreviewWidget::speedChanged, this, &MainWindow::handleSpeedChanged);
+    connect(m_preview, &WallpaperPreviewWidget::fillModeChanged, this, &MainWindow::handleFillModeChanged);
+    connect(m_preview, &WallpaperPreviewWidget::propertyChanged, this, &MainWindow::handlePropertyChanged);
+    connect(m_preview, &WallpaperPreviewWidget::resetDefaultsRequested, this, &MainWindow::handleResetDefaults);
     connect(m_preview, &WallpaperPreviewWidget::applyAllRequested, this, [this](const Wallpaper& wallpaper) {
         applyWallpaper(wallpaper, true);
     });
@@ -133,7 +132,7 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_bottomBar, &ExplorerBottomBarWidget::playItemRequested, this,
             [this](const Wallpaper& wallpaper, int screen) {
         QString error;
-        if (!m_renderer->render(wallpaper, screen, currentRenderOptions(), &error) && !error.isEmpty()) {
+        if (!m_renderer->render(wallpaper, screen, renderOptionsFor(wallpaper), &error) && !error.isEmpty()) {
             QMessageBox::warning(this, QStringLiteral("应用壁纸"), error);
         } else {
             m_playlist->setCurrentWallpaper(screen, wallpaper);
@@ -143,7 +142,7 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_playlist, &PlaylistManager::applyWallpaperRequested, this,
             [this](const Wallpaper& wallpaper, int screen) {
         QString error;
-        if (!m_renderer->render(wallpaper, screen, currentRenderOptions(), &error) && !error.isEmpty()) {
+        if (!m_renderer->render(wallpaper, screen, renderOptionsFor(wallpaper), &error) && !error.isEmpty()) {
             showMessage(error);
         } else {
             m_playlist->setCurrentWallpaper(screen, wallpaper);
@@ -177,7 +176,7 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_workshopViewModel, &WorkshopViewModel::installedWallpaperRequested, this,
             [this](const Wallpaper& wallpaper) {
         m_showWorkshopCustomization = true;
-        m_preview->setWallpaper(wallpaper);
+        selectWallpaper(wallpaper);
         m_rightStack->setCurrentIndex(0);
     });
     connect(m_workshopViewModel, &WorkshopViewModel::presetDependencyRequested, this,
@@ -202,8 +201,16 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_workshopViewModel, &WorkshopViewModel::workshopItemDownloaded, m_wallpaperList, &WallpaperListWidget::reload);
     connect(m_settings, &GlobalSettingsService::settingsChanged, this, [this](const GlobalSettings& settings) {
         applyMirageStyle(*qApp, settings.appearance);
-        m_renderer->setVolume(settings.masterVolume);
-        m_renderer->setMuted(settings.globalMuted);
+        if (m_selectedWallpaper.isValid()) {
+            const WallpaperRuntimeState runtime = m_runtimeStore->loadRuntime(m_selectedWallpaper);
+            const double volume = runtime.volume * settings.masterVolume;
+            const bool muted = runtime.muted || settings.globalMuted || runtime.volume <= 0.0;
+            m_renderer->setVolume(volume);
+            m_renderer->setMuted(muted);
+        } else {
+            m_renderer->setVolume(settings.masterVolume);
+            m_renderer->setMuted(settings.globalMuted);
+        }
         m_renderer->setFps(settings.fps);
         m_wallpaperList->reload();
         m_workshopViewModel->reloadOnlineContent();
@@ -215,7 +222,7 @@ MainWindow::MainWindow(QWidget* parent)
     });
 
     if (m_wallpaperList->currentWallpaper().isValid()) {
-        m_preview->setWallpaper(m_wallpaperList->currentWallpaper());
+        selectWallpaper(m_wallpaperList->currentWallpaper());
     }
     m_playlist->startRotators();
     setupTray();
@@ -233,7 +240,10 @@ void MainWindow::closeEvent(QCloseEvent* event) {
 }
 
 void MainWindow::applyWallpaper(const Wallpaper& wallpaper, bool allScreens) {
-    RenderOptions options = currentRenderOptions();
+    if (wallpaper.isValid()) {
+        selectWallpaper(wallpaper);
+    }
+    RenderOptions options = renderOptionsFor(wallpaper);
     QString error;
     bool ok = false;
     if (allScreens) {
@@ -343,7 +353,7 @@ QWidget* MainWindow::buildInstalledPage() {
     connect(m_filter, &FilterResultsWidget::filtersChanged, this, [this] {
         m_wallpaperList->setFilterState(m_filter->filterState());
     });
-    connect(m_wallpaperList, &WallpaperListWidget::wallpaperSelected, m_preview, &WallpaperPreviewWidget::setWallpaper);
+    connect(m_wallpaperList, &WallpaperListWidget::wallpaperSelected, this, &MainWindow::selectWallpaper);
     connect(m_wallpaperList, &WallpaperListWidget::applyRequested, this, &MainWindow::applyWallpaper);
     connect(m_wallpaperList, &WallpaperListWidget::importRequested, this, &MainWindow::importWallpaper);
     m_wallpaperList->setFilterState(m_filter->filterState());
@@ -396,15 +406,126 @@ void MainWindow::setFilterVisible(bool visible) {
     QSettings().setValue(QStringLiteral("MainWindow/FilterVisible"), visible);
 }
 
-RenderOptions MainWindow::currentRenderOptions() const {
+RenderOptions MainWindow::renderOptionsFor(const Wallpaper& wallpaper) const {
     const GlobalSettings& s = m_settings->settings();
+    const WallpaperRuntimeState runtime = wallpaper.isValid()
+        ? m_runtimeStore->loadRuntime(wallpaper)
+        : WallpaperRuntimeState{};
+
     RenderOptions options;
     options.fps = s.fps;
-    options.volume = s.masterVolume;
-    options.muted = s.globalMuted;
+    options.volume = runtime.volume * s.masterVolume;
+    options.muted = runtime.muted || s.globalMuted || runtime.volume <= 0.0;
+    options.speed = runtime.speed;
+    options.fillMode = runtime.fillMode;
     options.enableSpectrum = s.enableSpectrum;
     options.loadFromMemory = s.wallpaperLoadSource == QStringLiteral("memory");
+    if (wallpaper.isValid()) {
+        options.userProperties = m_runtimeStore->effectiveProperties(wallpaper, runtime);
+    }
     return options;
+}
+
+void MainWindow::selectWallpaper(const Wallpaper& wallpaper) {
+    if (m_selectedWallpaper.isValid()
+        && m_selectedWallpaper.id() != wallpaper.id()
+        && m_propertyCommandTimer
+        && m_propertyCommandTimer->isActive()) {
+        flushPendingPropertyCommands();
+    }
+
+    m_selectedWallpaper = wallpaper;
+    m_pendingPropertyCommands.clear();
+    if (m_propertyCommandTimer) m_propertyCommandTimer->stop();
+
+    m_preview->setWallpaper(wallpaper);
+    if (wallpaper.isValid()) {
+        m_preview->setRuntime(m_runtimeStore->loadRuntime(wallpaper));
+    } else {
+        m_preview->setRuntime(WallpaperRuntimeState{});
+    }
+}
+
+void MainWindow::handleVolumeChanged(double volume) {
+    if (!m_selectedWallpaper.isValid()) return;
+    m_runtimeStore->setVolume(m_selectedWallpaper, volume);
+    const GlobalSettings& settings = m_settings->settings();
+    const WallpaperRuntimeState runtime = m_runtimeStore->loadRuntime(m_selectedWallpaper);
+    m_renderer->setVolume(runtime.volume * settings.masterVolume);
+    m_renderer->setMuted(runtime.muted || settings.globalMuted || runtime.volume <= 0.0);
+}
+
+void MainWindow::handleSpeedChanged(double speed) {
+    if (!m_selectedWallpaper.isValid()) return;
+    m_runtimeStore->setSpeed(m_selectedWallpaper, speed);
+    m_renderer->setSpeed(speed);
+}
+
+void MainWindow::handleFillModeChanged(FillMode mode) {
+    if (!m_selectedWallpaper.isValid()) return;
+    m_runtimeStore->setFillMode(m_selectedWallpaper, mode);
+    m_renderer->setFillMode(mode);
+}
+
+void MainWindow::handlePropertyChanged(const QString& key, const ProjectProperty& property) {
+    if (!m_selectedWallpaper.isValid() || key.isEmpty()) return;
+
+    const ProjectProperty normalized = m_runtimeStore->setProperty(m_selectedWallpaper, key, property.value);
+    if (!m_selectedWallpaper.project.properties.contains(key)) return;
+
+    switch (m_selectedWallpaper.kind()) {
+    case WallpaperKind::Scene:
+    case WallpaperKind::Web:
+        m_pendingPropertyCommands.insert(key, normalized);
+        if (m_propertyCommandTimer && !m_propertyCommandTimer->isActive()) {
+            m_propertyCommandTimer->start();
+        }
+        break;
+    case WallpaperKind::Video:
+    case WallpaperKind::Unsupported:
+        break;
+    }
+}
+
+void MainWindow::handleResetDefaults() {
+    if (!m_selectedWallpaper.isValid()) return;
+
+    m_pendingPropertyCommands.clear();
+    if (m_propertyCommandTimer) m_propertyCommandTimer->stop();
+
+    m_runtimeStore->resetRuntime(m_selectedWallpaper);
+    const Wallpaper wallpaper = m_selectedWallpaper;
+    m_preview->setRuntime(m_runtimeStore->loadRuntime(wallpaper));
+    reapplyPlayingWallpaper(wallpaper);
+}
+
+void MainWindow::flushPendingPropertyCommands() {
+    if (m_pendingPropertyCommands.isEmpty()) return;
+    if (!m_selectedWallpaper.isValid()) {
+        m_pendingPropertyCommands.clear();
+        return;
+    }
+
+    const auto commands = m_pendingPropertyCommands;
+    m_pendingPropertyCommands.clear();
+    for (auto it = commands.constBegin(); it != commands.constEnd(); ++it) {
+        m_renderer->setProperty(it.key(), it.value());
+    }
+}
+
+void MainWindow::reapplyPlayingWallpaper(const Wallpaper& wallpaper) {
+    if (!wallpaper.isValid()) return;
+
+    const RenderOptions options = renderOptionsFor(wallpaper);
+    for (int screen : m_renderer->activeScreens()) {
+        QString error;
+        if (m_renderer->render(wallpaper, screen, options, &error)) {
+            m_playlist->setCurrentWallpaper(screen, wallpaper);
+            m_bottomBar->setPlayingWallpaper(screen, wallpaper);
+        } else if (!error.isEmpty()) {
+            showMessage(error);
+        }
+    }
 }
 
 void MainWindow::setupTray() {

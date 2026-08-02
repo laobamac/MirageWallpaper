@@ -3,6 +3,7 @@
 #include "ContentView/Components/PropertyEditorWidget.h"
 #include "Services/FavoritesManager.h"
 #include "Services/RendererController.h"
+#include "Services/WallpaperRuntimeStore.h"
 #include "Services/WallpaperLibrary.h"
 
 #include <QLabel>
@@ -22,6 +23,8 @@ public:
 
 public slots:
     void setWallpaper(const Mirage::Wallpaper& wallpaper);
+    void setRuntime(const Mirage::WallpaperRuntimeState& runtime);
+    void setPropertyOverrides(const QHash<QString, QVariant>& overrides);
 
 signals:
     void favoriteRequested(const Mirage::Wallpaper& wallpaper);
@@ -29,6 +32,7 @@ signals:
     void speedChanged(double speed);
     void fillModeChanged(Mirage::FillMode mode);
     void propertyChanged(const QString& key, const Mirage::ProjectProperty& property);
+    void resetDefaultsRequested();
     void applyAllRequested(const Mirage::Wallpaper& wallpaper);
     void stopRequested();
     void closeRequested();

@@ -149,7 +149,7 @@ public:
 
     virtual bool acquireRenderTarget(vulkan::ImageParameters& out) = 0;
 
-    virtual void submitRendered(int sync_marker) = 0;
+    virtual void submitRendered(VkSemaphore acquire_semaphore) = 0;
 
     virtual ExHandle*                eatFrame() { return nullptr; }
     virtual std::array<ExHandle*, 3> snapshot_all_slots() { return { nullptr, nullptr, nullptr }; }
@@ -839,7 +839,7 @@ public:
         return true;
     }
 
-    void submitRendered(int) override { this->renderFrame(); }
+    void submitRendered(VkSemaphore) override { this->renderFrame(); }
 
     ::sr::ExHandle* eatFrame() override {
         return this->TripleSwapchain<::sr::ExHandle>::eatFrame();

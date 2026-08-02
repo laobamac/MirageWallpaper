@@ -2,6 +2,7 @@
 
 #include "Services/LinuxSystemIntegration.h"
 #include "Services/Paths.h"
+#include "Services/DisplayBrokerService.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -10,7 +11,11 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QGuiApplication>
+#include <QScreen>
 #include <QTimer>
+
+#include <functional>
 
 namespace Mirage {
 namespace {
@@ -37,10 +42,11 @@ QJsonValue propertyWireValue(const ProjectProperty& property) {
         return property.boolValue();
     case PropertyKind::Slider:
         return property.doubleValue();
+    case PropertyKind::Combo:
+        return variantToJsonValue(property.value);
     case PropertyKind::Color:
     case PropertyKind::SceneTexture:
     case PropertyKind::File:
-    case PropertyKind::Combo:
     case PropertyKind::TextInput:
     case PropertyKind::Text:
     case PropertyKind::Group:
@@ -95,17 +101,28 @@ bool RendererController::render(const Wallpaper& wallpaper, int screenIndex, con
     running->process = process;
     running->wallpaper = wallpaper;
     running->screenIndex = screenIndex;
+    const QList<QScreen*> screens = QGuiApplication::screens();
+    QScreen* targetScreen = screens.isEmpty()
+                                ? nullptr
+                                : screens.at(qBound(0, screenIndex, screens.size() - 1));
+    running->outputStableId = stableOutputId(targetScreen);
 
     QStringList args;
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    const bool protocolDisplay = LinuxSystemIntegration::isWaylandSession() &&
+                                 !running->outputStableId.isEmpty();
+    if (protocolDisplay) {
+        args << "--display-output-id" << running->outputStableId
+             << "--display-socket" << DisplayBrokerService::defaultSocketPath();
+    }
 
     switch (wallpaper.kind()) {
     case WallpaperKind::Scene: {
         args << Paths::assetsDir()
              << wallpaper.resolvedEntryPath()
              << "--fps" << QString::number(options.fps)
-             << "--screen" << QString::number(screenIndex)
              << "--control-stdin";
+        if (!protocolDisplay) args << "--screen" << QString::number(screenIndex);
         if (options.muted) args << "--muted";
         if (options.loadFromMemory) args << "--load-from-memory";
         const QString propsFile = writeUserPropertiesFile(options.userProperties, wallpaper);
@@ -117,11 +134,11 @@ bool RendererController::render(const Wallpaper& wallpaper, int screenIndex, con
     }
     case WallpaperKind::Video:
         args << wallpaper.renderDirectory
-             << "--screen" << QString::number(screenIndex)
              << "--volume" << number(options.volume)
              << "--fill" << fillModeKey(options.fillMode);
         if (options.muted) args << "--muted";
         if (options.loadFromMemory) args << "--load-from-memory";
+        if (!protocolDisplay) args << "--screen" << QString::number(screenIndex);
         args << "--control-stdin";
         break;
     case WallpaperKind::Web:
@@ -222,6 +239,18 @@ QString RendererController::fillModeKey(FillMode mode) {
     return QStringLiteral("cover");
 }
 
+QString RendererController::stableOutputId(const QScreen* screen) {
+    if (screen == nullptr) return {};
+    const QString manufacturer = screen->manufacturer().trimmed();
+    const QString model = screen->model().trimmed();
+    const QString serial = screen->serialNumber().trimmed();
+    const QString connector = screen->name().trimmed();
+    const QString identity = serial.isEmpty()
+                                 ? QStringList {manufacturer, model, connector}.join('|')
+                                 : QStringList {manufacturer, model, serial}.join('|');
+    return QStringLiteral("kde:") + identity;
+}
+
 void RendererController::setVolume(double volume, int screenIndex) {
     forEachTarget(screenIndex, [&](RunningProcess* running) {
         sendCommand(running, QJsonObject{{"cmd", "volume"}, {"value", volume}});
@@ -296,6 +325,7 @@ QString RendererController::webWallpaperBinary() const {
 QString RendererController::videoWallpaperBinary() const {
     return firstExecutable({
         siblingBinary("VideoWallpaper"),
+        QDir::cleanPath(Paths::repoRoot() + "/VideoRenderer/build/linux-clang-release/Tools/VideoWallpaper/VideoWallpaper"),
         QDir::cleanPath(Paths::repoRoot() + "/VideoRenderer/build/release/Tools/VideoWallpaper/VideoWallpaper"),
         QDir::cleanPath(Paths::repoRoot() + "/VideoRenderer/build/debug/Tools/VideoWallpaper/VideoWallpaper"),
         QDir::cleanPath(Paths::repoRoot() + "/VideoRenderer/cmake-build-debug-clang-21/Tools/VideoWallpaper/VideoWallpaper"),
@@ -374,4 +404,3 @@ void RendererController::consumeStdout(RunningProcess* running, const QByteArray
 }
 
 } // namespace Mirage
-

@@ -617,6 +617,7 @@ struct VulkanRender::Impl {
     vvk::CommandBuffer              m_render_cmd;
 
     bool              m_with_surface { false };
+    bool              m_external_swapchain { false };
     std::atomic<bool> m_inited { false };
 
     // MSAA sample count for the screen RT only. 1bit = disabled.
@@ -809,6 +810,23 @@ bool VulkanRender::Impl::init(RenderInitInfo info) {
 
     std::vector<Extension> inst_exts { base_inst_exts.begin(), base_inst_exts.end() };
     std::vector<Extension> device_exts { base_device_exts.begin(), base_device_exts.end() };
+    m_external_swapchain = static_cast<bool>(info.ex_swapchain_factory);
+    if (m_external_swapchain) {
+        const Extension external_extensions[] = {
+            { true, VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME },
+            { true, VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME },
+            { true, VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME },
+            { true, VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME },
+            { true, VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME },
+            { true, VK_KHR_EXTERNAL_SEMAPHORE_EXTENSION_NAME },
+            { true, VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME },
+            { true, VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME },
+            { true, VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME },
+            { true, VK_EXT_PHYSICAL_DEVICE_DRM_EXTENSION_NAME },
+        };
+        device_exts.insert(device_exts.end(), std::begin(external_extensions),
+                           std::end(external_extensions));
+    }
     const bool needs_vulkan_video = RequiresVulkanVideoDeviceExtensions(info.video_hwdec);
     if (needs_vulkan_video) {
         AppendVideoDeviceExtensions(device_exts);
@@ -892,12 +910,19 @@ bool VulkanRender::Impl::init(RenderInitInfo info) {
     }
 
     if (info.offscreen) {
-        m_ex_swapchain = CreateLocalExSwapchain(*m_device,
-                                                extent.width,
-                                                extent.height,
-                                                (info.offscreen_tiling == TexTiling::OPTIMAL
-                                                     ? VK_IMAGE_TILING_OPTIMAL
-                                                     : VK_IMAGE_TILING_LINEAR));
+        if (info.ex_swapchain_factory) {
+            m_ex_swapchain = info.ex_swapchain_factory(
+                *m_instance.inst(), *m_device->gpu(), *m_device->handle(),
+                *m_device->graphics_queue().handle, m_device->graphics_queue().family_index,
+                extent.width, extent.height);
+        } else {
+            m_ex_swapchain = CreateLocalExSwapchain(*m_device,
+                                                    extent.width,
+                                                    extent.height,
+                                                    (info.offscreen_tiling == TexTiling::OPTIMAL
+                                                         ? VK_IMAGE_TILING_OPTIMAL
+                                                         : VK_IMAGE_TILING_LINEAR));
+        }
         if (! m_ex_swapchain) return false;
         m_with_surface = false;
     }
@@ -1018,9 +1043,14 @@ bool VulkanRender::Impl::CreateRenderingResource(RenderingResources& rr) {
     }
 
     if (! m_with_surface) {
+        VkExportSemaphoreCreateInfo export_info {
+            .sType = VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO,
+            .pNext = nullptr,
+            .handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT,
+        };
         VkSemaphoreCreateInfo ci {
             .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
-            .pNext = nullptr,
+            .pNext = m_external_swapchain ? &export_info : nullptr,
             .flags = 0,
         };
         VVK_CHECK_BOOL_RE(m_device->handle().CreateSemaphore(ci, rr.sem_export));
@@ -1286,7 +1316,7 @@ void VulkanRender::Impl::drawFrameOffscreen() {
     rr.pending_upload_value = 0;
     VVK_CHECK_VOID_RE(rr.fence_frame.Reset());
 
-    m_ex_swapchain->submitRendered(-1);
+    m_ex_swapchain->submitRendered(*rr.sem_export);
 }
 
 bool VulkanRender::Impl::onSwapchainReady(unsigned width, unsigned height) {

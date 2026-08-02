@@ -7,6 +7,8 @@
 #include <QProcess>
 #include <QSet>
 
+class QScreen;
+
 namespace Mirage {
 
 enum class FillMode {
@@ -41,6 +43,7 @@ public:
     QSet<qint64> processIds() const;
 
     static QString fillModeKey(FillMode mode);
+    static QString stableOutputId(const QScreen* screen);
 
 public slots:
     void setVolume(double volume, int screenIndex = -1);
@@ -62,6 +65,7 @@ private:
         QProcess* process = nullptr;
         Wallpaper wallpaper;
         int screenIndex = 0;
+        QString outputStableId;
         bool stopping = false;
         QStringList tempFiles;
         QByteArray stdoutBuffer;
