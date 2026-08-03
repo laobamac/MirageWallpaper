@@ -1,3 +1,7 @@
+// RendererController — owns the lifecycle of the Scene/Video/Web wallpaper
+// processes and drives them over the line-oriented JSON control protocol on
+// stdin (volume, speed, fill mode, user properties, pause/resume, ...).
+
 #pragma once
 
 #include "Services/GlobalSettingsService.h"
@@ -5,7 +9,6 @@
 
 #include <QObject>
 #include <QProcess>
-#include <QSet>
 
 class QScreen;
 
@@ -38,9 +41,7 @@ public:
     bool render(const Wallpaper& wallpaper, int screenIndex, const RenderOptions& options, QString* error = nullptr);
     void stop(int screenIndex);
     void stopAll();
-    bool isRendering(int screenIndex) const;
     QVector<int> activeScreens() const;
-    QSet<qint64> processIds() const;
 
     static QString fillModeKey(FillMode mode);
     static QString stableOutputId(const QScreen* screen);

@@ -50,7 +50,6 @@ public:
     WorkshopTypeFilter typeFilter() const;
     int currentPage() const;
     int totalPages() const;
-    int totalItems() const;
     bool isLoading() const;
     bool isDiscoverLoading() const;
     QString error() const;

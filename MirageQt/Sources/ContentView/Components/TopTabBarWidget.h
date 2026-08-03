@@ -14,7 +14,6 @@ public:
 
 public slots:
     void setCurrentIndex(int index);
-    void setActiveDownloadCount(int count);
 
 signals:
     void tabChanged(int index);

@@ -98,8 +98,5 @@ void TopTabBarWidget::setCurrentIndex(int index) {
     emit tabChanged(index);
 }
 
-void TopTabBarWidget::setActiveDownloadCount(int count) {
-    Q_UNUSED(count)
-}
 
 } // namespace Mirage

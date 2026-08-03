@@ -197,6 +197,8 @@ void RendererController::stop(int screenIndex) {
     sendCommand(running, QJsonObject{{"cmd", "quit"}});
     running->process->closeWriteChannel();
 
+    // Escalating shutdown: "quit" first, then terminate() at 1.5 s and
+    // kill() at 3 s. Both timers no-op once the process has exited.
     QTimer::singleShot(1500, running->process, [process = running->process] {
         if (process->state() != QProcess::NotRunning) process->terminate();
     });
@@ -210,24 +212,11 @@ void RendererController::stopAll() {
     for (int screen : screens) stop(screen);
 }
 
-bool RendererController::isRendering(int screenIndex) const {
-    const RunningProcess* running = m_running.value(screenIndex);
-    return running && running->process->state() != QProcess::NotRunning;
-}
-
 QVector<int> RendererController::activeScreens() const {
     QVector<int> screens;
     for (auto it = m_running.constBegin(); it != m_running.constEnd(); ++it) screens.push_back(it.key());
     std::sort(screens.begin(), screens.end());
     return screens;
-}
-
-QSet<qint64> RendererController::processIds() const {
-    QSet<qint64> ids;
-    for (RunningProcess* running : m_running) {
-        if (running->process->state() != QProcess::NotRunning) ids.insert(running->process->processId());
-    }
-    return ids;
 }
 
 QString RendererController::fillModeKey(FillMode mode) {

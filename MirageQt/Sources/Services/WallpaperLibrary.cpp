@@ -10,7 +10,6 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QRegularExpression>
-#include <QSaveFile>
 
 namespace Mirage {
 namespace {
@@ -118,11 +117,6 @@ QStringList WallpaperLibrary::workshopItemDirectories(const QString& workshopId)
     return dirs;
 }
 
-QString WallpaperLibrary::workshopItemDirectory(const QString& workshopId) const {
-    const QStringList dirs = workshopItemDirectories(workshopId);
-    return dirs.isEmpty() ? QString() : dirs.first();
-}
-
 Wallpaper WallpaperLibrary::loadWallpaper(const QString& directory) const {
     return loadWallpaper(directory, {});
 }
@@ -183,27 +177,6 @@ QString WallpaperLibrary::importAny(const QString& path, QString* error) const {
     const QFileInfo info(path);
     if (info.isDir()) return importWallpaperFolder(path, error);
     return importVideoFile(path, error);
-}
-
-bool WallpaperLibrary::updateStoredMetadata(const Wallpaper& wallpaper, const QString& title, const QStringList& tags) const {
-    QFile file(wallpaper.wallpaperDirectory + "/project.json");
-    if (!file.open(QIODevice::ReadOnly)) return false;
-
-    QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
-    if (!doc.isObject()) return false;
-
-    QJsonObject object = doc.object();
-    if (!title.isNull()) object["title"] = title;
-    if (!tags.isEmpty()) {
-        QJsonArray array;
-        for (const QString& tag : tags) array.push_back(tag);
-        object["tags"] = array;
-    }
-
-    QSaveFile out(wallpaper.wallpaperDirectory + "/project.json");
-    if (!out.open(QIODevice::WriteOnly)) return false;
-    out.write(QJsonDocument(object).toJson(QJsonDocument::Indented));
-    return out.commit();
 }
 
 Wallpaper WallpaperLibrary::loadWallpaper(const QString& directory, QSet<QString> visited) const {

@@ -53,8 +53,8 @@ void PlaylistRotator::rebuildOnMain(StartReason reason) {
     const Playlist playlist = m_manager->current(m_screen);
     if (playlist.items.isEmpty()) return;
 
-    if (reason == StartReason::AppLaunch || playlist.settings.alwaysBeginFirst || playlist.settings.introOnStartup) {
-        applyLaunchAnchor(playlist, reason);
+    if (reason == StartReason::AppLaunch) {
+        applyLaunchAnchor(playlist);
     }
 
     if (playlist.settings.videoSequence && m_renderer) {
@@ -80,8 +80,8 @@ void PlaylistRotator::rebuildOnMain(StartReason reason) {
     }
 }
 
-void PlaylistRotator::applyLaunchAnchor(const Playlist& playlist, StartReason reason) {
-    if (reason != StartReason::AppLaunch || m_didHandleLaunch) return;
+void PlaylistRotator::applyLaunchAnchor(const Playlist& playlist) {
+    if (m_didHandleLaunch) return;
     m_didHandleLaunch = true;
     const Wallpaper target = firstItemWallpaper(playlist);
     if (!target.isValid()) return;
@@ -161,11 +161,8 @@ void PlaylistRotator::tick() {
     const PlaylistSettings settings = m_manager->current(m_screen).settings;
     const Wallpaper current = m_manager->currentWallpaper(m_screen);
     if (settings.videoSequence && current.kind() == WallpaperKind::Video) {
+        // Defer to the video-end signal; onVideoDidEnd rebuilds one-shot schedules.
         m_pendingVideoAdvance = true;
-        // For daytime / day-of-week one-shots, reschedule after the deferred advance path.
-        if (settings.timing == PlaylistTiming::Daytime) {
-            // wait for video end; rebuild after advance
-        }
         return;
     }
     advanceNow();
@@ -175,18 +172,11 @@ void PlaylistRotator::tick() {
 }
 
 void PlaylistRotator::advanceNow() {
-    if (!m_manager || !shouldAdvance()) return;
+    if (!m_manager) return;
     const Playlist playlist = m_manager->current(m_screen);
     const Wallpaper next = pickNext(playlist);
     if (!next.isValid()) return;
     apply(next);
-}
-
-bool PlaylistRotator::shouldAdvance() const {
-    // Linux lacks full effectivePlaybackAction; always advance for now.
-    // updateOnPause is reserved for future pause policy wiring.
-    Q_UNUSED(m_manager);
-    return true;
 }
 
 Wallpaper PlaylistRotator::pickNext(const Playlist& playlist) const {

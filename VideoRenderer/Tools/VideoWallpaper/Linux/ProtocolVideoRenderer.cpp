@@ -190,6 +190,8 @@ public:
         }
         const int result = md_producer_offer_buffers(m_producer, pool);
         if (result != MD_OK) return result;
+        // Advertise the pool as covering the whole output; the desktop
+        // environment adapter scales it to the actual display geometry.
         md_display_config_t display_config {
             .generation = pool->generation,
             .source = {0.0f, 0.0f, static_cast<float>(pool->width),

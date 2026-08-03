@@ -13,38 +13,8 @@
 #include <QProcessEnvironment>
 #include <QTextStream>
 
-#include <X11/Xatom.h>
-#include <X11/Xlib.h>
-
 namespace Mirage {
 namespace {
-
-Atom atom(Display* display, const char* name) {
-    return XInternAtom(display, name, False);
-}
-
-bool readWindowProperty(Display* display, Window window, Atom property, Atom type, QVector<unsigned long>* values) {
-    Atom actualType = None;
-    int actualFormat = 0;
-    unsigned long itemCount = 0;
-    unsigned long bytesAfter = 0;
-    unsigned char* data = nullptr;
-
-    const int status = XGetWindowProperty(display, window, property, 0, 1024, False, type,
-                                          &actualType, &actualFormat, &itemCount, &bytesAfter, &data);
-    if (status != Success || actualType == None || data == nullptr) {
-        if (data) XFree(data);
-        return false;
-    }
-
-    values->clear();
-    if (actualFormat == 32) {
-        auto* raw = reinterpret_cast<unsigned long*>(data);
-        for (unsigned long i = 0; i < itemCount; ++i) values->push_back(raw[i]);
-    }
-    XFree(data);
-    return true;
-}
 
 QString shellQuoted(const QString& value) {
     QString out = value;
@@ -108,46 +78,6 @@ bool LinuxSystemIntegration::setAutoStartEnabled(bool enabled, const QString& ex
            << "Categories=Utility;DesktopSettings;\n"
            << "StartupNotify=false\n";
     return true;
-}
-
-bool LinuxSystemIntegration::isOnBattery() {
-    QDBusInterface upower(QStringLiteral("org.freedesktop.UPower"),
-                          QStringLiteral("/org/freedesktop/UPower"),
-                          QStringLiteral("org.freedesktop.DBus.Properties"),
-                          QDBusConnection::systemBus());
-    if (!upower.isValid()) return false;
-
-    QDBusReply<QDBusVariant> reply = upower.call(QStringLiteral("Get"),
-                                                 QStringLiteral("org.freedesktop.UPower"),
-                                                 QStringLiteral("OnBattery"));
-    return reply.isValid() && reply.value().variant().toBool();
-}
-
-bool LinuxSystemIntegration::activeWindowIsFullscreen() {
-    if (!isX11Session()) return false;
-
-    Display* display = XOpenDisplay(nullptr);
-    if (!display) return false;
-
-    const Window root = DefaultRootWindow(display);
-    QVector<unsigned long> activeValues;
-    if (!readWindowProperty(display, root, atom(display, "_NET_ACTIVE_WINDOW"), XA_WINDOW, &activeValues) ||
-        activeValues.isEmpty()) {
-        XCloseDisplay(display);
-        return false;
-    }
-
-    const Window active = static_cast<Window>(activeValues.first());
-    QVector<unsigned long> stateValues;
-    const bool hasState = readWindowProperty(display, active, atom(display, "_NET_WM_STATE"), XA_ATOM, &stateValues);
-    const Atom fullscreen = atom(display, "_NET_WM_STATE_FULLSCREEN");
-    XCloseDisplay(display);
-
-    if (!hasState) return false;
-    for (unsigned long value : stateValues) {
-        if (static_cast<Atom>(value) == fullscreen) return true;
-    }
-    return false;
 }
 
 } // namespace Mirage

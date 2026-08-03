@@ -1,3 +1,6 @@
+// PlaylistManager — per-screen playlists: current/saved state, debounced JSON
+// persistence, and the owning factory for the per-screen PlaylistRotator.
+
 #pragma once
 
 #include "Services/PlaylistModels.h"
@@ -26,12 +29,10 @@ public:
 
     Playlist current(int screen) const;
     QVector<Playlist> saved() const;
-    QHash<int, Wallpaper> currentWallpapers() const;
 
     void ensureScreen(int screen);
     void startRotators();
     void kickRotator(int screen);
-    void kickAllRotators();
     void stopAllRotators();
 
     void add(const Wallpaper& wallpaper, int screen);

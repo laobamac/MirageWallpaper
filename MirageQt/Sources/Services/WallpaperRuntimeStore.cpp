@@ -63,10 +63,6 @@ WallpaperRuntimeStore::WallpaperRuntimeStore(QObject* parent)
     qRegisterMetaType<Mirage::WallpaperRuntimeState>();
 }
 
-WallpaperRuntimeState WallpaperRuntimeStore::runtime(const QString& wallpaperId) const {
-    return m_runtimes.value(wallpaperId);
-}
-
 WallpaperRuntimeState WallpaperRuntimeStore::loadRuntime(const Wallpaper& wallpaper) const {
     if (!wallpaper.isValid()) return {};
 
@@ -94,14 +90,6 @@ void WallpaperRuntimeStore::setRuntime(const Wallpaper& wallpaper, const Wallpap
     m_wallpapers.insert(wallpaper.id(), wallpaper);
     emit runtimeChanged(wallpaper.id(), normalized);
     if (scheduleSaveFlag) scheduleSave(wallpaper);
-}
-
-void WallpaperRuntimeStore::saveRuntime(const Wallpaper& wallpaper) {
-    if (!wallpaper.isValid()) return;
-    if (QTimer* timer = m_saveTimers.value(wallpaper.id())) {
-        timer->stop();
-    }
-    persist(wallpaper, loadRuntime(wallpaper));
 }
 
 void WallpaperRuntimeStore::resetRuntime(const Wallpaper& wallpaper) {

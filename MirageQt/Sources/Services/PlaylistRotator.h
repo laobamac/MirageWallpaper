@@ -1,3 +1,7 @@
+// PlaylistRotator — advances one screen's playlist on its schedule (timer,
+// daytime anchors, day of week) or when a video wallpaper ends, then asks
+// PlaylistManager to apply the next wallpaper.
+
 #pragma once
 
 #include "Services/PlaylistModels.h"
@@ -39,14 +43,13 @@ private slots:
 
 private:
     void rebuildOnMain(StartReason reason);
-    void applyLaunchAnchor(const Playlist& playlist, StartReason reason);
+    void applyLaunchAnchor(const Playlist& playlist);
     Wallpaper firstItemWallpaper(const Playlist& playlist) const;
     void scheduleTimer(int seconds);
     void scheduleNextDaytimeAnchor(const QVector<int>& anchors);
     void scheduleNextMidnight();
     void applyDayOfWeek(const Playlist& playlist);
     void advanceNow();
-    bool shouldAdvance() const;
     Wallpaper pickNext(const Playlist& playlist) const;
     void apply(const Wallpaper& wallpaper);
 

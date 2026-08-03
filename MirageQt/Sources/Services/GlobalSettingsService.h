@@ -62,8 +62,6 @@ public:
     bool hasValidCustomSteamAPIKey() const;
     QString steamAPIBaseUrl() const;
 
-    void setQualityPreset(const QString& preset);
-
 signals:
     void settingsChanged(const Mirage::GlobalSettings& settings);
 

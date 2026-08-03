@@ -61,7 +61,6 @@ WorkshopSortOrder WorkshopViewModel::sortOrder() const { return m_sortOrder; }
 WorkshopTypeFilter WorkshopViewModel::typeFilter() const { return m_typeFilter; }
 int WorkshopViewModel::currentPage() const { return m_currentPage; }
 int WorkshopViewModel::totalPages() const { return qMax(1, (m_totalItems + kItemsPerPage - 1) / kItemsPerPage); }
-int WorkshopViewModel::totalItems() const { return m_totalItems; }
 bool WorkshopViewModel::isLoading() const { return m_isLoading; }
 bool WorkshopViewModel::isDiscoverLoading() const { return m_isDiscoverLoading; }
 QString WorkshopViewModel::error() const { return m_error; }
@@ -383,7 +382,7 @@ void WorkshopViewModel::processDownloadQueue() {
         task.state.message = QStringLiteral("正在启动 SteamCMD…");
         task.startedAt = QDateTime::currentDateTime();
         emit downloadQueueChanged();
-        m_steamCMD->downloadItem(task.workshopItem.publishedFileId, task.workshopItem.fileSize);
+        m_steamCMD->downloadItem(task.workshopItem.publishedFileId);
         return;
     }
 }

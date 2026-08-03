@@ -1,3 +1,7 @@
+// VRControlChannel — line-oriented JSON control protocol over stdin; see
+// SceneRenderer/Tools/SceneWallpaper/ControlChannel.h for the wire format.
+// Each line is one {"cmd": ...} object; EOF or "quit" stops the host.
+
 #pragma once
 
 #include <QByteArray>

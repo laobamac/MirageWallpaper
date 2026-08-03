@@ -94,10 +94,6 @@ bool SteamCMDManager::isLoggedIn() const {
     return m_loggedIn;
 }
 
-QStringList SteamCMDManager::diagnosticEvents() const {
-    return m_diagnostics;
-}
-
 QString SteamCMDManager::detectSteamCMD() {
     emit installStateChanged(SteamCMDInstallState::Detecting, 0.0, QStringLiteral("检测 SteamCMD"));
 
@@ -126,24 +122,6 @@ QString SteamCMDManager::detectSteamCMD() {
 
     emit installStateChanged(SteamCMDInstallState::NotFound, 0.0, QStringLiteral("未找到 SteamCMD"));
     return {};
-}
-
-QString SteamCMDManager::steamCMDContentDirectory() const {
-    return Paths::steamCMDDir() + "/steamapps/workshop/content/431960";
-}
-
-QStringList SteamCMDManager::steamCMDContentDirectories() const {
-    return Paths::steamCMDContentDirs();
-}
-
-QString SteamCMDManager::diagnosticReport() const {
-    QStringList lines;
-    lines << QStringLiteral("MirageQt Steam 创意工坊支持报告（已脱敏）")
-          << QStringLiteral("生成时间：%1").arg(QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs))
-          << QStringLiteral("SteamCMD：%1").arg(m_steamCMDPath.isEmpty() ? QStringLiteral("未安装") : m_steamCMDPath)
-          << QString();
-    lines << m_diagnostics;
-    return lines.join('\n');
 }
 
 void SteamCMDManager::installSteamCMD() {
@@ -300,10 +278,6 @@ void SteamCMDManager::submitGuardCode(const QString& code) {
     }
 }
 
-void SteamCMDManager::cancelLogin() {
-    if (m_loginProcess) m_loginProcess->kill();
-}
-
 void SteamCMDManager::logout() {
     m_savedUsername.clear();
     m_loggedIn = false;
@@ -313,8 +287,7 @@ void SteamCMDManager::logout() {
     emit authenticationChanged(false, QStringLiteral("未登录"));
 }
 
-void SteamCMDManager::downloadItem(const QString& workshopId, qint64 expectedFileSize) {
-    Q_UNUSED(expectedFileSize)
+void SteamCMDManager::downloadItem(const QString& workshopId) {
     if (workshopId.isEmpty()) return;
     if (m_steamCMDPath.isEmpty() && detectSteamCMD().isEmpty()) {
         publishDownloadState(workshopId, DownloadStateKind::Failed, -1.0, QStringLiteral("SteamCMD 未安装"));
@@ -407,8 +380,6 @@ void SteamCMDManager::record(const QString& category, const QString& message, co
     if (safe.isEmpty()) return;
     const QString line = QStringLiteral("[%1] [%2] %3")
                              .arg(QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs), category, safe);
-    m_diagnostics << line;
-    while (m_diagnostics.size() > 500) m_diagnostics.removeFirst();
     emit diagnosticEvent(line);
 }
 

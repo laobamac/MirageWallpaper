@@ -1,3 +1,8 @@
+// VRProtocolVideoRenderer — Linux mirage-display wallpaper host: decodes the
+// video with FFmpeg, uploads frames through Vulkan, and exports each frame as
+// DMA-BUF to the desktop environment's display adapter over a producer
+// connection. Audio goes to PulseAudio; control comes from the stdin channel.
+
 #pragma once
 
 #include "VideoRendererTypes.h"

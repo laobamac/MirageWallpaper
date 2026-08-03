@@ -53,21 +53,16 @@ public:
     QString steamCMDPath() const;
     QString savedUsername() const;
     bool isLoggedIn() const;
-    QStringList diagnosticEvents() const;
 
     QString detectSteamCMD();
-    QString steamCMDContentDirectory() const;
-    QStringList steamCMDContentDirectories() const;
-    QString diagnosticReport() const;
 
 public slots:
     void installSteamCMD();
     void cancelInstallation();
     void login(const QString& username, const QString& password);
     void submitGuardCode(const QString& code);
-    void cancelLogin();
     void logout();
-    void downloadItem(const QString& workshopId, qint64 expectedFileSize = 0);
+    void downloadItem(const QString& workshopId);
     void cancelDownload(const QString& workshopId);
 
 signals:
@@ -98,7 +93,6 @@ private:
     QProcess* m_loginProcess = nullptr;
     QHash<QString, QProcess*> m_downloadProcesses;
     QSet<QString> m_cancelledDownloads;
-    QStringList m_diagnostics;
     QNetworkAccessManager m_network;
 };
 

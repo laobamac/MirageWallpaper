@@ -263,11 +263,6 @@ void PropertyEditorWidget::setPropertyOverrides(const QHash<QString, QVariant>& 
     rebuild();
 }
 
-void PropertyEditorWidget::setEffectiveProperties(const QHash<QString, ProjectProperty>& properties) {
-    m_effectiveProperties = properties;
-    rebuild();
-}
-
 ProjectProperty PropertyEditorWidget::effectiveProperty(const QString& key) const {
     if (m_effectiveProperties.contains(key)) return m_effectiveProperties.value(key);
     return m_wallpaper.project.properties.value(key);

@@ -204,34 +204,4 @@ QString GlobalSettingsService::steamAPIBaseUrl() const {
         : QStringLiteral("https://api.steampowered.com/");
 }
 
-void GlobalSettingsService::setQualityPreset(const QString& preset) {
-    GlobalSettings next = m_settings;
-    if (preset == "low") {
-        next.antiAliasing = "none";
-        next.postProcessing = "disabled";
-        next.textureResolution = "highQuality";
-        next.fps = 10;
-        next.reflections = false;
-    } else if (preset == "medium") {
-        next.antiAliasing = "none";
-        next.postProcessing = "enabled";
-        next.textureResolution = "highQuality";
-        next.fps = 15;
-        next.reflections = true;
-    } else if (preset == "high") {
-        next.antiAliasing = "msaa_x2";
-        next.postProcessing = "enabled";
-        next.textureResolution = "highQuality";
-        next.fps = 25;
-        next.reflections = true;
-    } else if (preset == "ultra") {
-        next.antiAliasing = "msaa_x2";
-        next.postProcessing = "ultra";
-        next.textureResolution = "highQuality";
-        next.fps = 30;
-        next.reflections = true;
-    }
-    setSettings(next);
-}
-
 } // namespace Mirage

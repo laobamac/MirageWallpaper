@@ -1,3 +1,8 @@
+// DisplayBrokerService — hosts the mirage-display broker socket so desktop
+// environment adapters (e.g. KDE Plasma) can receive wallpaper frames. The
+// dispatch loop runs on a worker thread; MirageQt itself never paints into
+// desktop windows.
+
 #pragma once
 
 #include <QObject>
@@ -20,8 +25,6 @@ public:
     bool start(QString* error = nullptr);
     void stop();
 
-    [[nodiscard]] bool running() const noexcept { return m_running.load(); }
-    [[nodiscard]] QString socketPath() const { return m_socketPath; }
     [[nodiscard]] static QString defaultSocketPath();
 
 private:

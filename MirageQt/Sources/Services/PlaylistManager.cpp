@@ -41,10 +41,6 @@ QVector<Playlist> PlaylistManager::saved() const {
     return m_saved;
 }
 
-QHash<int, Wallpaper> PlaylistManager::currentWallpapers() const {
-    return m_currentWallpapers;
-}
-
 void PlaylistManager::ensureScreen(int screen) {
     if (m_currents.contains(screen)) return;
     m_currents.insert(screen, defaultPlaylist());
@@ -63,12 +59,6 @@ void PlaylistManager::kickRotator(int screen) {
         rotator->rebuild(PlaylistRotator::StartReason::SettingsChanged);
     } else {
         rebuildRotator(screen, false);
-    }
-}
-
-void PlaylistManager::kickAllRotators() {
-    for (PlaylistRotator* rotator : m_rotators) {
-        rotator->rebuild(PlaylistRotator::StartReason::SettingsChanged);
     }
 }
 
@@ -245,6 +235,8 @@ void PlaylistManager::load() {
     }
 }
 
+    // Persistence is debounced so bursts of edits (dragging items, changing
+    // settings) write once after the UI settles instead of on every mutation.
 void PlaylistManager::scheduleSave() {
     m_saveTimer.start();
 }

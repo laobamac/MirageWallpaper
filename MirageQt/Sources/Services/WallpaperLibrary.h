@@ -19,14 +19,11 @@ public:
     QStringList sourceDirectories() const;
     QVector<Wallpaper> loadAll() const;
     QStringList workshopItemDirectories(const QString& workshopId) const;
-    QString workshopItemDirectory(const QString& workshopId) const;
 
     Wallpaper loadWallpaper(const QString& directory) const;
     QString importWallpaperFolder(const QString& directory, QString* error = nullptr) const;
     QString importVideoFile(const QString& filePath, QString* error = nullptr) const;
     QString importAny(const QString& path, QString* error = nullptr) const;
-
-    bool updateStoredMetadata(const Wallpaper& wallpaper, const QString& title, const QStringList& tags) const;
 
 private:
     Wallpaper loadWallpaper(const QString& directory, QSet<QString> visited) const;

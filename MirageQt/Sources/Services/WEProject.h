@@ -125,9 +125,6 @@ QString wallpaperKindName(WallpaperKind kind);
 QString wallpaperKindKey(WallpaperKind kind);
 WallpaperKind wallpaperKindFromString(const QString& raw);
 
-QString presetStatusKey(PresetStatus status);
-PresetStatus presetStatusFromKey(const QString& raw);
-
 QVariant jsonValueToVariant(const QJsonValue& value);
 QJsonValue variantToJsonValue(const QVariant& value);
 ProjectProperty propertyFromJson(const QJsonObject& object);

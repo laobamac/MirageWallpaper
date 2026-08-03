@@ -315,25 +315,6 @@ WallpaperKind wallpaperKindFromString(const QString& raw) {
     return WallpaperKind::Unsupported;
 }
 
-QString presetStatusKey(PresetStatus status) {
-    switch (status) {
-    case PresetStatus::NotPreset: return QStringLiteral("notPreset");
-    case PresetStatus::Resolved: return QStringLiteral("resolved");
-    case PresetStatus::MissingDependency: return QStringLiteral("missingDependency");
-    case PresetStatus::InvalidDependency: return QStringLiteral("invalidDependency");
-    case PresetStatus::CircularDependency: return QStringLiteral("circularDependency");
-    }
-    return QStringLiteral("notPreset");
-}
-
-PresetStatus presetStatusFromKey(const QString& raw) {
-    if (raw == "resolved") return PresetStatus::Resolved;
-    if (raw == "missingDependency") return PresetStatus::MissingDependency;
-    if (raw == "invalidDependency") return PresetStatus::InvalidDependency;
-    if (raw == "circularDependency") return PresetStatus::CircularDependency;
-    return PresetStatus::NotPreset;
-}
-
 QVariant jsonValueToVariant(const QJsonValue& value) {
     if (value.isBool()) return value.toBool();
     if (value.isDouble()) return value.toDouble();

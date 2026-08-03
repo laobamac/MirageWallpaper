@@ -57,6 +57,9 @@ bool DisplayBrokerService::start(QString* error) {
     }
 
     m_running.store(true);
+    // Serve the socket on a worker thread so the UI never blocks: dispatch
+    // polls with a 100 ms timeout and md_broker_stop() (from stop()) wakes it,
+    // so the thread can be joined without waiting for a full timeout.
     m_thread = std::thread([this] {
         while (m_running.load()) {
             const int result = md_broker_dispatch(m_broker, 100);

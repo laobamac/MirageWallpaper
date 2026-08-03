@@ -20,7 +20,6 @@ public:
 public slots:
     void setWallpaper(const Mirage::Wallpaper& wallpaper);
     void setPropertyOverrides(const QHash<QString, QVariant>& overrides);
-    void setEffectiveProperties(const QHash<QString, ProjectProperty>& properties);
 
 signals:
     void propertyChanged(const QString& key, const Mirage::ProjectProperty& property);

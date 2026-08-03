@@ -1,3 +1,7 @@
+// WallpaperRuntimeStore — per-wallpaper playback state (volume, speed, fill
+// mode, property overrides) persisted to QSettings; the shared source of truth
+// for the UI and the renderer processes.
+
 #pragma once
 
 #include "Services/RendererController.h"
@@ -24,10 +28,8 @@ class WallpaperRuntimeStore : public QObject {
 public:
     explicit WallpaperRuntimeStore(QObject* parent = nullptr);
 
-    WallpaperRuntimeState runtime(const QString& wallpaperId) const;
     WallpaperRuntimeState loadRuntime(const Wallpaper& wallpaper) const;
     void setRuntime(const Wallpaper& wallpaper, const WallpaperRuntimeState& state, bool scheduleSave = true);
-    void saveRuntime(const Wallpaper& wallpaper);
     void resetRuntime(const Wallpaper& wallpaper);
 
     QHash<QString, ProjectProperty> effectiveProperties(const Wallpaper& wallpaper) const;

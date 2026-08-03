@@ -12,8 +12,6 @@ public:
     static QString wallpaperUnsupportedReason();
 
     static bool setAutoStartEnabled(bool enabled, const QString& executablePath);
-    static bool isOnBattery();
-    static bool activeWindowIsFullscreen();
 };
 
 } // namespace Mirage
