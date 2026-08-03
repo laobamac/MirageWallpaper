@@ -199,10 +199,18 @@ Wallpaper PlaylistManager::resolveWallpaper(const QString& id) const {
 
 void PlaylistManager::setCurrentWallpaper(int screen, const Wallpaper& wallpaper) {
     m_currentWallpapers.insert(screen, wallpaper);
+    if (wallpaper.isValid()) {
+        m_lastAppliedIDs.insert(screen, wallpaper.id());
+        scheduleSave();
+    }
 }
 
 Wallpaper PlaylistManager::currentWallpaper(int screen) const {
     return m_currentWallpapers.value(screen);
+}
+
+QHash<int, QString> PlaylistManager::lastAppliedIDs() const {
+    return m_lastAppliedIDs;
 }
 
 void PlaylistManager::load() {
@@ -233,6 +241,15 @@ void PlaylistManager::load() {
     for (const auto& value : saved) {
         m_saved.push_back(Playlist::fromJson(value.toObject()));
     }
+
+    const QJsonObject lastApplied = root.value(QStringLiteral("lastApplied")).toObject();
+    for (auto it = lastApplied.begin(); it != lastApplied.end(); ++it) {
+        bool ok = false;
+        const int screen = it.key().toInt(&ok);
+        if (!ok) continue;
+        const QString id = it.value().toString();
+        if (!id.isEmpty()) m_lastAppliedIDs.insert(screen, id);
+    }
 }
 
     // Persistence is debounced so bursts of edits (dragging items, changing
@@ -250,9 +267,15 @@ void PlaylistManager::saveNow() {
     QJsonArray saved;
     for (const Playlist& playlist : m_saved) saved.push_back(playlist.toJson());
 
+    QJsonObject lastApplied;
+    for (auto it = m_lastAppliedIDs.constBegin(); it != m_lastAppliedIDs.constEnd(); ++it) {
+        lastApplied.insert(QString::number(it.key()), it.value());
+    }
+
     const QJsonObject root{
         {QStringLiteral("currents"), currents},
         {QStringLiteral("saved"), saved},
+        {QStringLiteral("lastApplied"), lastApplied},
     };
 
     QFile file(m_storagePath);

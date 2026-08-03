@@ -51,6 +51,9 @@ public:
     Wallpaper resolveWallpaper(const QString& id) const;
     void setCurrentWallpaper(int screen, const Wallpaper& wallpaper);
     Wallpaper currentWallpaper(int screen) const;
+    // Persisted "last applied wallpaper" per screen, used to resume playback
+    // on app launch (mirrors the macOS app's CurrentWallpaper restore).
+    QHash<int, QString> lastAppliedIDs() const;
 
 signals:
     void currentChanged(int screen);
@@ -77,6 +80,7 @@ private:
     QHash<int, Playlist> m_currents;
     QVector<Playlist> m_saved;
     QHash<int, Wallpaper> m_currentWallpapers;
+    QHash<int, QString> m_lastAppliedIDs;
     QHash<int, PlaylistRotator*> m_rotators;
     QTimer m_saveTimer;
     QString m_storagePath;

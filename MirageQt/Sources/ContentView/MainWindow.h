@@ -62,6 +62,7 @@ private:
     void handleResetDefaults();
     void flushPendingPropertyCommands();
     void reapplyPlayingWallpaper(const Wallpaper& wallpaper);
+    void restoreStartupPlayback();
     void setupTray();
     void showMessage(const QString& message);
 

@@ -224,12 +224,33 @@ MainWindow::MainWindow(QWidget* parent)
     if (m_wallpaperList->currentWallpaper().isValid()) {
         selectWallpaper(m_wallpaperList->currentWallpaper());
     }
+    // Resume the last applied wallpaper(s) before the playlist rotators start,
+    // mirroring the macOS app's restore of "CurrentWallpaper" at launch.
+    restoreStartupPlayback();
     m_playlist->startRotators();
     setupTray();
 }
 
 MainWindow::~MainWindow() {
     m_renderer->stopAll();
+}
+
+void MainWindow::restoreStartupPlayback() {
+    const QHash<int, QString> lastApplied = m_playlist->lastAppliedIDs();
+    for (auto it = lastApplied.constBegin(); it != lastApplied.constEnd(); ++it) {
+        const int screen = it.key();
+        const Wallpaper wallpaper = m_playlist->resolveWallpaper(it.value());
+        if (!wallpaper.isValid()) continue; // wallpaper no longer installed
+
+        QString error;
+        if (!m_renderer->render(wallpaper, screen, renderOptionsFor(wallpaper), &error)
+            && !error.isEmpty()) {
+            showMessage(error);
+            continue;
+        }
+        m_playlist->setCurrentWallpaper(screen, wallpaper);
+        m_bottomBar->setPlayingWallpaper(screen, wallpaper);
+    }
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
