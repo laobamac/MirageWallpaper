@@ -17,19 +17,14 @@ find_package(Qt6 6.11 REQUIRED COMPONENTS
     DBus)
 find_package(X11 REQUIRED)
 
-set(MIRAGE_LINUX_DISPLAY_SOURCE_DIR
-    "${CMAKE_CURRENT_LIST_DIR}/../../MirageLinuxDisplay"
-    CACHE PATH "Path to the MirageLinuxDisplay source tree")
-if(NOT EXISTS "${MIRAGE_LINUX_DISPLAY_SOURCE_DIR}/CMakeLists.txt")
-    message(FATAL_ERROR
-        "MirageLinuxDisplay was not found at ${MIRAGE_LINUX_DISPLAY_SOURCE_DIR}")
-endif()
+# MirageLinuxDisplay is vendored in-tree (see Vendors/MirageLinuxDisplay/README.md).
+set(MIRAGE_DISPLAY_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}/../Vendors/MirageLinuxDisplay")
 set(MIRAGE_DISPLAY_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(MIRAGE_DISPLAY_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(MIRAGE_DISPLAY_PLUGIN_QML OFF CACHE BOOL "" FORCE)
 set(MIRAGE_DISPLAY_WITH_VULKAN OFF CACHE BOOL "" FORCE)
 set(MIRAGE_DISPLAY_WITH_EGL OFF CACHE BOOL "" FORCE)
-add_subdirectory("${MIRAGE_LINUX_DISPLAY_SOURCE_DIR}"
+add_subdirectory("${MIRAGE_DISPLAY_SOURCE_DIR}"
     "${CMAKE_CURRENT_BINARY_DIR}/MirageLinuxDisplay")
 
 qt_standard_project_setup()
@@ -82,6 +77,7 @@ add_library(MirageQtCore STATIC
     Sources/Services/WorkshopViewModel.h)
 
 target_include_directories(MirageQtCore PUBLIC Sources)
+target_include_directories(MirageQtCore PRIVATE "${MIRAGE_DISPLAY_SOURCE_DIR}/include")
 target_compile_definitions(MirageQtCore PUBLIC
     MIRAGEQT_REPO_ROOT="${MIRAGEQT_REPO_ROOT}"
     MIRAGE_STEAM_WEB_API_KEY="${MIRAGE_STEAM_WEB_API_KEY}")

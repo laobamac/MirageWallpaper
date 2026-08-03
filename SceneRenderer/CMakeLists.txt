@@ -57,19 +57,14 @@ find_package(Threads REQUIRED)
 option(SCENERENDERER_ENABLE_MIRAGE_DISPLAY
     "Build the mirage-display producer host on Linux" ON)
 if(UNIX AND NOT APPLE AND SCENERENDERER_ENABLE_MIRAGE_DISPLAY)
-    set(MIRAGE_LINUX_DISPLAY_SOURCE_DIR
-        "${CMAKE_CURRENT_LIST_DIR}/../../MirageLinuxDisplay"
-        CACHE PATH "Path to the MirageLinuxDisplay source tree")
-    if(NOT EXISTS "${MIRAGE_LINUX_DISPLAY_SOURCE_DIR}/CMakeLists.txt")
-        message(FATAL_ERROR
-            "MirageLinuxDisplay was not found at ${MIRAGE_LINUX_DISPLAY_SOURCE_DIR}")
-    endif()
+    # MirageLinuxDisplay is vendored in-tree (see Vendors/MirageLinuxDisplay/README.md).
+    set(MIRAGE_DISPLAY_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}/../Vendors/MirageLinuxDisplay")
     set(MIRAGE_DISPLAY_BUILD_TESTS OFF CACHE BOOL "" FORCE)
     set(MIRAGE_DISPLAY_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
     set(MIRAGE_DISPLAY_PLUGIN_QML OFF CACHE BOOL "" FORCE)
     set(MIRAGE_DISPLAY_WITH_EGL OFF CACHE BOOL "" FORCE)
     set(MIRAGE_DISPLAY_WITH_VULKAN ON CACHE BOOL "" FORCE)
-    add_subdirectory("${MIRAGE_LINUX_DISPLAY_SOURCE_DIR}"
+    add_subdirectory("${MIRAGE_DISPLAY_SOURCE_DIR}"
         "${CMAKE_CURRENT_BINARY_DIR}/MirageLinuxDisplay")
 endif()
 

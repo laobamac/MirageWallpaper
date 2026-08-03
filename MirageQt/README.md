@@ -16,6 +16,10 @@ The Linux web renderer is not implemented yet.
 
 Build:
 
+The mirage-display integration library is vendored in-tree under
+`Vendors/MirageLinuxDisplay/` (pinned snapshot, see its README for the upstream
+commit); no external `MirageLinuxDisplay` checkout is required.
+
 ```sh
 cmake -S VideoRenderer -B VideoRenderer/build/release -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build VideoRenderer/build/release

@@ -25,6 +25,8 @@ elseif(UNIX AND NOT APPLE)
             Linux/ProtocolVideoRenderer.cpp)
         target_compile_definitions(VideoWallpaper PRIVATE
             VIDEORENDERER_MIRAGE_DISPLAY=1)
+        # Public headers of the vendored MirageLinuxDisplay library (see Vendors/README).
+        target_include_directories(VideoWallpaper PRIVATE "${MIRAGE_DISPLAY_SOURCE_DIR}/include")
         target_link_libraries(VideoWallpaper PRIVATE
             mirage_display_vulkan_static
             PkgConfig::MIRAGE_FFMPEG

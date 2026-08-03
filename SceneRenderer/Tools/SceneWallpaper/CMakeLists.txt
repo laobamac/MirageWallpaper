@@ -48,6 +48,8 @@ endif()
 
 if(UNIX AND NOT APPLE AND SCENERENDERER_ENABLE_MIRAGE_DISPLAY)
     target_compile_definitions(SceneWallpaper PRIVATE SCENERENDERER_MIRAGE_DISPLAY=1)
+    # Public headers of the vendored MirageLinuxDisplay library (see Vendors/README).
+    target_include_directories(SceneWallpaper PRIVATE "${MIRAGE_DISPLAY_SOURCE_DIR}/include")
     target_link_libraries(SceneWallpaper PRIVATE mirage_display_vulkan_static)
 endif()
 

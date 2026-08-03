@@ -41,25 +41,20 @@ option(VIDEORENDERER_ENABLE_MIRAGE_DISPLAY
 if(UNIX AND NOT APPLE AND VIDEORENDERER_ENABLE_MIRAGE_DISPLAY)
     find_package(Threads REQUIRED)
 
-    set(MIRAGE_LINUX_DISPLAY_SOURCE_DIR
-        "${CMAKE_CURRENT_LIST_DIR}/../../MirageLinuxDisplay"
-        CACHE PATH "Path to the MirageLinuxDisplay source tree")
-    if(NOT EXISTS "${MIRAGE_LINUX_DISPLAY_SOURCE_DIR}/CMakeLists.txt")
-        message(FATAL_ERROR
-            "MirageLinuxDisplay was not found at ${MIRAGE_LINUX_DISPLAY_SOURCE_DIR}")
-    endif()
+    # MirageLinuxDisplay is vendored in-tree (see Vendors/MirageLinuxDisplay/README.md).
+    set(MIRAGE_DISPLAY_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}/../Vendors/MirageLinuxDisplay")
     set(MIRAGE_DISPLAY_BUILD_TESTS OFF CACHE BOOL "" FORCE)
     set(MIRAGE_DISPLAY_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
     set(MIRAGE_DISPLAY_PLUGIN_QML OFF CACHE BOOL "" FORCE)
     set(MIRAGE_DISPLAY_WITH_EGL OFF CACHE BOOL "" FORCE)
     set(MIRAGE_DISPLAY_WITH_VULKAN ON CACHE BOOL "" FORCE)
-    add_subdirectory("${MIRAGE_LINUX_DISPLAY_SOURCE_DIR}"
+    add_subdirectory("${MIRAGE_DISPLAY_SOURCE_DIR}"
         "${CMAKE_CURRENT_BINARY_DIR}/MirageLinuxDisplay")
 
     # The mirage-display video producer intentionally has no dependency on
     # the vendored rstd/wavsen C++20 module libraries (used by SceneRenderer);
-    # the protocol renderer decodes with Qt Multimedia and uploads frames
-    # through plain Vulkan, keeping this build free of C++20 modules.
+    # the protocol renderer decodes with Qt Multimedia and uploads frames through
+    # plain Vulkan, keeping this build free of C++20 modules.
 endif()
 
 if(APPLE)

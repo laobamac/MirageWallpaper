@@ -1,0 +1,18 @@
+{
+    "KPackageStructure": "Plasma/Wallpaper",
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "MirageWallpaper contributors"
+            }
+        ],
+        "Category": "",
+        "Description": "Native MirageWallpaper display integration",
+        "Icon": "preferences-desktop-wallpaper",
+        "Id": "org.mirage.wallpaper",
+        "License": "GPL-3.0-or-later",
+        "Name": "MirageWallpaper",
+        "Website": "https://github.com/"
+    },
+    "X-KDE-ParentApp": "org.kde.plasmashell"
+}

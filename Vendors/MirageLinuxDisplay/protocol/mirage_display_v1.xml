@@ -1,0 +1,229 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="mirage-display" major="1" minor="0"
+          transport="unix-seqpacket" byte-order="little-endian">
+  <roles>
+    <role name="display-consumer" value="1"/>
+    <role name="render-producer" value="2"/>
+  </roles>
+
+  <features>
+    <feature name="explicit-sync" bit="0" required="true"/>
+    <feature name="drm-modifiers" bit="1"/>
+    <feature name="multiplane" bit="2"/>
+    <feature name="pointer-axis" bit="3"/>
+    <feature name="window-state" bit="4"/>
+    <feature name="color-metadata" bit="5" since-minor="1"/>
+  </features>
+
+  <enums>
+    <enum name="transform">
+      <entry name="normal" value="0"/>
+      <entry name="rotate-90" value="1"/>
+      <entry name="rotate-180" value="2"/>
+      <entry name="rotate-270" value="3"/>
+      <entry name="flipped" value="4"/>
+      <entry name="flipped-90" value="5"/>
+      <entry name="flipped-180" value="6"/>
+      <entry name="flipped-270" value="7"/>
+    </enum>
+    <enum name="button-state">
+      <entry name="released" value="0"/>
+      <entry name="pressed" value="1"/>
+    </enum>
+    <enum name="axis-source">
+      <entry name="wheel" value="0"/>
+      <entry name="finger" value="1"/>
+      <entry name="continuous" value="2"/>
+    </enum>
+  </enums>
+
+  <messages>
+    <message name="hello" opcode="0x0001" direction="peer-to-broker">
+      <arg name="role" type="u32"/>
+      <arg name="min_minor" type="u16"/>
+      <arg name="max_minor" type="u16"/>
+      <arg name="features" type="u64"/>
+      <arg name="name" type="string" max-bytes="4096"/>
+      <arg name="version" type="string" max-bytes="4096"/>
+    </message>
+    <message name="goodbye" opcode="0x0002" direction="peer-to-broker">
+      <arg name="reason" type="u32"/>
+    </message>
+    <message name="welcome" opcode="0x8001" direction="broker-to-peer">
+      <arg name="selected_minor" type="u16"/>
+      <arg name="reserved" type="u16" value="0"/>
+      <arg name="features" type="u64"/>
+      <arg name="server_name" type="string" max-bytes="4096"/>
+      <arg name="server_version" type="string" max-bytes="4096"/>
+    </message>
+    <message name="error" opcode="0x80ff" direction="broker-to-peer">
+      <arg name="code" type="u32"/>
+      <arg name="fatal" type="u32"/>
+      <arg name="message" type="string" max-bytes="4096"/>
+    </message>
+
+    <message name="register-output" opcode="0x0101" direction="display-to-broker">
+      <arg name="stable_id" type="string" max-bytes="4096"/>
+      <arg name="name" type="string" max-bytes="4096"/>
+      <arg name="physical_width" type="u32"/>
+      <arg name="physical_height" type="u32"/>
+      <arg name="logical_width" type="u32"/>
+      <arg name="logical_height" type="u32"/>
+      <arg name="scale_120" type="u32"/>
+      <arg name="refresh_mhz" type="u32"/>
+      <arg name="transform" type="u32" enum="transform"/>
+      <arg name="drm_render_major" type="u32"/>
+      <arg name="drm_render_minor" type="u32"/>
+      <arg name="input_caps" type="u64"/>
+    </message>
+    <message name="update-output" opcode="0x0102" direction="display-to-broker">
+      <arg name="physical_width" type="u32"/>
+      <arg name="physical_height" type="u32"/>
+      <arg name="logical_width" type="u32"/>
+      <arg name="logical_height" type="u32"/>
+      <arg name="scale_120" type="u32"/>
+      <arg name="refresh_mhz" type="u32"/>
+      <arg name="transform" type="u32" enum="transform"/>
+    </message>
+    <message name="consumer-caps" opcode="0x0103" direction="display-to-broker">
+      <arg name="sync_caps" type="u64"/>
+      <arg name="color_caps" type="u64"/>
+      <arg name="max_width" type="u32"/>
+      <arg name="max_height" type="u32"/>
+      <arg name="device_uuid" type="bytes16"/>
+      <arg name="driver_uuid" type="bytes16"/>
+      <arg name="formats" type="array" element="format-cap" max-count="256"/>
+    </message>
+    <message name="pointer-enter" opcode="0x0104" direction="display-to-broker">
+      <arg name="x" type="f32"/><arg name="y" type="f32"/>
+      <arg name="timestamp_us" type="u64"/>
+    </message>
+    <message name="pointer-leave" opcode="0x0105" direction="display-to-broker">
+      <arg name="timestamp_us" type="u64"/>
+    </message>
+    <message name="pointer-motion" opcode="0x0106" direction="display-to-broker">
+      <arg name="x" type="f32"/><arg name="y" type="f32"/>
+      <arg name="timestamp_us" type="u64"/><arg name="modifiers" type="u32"/>
+    </message>
+    <message name="pointer-button" opcode="0x0107" direction="display-to-broker">
+      <arg name="x" type="f32"/><arg name="y" type="f32"/>
+      <arg name="button" type="u32"/><arg name="state" type="u32" enum="button-state"/>
+      <arg name="timestamp_us" type="u64"/><arg name="modifiers" type="u32"/>
+    </message>
+    <message name="pointer-axis" opcode="0x0108" direction="display-to-broker">
+      <arg name="x" type="f32"/><arg name="y" type="f32"/>
+      <arg name="delta_x" type="f32"/><arg name="delta_y" type="f32"/>
+      <arg name="source" type="u32" enum="axis-source"/>
+      <arg name="timestamp_us" type="u64"/><arg name="modifiers" type="u32"/>
+    </message>
+    <message name="unbind-done" opcode="0x0109" direction="display-to-broker">
+      <arg name="generation" type="u64"/>
+    </message>
+    <message name="window-state" opcode="0x010a" direction="display-to-broker">
+      <arg name="flags" type="u32"/>
+    </message>
+
+    <message name="output-accepted" opcode="0x8101" direction="broker-to-display">
+      <arg name="output_id" type="u64"/>
+    </message>
+    <message name="bind-buffers" opcode="0x8102" direction="broker-to-display"
+             fd-expression="buffer_count * plane_count">
+      <arg name="generation" type="u64"/>
+      <arg name="buffer_count" type="u32" min="2" max="4"/>
+      <arg name="width" type="u32"/><arg name="height" type="u32"/>
+      <arg name="fourcc" type="u32"/><arg name="plane_count" type="u32" min="1" max="4"/>
+      <arg name="modifier" type="u64"/>
+      <arg name="planes" type="array" element="plane-desc"/>
+    </message>
+    <message name="set-config" opcode="0x8103" direction="broker-to-display">
+      <arg name="config_generation" type="u64"/>
+      <arg name="source" type="rect"/><arg name="destination" type="rect"/>
+      <arg name="transform" type="u32" enum="transform"/>
+      <arg name="clear_r" type="f32"/><arg name="clear_g" type="f32"/>
+      <arg name="clear_b" type="f32"/><arg name="clear_a" type="f32"/>
+    </message>
+    <message name="frame-ready" opcode="0x8104" direction="broker-to-display" fds="2">
+      <arg name="generation" type="u64"/><arg name="buffer_index" type="u32"/>
+      <arg name="reserved" type="u32" value="0"/><arg name="sequence" type="u64"/>
+    </message>
+    <message name="unbind" opcode="0x8105" direction="broker-to-display">
+      <arg name="generation" type="u64"/>
+    </message>
+
+    <message name="register-producer" opcode="0x0201" direction="producer-to-broker">
+      <arg name="stable_output_id" type="string" max-bytes="4096"/>
+      <arg name="kind" type="string" max-bytes="4096"/>
+      <arg name="drm_render_major" type="u32"/><arg name="drm_render_minor" type="u32"/>
+      <arg name="device_uuid" type="bytes16"/><arg name="driver_uuid" type="bytes16"/>
+      <arg name="formats" type="array" element="format-cap" max-count="256"/>
+    </message>
+    <message name="offer-buffers" opcode="0x0202" direction="producer-to-broker"
+             fd-expression="buffer_count * plane_count">
+      <arg name="generation" type="u64"/>
+      <arg name="buffer_count" type="u32" min="2" max="4"/>
+      <arg name="width" type="u32"/><arg name="height" type="u32"/>
+      <arg name="fourcc" type="u32"/><arg name="plane_count" type="u32" min="1" max="4"/>
+      <arg name="modifier" type="u64"/>
+      <arg name="planes" type="array" element="plane-desc"/>
+    </message>
+    <message name="producer-frame" opcode="0x0203" direction="producer-to-broker" fds="2">
+      <arg name="generation" type="u64"/><arg name="buffer_index" type="u32"/>
+      <arg name="reserved" type="u32" value="0"/><arg name="sequence" type="u64"/>
+    </message>
+    <message name="retire-done" opcode="0x0204" direction="producer-to-broker">
+      <arg name="generation" type="u64"/>
+    </message>
+    <message name="producer-set-config" opcode="0x0205" direction="producer-to-broker">
+      <arg name="config_generation" type="u64"/>
+      <arg name="source" type="rect"/><arg name="destination" type="rect"/>
+      <arg name="transform" type="u32" enum="transform"/>
+      <arg name="clear_r" type="f32"/><arg name="clear_g" type="f32"/>
+      <arg name="clear_b" type="f32"/><arg name="clear_a" type="f32"/>
+    </message>
+
+    <message name="producer-accepted" opcode="0x8201" direction="broker-to-producer">
+      <arg name="producer_id" type="u64"/><arg name="output_id" type="u64"/>
+    </message>
+    <message name="output-config" opcode="0x8202" direction="broker-to-producer">
+      <arg name="physical_width" type="u32"/><arg name="physical_height" type="u32"/>
+      <arg name="refresh_mhz" type="u32"/><arg name="transform" type="u32" enum="transform"/>
+      <arg name="fourcc" type="u32"/><arg name="plane_count" type="u32"/>
+      <arg name="modifier" type="u64"/>
+    </message>
+    <message name="retire-buffers" opcode="0x8203" direction="broker-to-producer">
+      <arg name="generation" type="u64"/>
+    </message>
+    <message name="producer-pointer-motion" opcode="0x8204" direction="broker-to-producer">
+      <arg name="x" type="f32"/><arg name="y" type="f32"/>
+      <arg name="timestamp_us" type="u64"/><arg name="modifiers" type="u32"/>
+    </message>
+    <message name="producer-pointer-button" opcode="0x8205" direction="broker-to-producer">
+      <arg name="x" type="f32"/><arg name="y" type="f32"/>
+      <arg name="button" type="u32"/><arg name="state" type="u32" enum="button-state"/>
+      <arg name="timestamp_us" type="u64"/><arg name="modifiers" type="u32"/>
+    </message>
+    <message name="producer-pointer-enter" opcode="0x8206" direction="broker-to-producer">
+      <arg name="x" type="f32"/><arg name="y" type="f32"/><arg name="timestamp_us" type="u64"/>
+    </message>
+    <message name="producer-pointer-leave" opcode="0x8207" direction="broker-to-producer">
+      <arg name="timestamp_us" type="u64"/>
+    </message>
+    <message name="producer-pointer-axis" opcode="0x8208" direction="broker-to-producer">
+      <arg name="x" type="f32"/><arg name="y" type="f32"/>
+      <arg name="delta_x" type="f32"/><arg name="delta_y" type="f32"/>
+      <arg name="source" type="u32" enum="axis-source"/>
+      <arg name="timestamp_us" type="u64"/><arg name="modifiers" type="u32"/>
+    </message>
+  </messages>
+
+  <structs>
+    <struct name="format-cap">
+      <arg name="fourcc" type="u32"/><arg name="plane_count" type="u32"/>
+      <arg name="modifier" type="u64"/>
+    </struct>
+    <struct name="plane-desc">
+      <arg name="stride" type="u32"/><arg name="offset" type="u32"/>
+      <arg name="size" type="u64"/>
+    </struct>
+  </structs>
+</protocol>

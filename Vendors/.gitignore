@@ -1,0 +1,45 @@
+# CMake, Ninja and other local build trees
+/build*/
+/cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+build.ninja
+.ninja_deps
+.ninja_log
+compile_commands.json
+Testing/
+install_manifest.txt
+_CPack*/
+*.zip
+
+# Compiled objects and libraries
+*.o
+*.obj
+*.a
+*.so
+*.so.*
+*.dll
+*.dylib
+*.exe
+
+# Generated Qt/QML artifacts
+qmlcachegen_*
+*.qmlc
+*.jsc
+*.qmltypes.tmp
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Local tooling, logs and OS metadata
+.cache/
+.clangd/
+*.log
+.DS_Store
+Thumbs.db
