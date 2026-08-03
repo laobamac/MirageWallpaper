@@ -51,6 +51,9 @@ StyleColors lightColors() {
         QStringLiteral("#8f8f95"), QStringLiteral("#c7c7cc"), QStringLiteral("#ffffff")};
 }
 
+StyleColors g_currentColors;
+const StyleColors* g_activeColors = nullptr;
+
 bool useDarkAppearance(QApplication& app, const QString& appearance) {
     if (appearance == QStringLiteral("dark")) return true;
     if (appearance == QStringLiteral("light")) return false;
@@ -169,13 +172,9 @@ QString styleSheet(const StyleColors& color) {
         }
         QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus { border-color: #0a84ff; }
         QLineEdit:read-only { color: @SECONDARY@; }
-        QComboBox::drop-down { width: 25px; border: 0; }
-        QComboBox QAbstractItemView {
-            color: @TEXT@;
-            background-color: @BASE@;
-            border: 1px solid @BORDER@;
-            selection-background-color: #0a84ff;
-        }
+        QComboBox { border-radius: 8px; padding: 2px 10px; }
+        QComboBox::drop-down { width: 25px; border: 0; background-color: transparent; }
+        QComboBox::down-arrow { image: url(:/icons/arrow_down.png); width: 12px; height: 12px; }
         QCheckBox { spacing: 7px; }
         QCheckBox::indicator { width: 17px; height: 17px; }
         QGroupBox {
@@ -209,11 +208,12 @@ QString styleSheet(const StyleColors& color) {
         }
         QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal,
         QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { width: 0; background: transparent; }
+        QSlider { min-height: 20px; }
         QSlider::groove:horizontal { height: 4px; background-color: @BORDER@; border-radius: 2px; }
         QSlider::sub-page:horizontal { background-color: #0a84ff; border-radius: 2px; }
         QSlider::handle:horizontal {
-            width: 17px; margin: -7px 0; background-color: @SCROLL_HOVER@;
-            border: 1px solid @BORDER@; border-radius: 8px;
+            width: 13px; margin: -5px 0; background-color: @SCROLL_HOVER@;
+            border: 1px solid @BORDER@; border-radius: 7px;
         }
         QProgressBar { border: 1px solid @BORDER@; border-radius: 3px; background-color: @BASE@; }
         QProgressBar::chunk { background-color: #0a84ff; border-radius: 2px; }
@@ -276,6 +276,8 @@ void applyMirageStyle(QApplication& app, const QString& appearance) {
 
     const bool dark = useDarkAppearance(app, appearance);
     const StyleColors color = dark ? darkColors() : lightColors();
+    g_currentColors = color;
+    g_activeColors = &g_currentColors;
     QPalette palette;
     palette.setColor(QPalette::Window, QColor(color.window));
     palette.setColor(QPalette::WindowText, QColor(color.text));
@@ -297,6 +299,10 @@ void applyMirageStyle(QApplication& app, const QString& appearance) {
     palette.setColor(QPalette::Disabled, QPalette::Button, QColor(color.disabledButton));
     app.setPalette(palette);
     app.setStyleSheet(styleSheet(color));
+}
+
+QColor currentBorderColor() {
+    return g_activeColors ? QColor(g_activeColors->border) : QColor(QStringLiteral("#7b756d"));
 }
 
 } // namespace Mirage

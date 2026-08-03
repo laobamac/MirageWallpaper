@@ -1,4 +1,5 @@
 #include "ContentView/Components/WallpaperPreviewWidget.h"
+#include "App/MirageWidgets.h"
 
 #include <QComboBox>
 #include <QDirIterator>
@@ -151,7 +152,7 @@ WallpaperPreviewWidget::WallpaperPreviewWidget(FavoritesManager* favorites, QWid
     m_speed->setFixedWidth(100);
     m_speedValue = new QLabel(QStringLiteral("1.0x"), this);
 
-    m_fill = new QComboBox(this);
+    m_fill = new MirageComboBox(this);
     m_fill->setFixedWidth(120);
     m_fill->addItem(QStringLiteral("填充"), QVariant::fromValue(int(FillMode::Cover)));
     m_fill->addItem(QStringLiteral("适应"), QVariant::fromValue(int(FillMode::Contain)));

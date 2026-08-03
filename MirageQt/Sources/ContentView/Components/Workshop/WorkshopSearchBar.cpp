@@ -1,4 +1,5 @@
 #include "ContentView/Components/Workshop/WorkshopSearchBar.h"
+#include "App/MirageWidgets.h"
 
 #include <QHBoxLayout>
 #include <QSignalBlocker>
@@ -14,7 +15,7 @@ WorkshopSearchBar::WorkshopSearchBar(WorkshopViewModel* viewModel, QWidget* pare
     m_search->setMinimumWidth(250);
     m_search->setMaximumWidth(520);
 
-    m_sort = new QComboBox(this);
+    m_sort = new MirageComboBox(this);
     m_sort->setAccessibleName(QStringLiteral("排序"));
     for (WorkshopSortOrder order : {WorkshopSortOrder::Trending,
                                     WorkshopSortOrder::MostRecent,

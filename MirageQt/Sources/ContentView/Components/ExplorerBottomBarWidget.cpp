@@ -1,4 +1,5 @@
 #include "ContentView/Components/ExplorerBottomBarWidget.h"
+#include "App/MirageWidgets.h"
 
 #include "ContentView/Components/Playlist/PlaylistOpenDialog.h"
 #include "ContentView/Components/Playlist/PlaylistSaveDialog.h"
@@ -48,7 +49,7 @@ ExplorerBottomBarWidget::ExplorerBottomBarWidget(PlaylistManager* playlistManage
     font.setWeight(QFont::Medium);
     m_title->setFont(font);
 
-    m_screen = new QComboBox(this);
+    m_screen = new MirageComboBox(this);
     m_screen->setFixedWidth(120);
     const int screenCount = qMax(1, QGuiApplication::screens().size());
     for (int i = 0; i < screenCount; ++i) {

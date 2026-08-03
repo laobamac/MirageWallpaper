@@ -1,4 +1,5 @@
 #include "SettingsView/PerformancePage.h"
+#include "App/MirageWidgets.h"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -15,7 +16,7 @@ namespace Mirage {
 namespace {
 
 QComboBox* playbackPicker(const QVector<QPair<QString, QString>>& options, QWidget* parent) {
-    auto* picker = new QComboBox(parent);
+    auto* picker = new MirageComboBox(parent);
     for (const auto& option : options) picker->addItem(option.first, option.second);
     return picker;
 }
@@ -77,14 +78,14 @@ PerformancePage::PerformancePage(GlobalSettings* draft, QWidget* parent)
     qualityLayout->addLayout(presets);
 
     auto* qualityForm = new QFormLayout;
-    m_antiAliasing = new QComboBox(quality);
+    m_antiAliasing = new MirageComboBox(quality);
     m_antiAliasing->addItem(QStringLiteral("关闭"), QStringLiteral("none"));
     m_antiAliasing->addItem(QStringLiteral("MSAA ×2"), QStringLiteral("msaa_x2"));
     m_antiAliasing->addItem(QStringLiteral("MSAA ×4"), QStringLiteral("msaa_x4"));
     m_antiAliasing->addItem(QStringLiteral("MSAA ×8"), QStringLiteral("msaa_x8"));
     qualityForm->addRow(QStringLiteral("抗锯齿"), m_antiAliasing);
 
-    m_loadSource = new QComboBox(quality);
+    m_loadSource = new MirageComboBox(quality);
     m_loadSource->addItem(QStringLiteral("从磁盘加载（较低内存占用）"), QStringLiteral("disk"));
     m_loadSource->addItem(QStringLiteral("从内存加载（减少磁盘读取）"), QStringLiteral("memory"));
     qualityForm->addRow(QStringLiteral("壁纸加载方式"), m_loadSource);

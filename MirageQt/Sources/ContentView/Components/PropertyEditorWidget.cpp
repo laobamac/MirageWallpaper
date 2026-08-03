@@ -1,4 +1,5 @@
 #include "ContentView/Components/PropertyEditorWidget.h"
+#include "App/MirageWidgets.h"
 
 #include <QCheckBox>
 #include <QColorDialog>
@@ -396,7 +397,7 @@ QWidget* PropertyEditorWidget::widgetFor(const QString& key, ProjectProperty pro
         return horizontalRow(wrappingLabel(labelText, this), swatch, this);
     }
     case PropertyKind::Combo: {
-        auto* combo = new QComboBox(this);
+        auto* combo = new MirageComboBox(this);
         combo->setMaximumWidth(170);
         const QVariant current = property.normalizedComboValue(property.value);
         int selectedIndex = -1;

@@ -1,4 +1,5 @@
 #include "SettingsView/GeneralPage.h"
+#include "App/MirageWidgets.h"
 
 #include "Services/Paths.h"
 
@@ -42,7 +43,7 @@ GeneralPage::GeneralPage(GlobalSettings* draft, QWidget* parent)
 
     auto* appearance = new QGroupBox(QStringLiteral("外观"), this);
     auto* appearanceForm = new QFormLayout(appearance);
-    m_appearance = new QComboBox(appearance);
+    m_appearance = new MirageComboBox(appearance);
     m_appearance->addItem(QStringLiteral("浅色"), QStringLiteral("light"));
     m_appearance->addItem(QStringLiteral("深色"), QStringLiteral("dark"));
     m_appearance->addItem(QStringLiteral("跟随系统"), QStringLiteral("followSystem"));
@@ -92,7 +93,7 @@ GeneralPage::GeneralPage(GlobalSettings* draft, QWidget* parent)
     auto* endpoint = new QGroupBox(QStringLiteral("创意工坊"), this);
     m_endpointGroup = endpoint;
     auto* endpointForm = new QFormLayout(endpoint);
-    m_endpoint = new QComboBox(endpoint);
+    m_endpoint = new MirageComboBox(endpoint);
     m_endpoint->addItem(QStringLiteral("Steam 官方 Web API"), QStringLiteral("official"));
     m_endpoint->addItem(QStringLiteral("SteamCF 镜像"), QStringLiteral("mirror"));
     endpointForm->addRow(QStringLiteral("Steam API 线路"), m_endpoint);

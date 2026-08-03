@@ -1,4 +1,5 @@
 #include "ContentView/Components/Playlist/PlaylistSettingsDialog.h"
+#include "App/MirageWidgets.h"
 
 #include <algorithm>
 #include <QCheckBox>
@@ -29,11 +30,11 @@ PlaylistSettingsDialog::PlaylistSettingsDialog(PlaylistManager* manager, int scr
     font.setBold(true);
     title->setFont(font);
 
-    m_order = new QComboBox(this);
+    m_order = new MirageComboBox(this);
     m_order->addItem(playlistOrderDisplayName(PlaylistOrder::Sorted), static_cast<int>(PlaylistOrder::Sorted));
     m_order->addItem(playlistOrderDisplayName(PlaylistOrder::Random), static_cast<int>(PlaylistOrder::Random));
 
-    m_timing = new QComboBox(this);
+    m_timing = new MirageComboBox(this);
     for (PlaylistTiming timing : {PlaylistTiming::Timer, PlaylistTiming::Logon, PlaylistTiming::Daytime,
                                   PlaylistTiming::DayOfWeek, PlaylistTiming::Never}) {
         m_timing->addItem(playlistTimingDisplayName(timing), static_cast<int>(timing));
@@ -78,7 +79,7 @@ PlaylistSettingsDialog::PlaylistSettingsDialog(PlaylistManager* manager, int scr
         QMessageBox::information(this, QStringLiteral("播放列表"), QStringLiteral("已裁剪为最多 7 张壁纸。"));
     });
 
-    m_transition = new QComboBox(this);
+    m_transition = new MirageComboBox(this);
     for (PlaylistTransitionKind kind : {PlaylistTransitionKind::Disabled, PlaylistTransitionKind::Enabled,
                                         PlaylistTransitionKind::Random}) {
         m_transition->addItem(playlistTransitionDisplayName(kind), static_cast<int>(kind));

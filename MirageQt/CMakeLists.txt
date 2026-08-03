@@ -28,6 +28,8 @@ add_subdirectory("${MIRAGE_DISPLAY_SOURCE_DIR}"
     "${CMAKE_CURRENT_BINARY_DIR}/MirageLinuxDisplay")
 
 qt_standard_project_setup()
+# Embed Resources/resources.qrc (app icon) into the binary.
+set(CMAKE_AUTORCC ON)
 
 set(MIRAGEQT_REPO_ROOT "${CMAKE_CURRENT_LIST_DIR}/..")
 set(MIRAGE_STEAM_WEB_API_KEY "$ENV{MIRAGE_STEAM_WEB_API_KEY}" CACHE STRING
@@ -95,6 +97,8 @@ qt_add_executable(MirageQt
     Sources/App/main.cpp
     Sources/App/MirageStyle.cpp
     Sources/App/MirageStyle.h
+    Sources/App/MirageWidgets.h
+    Resources/resources.qrc
     Sources/ContentView/ContentView.cpp
     Sources/ContentView/ContentView.h
     Sources/ContentView/FirstLaunchView.cpp
