@@ -1,5 +1,6 @@
 <RCC>
     <qresource prefix="/">
+        <file alias="appicon.png">mirage.png</file>
         <file alias="icons/arrow_down.png">arrow_down.png</file>
     </qresource>
 </RCC>

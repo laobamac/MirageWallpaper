@@ -2,7 +2,8 @@
 Type=Application
 Name=MirageQt
 Exec=@MIRAGEQT_EXECUTABLE@
-Icon=preferences-desktop-wallpaper
+Icon=mirageqt
+StartupWMClass=MirageQt
 Terminal=false
 Categories=Utility;DesktopSettings;
 StartupNotify=false

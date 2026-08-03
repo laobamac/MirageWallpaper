@@ -4,6 +4,7 @@
 
 #include <QApplication>
 #include <QDebug>
+#include <QIcon>
 
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
@@ -11,6 +12,7 @@ int main(int argc, char** argv) {
     QCoreApplication::setOrganizationName(QStringLiteral("Mirage"));
     QCoreApplication::setApplicationVersion(QStringLiteral("1.0.0"));
     Mirage::applyMirageStyle(app);
+    app.setWindowIcon(QIcon(QStringLiteral(":/appicon.png")));
 
     Mirage::DisplayBrokerService displayBroker;
     QString brokerError;

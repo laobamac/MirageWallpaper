@@ -174,3 +174,13 @@ set_target_properties(MirageQt PROPERTIES
 
 install(TARGETS MirageQt
     RUNTIME DESTINATION bin)
+
+# --- Desktop integration ---
+# Configures the .desktop entry with the absolute install path of the binary.
+set(MIRAGEQT_EXECUTABLE "${CMAKE_INSTALL_PREFIX}/bin/MirageQt")
+configure_file(Resources/mirageqt.desktop.in ${CMAKE_CURRENT_BINARY_DIR}/mirageqt.desktop @ONLY)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/mirageqt.desktop
+        DESTINATION share/applications)
+install(FILES Resources/mirage.png
+        DESTINATION share/icons/hicolor/512x512/apps
+        RENAME mirageqt.png)

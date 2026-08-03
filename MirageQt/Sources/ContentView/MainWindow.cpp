@@ -15,6 +15,7 @@
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QHBoxLayout>
+#include <QIcon>
 #include <QInputDialog>
 #include <QLabel>
 #include <QMenu>
@@ -551,7 +552,7 @@ void MainWindow::reapplyPlayingWallpaper(const Wallpaper& wallpaper) {
 
 void MainWindow::setupTray() {
     if (!QSystemTrayIcon::isSystemTrayAvailable()) return;
-    m_tray = new QSystemTrayIcon(QIcon::fromTheme("preferences-desktop-wallpaper"), this);
+    m_tray = new QSystemTrayIcon(QIcon(QStringLiteral(":/appicon.png")), this);
     auto* menu = new QMenu(this);
     menu->addAction(QStringLiteral("暂停"), m_renderer, [this] { m_renderer->pause(); });
     menu->addAction(QStringLiteral("继续"), m_renderer, [this] { m_renderer->resume(); });
