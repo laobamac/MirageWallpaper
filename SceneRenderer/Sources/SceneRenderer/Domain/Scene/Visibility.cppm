@@ -59,7 +59,7 @@ ResolveSceneUserVisibilityBinding(const SceneUserVisibilityBinding& binding, con
 inline rstd::Option<bool>
 ResolveSceneUserVisibilityBinding(const SceneUserVisibilityBinding& binding, std::string_view key,
                                   const Json& property) {
-    if (binding.key == key) return rstd::None();
+    if (binding.key != key) return rstd::None();
     return ResolveSceneUserVisibilityBinding(binding, property);
 }
 
