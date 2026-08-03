@@ -36,17 +36,14 @@ if(APPLE)
     target_compile_options(SceneWallpaper PRIVATE
         $<$<COMPILE_LANGUAGE:OBJCXX>:-Wno-deprecated-declarations>
         $<$<COMPILE_LANGUAGE:OBJCXX>:-Wno-deprecated-enum-enum-conversion>)
-elseif(UNIX AND NOT APPLE AND SCENERENDERER_ENABLE_X11_WALLPAPER)
-    find_package(X11 REQUIRED COMPONENTS Xrandr Xfixes Xext)
-    target_sources(SceneWallpaper PRIVATE
-        ../../Sources/SceneRenderer/Host/X11/X11DesktopHost.cpp)
-    target_compile_definitions(SceneWallpaper PRIVATE SCENERENDERER_WALLPAPER_X11)
-    target_link_libraries(SceneWallpaper PRIVATE X11::X11 X11::Xrandr X11::Xfixes X11::Xext)
+elseif(UNIX AND NOT APPLE)
+    # Linux has no native window host: display is handled by the mirage-display
+    # protocol producer linked below.
 else()
     message(FATAL_ERROR "No SceneWallpaper host backend enabled for this platform")
 endif()
 
-if(UNIX AND NOT APPLE AND SCENERENDERER_ENABLE_MIRAGE_DISPLAY)
+if(UNIX AND NOT APPLE)
     target_compile_definitions(SceneWallpaper PRIVATE SCENERENDERER_MIRAGE_DISPLAY=1)
     # Public headers of the vendored MirageLinuxDisplay library (see Vendors/README).
     target_include_directories(SceneWallpaper PRIVATE "${MIRAGE_DISPLAY_SOURCE_DIR}/include")

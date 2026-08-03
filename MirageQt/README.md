@@ -10,7 +10,14 @@ The source tree mirrors the macOS app:
 - `Sources/SettingsView` contains global settings.
 - `Sources/SteamSetup` contains SteamCMD setup and login UI.
 
-Dynamic desktop wallpapers are supported on X11 for scene and video wallpapers once the sibling `SceneRenderer` and `VideoRenderer` desktop hosts have been built. MirageQt resolves `SceneWallpaper` and `VideoWallpaper` beside the application first, then from their repository build directories during development. Wayland sessions can run the main UI and preview content, but applying a live desktop wallpaper reports that the current session is unsupported.
+Dynamic desktop wallpapers are applied through the mirage-display protocol
+(the vendored `MirageLinuxDisplay` library): MirageQt hosts the display broker,
+and the `SceneWallpaper` / `VideoWallpaper` renderer processes export frames to
+the desktop environment's display adapter. The consumer adapter is the KDE
+Plasma wallpaper plugin, so applying a live wallpaper requires a Plasma session
+(either X11 or Wayland). MirageQt resolves `SceneWallpaper` and `VideoWallpaper`
+beside the application first, then from their repository build directories
+during development.
 
 The Linux web renderer is not implemented yet.
 

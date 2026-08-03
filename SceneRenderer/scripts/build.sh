@@ -4,7 +4,7 @@
 #
 # Wraps CMake presets with prerequisite checks and a default configure → build
 # → report flow. macOS uses Homebrew LLVM/MoltenVK; Linux uses the system
-# Clang/Vulkan/X11 development packages.
+# Clang/Vulkan development packages.
 #
 # Usage:
 #   scripts/build.sh                # release build (default): configure + build + report

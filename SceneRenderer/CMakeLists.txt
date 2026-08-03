@@ -54,9 +54,9 @@ endif()
 find_package(PkgConfig REQUIRED)
 find_package(Threads REQUIRED)
 
-option(SCENERENDERER_ENABLE_MIRAGE_DISPLAY
-    "Build the mirage-display producer host on Linux" ON)
-if(UNIX AND NOT APPLE AND SCENERENDERER_ENABLE_MIRAGE_DISPLAY)
+# Linux wallpapers display exclusively through the mirage-display protocol
+# (the vendored MirageLinuxDisplay library); there is no native X11 host.
+if(UNIX AND NOT APPLE)
     # MirageLinuxDisplay is vendored in-tree (see Vendors/MirageLinuxDisplay/README.md).
     set(MIRAGE_DISPLAY_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}/../Vendors/MirageLinuxDisplay")
     set(MIRAGE_DISPLAY_BUILD_TESTS OFF CACHE BOOL "" FORCE)
@@ -96,10 +96,9 @@ set(_scenerenderer_default_wallpaper_host OFF)
 if(APPLE OR (UNIX AND NOT APPLE))
     set(_scenerenderer_default_wallpaper_host ON)
 endif()
-option(SCENERENDERER_ENABLE_X11_WALLPAPER "Build the X11 desktop wallpaper host on Linux" ON)
 option(SCENERENDERER_BUILD_WALLPAPER_HOST "Build the native desktop wallpaper host" ${_scenerenderer_default_wallpaper_host})
 if(SCENERENDERER_BUILD_ENGINE AND SCENERENDERER_BUILD_WALLPAPER_HOST)
-    if(APPLE OR (UNIX AND NOT APPLE AND SCENERENDERER_ENABLE_X11_WALLPAPER))
+    if(APPLE OR (UNIX AND NOT APPLE))
         add_subdirectory(Tools/SceneWallpaper)
     endif()
     if(APPLE)

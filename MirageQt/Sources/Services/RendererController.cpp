@@ -106,15 +106,18 @@ bool RendererController::render(const Wallpaper& wallpaper, int screenIndex, con
                                 ? nullptr
                                 : screens.at(qBound(0, screenIndex, screens.size() - 1));
     running->outputStableId = stableOutputId(targetScreen);
+    if (running->outputStableId.isEmpty()) {
+        delete running;
+        process->deleteLater();
+        if (error) *error = QStringLiteral("无法确定目标显示器标识，无法应用壁纸");
+        return false;
+    }
 
     QStringList args;
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
-    const bool protocolDisplay = LinuxSystemIntegration::isWaylandSession() &&
-                                 !running->outputStableId.isEmpty();
-    if (protocolDisplay) {
-        args << "--display-output-id" << running->outputStableId
-             << "--display-socket" << DisplayBrokerService::defaultSocketPath();
-    }
+    // Wallpaper hosts display exclusively through the mirage-display protocol.
+    args << "--display-output-id" << running->outputStableId
+         << "--display-socket" << DisplayBrokerService::defaultSocketPath();
 
     switch (wallpaper.kind()) {
     case WallpaperKind::Scene: {
@@ -122,7 +125,6 @@ bool RendererController::render(const Wallpaper& wallpaper, int screenIndex, con
              << wallpaper.resolvedEntryPath()
              << "--fps" << QString::number(options.fps)
              << "--control-stdin";
-        if (!protocolDisplay) args << "--screen" << QString::number(screenIndex);
         if (options.muted) args << "--muted";
         if (options.loadFromMemory) args << "--load-from-memory";
         const QString propsFile = writeUserPropertiesFile(options.userProperties, wallpaper);
@@ -138,7 +140,6 @@ bool RendererController::render(const Wallpaper& wallpaper, int screenIndex, con
              << "--fill" << fillModeKey(options.fillMode);
         if (options.muted) args << "--muted";
         if (options.loadFromMemory) args << "--load-from-memory";
-        if (!protocolDisplay) args << "--screen" << QString::number(screenIndex);
         args << "--control-stdin";
         break;
     case WallpaperKind::Web:

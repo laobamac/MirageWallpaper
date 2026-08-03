@@ -1,3 +1,7 @@
+// SceneWallpaper — standalone SceneRenderer wallpaper host. Renders a scene
+// package on the desktop (X11/macOS) or through the mirage-display protocol,
+// and accepts live JSON control commands on stdin.
+
 #include "DesktopHost.h"
 #include "ControlChannel.h"
 #if defined(SCENERENDERER_MIRAGE_DISPLAY)
@@ -129,6 +133,10 @@ void EmitLifecycleEvent(const AppState* state, std::string_view event) {
               << std::flush;
 }
 
+// macOS-only RAII wrapper for the native desktop host. Linux builds never
+// compile this: wallpapers display exclusively through the mirage-display
+// protocol (MirageProtocolHost below).
+#if !defined(SCENERENDERER_MIRAGE_DISPLAY)
 class DesktopHandle {
 public:
     DesktopHandle() = default;
@@ -148,6 +156,7 @@ public:
 private:
     void* handle_ { nullptr };
 };
+#endif
 
 class StopTimer {
 public:
@@ -960,17 +969,18 @@ int main(int argc, char** argv) {
 
     Options options;
     if (! ParseArgs(argc, argv, options)) return 1;
-    const bool protocol_mode = !options.display_output_id.empty();
-#if !defined(SCENERENDERER_MIRAGE_DISPLAY)
-    if (protocol_mode) {
-        std::cerr << "This SceneWallpaper build has no mirage-display support\n";
+#if defined(SCENERENDERER_MIRAGE_DISPLAY)
+    // Linux displays through the mirage-display protocol only; there is no
+    // native X11 window host anymore.
+    if (options.display_output_id.empty()) {
+        std::cerr << "--display-output-id is required (mirage-display protocol)\n";
         return 1;
     }
-#endif
-    if (protocol_mode && options.display_socket.empty()) {
+    if (options.display_socket.empty()) {
         std::cerr << "--display-socket is required with --display-output-id\n";
         return 1;
     }
+#endif
 
 #if defined(__APPLE__)
     setenv("MVK_CONFIG_PRESENT_WITH_COMMAND_BUFFER", "1", /*overwrite=*/0);
@@ -978,7 +988,9 @@ int main(int argc, char** argv) {
 #endif
 
     AppState      state;
+#if !defined(SCENERENDERER_MIRAGE_DISPLAY)
     DesktopHandle desktop;
+#endif
 #if defined(SCENERENDERER_MIRAGE_DISPLAY)
     std::unique_ptr<MirageProtocolHost> protocol_host;
 #endif
@@ -986,12 +998,6 @@ int main(int argc, char** argv) {
     StopTimer          run_timer;
     state.wallpaper = &wallpaper;
 
-    sr::host::DesktopConfig desktop_config {
-        .title         = "SceneRenderer Wallpaper",
-        .input_hz      = options.input_hz,
-        .screen_index  = options.screen,
-        .deferred_show = options.deferred_show,
-    };
     sr::host::DesktopCallbacks callbacks {
         .mouse_move            = MouseMoveCallback,
         .mouse_button          = MouseButtonCallback,
@@ -1004,34 +1010,37 @@ int main(int argc, char** argv) {
     std::uint32_t render_width = 0;
     std::uint32_t render_height = 0;
 #if defined(SCENERENDERER_MIRAGE_DISPLAY)
-    if (protocol_mode) {
-        protocol_host = std::make_unique<MirageProtocolHost>(
-            options.display_socket, options.display_output_id, callbacks);
-        if (!protocol_host->start()) {
-            std::cerr << "Failed to connect to the mirage-display broker or receive output configuration\n";
-            return 1;
-        }
-        md_producer_config_t producer_config {};
-        std::uint64_t config_version = 0;
-        std::uint64_t connection_epoch = 0;
-        if (!protocol_host->currentConfig(producer_config, config_version, connection_epoch)) {
-            std::cerr << "mirage-display did not provide an output configuration\n";
-            return 1;
-        }
-        render_width = producer_config.physical_width;
-        render_height = producer_config.physical_height;
-    } else
-#endif
-    {
-        desktop.reset(sr::host::DesktopCreate(&desktop_config, callbacks));
-        state.desktop = desktop.get();
-        if (!desktop) {
-            std::cerr << "Failed to create desktop wallpaper host\n";
-            return 1;
-        }
-        render_width = sr::host::DesktopPixelWidth(desktop.get());
-        render_height = sr::host::DesktopPixelHeight(desktop.get());
+    protocol_host = std::make_unique<MirageProtocolHost>(
+        options.display_socket, options.display_output_id, callbacks);
+    if (!protocol_host->start()) {
+        std::cerr << "Failed to connect to the mirage-display broker or receive output configuration\n";
+        return 1;
     }
+    md_producer_config_t producer_config {};
+    std::uint64_t config_version = 0;
+    std::uint64_t connection_epoch = 0;
+    if (!protocol_host->currentConfig(producer_config, config_version, connection_epoch)) {
+        std::cerr << "mirage-display did not provide an output configuration\n";
+        return 1;
+    }
+    render_width = producer_config.physical_width;
+    render_height = producer_config.physical_height;
+#else
+    sr::host::DesktopConfig desktop_config {
+        .title         = "SceneRenderer Wallpaper",
+        .input_hz      = options.input_hz,
+        .screen_index  = options.screen,
+        .deferred_show = options.deferred_show,
+    };
+    desktop.reset(sr::host::DesktopCreate(&desktop_config, callbacks));
+    state.desktop = desktop.get();
+    if (!desktop) {
+        std::cerr << "Failed to create desktop wallpaper host\n";
+        return 1;
+    }
+    render_width = sr::host::DesktopPixelWidth(desktop.get());
+    render_height = sr::host::DesktopPixelHeight(desktop.get());
+#endif
     if (options.resolution) {
         render_width  = options.resolution->width;
         render_height = options.resolution->height;
@@ -1073,42 +1082,27 @@ int main(int argc, char** argv) {
 
     sr::RenderInitInfo info;
     info.enable_valid_layer = options.valid_layer;
-#if defined(__APPLE__)
+    // Both the macOS desktop host and the Linux mirage-display producer render
+    // offscreen; only macOS presents through the live Metal frame callback.
     info.offscreen = true;
-#else
 #if defined(SCENERENDERER_MIRAGE_DISPLAY)
-    if (protocol_mode) {
-        info.offscreen = true;
-        MirageProtocolHost* host = protocol_host.get();
-        info.ex_swapchain_factory =
-            [host](VkInstance instance, VkPhysicalDevice physical_device, VkDevice device,
-                   VkQueue queue, std::uint32_t queue_family, unsigned width,
-                   unsigned height) -> std::unique_ptr<sr::ExSwapchain> {
-                return std::make_unique<MirageProtocolSwapchain>(
-                    *host, instance, physical_device, device, queue, queue_family,
-                    width, height);
-            };
-    } else
-#endif
-    {
-        info.offscreen = false;
-        sr::host::DesktopSurfaceInfo surface_info;
-        if (!sr::host::DesktopGetSurfaceInfo(desktop.get(), surface_info)) {
-            std::cerr << "Failed to create desktop Vulkan surface info\n";
-            return 1;
-        }
-        info.surface_info.instanceExts = std::move(surface_info.instance_extensions);
-        info.surface_info.createSurfaceOp = std::move(surface_info.create_surface);
-    }
+    MirageProtocolHost* host = protocol_host.get();
+    info.ex_swapchain_factory =
+        [host](VkInstance instance, VkPhysicalDevice physical_device, VkDevice device,
+               VkQueue queue, std::uint32_t queue_family, unsigned width,
+               unsigned height) -> std::unique_ptr<sr::ExSwapchain> {
+            return std::make_unique<MirageProtocolSwapchain>(
+                *host, instance, physical_device, device, queue, queue_family,
+                width, height);
+        };
+#else
+    info.redraw_callback = [desktop = desktop.get()]() {
+        sr::host::DesktopWake(desktop);
+    };
 #endif
     info.width           = ClampRenderExtent(render_width, 1920);
     info.height          = ClampRenderExtent(render_height, 1080);
     info.msaa_samples    = options.msaa;
-    if (!protocol_mode) {
-        info.redraw_callback = [desktop = desktop.get()]() {
-            sr::host::DesktopWake(desktop);
-        };
-    }
 
     wallpaper.configure(std::move(config));
     wallpaper.initVulkan(std::move(info));
@@ -1120,16 +1114,13 @@ int main(int argc, char** argv) {
 
     if (options.run_seconds > 0) {
 #if defined(SCENERENDERER_MIRAGE_DISPLAY)
-        if (protocol_mode) {
-            run_timer.start([host = protocol_host.get()] { host->stop(); },
-                            options.run_seconds);
-        } else
+        run_timer.start([host = protocol_host.get()] { host->stop(); },
+                        options.run_seconds);
+#else
+        run_timer.start([desktop = desktop.get()] {
+            sr::host::DesktopStop(desktop);
+        }, options.run_seconds);
 #endif
-        {
-            run_timer.start([desktop = desktop.get()] {
-                sr::host::DesktopStop(desktop);
-            }, options.run_seconds);
-        }
     }
 
     // Live control channel: Mirage.app pipes JSON commands on stdin to drive
@@ -1161,32 +1152,26 @@ int main(int argc, char** argv) {
     std::optional<mirage::SceneControlChannel> control;
     if (options.control_stdin) {
 #if defined(SCENERENDERER_MIRAGE_DISPLAY)
-        if (protocol_mode) {
-            MirageProtocolHost* host = protocol_host.get();
-            control.emplace(wallpaper,
-                            [host]() { host->stop(); },
-                            [host]() { host->notifyActivated(); });
-        } else
+        MirageProtocolHost* host = protocol_host.get();
+        control.emplace(wallpaper,
+                        [host]() { host->stop(); },
+                        [host]() { host->notifyActivated(); });
+#else
+        void* desktop_handle = desktop.get();
+        control.emplace(
+            wallpaper,
+            [desktop_handle]() { sr::host::DesktopStop(desktop_handle); },
+            [desktop_handle]() { sr::host::DesktopActivate(desktop_handle); });
 #endif
-        {
-            void* desktop_handle = desktop.get();
-            control.emplace(
-                wallpaper,
-                [desktop_handle]() { sr::host::DesktopStop(desktop_handle); },
-                [desktop_handle]() { sr::host::DesktopActivate(desktop_handle); });
-        }
         control->start();
     }
 
     int ok = 0;
 #if defined(SCENERENDERER_MIRAGE_DISPLAY)
-    if (protocol_mode) {
-        ok = protocol_host->run();
-    } else
+    ok = protocol_host->run();
+#else
+    ok = sr::host::DesktopRun(desktop.get());
 #endif
-    {
-        ok = sr::host::DesktopRun(desktop.get());
-    }
 
     if (control) control->stop();
     run_timer.stop();

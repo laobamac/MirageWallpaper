@@ -68,18 +68,9 @@ inline std::uint32_t DesktopPixelWidth(void* handle) { return SceneRendererMacDe
 inline std::uint32_t DesktopPixelHeight(void* handle) { return SceneRendererMacDesktopPixelHeight(handle); }
 inline bool DesktopGetSurfaceInfo(void*, DesktopSurfaceInfo&) { return false; }
 
-#else
-
-void* DesktopCreate(const DesktopConfig* config, DesktopCallbacks callbacks);
-void  DesktopDestroy(void* handle);
-int   DesktopRun(void* handle);
-void  DesktopStop(void* handle);
-void  DesktopWake(void* handle);
-void  DesktopActivate(void* handle);
-void  DesktopPresent(void* handle, void* texture, std::uint32_t width, std::uint32_t height);
-std::uint32_t DesktopPixelWidth(void* handle);
-std::uint32_t DesktopPixelHeight(void* handle);
-bool DesktopGetSurfaceInfo(void* handle, DesktopSurfaceInfo& out);
+// There is no non-Apple Desktop* implementation: Linux wallpapers display
+// through the mirage-display protocol (MirageProtocolHost in WallpaperApp.cpp),
+// not a native desktop window host.
 
 #endif
 

@@ -45,16 +45,15 @@ bool LinuxSystemIntegration::isWaylandSession() {
 }
 
 QString LinuxSystemIntegration::wallpaperUnsupportedReason() {
-    if (isX11Session()) return {};
-    if (isWaylandSession() &&
-        qEnvironmentVariable("XDG_CURRENT_DESKTOP").contains(QStringLiteral("KDE"),
-                                                              Qt::CaseInsensitive)) {
-        return {};
+    // Wallpapers display through the mirage-display protocol, whose consumer is
+    // the KDE Plasma wallpaper adapter — required on both X11 and Wayland.
+    const bool plasma = qEnvironmentVariable("XDG_CURRENT_DESKTOP")
+                            .contains(QStringLiteral("KDE"), Qt::CaseInsensitive);
+    if ((isX11Session() || isWaylandSession()) && plasma) return {};
+    if (isX11Session() || isWaylandSession()) {
+        return QStringLiteral("当前桌面尚未安装受支持的 Mirage 显示适配器（需要 KDE Plasma）。");
     }
-    if (isWaylandSession()) {
-        return QStringLiteral("当前 Wayland 桌面尚未安装受支持的 Mirage 显示适配器。");
-    }
-    return QStringLiteral("当前桌面会话不支持动态桌面壁纸，请在 X11 会话下应用壁纸。");
+    return QStringLiteral("当前桌面会话不支持动态桌面壁纸，请在 X11 或 Wayland 会话下使用。");
 }
 
 bool LinuxSystemIntegration::setAutoStartEnabled(bool enabled, const QString& executablePath) {

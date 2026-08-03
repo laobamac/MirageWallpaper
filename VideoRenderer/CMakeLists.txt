@@ -17,28 +17,13 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# clang's bare C driver (clang / clang-21) must never be used as the C++
-# compiler: it does not link the C++ standard library, so every C++
-# executable fails with "undefined reference to _ZSt9terminatev" /
-# "DSO missing from command line". Require the C++ driver (clang++).
-if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-    get_filename_component(_mirage_cxx_name "${CMAKE_CXX_COMPILER}" NAME)
-    # The C driver is named "clang" or "clang-<version>" (no "++").
-    if(_mirage_cxx_name MATCHES "^clang$" OR _mirage_cxx_name MATCHES "^clang-[0-9][0-9]*$")
-        message(FATAL_ERROR
-            "CMAKE_CXX_COMPILER must be the clang C++ driver (clang++), "
-            "not the C driver (${_mirage_cxx_name}). Reconfigure with "
-            "-DCMAKE_CXX_COMPILER=clang++")
-    endif()
-endif()
-
 if(APPLE)
     set(CMAKE_OSX_DEPLOYMENT_TARGET "13.0" CACHE STRING "macOS deployment target" FORCE)
 endif()
 
-option(VIDEORENDERER_ENABLE_MIRAGE_DISPLAY
-    "Build the mirage-display video producer on Linux" ON)
-if(UNIX AND NOT APPLE AND VIDEORENDERER_ENABLE_MIRAGE_DISPLAY)
+# Linux video wallpapers display exclusively through the mirage-display
+# protocol (the vendored MirageLinuxDisplay library); there is no native X11 host.
+if(UNIX AND NOT APPLE)
     find_package(Threads REQUIRED)
 
     # MirageLinuxDisplay is vendored in-tree (see Vendors/MirageLinuxDisplay/README.md).
@@ -53,7 +38,7 @@ if(UNIX AND NOT APPLE AND VIDEORENDERER_ENABLE_MIRAGE_DISPLAY)
 
     # The mirage-display video producer intentionally has no dependency on
     # the vendored rstd/wavsen C++20 module libraries (used by SceneRenderer);
-    # the protocol renderer decodes with Qt Multimedia and uploads frames through
+    # the protocol renderer decodes with FFmpeg and uploads frames through
     # plain Vulkan, keeping this build free of C++20 modules.
 endif()
 
