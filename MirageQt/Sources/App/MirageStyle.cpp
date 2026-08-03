@@ -51,9 +51,6 @@ StyleColors lightColors() {
         QStringLiteral("#8f8f95"), QStringLiteral("#c7c7cc"), QStringLiteral("#ffffff")};
 }
 
-StyleColors g_currentColors;
-const StyleColors* g_activeColors = nullptr;
-
 bool useDarkAppearance(QApplication& app, const QString& appearance) {
     if (appearance == QStringLiteral("dark")) return true;
     if (appearance == QStringLiteral("light")) return false;
@@ -175,6 +172,16 @@ QString styleSheet(const StyleColors& color) {
         QComboBox { border-radius: 8px; padding: 2px 10px; }
         QComboBox::drop-down { width: 25px; border: 0; background-color: transparent; }
         QComboBox::down-arrow { image: url(:/icons/arrow_down.png); width: 12px; height: 12px; }
+        QComboBox QAbstractItemView {
+            background-color: @BASE@;
+            border: 1px solid @BORDER@;
+            border-radius: 8px;
+            padding: 4px;
+            outline: 0;
+            selection-background-color: #0a84ff;
+            selection-color: white;
+        }
+        QComboBox QAbstractItemView::item { padding: 4px 8px; min-height: 18px; }
         QCheckBox { spacing: 7px; }
         QCheckBox::indicator { width: 17px; height: 17px; }
         QGroupBox {
@@ -276,8 +283,6 @@ void applyMirageStyle(QApplication& app, const QString& appearance) {
 
     const bool dark = useDarkAppearance(app, appearance);
     const StyleColors color = dark ? darkColors() : lightColors();
-    g_currentColors = color;
-    g_activeColors = &g_currentColors;
     QPalette palette;
     palette.setColor(QPalette::Window, QColor(color.window));
     palette.setColor(QPalette::WindowText, QColor(color.text));
@@ -299,10 +304,6 @@ void applyMirageStyle(QApplication& app, const QString& appearance) {
     palette.setColor(QPalette::Disabled, QPalette::Button, QColor(color.disabledButton));
     app.setPalette(palette);
     app.setStyleSheet(styleSheet(color));
-}
-
-QColor currentBorderColor() {
-    return g_activeColors ? QColor(g_activeColors->border) : QColor(QStringLiteral("#7b756d"));
 }
 
 } // namespace Mirage
