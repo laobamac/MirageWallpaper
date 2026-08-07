@@ -13,6 +13,7 @@ struct WorkshopItem: Identifiable, Codable, Equatable, Hashable {
     var title: String
     var itemDescription: String
     var previewImageURL: URL?
+    var additionalPreviewImageURLs: [URL]? = nil
     var tags: [String]
     var subscriptions: Int
     var favorited: Int
@@ -21,9 +22,28 @@ struct WorkshopItem: Identifiable, Codable, Equatable, Hashable {
     var timeCreated: Date
     var timeUpdated: Date
     var creatorSteamId: String
+    var creatorName: String? = nil
+    var creatorAvatarURL: URL? = nil
+    var creatorProfileURL: URL? = nil
+    var consumerAppId: Int? = nil
     var wallpaperType: String
+    /// Nil for the rare published file that carries no rating tag, matching how
+    /// the local library treats a `project.json` without `contentrating`.
+    var ageRating: WorkshopAgeRating? = nil
 
     var id: String { publishedFileId }
+
+    var creatorDisplayName: String {
+        let name = creatorName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !name.isEmpty { return name }
+        if !creatorSteamId.isEmpty { return creatorSteamId }
+        return L("未知作者")
+    }
+
+    var creatorWorkshopURL: URL? {
+        guard !creatorSteamId.isEmpty else { return nil }
+        return URL(string: "https://steamcommunity.com/profiles/\(creatorSteamId)/myworkshopfiles/?appid=431960")
+    }
 
     var kind: WallpaperKind {
         WallpaperKind(rawType: wallpaperType)
@@ -34,7 +54,7 @@ struct WorkshopItem: Identifiable, Codable, Equatable, Hashable {
     }
 
     var displayTypeName: String {
-        isPreset ? "预设 · \(kind.displayName)" : kind.displayName
+        isPreset ? L("预设 · %@", kind.displayName) : kind.displayName
     }
 
     var formattedFileSize: String {
@@ -81,13 +101,14 @@ struct WorkshopItem: Identifiable, Codable, Equatable, Hashable {
         timeCreated: Date(),
         timeUpdated: Date(),
         creatorSteamId: "",
-        wallpaperType: "scene"
+        wallpaperType: "scene",
+        ageRating: nil
     )
 
     static func dependencyPlaceholder(id: String) -> WorkshopItem {
         WorkshopItem(
             publishedFileId: id,
-            title: "基础壁纸 \(id)",
+            title: L("基础壁纸 %@", id),
             itemDescription: "",
             previewImageURL: nil,
             tags: [],
@@ -98,8 +119,87 @@ struct WorkshopItem: Identifiable, Codable, Equatable, Hashable {
             timeCreated: .distantPast,
             timeUpdated: .distantPast,
             creatorSteamId: "",
-            wallpaperType: "scene"
+            wallpaperType: "scene",
+            ageRating: nil
         )
+    }
+}
+
+// MARK: - Age Rating
+
+/// The three mutually exclusive rating tags Steam exposes for Wallpaper Engine.
+/// Raw values match `project.json`'s `contentrating`, so a Workshop item and an
+/// installed wallpaper name the same rating the same way.
+enum WorkshopAgeRating: String, CaseIterable, Identifiable, Codable, Hashable {
+    case everyone = "Everyone"
+    case questionable = "Questionable"
+    case mature = "Mature"
+
+    var id: String { rawValue }
+
+    var steamTag: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .everyone: return L("所有人")
+        case .questionable: return L("轻度裸露")
+        case .mature: return L("成人")
+        }
+    }
+
+    init?(steamTag: String) {
+        guard let match = Self.allCases.first(where: {
+            $0.rawValue.caseInsensitiveCompare(steamTag) == .orderedSame
+        }) else { return nil }
+        self = match
+    }
+
+    init?(contentRating: String?) {
+        guard let contentRating else { return nil }
+        self.init(steamTag: contentRating)
+    }
+}
+
+// MARK: - Age Rating Filter
+
+/// Mirrors `FRAgeRating` so the Workshop browser and the local library express
+/// the same filter the same way.
+struct WorkshopAgeRatingFilter: OptionSet, Codable, Equatable {
+    let rawValue: Int
+
+    static let everyone     = WorkshopAgeRatingFilter(rawValue: 1 << 0)
+    static let questionable = WorkshopAgeRatingFilter(rawValue: 1 << 1)
+    static let mature       = WorkshopAgeRatingFilter(rawValue: 1 << 2)
+
+    static let all: WorkshopAgeRatingFilter = [.everyone, .questionable, .mature]
+    static let none: WorkshopAgeRatingFilter = []
+
+    /// Adult content stays opt-in: a fresh install browses the all-ages subset.
+    static let `default`: WorkshopAgeRatingFilter = [.everyone]
+
+    static func bit(for rating: WorkshopAgeRating) -> WorkshopAgeRatingFilter {
+        switch rating {
+        case .everyone: return .everyone
+        case .questionable: return .questionable
+        case .mature: return .mature
+        }
+    }
+
+    func contains(_ rating: WorkshopAgeRating) -> Bool {
+        contains(Self.bit(for: rating))
+    }
+
+    var selectedRatings: [WorkshopAgeRating] {
+        WorkshopAgeRating.allCases.filter { contains($0) }
+    }
+
+    /// Ratings to hand to Steam's `excludedtags`.  Empty when everything is
+    /// selected, and also when nothing is: excluding all three would return an
+    /// empty page, so a cleared filter stops narrowing rather than showing
+    /// nothing.
+    var excludedRatings: [WorkshopAgeRating] {
+        if self == .all || isEmpty { return [] }
+        return WorkshopAgeRating.allCases.filter { !contains($0) }
     }
 }
 
@@ -107,28 +207,135 @@ struct WorkshopItem: Identifiable, Codable, Equatable, Hashable {
 
 enum WorkshopSortOrder: Int, CaseIterable, Identifiable {
     case trending = 0
-    case mostRecent = 1
     case mostSubscribed = 2
     case topRated = 3
+    case playtimeTrend = 5
+    case totalPlaytime = 6
+    case averagePlaytimeTrend = 7
+    case lifetimeAveragePlaytime = 8
+    case sessionsTrend = 9
+    case lifetimeSessions = 10
+    case lastUpdated = 11
+    case textRelevance = 12
 
     var id: Int { rawValue }
 
     var label: String {
         switch self {
         case .trending: return L("热门趋势")
-        case .mostRecent: return L("最新发布")
         case .mostSubscribed: return L("订阅最多")
         case .topRated: return L("评分最高")
+        case .playtimeTrend: return L("播放时长最多")
+        case .totalPlaytime: return L("总播放时长最多")
+        case .averagePlaytimeTrend: return L("平均播放时长最长")
+        case .lifetimeAveragePlaytime: return L("终身平均播放时长")
+        case .sessionsTrend: return L("播放次数最多")
+        case .lifetimeSessions: return L("总播放次数最多")
+        case .lastUpdated: return L("最近更新")
+        case .textRelevance: return L("文本相关性")
         }
     }
 
     var apiValue: Int {
         switch self {
         case .trending: return 3
-        case .mostRecent: return 1
         case .mostSubscribed: return 9
         case .topRated: return 0
+        case .playtimeTrend: return 13
+        case .totalPlaytime: return 14
+        case .averagePlaytimeTrend: return 15
+        case .lifetimeAveragePlaytime: return 16
+        case .sessionsTrend: return 17
+        case .lifetimeSessions: return 18
+        case .lastUpdated: return 21
+        case .textRelevance: return 12
         }
+    }
+
+    var usesTrendPeriod: Bool {
+        switch self {
+        case .trending, .playtimeTrend, .averagePlaytimeTrend, .sessionsTrend:
+            return true
+        default:
+            return false
+        }
+    }
+
+    func workshopLabel(period: WorkshopTrendPeriod) -> String {
+        switch self {
+        case .topRated: return L("评分最高")
+        case .trending: return L("最热门（%@）", period.workshopLabel)
+        case .mostSubscribed: return L("最多订阅")
+        default:
+            return usesTrendPeriod ? L("%@（%@）", label, period.workshopLabel) : label
+        }
+    }
+}
+
+enum WorkshopTrendPeriod: Int, CaseIterable, Identifiable {
+    case day = 1
+    case week = 7
+
+    var id: Int { rawValue }
+
+    var label: String {
+        switch self {
+        case .day: return L("今日")
+        case .week: return L("本周")
+        }
+    }
+
+    var workshopLabel: String {
+        label
+    }
+}
+
+enum WorkshopDiscoverCategory: String, CaseIterable, Identifiable {
+    case trending
+    case mostSubscribed
+    case topRated
+    case lastUpdated
+    case playtimeTrend
+    case averagePlaytimeTrend
+    case sessionsTrend
+    case totalPlaytime
+    case lifetimeAveragePlaytime
+    case lifetimeSessions
+    case anime
+    case nature
+    case abstract
+    case landscape
+
+    var id: String { rawValue }
+
+    var sortOrder: WorkshopSortOrder? {
+        switch self {
+        case .trending: return .trending
+        case .mostSubscribed: return .mostSubscribed
+        case .topRated: return .topRated
+        case .lastUpdated: return .lastUpdated
+        case .playtimeTrend: return .playtimeTrend
+        case .averagePlaytimeTrend: return .averagePlaytimeTrend
+        case .sessionsTrend: return .sessionsTrend
+        case .totalPlaytime: return .totalPlaytime
+        case .lifetimeAveragePlaytime: return .lifetimeAveragePlaytime
+        case .lifetimeSessions: return .lifetimeSessions
+        case .anime, .nature, .abstract, .landscape: return nil
+        }
+    }
+
+    var tag: String? {
+        switch self {
+        case .anime: return "Anime"
+        case .nature: return "Nature"
+        case .abstract: return "Abstract"
+        case .landscape: return "Landscape"
+        default: return nil
+        }
+    }
+
+    var usesTrendPeriod: Bool {
+        sortOrder?.usesTrendPeriod == true || tag != nil
     }
 }
 
@@ -272,7 +479,7 @@ struct PresetDependencyPrompt: Identifiable {
     var id: String { "\(presetID):\(dependencyID)" }
 
     var message: String {
-        let size = dependencyItem.fileSize > 0 ? "（\(dependencyItem.formattedFileSize)）" : ""
+        let size = dependencyItem.fileSize > 0 ? L("（%@）", dependencyItem.formattedFileSize) : ""
         return L("预设“%@”需要基础壁纸“%@”%@才能使用。是否一起下载？", presetTitle, dependencyItem.title, size)
     }
 }
@@ -309,9 +516,9 @@ enum SteamServiceState: Equatable {
         switch self {
         case .unknown: return L("尚未检测")
         case .checking: return L("检测中")
-        case .available(let detail): return detail
-        case .needsAction(let detail): return detail
-        case .unavailable(let detail): return detail
+        case .available(let detail): return L(detail)
+        case .needsAction(let detail): return L(detail)
+        case .unavailable(let detail): return L(detail)
         }
     }
 }
@@ -325,6 +532,7 @@ struct SteamServiceStatus: Equatable {
 
 enum SteamCMDInstallState: Equatable {
     case detecting
+    case rosettaRequired
     case found(String)
     case notFound
     case downloading(Double)
@@ -332,6 +540,12 @@ enum SteamCMDInstallState: Equatable {
     case initializing
     case installed(String)
     case failed(String)
+}
+
+enum SteamCMDDetectionResult: Equatable {
+    case found(URL)
+    case notFound
+    case rosettaRequired
 }
 
 enum SteamLoginState: Equatable {
@@ -379,6 +593,7 @@ struct SteamPublishedFile: Codable {
     var title: String?
     var file_description: String?
     var preview_url: String?
+    var previews: [SteamPreview]?
     var tags: [SteamTag]?
     var subscriptions: Int?
     var favorited: Int?
@@ -387,27 +602,36 @@ struct SteamPublishedFile: Codable {
     var time_created: Int?
     var time_updated: Int?
     var creator: String?
+    var consumer_app_id: StringOrInt?
 
     func toWorkshopItem() -> WorkshopItem {
-        let wallpaperType = tags?.first(where: {
-            let v = ($0.tag ?? "").lowercased()
-            return v == "scene" || v == "web" || v == "video"
-        })?.tag ?? "scene"
+        let rawTags = tags?.compactMap { $0.tag } ?? []
 
-        let tagStrings = tags?
-            .compactMap { $0.tag }
-            .filter { t in
-                let l = t.lowercased()
-                return l != "scene" && l != "web" && l != "video" &&
-                       l != "wallpaper" && l != "approved" &&
-                       l != "everyone" && l != "questionable" && l != "mature"
-            } ?? []
+        let wallpaperType = rawTags.first(where: {
+            let v = $0.lowercased()
+            return v == "scene" || v == "web" || v == "video"
+        }) ?? "scene"
+
+        // Read before the tags are stripped below, which is where the rating
+        // used to be discarded along with the other bookkeeping tags.
+        let ageRating = rawTags.lazy.compactMap { WorkshopAgeRating(steamTag: $0) }.first
+
+        let tagStrings = rawTags.filter { t in
+            let l = t.lowercased()
+            return l != "scene" && l != "web" && l != "video" &&
+                   l != "wallpaper" && l != "approved" &&
+                   l != "everyone" && l != "questionable" && l != "mature"
+        }
 
         return WorkshopItem(
             publishedFileId: publishedfileid ?? "",
-            title: title ?? "无标题",
+            title: title ?? L("无标题"),
             itemDescription: file_description ?? "",
             previewImageURL: URL(string: preview_url ?? ""),
+            additionalPreviewImageURLs: previews?.compactMap { preview in
+                guard let value = preview.url, !value.isEmpty else { return nil }
+                return URL(string: value)
+            },
             tags: tagStrings,
             subscriptions: subscriptions ?? 0,
             favorited: favorited ?? 0,
@@ -416,9 +640,94 @@ struct SteamPublishedFile: Codable {
             timeCreated: Date(timeIntervalSince1970: TimeInterval(time_created ?? 0)),
             timeUpdated: Date(timeIntervalSince1970: TimeInterval(time_updated ?? 0)),
             creatorSteamId: creator ?? "",
-            wallpaperType: wallpaperType
+            consumerAppId: consumer_app_id.map { Int($0.int64Value) },
+            wallpaperType: wallpaperType,
+            ageRating: ageRating
         )
     }
+}
+
+struct WorkshopCreator: Identifiable, Hashable {
+    var steamId: String
+    var name: String
+    var avatarURL: URL?
+    var profileURL: URL?
+
+    var id: String { steamId }
+
+    var workshopURL: URL? {
+        guard !steamId.isEmpty else { return nil }
+        return URL(string: "https://steamcommunity.com/profiles/\(steamId)/myworkshopfiles/?appid=431960")
+    }
+
+    init?(item: WorkshopItem) {
+        guard !item.creatorSteamId.isEmpty else { return nil }
+        steamId = item.creatorSteamId
+        name = item.creatorDisplayName
+        avatarURL = item.creatorAvatarURL
+        profileURL = item.creatorProfileURL
+    }
+
+    init(steamId: String, name: String, avatarURL: URL? = nil, profileURL: URL? = nil) {
+        self.steamId = steamId
+        self.name = name
+        self.avatarURL = avatarURL
+        self.profileURL = profileURL
+    }
+}
+
+extension WEWallpaper {
+    /// Returns a Workshop ID only when the manifest or a trusted Steam source
+    /// provides one. Imported folders are never identified by name alone.
+    func verifiedWorkshopID() -> String? {
+        if let manifestID = project.workshopid?.rawValue,
+           Self.isValidWorkshopID(manifestID) {
+            return manifestID
+        }
+        guard WallpaperLibrary.shared.isWorkshopSource(self) else { return nil }
+        let directoryID = wallpaperDirectory.lastPathComponent
+        return Self.isValidWorkshopID(directoryID) ? directoryID : nil
+    }
+
+    func verifiedWorkshopURL() -> URL? {
+        guard let id = verifiedWorkshopID() else { return nil }
+        if let raw = project.workshopurl,
+           let url = URL(string: raw),
+           let host = url.host?.lowercased(),
+           host == "steamcommunity.com" || host == "www.steamcommunity.com",
+           let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+           components.path.contains("sharedfiles/filedetails") {
+            let queryID = components.queryItems?.first(where: { $0.name == "id" })?.value
+            if queryID == id { return url }
+        }
+        return URL(string: "https://steamcommunity.com/sharedfiles/filedetails/?id=\(id)")
+    }
+
+    private static func isValidWorkshopID(_ value: String) -> Bool {
+        guard !value.isEmpty, value.allSatisfy(\.isNumber), let number = UInt64(value) else {
+            return false
+        }
+        return number > 0
+    }
+}
+
+struct SteamPlayerSummariesResponse: Codable {
+    var response: SteamPlayerSummariesBody
+}
+
+struct SteamPlayerSummariesBody: Codable {
+    var players: [SteamPlayerSummary]
+}
+
+struct SteamPlayerSummary: Codable {
+    var steamid: String
+    var personaname: String
+    var profileurl: String?
+    var avatarmedium: String?
+}
+
+struct SteamPreview: Codable {
+    var url: String?
 }
 
 struct SteamTag: Codable {

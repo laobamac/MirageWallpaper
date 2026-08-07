@@ -1,5 +1,8 @@
 module;
 
+#include <atomic>
+#include <cmath>
+
 export module sr.types;
 import sr.core;
 import rstd.cppstd;
@@ -73,6 +76,7 @@ enum class BlendMode
     Disable,
     Translucent,
     Additive,
+    AlphaToCoverage,
     Normal
 };
 
@@ -125,6 +129,66 @@ struct TextureSample {
     TextureWrap   wrapT { TextureWrap::REPEAT };
     TextureFilter magFilter { TextureFilter::NEAREST };
     TextureFilter minFilter { TextureFilter::NEAREST };
+};
+
+struct VideoPlaybackSnapshot {
+    bool   playing { true };
+    double rate { 1.0 };
+    u64    seek_sequence { 0 };
+    double seek_seconds { 0.0 };
+};
+
+class VideoPlaybackState {
+public:
+    VideoPlaybackState()                                      = default;
+    VideoPlaybackState(const VideoPlaybackState&)             = delete;
+    VideoPlaybackState(VideoPlaybackState&&)                  = delete;
+    VideoPlaybackState& operator=(const VideoPlaybackState&)  = delete;
+    VideoPlaybackState& operator=(VideoPlaybackState&&)       = delete;
+
+    void Play() { m_playing.store(true, std::memory_order_release); }
+    void Pause() { m_playing.store(false, std::memory_order_release); }
+    void Stop() {
+        Pause();
+        Seek(0.0);
+    }
+    void Seek(double seconds) {
+        if (! std::isfinite(seconds) || seconds < 0.0) seconds = 0.0;
+        m_current_time.store(seconds, std::memory_order_release);
+        m_seek_seconds.store(seconds, std::memory_order_release);
+        m_seek_sequence.fetch_add(1, std::memory_order_acq_rel);
+    }
+    void SetRate(double rate) {
+        if (! std::isfinite(rate) || rate <= 0.0) return;
+        m_rate.store(rate, std::memory_order_release);
+    }
+
+    VideoPlaybackSnapshot Snapshot() const {
+        return VideoPlaybackSnapshot {
+            .playing       = m_playing.load(std::memory_order_acquire),
+            .rate          = m_rate.load(std::memory_order_acquire),
+            .seek_sequence = m_seek_sequence.load(std::memory_order_acquire),
+            .seek_seconds  = m_seek_seconds.load(std::memory_order_acquire),
+        };
+    }
+
+    void PublishTime(double current, std::optional<double> duration) {
+        m_current_time.store(current, std::memory_order_release);
+        m_duration.store(duration.value_or(-1.0), std::memory_order_release);
+    }
+    double CurrentTime() const { return m_current_time.load(std::memory_order_acquire); }
+    std::optional<double> Duration() const {
+        const double value = m_duration.load(std::memory_order_acquire);
+        return value >= 0.0 ? std::optional<double>(value) : std::nullopt;
+    }
+
+private:
+    std::atomic<bool>   m_playing { true };
+    std::atomic<double> m_rate { 1.0 };
+    std::atomic<u64>    m_seek_sequence { 0 };
+    std::atomic<double> m_seek_seconds { 0.0 };
+    std::atomic<double> m_current_time { 0.0 };
+    std::atomic<double> m_duration { -1.0 };
 };
 
 enum class VertexType

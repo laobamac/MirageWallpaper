@@ -3,6 +3,11 @@
 static NSString *const kScheme = @"we-wallpaper";
 static NSString *const kHost   = @"wallpaper";
 
+// How many 256 KiB chunks may be queued on the main thread at once. Enough to
+// keep the reader and the main thread overlapped, small enough that a large
+// asset cannot turn into an unbounded backlog of pending blocks.
+static const long kWRInFlightChunks = 4;
+
 static NSString *MIMEForExtension(NSString *ext) {
     static NSDictionary<NSString *, NSString *> *map = nil;
     static dispatch_once_t once;
@@ -47,7 +52,12 @@ static NSString *MIMEForExtension(NSString *ext) {
     if (self) {
         _baseDirectory = [[baseDirectory stringByStandardizingPath] copy];
         _overlayDirectories = @[];
-        _ioQueue = dispatch_queue_create("WebRenderer.schemeHandler", DISPATCH_QUEUE_CONCURRENT);
+        // Serial, not concurrent: the old unbounded concurrent queue spawned a
+        // thread per in-flight resource and parked every one of them on the
+        // main queue. Chunks are now handed over asynchronously (see below), so
+        // reading the next chunk overlaps the main thread consuming the last
+        // one and serialising costs little.
+        _ioQueue = dispatch_queue_create("WebRenderer.schemeHandler", DISPATCH_QUEUE_SERIAL);
         _taskStates = [NSMutableDictionary dictionary];
         _memoryCache = [NSMutableDictionary dictionary];
         _memoryModificationTimes = [NSMutableDictionary dictionary];
@@ -206,8 +216,15 @@ static NSString *MIMEForExtension(NSString *ext) {
                     memoryData = self.memoryCache[filePath];
                     memoryModificationTime = self.memoryModificationTimes[filePath];
                     if (memoryData == nil) {
+                        // Mapped, not read into anonymous memory: the previous
+                        // NSDataReadingUncached told the kernel it may never
+                        // reclaim these pages, so a wallpaper shipping 2 GB of
+                        // assets held 2 GB of RSS for its whole lifetime — with
+                        // the total dictated entirely by untrusted content.
+                        // Mapped pages fault in on demand and evict under
+                        // pressure while still satisfying every range request.
                         memoryData = [NSData dataWithContentsOfFile:filePath
-                                                           options:NSDataReadingUncached
+                                                           options:NSDataReadingMappedIfSafe
                                                              error:nil];
                         if (memoryData != nil) {
                             memoryModificationTime = @([attributes[NSFileModificationDate]
@@ -320,16 +337,25 @@ static NSString *MIMEForExtension(NSString *ext) {
             NSUInteger offset = start;
             NSUInteger remaining = length;
             static const NSUInteger kMemoryChunkSize = 256 * 1024;
+            // Hand each chunk over asynchronously: a 200 MB asset used to make
+            // ~800 synchronous round trips into the main queue while the main
+            // thread was busy driving the render loop. Going fully unbounded
+            // would just move the cost — the whole file would queue up as
+            // pending blocks — so the semaphore caps how much is in flight.
+            dispatch_semaphore_t budget = dispatch_semaphore_create(kWRInFlightChunks);
             while (remaining > 0 && [self isTaskActive:task]) {
                 @autoreleasepool {
                     NSUInteger count = MIN(remaining, kMemoryChunkSize);
                     NSData *chunk = [memoryData subdataWithRange:NSMakeRange(offset, count)];
                     offset += count;
                     remaining -= count;
-                    dispatch_sync(dispatch_get_main_queue(), ^{
-                        if (![self isTaskActive:task]) return;
-                        @try { [task didReceiveData:chunk]; }
-                        @catch (NSException *exception) {}
+                    dispatch_semaphore_wait(budget, DISPATCH_TIME_FOREVER);
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        if ([self isTaskActive:task]) {
+                            @try { [task didReceiveData:chunk]; }
+                            @catch (NSException *exception) {}
+                        }
+                        dispatch_semaphore_signal(budget);
                     });
                 }
             }
@@ -351,15 +377,22 @@ static NSString *MIMEForExtension(NSString *ext) {
             [handle seekToFileOffset:start];
             NSUInteger remaining = length;
             static const NSUInteger kChunkSize = 256 * 1024;
+            // Asynchronous hand-off with a bounded backlog, as in the in-memory
+            // path above: reading the next chunk now overlaps the main thread
+            // consuming the previous one instead of waiting for it.
+            dispatch_semaphore_t budget = dispatch_semaphore_create(kWRInFlightChunks);
             while (remaining > 0 && [self isTaskActive:task]) {
                 @autoreleasepool {
                     NSData *chunk = [handle readDataOfLength:MIN(remaining, kChunkSize)];
                     if (chunk.length == 0) break;
                     remaining -= chunk.length;
-                    dispatch_sync(dispatch_get_main_queue(), ^{
-                        if (![self isTaskActive:task]) return;
-                        @try { [task didReceiveData:chunk]; }
-                        @catch (NSException *exception) {}
+                    dispatch_semaphore_wait(budget, DISPATCH_TIME_FOREVER);
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        if ([self isTaskActive:task]) {
+                            @try { [task didReceiveData:chunk]; }
+                            @catch (NSException *exception) {}
+                        }
+                        dispatch_semaphore_signal(budget);
                     });
                 }
             }

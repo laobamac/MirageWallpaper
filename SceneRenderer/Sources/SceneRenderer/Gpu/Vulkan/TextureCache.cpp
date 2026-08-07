@@ -372,13 +372,14 @@ TextureCache::CreateRenderTargetTex(uint32_t width, uint32_t height, VkFormat fo
                            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
 }
 
-ImageSlotsRef TextureCache::CreateTex(Image& image) {
+ImageSlotsRef TextureCache::CreateTex(Image& image,
+                                      std::shared_ptr<VideoPlaybackState> playback) {
     if (exists(m_tex_map, image.key)) {
         return m_tex_map.at(image.key);
     }
 
     if (image.header.type == ImageType::VIDEO) {
-        return CreateVideoTex(image);
+        return CreateVideoTex(image, std::move(playback));
     }
 
     ImageSlots img_slots;
@@ -434,30 +435,65 @@ ImageSlotsRef TextureCache::CreateTex(Image& image) {
             return fail();
         }
 
+        // One staging allocation per texture instead of one per mip level.
+        // Each level used to pay its own VMA create + map + memcpy + unmap,
+        // which a texture-heavy scene ran into the thousands. The levels are
+        // packed into a single buffer and addressed through the buffer_offset
+        // that PendingImageUpload already carried.
+        //
+        // 16 bytes is at least as large as any block-compressed texel block
+        // and is a multiple of 4, satisfying vkCmdCopyBufferToImage's
+        // bufferOffset alignment rules for every format handled here.
+        constexpr VkDeviceSize    upload_alignment = 16;
+        std::vector<VkDeviceSize> mip_offsets(image_slot.mipmaps.size(), 0);
+        VkDeviceSize              staging_size = 0;
         for (usize j = 0; j < image_slot.mipmaps.size(); j++) {
-            auto&               image_data = image_slot.mipmaps[j];
+            auto& image_data = image_slot.mipmaps[j];
             if (image_data.size == 0 || image_data.data == nullptr || image_data.width <= 0 ||
                 image_data.height <= 0) {
                 return fail();
             }
-            PendingImageUpload up {};
+            staging_size = (staging_size + upload_alignment - 1) / upload_alignment *
+                           upload_alignment;
+            mip_offsets[j] = staging_size;
+            staging_size += (VkDeviceSize)image_data.size;
+        }
+
+        if (staging_size != 0) {
+            VmaBufferParameters staging {};
             if (! CreateStagingBuffer(
-                    m_device.vma_allocator(), (u32)image_data.size, up.owned_stage)) {
+                    m_device.vma_allocator(), (std::size_t)staging_size, staging)) {
                 return fail();
             }
             {
-                void* v_data;
-                VVK_CHECK(up.owned_stage.handle.MapMemory(&v_data));
-                std::memcpy(v_data, image_data.data.get(), (u32)image_data.size);
-                up.owned_stage.handle.UnMapMemory();
+                void* v_data { nullptr };
+                VVK_CHECK_ACT(return fail(), staging.handle.MapMemory(&v_data));
+                for (usize j = 0; j < image_slot.mipmaps.size(); j++) {
+                    auto& image_data = image_slot.mipmaps[j];
+                    std::memcpy(static_cast<std::uint8_t*>(v_data) + mip_offsets[j],
+                                image_data.data.get(),
+                                (std::size_t)image_data.size);
+                }
+                staging.handle.UnMapMemory();
             }
-            up.image         = ToImageParameters(image_paras);
-            up.buffer        = *up.owned_stage.handle;
-            up.image_extent  = VkExtent3D { (u32)image_data.width, (u32)image_data.height, 1 };
-            up.old_layout    = VK_IMAGE_LAYOUT_UNDEFINED;
-            up.final_layout  = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            up.mip_level     = (std::uint32_t)j;
-            m_pending_uploads.push_back(std::move(up));
+
+            const VkBuffer staging_handle = *staging.handle;
+            for (usize j = 0; j < image_slot.mipmaps.size(); j++) {
+                auto&              image_data = image_slot.mipmaps[j];
+                PendingImageUpload up {};
+                up.image         = ToImageParameters(image_paras);
+                up.buffer        = staging_handle;
+                up.buffer_offset = mip_offsets[j];
+                up.image_extent  = VkExtent3D { (u32)image_data.width, (u32)image_data.height, 1 };
+                up.old_layout    = VK_IMAGE_LAYOUT_UNDEFINED;
+                up.final_layout  = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                up.mip_level     = (std::uint32_t)j;
+                // The allocation rides on the first level. Every upload for this
+                // texture is retired together in ReleaseRecordedUploads, so no
+                // level can outlive the buffer it reads from.
+                if (j == 0) up.owned_stage = std::move(staging);
+                m_pending_uploads.push_back(std::move(up));
+            }
         }
     }
     m_tex_map[image.key] = std::move(img_slots);
@@ -606,6 +642,7 @@ const char* FrameKindLabel(wavsen::video::FrameKind k) {
     case wavsen::video::FrameKind::Sw: return "sw";
     case wavsen::video::FrameKind::VulkanShared: return "vulkan-shared";
     case wavsen::video::FrameKind::VideoToolboxSw: return "videotoolbox-sw";
+    case wavsen::video::FrameKind::VideoToolboxVk: return "videotoolbox-vk";
     default: break;
     }
     return "?";
@@ -720,8 +757,10 @@ struct TextureCache::VideoRegistry {
          * during CreateVideoTex). Pump retrieves it via lookup so the
          * single owner stays in the cache. */
         VmaImageParameters                           image; /* moved into m_tex_map */
+        std::shared_ptr<VideoPlaybackState>           playback;
         std::unique_ptr<wavsen::video::VideoDecoder> decoder;
         wavsen::video::Nv12Frame                     nv12_scratch;
+        wavsen::video::MetalFrameView                metal_scratch;
         std::vector<std::uint8_t>                    rgba_scratch;
         VmaBufferParameters                          upload_stage;
         std::size_t                                  upload_stage_size { 0 };
@@ -730,9 +769,15 @@ struct TextureCache::VideoRegistry {
         double                                       pts_origin {
             std::numeric_limits<double>::quiet_NaN()
         };
+        double                                       pts_offset { 0.0 };
         double                                       frame_interval { 1.0 / 30.0 };
+        u64                                          applied_seek_sequence { 0 };
         uint64_t                                     active_epoch { 0 };
         bool                                         have_frame { false };
+        // VideoToolboxVk: latest zero-copy frame view, and a sticky flag that
+        // downgrades this slot to the CPU next_frame path if Metal import fails.
+        wavsen::video::MetalFrameView                metal_view;
+        bool                                         metal_fallback { false };
     };
     std::vector<std::unique_ptr<Slot>> slots;
 
@@ -775,7 +820,8 @@ struct TextureCache::VideoRegistry {
     }
 };
 
-ImageSlotsRef TextureCache::CreateVideoTex(Image& image) {
+ImageSlotsRef TextureCache::CreateVideoTex(Image& image,
+                                           std::shared_ptr<VideoPlaybackState> playback) {
     if (image.slots.empty() || image.slots[0].mipmaps.empty()) return {};
     auto& mip = image.slots[0].mipmaps[0];
     if (! mip.videoStream || mip.videoSize <= 0 || mip.width <= 0 || mip.height <= 0) {
@@ -796,6 +842,7 @@ ImageSlotsRef TextureCache::CreateVideoTex(Image& image) {
 
     auto slot = std::make_unique<VideoRegistry::Slot>();
     slot->key = image.key;
+    slot->playback = std::move(playback);
     /* NV12 chroma is 4:2:0 → both dimensions must be even. Keep the source
      * dimensions: video decode must not be used as a quality/performance
      * trade-off. */
@@ -882,6 +929,7 @@ ImageSlotsRef TextureCache::CreateVideoTex(Image& image) {
         return {};
     }
     slot->decoder = std::move(dec_r).unwrap();
+    if (slot->playback) slot->playback->PublishTime(0.0, slot->decoder->duration());
     const double frame_interval = slot->decoder->frame_duration_seconds();
     if (std::isfinite(frame_interval) && frame_interval > 0.0 && frame_interval < 1.0) {
         slot->frame_interval = frame_interval;
@@ -907,11 +955,22 @@ ImageSlotsRef TextureCache::CreateVideoTex(Image& image) {
 void TextureCache::PumpVideoTextures(double dt_seconds) {
     if (! m_video_registry || m_video_registry->slots.empty()) return;
 
+    static const bool k_pump_timing = [] {
+        std::FILE* f = std::fopen("/tmp/sr-frame-timing", "r");
+        if (f != nullptr) { std::fclose(f); return true; }
+        return false;
+    }();
+    using pump_clock = std::chrono::steady_clock;
+    static double   s_decode_ms { 0 }, s_convert_ms { 0 };
+    static uint32_t s_pump_frames { 0 };
+    static auto     s_pump_window = pump_clock::now();
+    double          f_decode_ms { 0 }, f_convert_ms { 0 };
+
     auto advance_slot_pts = [](VideoRegistry::Slot& s, double raw_pts) {
         double next_pts = -1.0;
         if (std::isfinite(raw_pts) && raw_pts >= 0.0) {
             if (! std::isfinite(s.pts_origin)) s.pts_origin = raw_pts;
-            const double normalized = raw_pts - s.pts_origin;
+            const double normalized = raw_pts - s.pts_origin + s.pts_offset;
             if (std::isfinite(normalized) && normalized >= 0.0 &&
                 (s.last_pts < 0.0 || normalized > s.last_pts)) {
                 next_pts = normalized;
@@ -926,7 +985,33 @@ void TextureCache::PumpVideoTextures(double dt_seconds) {
     for (auto& up : m_video_registry->slots) {
         auto& s = *up;
         if (s.active_epoch != m_video_activity_epoch) continue;
-        s.pts_acc += dt_seconds;
+
+        double advance_seconds = dt_seconds;
+        if (s.playback) {
+            const auto state = s.playback->Snapshot();
+            if (state.seek_sequence != s.applied_seek_sequence) {
+                auto seeked              = s.decoder->seek(state.seek_seconds);
+                s.applied_seek_sequence  = state.seek_sequence;
+                if (seeked.is_err()) {
+                    rstd_error("PumpVideoTextures[{}]: seek: {}",
+                               s.key,
+                               std::move(seeked).unwrap_err().message);
+                } else {
+                    s.pts_acc    = state.seek_seconds;
+                    s.last_pts   = -1.0;
+                    s.pts_origin = std::numeric_limits<double>::quiet_NaN();
+                    s.pts_offset = state.seek_seconds;
+                    s.have_frame = false;
+                }
+            }
+            if (! state.playing) {
+                s.playback->PublishTime(s.pts_acc, s.decoder->duration());
+                continue;
+            }
+            advance_seconds *= state.rate;
+        }
+        s.pts_acc += advance_seconds;
+        if (s.playback) s.playback->PublishTime(s.pts_acc, s.decoder->duration());
 
         auto it = m_tex_map.find(s.key);
         if (it == m_tex_map.end() || it->second.slots.empty()) continue;
@@ -937,13 +1022,18 @@ void TextureCache::PumpVideoTextures(double dt_seconds) {
         const bool supported_frame_kind =
             fkind == wavsen::video::FrameKind::VulkanShared ||
             fkind == wavsen::video::FrameKind::Sw ||
-            fkind == wavsen::video::FrameKind::VideoToolboxSw;
+            fkind == wavsen::video::FrameKind::VideoToolboxSw ||
+            fkind == wavsen::video::FrameKind::VideoToolboxVk;
         if (! supported_frame_kind) {
             rstd_error("PumpVideoTextures[{}]: unsupported decoded frame kind {}",
                        s.key,
                        FrameKindLabel(fkind));
             continue;
         }
+        // Zero-copy Metal path is live only while import keeps succeeding;
+        // a failure sets metal_fallback and this slot decodes to CPU NV12.
+        const bool use_metal =
+            fkind == wavsen::video::FrameKind::VideoToolboxVk && ! s.metal_fallback;
 
         /* Catch up to wall time without downloading every obsolete 4K frame.
          * For software/VideoToolbox frames we advance stale decoder output
@@ -957,12 +1047,14 @@ void TextureCache::PumpVideoTextures(double dt_seconds) {
             rstd::Result<wavsen::video::NextFrame, wavsen::video::Error> r =
                 rstd::Ok(wavsen::video::NextFrame::Ok);
             double discarded_pts = -1.0;
-            const bool discard = fkind != wavsen::video::FrameKind::VulkanShared &&
+            const bool discard = fkind != wavsen::video::FrameKind::VulkanShared && ! use_metal &&
                                  s.last_pts >= 0.0 &&
                                  s.last_pts + s.frame_interval < s.pts_acc &&
                                  i + 1 < kMaxAdvancePerTick;
             if (discard) {
                 r = s.decoder->discard_frame(discarded_pts);
+            } else if (use_metal) {
+                r = s.decoder->next_metal_frame(s.metal_scratch);
             } else {
                 switch (fkind) {
                 case wavsen::video::FrameKind::VulkanShared:
@@ -987,22 +1079,28 @@ void TextureCache::PumpVideoTextures(double dt_seconds) {
                 s.pts_acc    = 0.0;
                 s.last_pts   = -1.0;
                 s.pts_origin = std::numeric_limits<double>::quiet_NaN();
+                s.pts_offset = 0.0;
                 break;
             }
             const bool decoder_looped = kind == wavsen::video::NextFrame::Looped;
             if (decoder_looped) {
                 s.pts_origin = std::numeric_limits<double>::quiet_NaN();
                 s.last_pts   = -1.0;
+                s.pts_offset = 0.0;
             }
             double frame_pts = discarded_pts;
             if (! discard) {
-                switch (fkind) {
-                case wavsen::video::FrameKind::VulkanShared: frame_pts = vkv.pts_seconds; break;
-                case wavsen::video::FrameKind::Sw: frame_pts = s.nv12_scratch.pts_seconds; break;
-                case wavsen::video::FrameKind::VideoToolboxSw:
-                    frame_pts = s.nv12_scratch.pts_seconds;
-                    break;
-                default: break;
+                if (use_metal) {
+                    frame_pts = s.metal_scratch.pts_seconds;
+                } else {
+                    switch (fkind) {
+                    case wavsen::video::FrameKind::VulkanShared: frame_pts = vkv.pts_seconds; break;
+                    case wavsen::video::FrameKind::Sw:
+                    case wavsen::video::FrameKind::VideoToolboxSw:
+                        frame_pts = s.nv12_scratch.pts_seconds;
+                        break;
+                    default: break;
+                    }
                 }
             }
             advance_slot_pts(s, frame_pts);
@@ -1020,17 +1118,22 @@ void TextureCache::PumpVideoTextures(double dt_seconds) {
 
         std::uint32_t cs_id = 0;
         std::uint32_t cr_id = 0;
-        switch (fkind) {
-        case wavsen::video::FrameKind::VulkanShared:
-            cs_id = vkv.colorspace;
-            cr_id = vkv.color_range;
-            break;
-        case wavsen::video::FrameKind::Sw:
-        case wavsen::video::FrameKind::VideoToolboxSw:
-            cs_id = s.nv12_scratch.colorspace;
-            cr_id = s.nv12_scratch.color_range;
-            break;
-        default: break;
+        if (use_metal) {
+            cs_id = s.metal_scratch.colorspace;
+            cr_id = s.metal_scratch.color_range;
+        } else {
+            switch (fkind) {
+            case wavsen::video::FrameKind::VulkanShared:
+                cs_id = vkv.colorspace;
+                cr_id = vkv.color_range;
+                break;
+            case wavsen::video::FrameKind::Sw:
+            case wavsen::video::FrameKind::VideoToolboxSw:
+                cs_id = s.nv12_scratch.colorspace;
+                cr_id = s.nv12_scratch.color_range;
+                break;
+            default: break;
+            }
         }
         const auto color_matrix =
             wavsen::video::make_color_matrix(static_cast<wavsen::video::ColorSpace>(cs_id),
@@ -1049,7 +1152,7 @@ void TextureCache::PumpVideoTextures(double dt_seconds) {
             }
             {
                 void* v = nullptr;
-                VVK_CHECK(s.upload_stage.handle.MapMemory(&v));
+                VVK_CHECK_ACT(return false, s.upload_stage.handle.MapMemory(&v));
                 std::memcpy(v, rgba.data(), bytes);
                 s.upload_stage.handle.UnMapMemory();
             }
@@ -1064,8 +1167,12 @@ void TextureCache::PumpVideoTextures(double dt_seconds) {
 
         auto* yuv = m_video_registry->ensureYuv(m_device, s.width, s.height);
         if (! yuv) {
+            // GPU converter unavailable: metal zero-copy can't run, so drop
+            // this slot to the CPU download path from the next tick on.
+            if (use_metal) s.metal_fallback = true;
             if (fkind == wavsen::video::FrameKind::Sw ||
-                fkind == wavsen::video::FrameKind::VideoToolboxSw) {
+                fkind == wavsen::video::FrameKind::VideoToolboxSw ||
+                fkind == wavsen::video::FrameKind::VideoToolboxVk) {
                 if (! ConvertNv12ToRgba(s.nv12_scratch, color_matrix, s.rgba_scratch)) {
                     rstd_error("PumpVideoTextures[{}]: CPU NV12->RGBA conversion failed", s.key);
                     continue;
@@ -1080,48 +1187,70 @@ void TextureCache::PumpVideoTextures(double dt_seconds) {
         }
 
         rstd::Result<int, wavsen::video::Error> cv = rstd::Ok(-1);
-        switch (fkind) {
-        case wavsen::video::FrameKind::VulkanShared: {
-            wavsen::video::YuvToRgba::VkFrameImports im {};
-            im.y_image           = vkv.img[0];
-            im.uv_image          = vkv.plane_count > 1 ? vkv.img[1] : VK_NULL_HANDLE;
-            im.y_sem             = vkv.sem[0];
-            im.uv_sem            = vkv.plane_count > 1 ? vkv.sem[1] : vkv.sem[0];
-            im.y_sem_val_in_out  = &vkv.sem_value[0];
-            im.uv_sem_val_in_out = vkv.plane_count > 1 ? &vkv.sem_value[1] : &vkv.sem_value[0];
-            im.y_layout_in_out   = &vkv.layout[0];
-            im.uv_layout_in_out  = vkv.plane_count > 1 ? &vkv.layout[1] : &vkv.layout[0];
-            im.y_qf_in_out       = &vkv.queue_family[0];
-            im.uv_qf_in_out = vkv.plane_count > 1 ? &vkv.queue_family[1] : &vkv.queue_family[0];
-            im.src_w        = vkv.width;
-            im.src_h        = vkv.height;
-            im.bit_depth    = vkv.bit_depth;
-            cv              = yuv->convert_av_vk_frame(im,
-                                                       ip.handle,
-                                                       s.width,
-                                                       s.height,
-                                                       color_matrix,
-                                                       wavsen::video::ConvertTarget::SampledLocal);
-            break;
-        }
-        case wavsen::video::FrameKind::Sw:
-        case wavsen::video::FrameKind::VideoToolboxSw:
-            cv = yuv->convert_nv12(ip.handle,
-                                   s.width,
-                                   s.height,
-                                   s.nv12_scratch.data.data(),
-                                   s.nv12_scratch.data.size(),
-                                   color_matrix,
-                                   wavsen::video::ConvertTarget::SampledLocal);
-            break;
-        default: break;
-        }
-        if (cv.is_err()) {
-            rstd_error("PumpVideoTextures[{}]: yuv conversion {}: {}",
-                       s.key,
-                       FrameKindLabel(fkind),
-                       std::move(cv).unwrap_err().message);
-            continue;
+        if (use_metal) {
+            cv = yuv->convert_metal_frame(s.metal_scratch.pixel_buffer,
+                                          s.metal_scratch.width,
+                                          s.metal_scratch.height,
+                                          ip.handle,
+                                          s.width,
+                                          s.height,
+                                          color_matrix,
+                                          wavsen::video::ConvertTarget::SampledLocal);
+            if (cv.is_err()) {
+                // One-time downgrade to the CPU download path; the same
+                // decoder serves next_frame without reopening.
+                rstd_warn("PumpVideoTextures[{}]: metal zero-copy failed ({}), "
+                          "falling back to CPU download",
+                          s.key,
+                          std::move(cv).unwrap_err().message);
+                s.metal_fallback = true;
+                continue;
+            }
+        } else {
+            switch (fkind) {
+            case wavsen::video::FrameKind::VulkanShared: {
+                wavsen::video::YuvToRgba::VkFrameImports im {};
+                im.y_image           = vkv.img[0];
+                im.uv_image          = vkv.plane_count > 1 ? vkv.img[1] : VK_NULL_HANDLE;
+                im.y_sem             = vkv.sem[0];
+                im.uv_sem            = vkv.plane_count > 1 ? vkv.sem[1] : vkv.sem[0];
+                im.y_sem_val_in_out  = &vkv.sem_value[0];
+                im.uv_sem_val_in_out = vkv.plane_count > 1 ? &vkv.sem_value[1] : &vkv.sem_value[0];
+                im.y_layout_in_out   = &vkv.layout[0];
+                im.uv_layout_in_out  = vkv.plane_count > 1 ? &vkv.layout[1] : &vkv.layout[0];
+                im.y_qf_in_out       = &vkv.queue_family[0];
+                im.uv_qf_in_out = vkv.plane_count > 1 ? &vkv.queue_family[1] : &vkv.queue_family[0];
+                im.src_w        = vkv.width;
+                im.src_h        = vkv.height;
+                im.bit_depth    = vkv.bit_depth;
+                cv              = yuv->convert_av_vk_frame(im,
+                                                          ip.handle,
+                                                          s.width,
+                                                          s.height,
+                                                          color_matrix,
+                                                          wavsen::video::ConvertTarget::SampledLocal);
+                break;
+            }
+            case wavsen::video::FrameKind::Sw:
+            case wavsen::video::FrameKind::VideoToolboxSw:
+            case wavsen::video::FrameKind::VideoToolboxVk:
+                cv = yuv->convert_nv12(ip.handle,
+                                       s.width,
+                                       s.height,
+                                       s.nv12_scratch.data.data(),
+                                       s.nv12_scratch.data.size(),
+                                       color_matrix,
+                                       wavsen::video::ConvertTarget::SampledLocal);
+                break;
+            default: break;
+            }
+            if (cv.is_err()) {
+                rstd_error("PumpVideoTextures[{}]: yuv conversion {}: {}",
+                           s.key,
+                           FrameKindLabel(fkind),
+                           std::move(cv).unwrap_err().message);
+                continue;
+            }
         }
         CloseSyncFd(std::move(cv).unwrap());
         s.have_frame = true;
@@ -1146,7 +1275,7 @@ bool TextureCache::UploadFontAtlasRegion(const std::string& key, const std::uint
 
     {
         void* v = nullptr;
-        VVK_CHECK(stage.handle.MapMemory(&v));
+        VVK_CHECK_BOOL_RE(stage.handle.MapMemory(&v));
         auto* dst = static_cast<std::uint8_t*>(v);
         for (std::uint32_t row = 0; row < h; ++row) {
             std::memcpy(dst + row * w, atlas + (y + row) * atlas_w + x, w);

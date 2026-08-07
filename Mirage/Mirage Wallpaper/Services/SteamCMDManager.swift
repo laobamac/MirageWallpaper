@@ -27,6 +27,8 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
     private var activeLoginProcess: Process?
     private var activeLoginMasterFD: Int32?
     private var activeLoginWaitingForGuard = false
+    private var activeLoginGuardType: SteamGuardType?
+    private var activeLoginSubmittedGuardType: SteamGuardType?
     private var activeLoginCancelled = false
     private var installationInProgress = false
     private var installationCancelled = false
@@ -149,20 +151,32 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
 
     // MARK: - Detect
 
-    func detectSteamCMD() -> URL? {
+    func detectSteamCMD() -> SteamCMDDetectionResult {
         if let steamCMDPath, isReadyLauncher(steamCMDPath) {
-            return steamCMDPath
+            do {
+                try ensureSteamCMDCanRun(at: steamCMDPath)
+                return .found(steamCMDPath)
+            } catch SteamCMDError.rosettaRequired {
+                return markRosettaRequired()
+            } catch {
+            }
         }
 
         let managedLauncher = steamCMDDir.appending(path: "steamcmd.sh")
         if isUsableLauncher(managedLauncher), !fm.fileExists(atPath: installationMarker.path) {
+            do {
+                try ensureSteamCMDCanRun(at: steamCMDDir.appending(path: "steamcmd"))
+            } catch SteamCMDError.rosettaRequired {
+                return markRosettaRequired()
+            } catch {
+            }
             record(.steamCMDInstall, domain: "SteamCMD", "正在验证旧版 SteamCMD 安装状态")
             let health = runWithPTY(executable: managedLauncher, arguments: ["+quit"], onLine: { line in
                 self.record(.steamCMDInstall, domain: "SteamCMD", line)
             }, timeout: 300)
             if health.status == 0, !health.timedOut,
                (try? Data("ready".utf8).write(to: installationMarker, options: .atomic)) != nil {
-                return saveSteamCMDPath(managedLauncher)
+                return .found(saveSteamCMDPath(managedLauncher))
             }
         }
 
@@ -176,7 +190,14 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
         for path in candidates {
             let url = preferredLauncher(for: URL(fileURLWithPath: path))
             if isReadyLauncher(url) {
-                return saveSteamCMDPath(url)
+                do {
+                    try ensureSteamCMDCanRun(at: url)
+                    return .found(saveSteamCMDPath(url))
+                } catch SteamCMDError.rosettaRequired {
+                    return markRosettaRequired()
+                } catch {
+                    continue
+                }
             }
         }
 
@@ -185,11 +206,29 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
             let path = whichResult.output.trimmingCharacters(in: .whitespacesAndNewlines)
             let url = preferredLauncher(for: URL(fileURLWithPath: path))
             if isReadyLauncher(url) {
-                return saveSteamCMDPath(url)
+                do {
+                    try ensureSteamCMDCanRun(at: url)
+                    return .found(saveSteamCMDPath(url))
+                } catch SteamCMDError.rosettaRequired {
+                    return markRosettaRequired()
+                } catch {
+                    return .notFound
+                }
             }
         }
 
-        return nil
+        do {
+            try ensureSteamCMDCanRun()
+        } catch SteamCMDError.rosettaRequired {
+            return markRosettaRequired()
+        } catch {
+        }
+        return .notFound
+    }
+
+    private func markRosettaRequired() -> SteamCMDDetectionResult {
+        clearSteamCMDPath()
+        return .rosettaRequired
     }
 
     private func saveSteamCMDPath(_ url: URL) -> URL {
@@ -200,6 +239,15 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
         }
         UserDefaults.standard.set(url.path, forKey: pathKey)
         return url
+    }
+
+    private func clearSteamCMDPath() {
+        if Thread.isMainThread {
+            steamCMDPath = nil
+        } else {
+            DispatchQueue.main.sync { [weak self] in self?.steamCMDPath = nil }
+        }
+        UserDefaults.standard.removeObject(forKey: pathKey)
     }
 
     private func preferredLauncher(for url: URL) -> URL {
@@ -250,6 +298,7 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
             DispatchQueue.main.async { onProgress(.downloading(0)) }
 
             do {
+                try self.ensureSteamCMDCanRun()
                 try self.throwIfInstallationCancelled()
                 try self.ensureSufficientDiskSpace(minimumBytes: 150 * 1024 * 1024)
                 let archive = try self.downloadBootstrap { progress in
@@ -268,6 +317,7 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
                 guard self.isUsableLauncher(execPath) else {
                     throw SteamCMDError.installFailed("解压完成后未找到可执行的 steamcmd.sh")
                 }
+                try self.ensureSteamCMDCanRun(at: self.steamCMDDir.appending(path: "steamcmd"))
 
                 DispatchQueue.main.async { onProgress(.initializing) }
                 let health = self.runWithPTY(executable: execPath, arguments: ["+quit"], onLine: { line in
@@ -290,6 +340,10 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
                 _ = self.saveSteamCMDPath(execPath)
                 self.record(.steamCMDInstall, domain: Self.bootstrapDomain, "SteamCMD 安装并完成首次初始化")
                 DispatchQueue.main.async { onProgress(.installed(execPath.path)) }
+            } catch SteamCMDError.rosettaRequired {
+                self.clearSteamCMDPath()
+                self.record(.steamCMDInstall, domain: Self.bootstrapDomain, "当前机器需要 Rosetta 2 才能运行 SteamCMD")
+                DispatchQueue.main.async { onProgress(.rosettaRequired) }
             } catch is CancellationError {
                 self.record(.steamCMDInstall, domain: Self.bootstrapDomain, "SteamCMD 安装已取消")
                 DispatchQueue.main.async { onProgress(.failed("SteamCMD 安装已取消")) }
@@ -374,6 +428,21 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
         }
     }
 
+    private func ensureSteamCMDCanRun(at _: URL? = nil) throws {
+        guard isAppleSiliconHardware else { return }
+
+        let rosetta = try runShellSync("/usr/bin/arch", arguments: ["-x86_64", "/usr/bin/true"])
+        guard rosetta.status == 0 else {
+            throw SteamCMDError.rosettaRequired
+        }
+    }
+
+    private var isAppleSiliconHardware: Bool {
+        var arm64: Int32 = 0
+        var size = MemoryLayout<Int32>.size
+        return sysctlbyname("hw.optional.arm64", &arm64, &size, nil, 0) == 0 && arm64 == 1
+    }
+
     // MARK: - Session
 
     func refreshSessionIfNeeded() {
@@ -393,9 +462,17 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
     func login(username: String, password: String,
                onLog: @escaping (String) -> Void,
                onResult: @escaping (SteamLoginState) -> Void) {
-        guard steamCMDPath != nil else {
+        guard let cmdPath = steamCMDPath else {
             onResult(.failed("SteamCMD 未安装"))
             return
+        }
+        do {
+            try ensureSteamCMDCanRun(at: cmdPath)
+        } catch SteamCMDError.rosettaRequired {
+            clearSteamCMDPath()
+            onResult(.failed(L("当前 Apple 芯片 Mac 需要先安装 Rosetta 2，才能使用 SteamCMD")))
+            return
+        } catch {
         }
         guard beginLoginSession() else {
             onResult(.failed("SteamCMD 正在执行其他任务，请先等待或取消当前任务"))
@@ -462,7 +539,7 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
                         }
                         self.isLoggedIn = true
                         self.savedUsername = username
-                        self.authenticationState = .available("已登录 \(username)")
+                        self.authenticationState = .available(L("已登录 %@", username))
                         onResult(.success)
                     }
                 }
@@ -475,7 +552,8 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
                         promptBuffer = ""
                         if !passwordSent { process.terminate() }
                     }
-                    if let type = self.guardType(for: promptBuffer), self.markWaitingForGuard(process: process) {
+                    if !successPublished, let type = self.guardType(for: promptBuffer),
+                       self.markWaitingForGuard(process: process, type: type) {
                         promptBuffer = ""
                         DispatchQueue.main.async { onResult(.waitingForGuard(type)) }
                     }
@@ -490,7 +568,8 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
                     let safeLine = self.redact(line, secrets: [username, password])
                     self.record(.authentication, domain: "Steam 登录服务", safeLine)
                     DispatchQueue.main.async { onLog(safeLine) }
-                    if let type = self.guardType(for: line), self.markWaitingForGuard(process: process) {
+                    if !successPublished, let type = self.guardType(for: line),
+                       self.markWaitingForGuard(process: process, type: type) {
                         DispatchQueue.main.async { onResult(.waitingForGuard(type)) }
                     }
                 })
@@ -540,11 +619,22 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
         let process = activeLoginProcess
         let masterFD = activeLoginMasterFD
         let canSubmit = activeLoginWaitingForGuard && process?.isRunning == true && masterFD != nil
-        if canSubmit { activeLoginWaitingForGuard = false }
+        if canSubmit {
+            activeLoginWaitingForGuard = false
+            activeLoginSubmittedGuardType = activeLoginGuardType
+        }
         processLock.unlock()
         guard canSubmit, let masterFD else { return false }
 
         let sent = writeToPTY(code + "\n", masterFD: masterFD)
+        if !sent {
+            processLock.lock()
+            if activeLoginProcess === process {
+                activeLoginWaitingForGuard = true
+                activeLoginSubmittedGuardType = nil
+            }
+            processLock.unlock()
+        }
         record(.authentication, domain: "Steam 登录服务", sent ? "已安全提交 Steam Guard 验证码" : "提交 Steam Guard 验证码失败")
         return sent
     }
@@ -671,6 +761,14 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
             failWorkshopSessionStart(task: task, message: "SteamCMD 未安装")
             return
         }
+        do {
+            try ensureSteamCMDCanRun(at: cmdPath)
+        } catch SteamCMDError.rosettaRequired {
+            clearSteamCMDPath()
+            failWorkshopSessionStart(task: task, message: L("当前 Apple 芯片 Mac 需要先安装 Rosetta 2，才能使用 SteamCMD"))
+            return
+        } catch {
+        }
 
         var masterFD: Int32 = 0
         var slaveFD: Int32 = 0
@@ -786,34 +884,11 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
     private func startWorkshopDownload(_ task: SteamCMDWorkshopTask, in session: SteamCMDWorkshopSession) {
         guard task.markCommandSent() else { return }
         DispatchQueue.main.async { task.onProgress(.downloading(percent: nil)) }
-        monitorReceivedBytes(
-            parentPID: session.process.processIdentifier,
-            active: task.polling,
-            receivedBytes: task.receivedBytes,
-            downloadStarted: task.downloadStarted
-        )
-        monitorWorkshopProgress(task)
+        monitorReceivedBytes(task, parentPID: session.process.processIdentifier)
         do {
             try session.input.write(contentsOf: Data("workshop_download_item 431960 \(task.workshopId)\n".utf8))
         } catch {
             failWorkshopDownload(task, in: session, message: error.localizedDescription)
-        }
-    }
-
-    private func monitorWorkshopProgress(_ task: SteamCMDWorkshopTask) {
-        DispatchQueue.global(qos: .utility).async {
-            var lastReported = 0.0
-            while task.polling.value {
-                Thread.sleep(forTimeInterval: 0.1)
-                let total = task.receivedBytes.value
-                let baseline = task.baselineBytes.value
-                guard task.downloadStarted.value, total >= baseline, task.expectedFileSize > 0 else { continue }
-                let progress = min(Double(total - baseline) / Double(task.expectedFileSize), 0.98)
-                if progress >= lastReported + 0.002 {
-                    lastReported = progress
-                    DispatchQueue.main.async { task.onProgress(.downloading(percent: progress)) }
-                }
-            }
         }
     }
 
@@ -1003,6 +1078,8 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
         guard activeLoginProcess == nil, !installationInProgress, downloadProcesses.isEmpty,
               workshopSession?.process.isRunning != true, !workshopSessionStarting else { return false }
         activeLoginWaitingForGuard = false
+        activeLoginGuardType = nil
+        activeLoginSubmittedGuardType = nil
         activeLoginCancelled = false
         activeLoginProcess = Process()
         return true
@@ -1024,17 +1101,22 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
             activeLoginProcess = nil
             activeLoginMasterFD = nil
             activeLoginWaitingForGuard = false
+            activeLoginGuardType = nil
+            activeLoginSubmittedGuardType = nil
             activeLoginCancelled = false
         }
         processLock.unlock()
         return wasCancelled
     }
 
-    private func markWaitingForGuard(process: Process) -> Bool {
+    private func markWaitingForGuard(process: Process, type: SteamGuardType) -> Bool {
         processLock.lock()
         defer { processLock.unlock() }
-        guard activeLoginProcess === process, !activeLoginWaitingForGuard else { return false }
+        guard activeLoginProcess === process,
+              !activeLoginWaitingForGuard,
+              activeLoginSubmittedGuardType == nil else { return false }
         activeLoginWaitingForGuard = true
+        activeLoginGuardType = type
         return true
     }
 
@@ -1099,67 +1181,54 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
         }
     }
 
-    private func monitorReceivedBytes(
-        parentPID: pid_t,
-        active: LockedFlag,
-        receivedBytes: LockedUInt64,
-        downloadStarted: LockedFlag
-    ) {
+    /// Sample SteamCMD's download progress and report it.
+    ///
+    /// This used to spawn a `nettop` per sample — an `openpty` + `fork/exec` +
+    /// poll + `terminate` + `waitUntilExit` + PTY teardown, two to seven times a
+    /// second for the whole download, purely to move a progress bar. It is now a
+    /// single `proc_pid_rusage` syscall against the same process.
+    ///
+    /// Bytes written to disk also track `expectedFileSize` more faithfully than
+    /// the old bytes-received figure did: Steam transfers content compressed, so
+    /// what lands on disk is what the Workshop file size actually describes.
+    ///
+    /// Progress reporting is folded into this same loop; it used to be a second
+    /// thread spinning at 10 Hz just to read the counter this one wrote.
+    private func monitorReceivedBytes(_ task: SteamCMDWorkshopTask, parentPID: pid_t) {
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self,
-                  let steamCMDPID = self.waitForSteamCMDChild(of: parentPID, active: active) else { return }
-            while active.value {
-                if let total = self.receivedNetworkBytes(pid: steamCMDPID) {
-                    receivedBytes.value = max(receivedBytes.value, total)
+                  let steamCMDPID = self.waitForSteamCMDChild(of: parentPID, active: task.polling)
+            else { return }
+            var lastReported = 0.0
+            while task.polling.value {
+                if let total = Self.diskBytesWritten(pid: steamCMDPID) {
+                    task.receivedBytes.value = max(task.receivedBytes.value, total)
                 }
-                Thread.sleep(forTimeInterval: downloadStarted.value ? 0.1 : 0.5)
+                let total = task.receivedBytes.value
+                let baseline = task.baselineBytes.value
+                if task.downloadStarted.value, total >= baseline, task.expectedFileSize > 0 {
+                    let progress = min(Double(total - baseline) / Double(task.expectedFileSize), 0.98)
+                    if progress >= lastReported + 0.002 {
+                        lastReported = progress
+                        DispatchQueue.main.async { task.onProgress(.downloading(percent: progress)) }
+                    }
+                }
+                Thread.sleep(forTimeInterval: task.downloadStarted.value ? 0.25 : 0.5)
             }
         }
     }
 
-    private func receivedNetworkBytes(pid: pid_t) -> UInt64? {
-        var masterFD: Int32 = 0
-        var slaveFD: Int32 = 0
-        guard openpty(&masterFD, &slaveFD, nil, nil, nil) == 0 else { return nil }
-
-        let monitor = Process()
-        monitor.executableURL = URL(fileURLWithPath: "/usr/bin/nettop")
-        monitor.arguments = ["-P", "-L", "0", "-x", "-J", "bytes_in", "-p", String(pid)]
-        monitor.standardInput = FileHandle.nullDevice
-        monitor.standardOutput = FileHandle(fileDescriptor: slaveFD, closeOnDealloc: false)
-        monitor.standardError = FileHandle(fileDescriptor: slaveFD, closeOnDealloc: false)
-
-        do {
-            try monitor.run()
-            close(slaveFD)
-        } catch {
-            close(slaveFD)
-            close(masterFD)
-            return nil
+    /// Cumulative bytes this process has written to disk, straight from the
+    /// kernel. No subprocess, no parsing.
+    private static func diskBytesWritten(pid: pid_t) -> UInt64? {
+        var info = rusage_info_v2()
+        let status = withUnsafeMutablePointer(to: &info) { pointer -> Int32 in
+            pointer.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) { rebound in
+                proc_pid_rusage(pid, RUSAGE_INFO_V2, rebound)
+            }
         }
-
-        var output = ""
-        var totalBytes: UInt64?
-        let deadline = Date().addingTimeInterval(0.4)
-        while Date() < deadline, totalBytes == nil {
-            var descriptor = pollfd(fd: masterFD, events: Int16(POLLIN), revents: 0)
-            guard Darwin.poll(&descriptor, 1, 50) > 0 else { continue }
-            var buffer = [UInt8](repeating: 0, count: 4096)
-            let count = Darwin.read(masterFD, &buffer, buffer.count)
-            guard count > 0 else { break }
-            output += String(decoding: buffer.prefix(Int(count)), as: UTF8.self)
-            totalBytes = output.split(whereSeparator: { $0.isNewline }).compactMap { line in
-                let columns = line.split(separator: ",", omittingEmptySubsequences: false)
-                guard columns.count > 1 else { return nil }
-                return UInt64(columns[1].trimmingCharacters(in: .whitespacesAndNewlines))
-            }.max()
-        }
-        if monitor.isRunning {
-            monitor.terminate()
-            monitor.waitUntilExit()
-        }
-        close(masterFD)
-        return totalBytes
+        guard status == 0 else { return nil }
+        return info.ri_diskio_byteswritten
     }
 
     private func waitForSteamCMDChild(of parentPID: pid_t, active: LockedFlag) -> pid_t? {
@@ -1168,7 +1237,9 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
             if let pid = descendantPIDs(of: parentPID).first(where: { processName(pid: $0) == "steamcmd" }) {
                 return pid
             }
-            Thread.sleep(forTimeInterval: 0.05)
+            // 5 Hz is plenty to notice a child appearing; the old 20 Hz walked
+            // the whole process tree four times as often for no benefit.
+            Thread.sleep(forTimeInterval: 0.2)
         }
         return nil
     }
@@ -1334,17 +1405,70 @@ final class SteamCMDManager: ObservableObject, @unchecked Sendable {
 
     // MARK: - Shell helper
 
+    /// Hard limit for one-shot helper processes such as `tar`.  The inspected
+    /// archive arrives over the network, so a hostile or corrupt payload must
+    /// never be able to block the installation thread — and with it
+    /// `installationInProgress` — for the rest of the app's lifetime.
+    private static let shellTimeout: TimeInterval = 60
+    /// Grace period between `SIGTERM` and `SIGKILL`, and the extra budget the
+    /// reader gets once the child is gone.
+    private static let shellKillGrace: TimeInterval = 2
+
+    /// Runs a short-lived helper process and returns its merged stdout/stderr.
+    ///
+    /// Both streams share one `Pipe`, so that pipe has to be drained *while* the
+    /// child runs: waiting for exit first deadlocks as soon as the child writes
+    /// more than the pipe buffer (~64 KB).  A single background reader owns the
+    /// shared read end and runs to EOF, so the returned output is complete.
     private func runShellSync(_ executable: String, arguments: [String]) throws -> ShellResult {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
         let pipe = Pipe()
+        process.standardInput = FileHandle.nullDevice
         process.standardOutput = pipe
         process.standardError = pipe
         try process.run()
+
+        let collected = LockedData(Data())
+        let readerFinished = DispatchSemaphore(value: 0)
+        let readHandle = pipe.fileHandleForReading
+        DispatchQueue.global(qos: .utility).async {
+            let data = readHandle.readDataToEndOfFile()
+            collected.value = data
+            readerFinished.signal()
+        }
+
+        var timedOut = false
+        if !waitForExit(process, timeout: Self.shellTimeout) {
+            timedOut = true
+            terminate(process)
+            if !waitForExit(process, timeout: Self.shellKillGrace), process.isRunning {
+                _ = Darwin.kill(process.processIdentifier, SIGKILL)
+                _ = waitForExit(process, timeout: Self.shellKillGrace)
+            }
+        }
+        // Never return a partial buffer: the reader holds the only remaining copy
+        // of the read end and stops at EOF, which the dead child guarantees.
+        if readerFinished.wait(timeout: .now() + Self.shellKillGrace) == .timedOut { timedOut = true }
+        guard !timedOut else {
+            throw SteamCMDError.installFailed(
+                L("外部命令执行超时：%@", URL(fileURLWithPath: executable).lastPathComponent)
+            )
+        }
         process.waitUntilExit()
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        return ShellResult(status: process.terminationStatus, output: String(data: data, encoding: .utf8) ?? "")
+        return ShellResult(status: process.terminationStatus, output: String(data: collected.value, encoding: .utf8) ?? "")
+    }
+
+    /// Polls until `process` exits.  Returns `false` when the timeout elapses
+    /// first; unlike `waitUntilExit()` it can never block forever.
+    private func waitForExit(_ process: Process, timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while process.isRunning {
+            if Date() >= deadline { return false }
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        return true
     }
 }
 
@@ -1484,6 +1608,18 @@ private final class LockedUInt64 {
     }
 }
 
+private final class LockedData {
+    private let lock = NSLock()
+    private var storage: Data
+
+    init(_ value: Data) { storage = value }
+
+    var value: Data {
+        get { lock.lock(); defer { lock.unlock() }; return storage }
+        set { lock.lock(); storage = newValue; lock.unlock() }
+    }
+}
+
 private final class SteamCMDDownloadDelegate: NSObject, URLSessionDownloadDelegate {
     let semaphore = DispatchSemaphore(value: 0)
     let onProgress: (Double) -> Void
@@ -1524,12 +1660,14 @@ private final class SteamCMDDownloadDelegate: NSObject, URLSessionDownloadDelega
 }
 
 enum SteamCMDError: LocalizedError {
+    case rosettaRequired
     case downloadFailed(String)
     case installFailed(String)
     case operationFailed(String)
 
     var errorDescription: String? {
         switch self {
+        case .rosettaRequired: return L("当前 Apple 芯片 Mac 需要先安装 Rosetta 2，才能使用 SteamCMD")
         case .downloadFailed(let message): return L("SteamCMD 下载失败：%@", message)
         case .installFailed(let message): return L("SteamCMD 安装失败：%@", message)
         case .operationFailed(let message): return message

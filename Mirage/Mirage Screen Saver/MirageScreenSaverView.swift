@@ -331,6 +331,15 @@ final class MirageScreenSaverView: ScreenSaverView {
     }
 
     private func loadVideo(_ configuration: MirageSaverConfiguration) {
+        // A track with no decoder on this Mac still yields a ready, advancing
+        // player that renders nothing, so the saver would be a black screen with
+        // no explanation. Rewriting to H.264 takes seconds and belongs to the
+        // main app; say so rather than showing black.
+        let asset = AVURLAsset(url: configuration.entryURL)
+        guard videoAssetIsDecodable(asset) else {
+            showMessage(localized("此视频格式无法播放，请先在 Mirage 中播放一次以完成转换"))
+            return
+        }
         let player = AVPlayer(url: configuration.entryURL)
         player.isMuted = true
         let playerLayer = AVPlayerLayer(player: player)
@@ -350,6 +359,24 @@ final class MirageScreenSaverView: ScreenSaverView {
             player?.seek(to: .zero)
             player?.play()
         }
+    }
+
+    private func videoAssetIsDecodable(_ asset: AVURLAsset) -> Bool {
+        let done = DispatchSemaphore(value: 0)
+        var decodable = false
+        Task {
+            defer { done.signal() }
+            guard let playable = try? await asset.load(.isPlayable), playable else { return }
+            guard let tracks = try? await asset.loadTracks(withMediaType: .video),
+                  !tracks.isEmpty else { return }
+            for track in tracks {
+                guard let ok = try? await track.load(.isDecodable), ok else { return }
+            }
+            decodable = true
+        }
+        // Local metadata only; the bound just keeps a pathological file from
+        // wedging the screen saver host.
+        return done.wait(timeout: .now() + 10) == .success && decodable
     }
 
     private func loadWeb(_ configuration: MirageSaverConfiguration) {

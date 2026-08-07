@@ -5,11 +5,57 @@
 //
 
 import SwiftUI
+import AVFoundation
+
+extension ContentViewModel {
+    var areAllResolutionsSelected: Bool {
+        widescreenResolution == .all &&
+            ultraWidescreenResolution == .all &&
+            dualscreenResolution == .all &&
+            triplescreenResolution == .all &&
+            potraitscreenResolution == .all &&
+            miscResolution == .all
+    }
+
+    var areAllResolutionsCleared: Bool {
+        widescreenResolution.isEmpty &&
+            ultraWidescreenResolution.isEmpty &&
+            dualscreenResolution.isEmpty &&
+            triplescreenResolution.isEmpty &&
+            potraitscreenResolution.isEmpty &&
+            miscResolution.isEmpty
+    }
+
+    func selectAllResolutions() {
+        widescreenResolution = .all
+        ultraWidescreenResolution = .all
+        dualscreenResolution = .all
+        triplescreenResolution = .all
+        potraitscreenResolution = .all
+        miscResolution = .all
+    }
+
+    func clearResolutions() {
+        widescreenResolution = .none
+        ultraWidescreenResolution = .none
+        dualscreenResolution = .none
+        triplescreenResolution = .none
+        potraitscreenResolution = .none
+        miscResolution = .none
+    }
+}
 
 typealias FilterResultsViewModel = ContentViewModel
 
 protocol FilterResultsModel: OptionSet where Element == Self, RawValue == Int {
     static var allOptions: [String] { get }
+    static func option(at index: Int) -> Self
+}
+
+extension FilterResultsModel {
+    static func option(at index: Int) -> Self {
+        Self(rawValue: 1 << index)
+    }
 }
 
 struct FRShowOnly: OptionSet {
@@ -75,20 +121,26 @@ struct FRWidescreenResolution: FilterResultsModel {
     let rawValue: Int
     
     static let allOptions = [
-        "StandardDefinition",
-        "1280x720",
-        "1920x1080-FullHD",
-        "2560x1440",
-        "3840x2160-4K"
+        "标清",
+        "1280 x 720",
+        "1366 x 768",
+        "1920 x 1080 - 全高清",
+        "2560 x 1440",
+        "3840 x 2160 - 4K",
+        "7680 x 4320 - 8K"
     ]
     
     static let standardDefinition   = Self.init(rawValue: 1 << 0)
     static let resolution1280x720   = Self.init(rawValue: 1 << 1)
-    static let resolution1920x1080  = Self.init(rawValue: 1 << 2)
-    static let resolution2560x1440  = Self.init(rawValue: 1 << 3)
-    static let resolution3840x2160  = Self.init(rawValue: 1 << 4)
-    
-    static let all: Self            = [.standardDefinition, resolution1280x720, resolution1920x1080, .resolution2560x1440, .resolution3840x2160]
+    static let resolution1366x768   = Self.init(rawValue: 1 << 2)
+    static let resolution1920x1080  = Self.init(rawValue: 1 << 3)
+    static let resolution2560x1440  = Self.init(rawValue: 1 << 4)
+    static let resolution3840x2160  = Self.init(rawValue: 1 << 5)
+    static let resolution7680x4320  = Self.init(rawValue: 1 << 6)
+
+    static let legacyAll: Self      = Self(rawValue: 31)
+    static let interimAll: Self     = Self(rawValue: 63)
+    static let all: Self            = [.standardDefinition, resolution1280x720, resolution1366x768, resolution1920x1080, .resolution2560x1440, .resolution3840x2160, .resolution7680x4320]
     static let none: Self           = []
 }
 
@@ -97,9 +149,9 @@ struct FRUltraWidescreenResolution: FilterResultsModel {
     
     
     static let allOptions: [String] = [
-        "Ultrawide Standard",
-        "2560x1080",
-        "3440x1440",
+        "超宽（标准）",
+        "2560 x 1080",
+        "3440 x 1440"
     ]
     
     static let ultrawideStandard    = FRUltraWidescreenResolution(rawValue: 1 << 0)
@@ -114,10 +166,10 @@ struct FRDualscreenResolution: FilterResultsModel {
     let rawValue: Int
     
     static let allOptions: [String] = [
-        "Dual Standard",
-        "3840x1080",
-        "5120x1440",
-        "7680x2160"
+        "双显示器（标准）",
+        "3840 x 1080",
+        "5120 x 1440",
+        "7680 x 2160"
     ]
     
     static let dualStandard         = Self.init(rawValue: 1 << 0)
@@ -133,11 +185,11 @@ struct FRTriplescreenResolution: FilterResultsModel {
     let rawValue: Int
     
     static let allOptions: [String] = [
-            "Triple Standard",
-            "4096x768",
-            "5760x1080",
-            "7680x1440",
-            "11520x2160"
+            "三显示器（标准）",
+            "4096 x 768",
+            "5760 x 1080",
+            "7680 x 1440",
+            "11520 x 2160"
         ]
     
     static let tripleStandard        = FRTriplescreenResolution(rawValue: 1 << 0)
@@ -154,11 +206,11 @@ struct FRPortraitScreenResolution: FilterResultsModel {
     let rawValue: Int
     
     static let allOptions = [
-        "PotraitStandard",
-        "720x1280",
-        "1080x1920",
-        "1440x2560",
-        "2160x3840"
+        "纵向（标准）",
+        "720 x 1280",
+        "1080 x 1920",
+        "1440 x 2560",
+        "2160 x 3840"
     ]
     
     static let portraitStandard     = Self.init(rawValue: 1 << 0)
@@ -173,17 +225,541 @@ struct FRPortraitScreenResolution: FilterResultsModel {
 
 struct FRMiscResolution: FilterResultsModel {
     let rawValue: Int
-    
+
     static let allOptions = [
-        "OtherResolution",
-        "DynamicResolution"
+        "其他分辨率",
+        "动态分辨率"
     ]
-    
+
     static let otherResolution     = Self.init(rawValue: 1 << 0)
     static let dynamicResolution   = Self.init(rawValue: 1 << 1)
-    
+
     static let all: Self           = [.otherResolution, .dynamicResolution]
     static let none: Self          = []
+}
+
+enum FRResolutionFilter {
+    private enum Kind: Equatable {
+        case widescreen(FRWidescreenResolution)
+        case ultraWidescreen(FRUltraWidescreenResolution)
+        case dualscreen(FRDualscreenResolution)
+        case triplescreen(FRTriplescreenResolution)
+        case portrait(FRPortraitScreenResolution)
+        case misc(FRMiscResolution)
+    }
+
+    private struct Dimensions {
+        let width: Int
+        let height: Int
+    }
+
+    private struct FileSignature: Equatable {
+        let path: String
+        let exists: Bool
+        let isDirectory: Bool
+        let size: Int64
+        let modificationTime: TimeInterval
+    }
+
+    private struct CachedMeasurement {
+        let signature: [FileSignature]
+        let kinds: [Kind]
+    }
+
+    private static let cacheLock = NSLock()
+    private static var measuredKinds: [String: CachedMeasurement] = [:]
+
+    static func matches(
+        wallpaper: WEWallpaper,
+        widescreen: FRWidescreenResolution,
+        ultraWidescreen: FRUltraWidescreenResolution,
+        dualscreen: FRDualscreenResolution,
+        triplescreen: FRTriplescreenResolution,
+        portrait: FRPortraitScreenResolution,
+        misc: FRMiscResolution
+    ) -> Bool {
+        if allResolutionsSelected(
+            widescreen: widescreen,
+            ultraWidescreen: ultraWidescreen,
+            dualscreen: dualscreen,
+            triplescreen: triplescreen,
+            portrait: portrait,
+            misc: misc
+        ) {
+            return true
+        }
+        let kinds: [Kind]
+        switch wallpaper.kind {
+        case .video, .scene, .web:
+            kinds = measuredKinds(for: wallpaper)
+        default:
+            kinds = wallpaper.project.tags?.compactMap { kind(forTag: normalized($0)) } ?? []
+        }
+        if kinds.isEmpty { return misc.contains(.otherResolution) }
+        return kinds.contains {
+            isSelected(
+                $0,
+                widescreen: widescreen,
+                ultraWidescreen: ultraWidescreen,
+                dualscreen: dualscreen,
+                portrait: portrait,
+                triplescreen: triplescreen,
+                misc: misc
+            )
+        }
+    }
+
+    static func matches(
+        tags: [String],
+        widescreen: FRWidescreenResolution,
+        ultraWidescreen: FRUltraWidescreenResolution,
+        dualscreen: FRDualscreenResolution,
+        triplescreen: FRTriplescreenResolution,
+        portrait: FRPortraitScreenResolution,
+        misc: FRMiscResolution
+    ) -> Bool {
+        if allResolutionsSelected(
+            widescreen: widescreen,
+            ultraWidescreen: ultraWidescreen,
+            dualscreen: dualscreen,
+            triplescreen: triplescreen,
+            portrait: portrait,
+            misc: misc
+        ) {
+            return true
+        }
+        let kinds = tags.compactMap { kind(forTag: normalized($0)) }
+        if kinds.isEmpty { return misc.contains(.otherResolution) }
+        return kinds.contains {
+            isSelected(
+                $0,
+                widescreen: widescreen,
+                ultraWidescreen: ultraWidescreen,
+                dualscreen: dualscreen,
+                portrait: portrait,
+                triplescreen: triplescreen,
+                misc: misc
+            )
+        }
+    }
+
+    private static func measuredKinds(for wallpaper: WEWallpaper) -> [Kind] {
+        let key = wallpaper.wallpaperDirectory.path(percentEncoded: false)
+        let signature = sourceSignature(for: wallpaper)
+        cacheLock.lock()
+        if let cached = measuredKinds[key], cached.signature == signature {
+            cacheLock.unlock()
+            return cached.kinds
+        }
+        cacheLock.unlock()
+
+        var result: [Kind] = []
+        switch wallpaper.kind {
+        case .video:
+            if let dimensions = videoDimensions(at: wallpaper.resolvedEntryURL),
+               let kind = kind(for: dimensions) {
+                result = [kind]
+            }
+            if result.isEmpty { result = [.misc(.otherResolution)] }
+        case .scene:
+            if sceneIsDynamic(at: wallpaper.resolvedEntryURL) {
+                result.append(.misc(.dynamicResolution))
+            }
+            if let dimensions = sceneDimensions(at: wallpaper.resolvedEntryURL),
+               let kind = kind(for: dimensions) {
+                result.append(kind)
+            }
+            if result.isEmpty { result = [.misc(.otherResolution)] }
+        case .web:
+            result = webKinds(for: wallpaper)
+        default:
+            break
+        }
+
+        cacheLock.lock()
+        measuredKinds[key] = CachedMeasurement(signature: signature, kinds: result)
+        cacheLock.unlock()
+        return result
+    }
+
+    private static func sourceSignature(for wallpaper: WEWallpaper) -> [FileSignature] {
+        var urls = [
+            wallpaper.wallpaperDirectory,
+            wallpaper.wallpaperDirectory.appending(path: "project.json"),
+            wallpaper.renderDirectory.appending(path: "project.json"),
+            wallpaper.entryURL,
+            wallpaper.resolvedEntryURL
+        ]
+        var seen = Set<String>()
+        urls = urls.filter { seen.insert($0.standardizedFileURL.path).inserted }
+        return urls.map(fileSignature(for:))
+    }
+
+    private static func fileSignature(for url: URL) -> FileSignature {
+        let path = url.standardizedFileURL.path(percentEncoded: false)
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: path) else {
+            return FileSignature(path: path, exists: false, isDirectory: false, size: -1, modificationTime: -1)
+        }
+        let type = (attributes[.type] as? FileAttributeType) ?? .typeUnknown
+        let size = (attributes[.size] as? NSNumber)?.int64Value ?? -1
+        let modificationTime = (attributes[.modificationDate] as? Date)?.timeIntervalSinceReferenceDate ?? -1
+        return FileSignature(
+            path: path,
+            exists: true,
+            isDirectory: type == .typeDirectory,
+            size: size,
+            modificationTime: modificationTime
+        )
+    }
+
+    private static func kind(forTag tag: String) -> Kind? {
+        switch tag {
+        case "standarddefinition": return .widescreen(.standardDefinition)
+        case "1280x720": return .widescreen(.resolution1280x720)
+        case "1366x768": return .widescreen(.resolution1366x768)
+        case let value where value.hasPrefix("1920x1080"): return .widescreen(.resolution1920x1080)
+        case "2560x1440": return .widescreen(.resolution2560x1440)
+        case let value where value.hasPrefix("3840x2160"): return .widescreen(.resolution3840x2160)
+        case let value where value.hasPrefix("7680x4320"): return .widescreen(.resolution7680x4320)
+        case "ultrawidestandard", "ultrawidestandarddefinition": return .ultraWidescreen(.ultrawideStandard)
+        case "ultrawide2560x1080", "2560x1080": return .ultraWidescreen(.resolution2560x1080)
+        case "ultrawide3440x1440", "3440x1440": return .ultraWidescreen(.resolution3440x1440)
+        case "dualstandard", "dualstandarddefinition": return .dualscreen(.dualStandard)
+        case "dual3840x1080", "3840x1080": return .dualscreen(.resolution3840x1080)
+        case "dual5120x1440", "5120x1440": return .dualscreen(.resolution5120x1440)
+        case "dual7680x2160", "7680x2160": return .dualscreen(.resolution7680x2160)
+        case "triplestandard", "triplestandarddefinition": return .triplescreen(.tripleStandard)
+        case "triple4096x768", "4096x768": return .triplescreen(.resolution4096x768)
+        case "triple5760x1080", "5760x1080": return .triplescreen(.resolution5760x1080)
+        case "triple7680x1440", "7680x1440": return .triplescreen(.resolution7680x1440)
+        case "triple11520x2160", "11520x2160": return .triplescreen(.resolution11520x2160)
+        case "portraitstandard", "portraitstandarddefinition", "potraitstandard": return .portrait(.portraitStandard)
+        case "portrait720x1280", "720x1280": return .portrait(.resolution720x1280)
+        case "portrait1080x1920", "1080x1920": return .portrait(.resolution1080x1920)
+        case "portrait1440x2560", "1440x2560": return .portrait(.resolution1440x2560)
+        case "portrait2160x3840", "2160x3840": return .portrait(.resolution2160x3840)
+        case "otherresolution": return .misc(.otherResolution)
+        case "dynamicresolution": return .misc(.dynamicResolution)
+        default: return nil
+        }
+    }
+
+    private static func kind(for dimensions: Dimensions) -> Kind? {
+        switch (dimensions.width, dimensions.height) {
+        case (1280, 720): return .widescreen(.resolution1280x720)
+        case (1366, 768): return .widescreen(.resolution1366x768)
+        case (1920, 1080): return .widescreen(.resolution1920x1080)
+        case (2560, 1440): return .widescreen(.resolution2560x1440)
+        case (3840, 2160): return .widescreen(.resolution3840x2160)
+        case (7680, 4320): return .widescreen(.resolution7680x4320)
+        case (2560, 1080): return .ultraWidescreen(.resolution2560x1080)
+        case (3440, 1440): return .ultraWidescreen(.resolution3440x1440)
+        case (3840, 1080): return .dualscreen(.resolution3840x1080)
+        case (5120, 1440): return .dualscreen(.resolution5120x1440)
+        case (7680, 2160): return .dualscreen(.resolution7680x2160)
+        case (4096, 768): return .triplescreen(.resolution4096x768)
+        case (5760, 1080): return .triplescreen(.resolution5760x1080)
+        case (7680, 1440): return .triplescreen(.resolution7680x1440)
+        case (11520, 2160): return .triplescreen(.resolution11520x2160)
+        case (720, 1280): return .portrait(.resolution720x1280)
+        case (1080, 1920): return .portrait(.resolution1080x1920)
+        case (1440, 2560): return .portrait(.resolution1440x2560)
+        case (2160, 3840): return .portrait(.resolution2160x3840)
+        default:
+            let ratio = Double(dimensions.width) / Double(dimensions.height)
+            if aspectMatches(ratio, 16.0 / 9.0) {
+                return .widescreen(.standardDefinition)
+            }
+            if aspectMatches(ratio, 21.0 / 9.0) || aspectMatches(ratio, 43.0 / 18.0) {
+                return .ultraWidescreen(.ultrawideStandard)
+            }
+            if aspectMatches(ratio, 32.0 / 9.0) {
+                return .dualscreen(.dualStandard)
+            }
+            if aspectMatches(ratio, 16.0 / 3.0) {
+                return .triplescreen(.tripleStandard)
+            }
+            if aspectMatches(ratio, 9.0 / 16.0) {
+                return .portrait(.portraitStandard)
+            }
+            return .misc(.otherResolution)
+        }
+    }
+
+    private static func aspectMatches(_ ratio: Double, _ target: Double) -> Bool {
+        abs(ratio - target) <= target * 0.04
+    }
+
+    private static func videoDimensions(at url: URL) -> Dimensions? {
+        guard url.isFileURL else { return nil }
+        let asset = AVURLAsset(url: url)
+        guard let track = asset.tracks(withMediaType: .video).first else { return nil }
+        let rect = CGRect(origin: .zero, size: track.naturalSize).applying(track.preferredTransform)
+        let width = Int(abs(rect.width).rounded())
+        let height = Int(abs(rect.height).rounded())
+        guard width > 0, height > 0 else { return nil }
+        return Dimensions(width: width, height: height)
+    }
+
+    private static func sceneDimensions(at url: URL) -> Dimensions? {
+        guard let data = sceneJSONData(at: url),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        if let general = root["general"] as? [String: Any],
+           let projection = general["orthogonalprojection"] as? [String: Any] {
+            let isAuto = boolValue(projection["auto"])
+            if !isAuto, let dimensions = dimensions(width: projection["width"], height: projection["height"]) {
+                return dimensions
+            }
+            if isAuto, let objects = root["objects"] as? [[String: Any]] {
+                var largest: Dimensions?
+                for object in objects {
+                    guard object["image"] != nil,
+                          let dimensions = dimensions(from: object["size"]) else { continue }
+                    if largest == nil || dimensions.width * dimensions.height > largest!.width * largest!.height {
+                        largest = dimensions
+                    }
+                }
+                if let largest { return largest }
+            }
+        }
+        return explicitDimensions(in: root)
+    }
+
+    private static func webKinds(for wallpaper: WEWallpaper) -> [Kind] {
+        let projectURLs = [
+            wallpaper.wallpaperDirectory.appending(path: "project.json"),
+            wallpaper.renderDirectory.appending(path: "project.json")
+        ]
+        var seen = Set<String>()
+        for projectURL in projectURLs where seen.insert(projectURL.standardizedFileURL.path).inserted {
+            if let projectData = try? Data(contentsOf: projectURL),
+               let project = try? JSONSerialization.jsonObject(with: projectData) as? [String: Any],
+               let dimensions = explicitDimensions(in: project),
+               let kind = kind(for: dimensions) {
+                return [kind]
+            }
+        }
+        if let html = try? String(contentsOf: wallpaper.entryURL, encoding: .utf8) {
+            if let dimensions = htmlDimensions(html), let kind = kind(for: dimensions) {
+                return [kind]
+            }
+        }
+        return [.misc(.dynamicResolution)]
+    }
+
+    private static func sceneIsDynamic(at url: URL) -> Bool {
+        guard let data = sceneJSONData(at: url),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let general = root["general"] as? [String: Any],
+              let projection = general["orthogonalprojection"] as? [String: Any] else {
+            return false
+        }
+        return boolValue(projection["auto"])
+    }
+
+    private static func sceneJSONData(at url: URL) -> Data? {
+        guard url.isFileURL else { return nil }
+        guard url.pathExtension.lowercased() == "pkg" else {
+            return try? Data(contentsOf: url)
+        }
+        guard let data = try? Data(contentsOf: url), data.count >= 12 else { return nil }
+        var reader = BinaryReader(data: data)
+        guard let stampLength = reader.readInt32(), stampLength > 0, stampLength <= 64,
+              reader.readData(count: Int(stampLength)) != nil,
+              let entryCount = reader.readInt32(), entryCount >= 0,
+              Int64(entryCount) <= Int64(data.count / 13) else { return nil }
+        var entries: [(path: String, offset: Int, length: Int)] = []
+        entries.reserveCapacity(min(Int(entryCount), 1024))
+        for _ in 0..<entryCount {
+            guard let pathLength = reader.readInt32(), pathLength > 0, pathLength <= 4096,
+                  let pathData = reader.readData(count: Int(pathLength)),
+                  let offset = reader.readInt32(), offset >= 0,
+                  let length = reader.readInt32(), length >= 0 else { return nil }
+            let path = String(data: pathData, encoding: .utf8) ?? ""
+            entries.append((path, Int(offset), Int(length)))
+        }
+        let headerEnd = reader.offset
+        guard let entry = entries.first(where: { normalizedPackagePath($0.path) == "scene.json" }),
+              entry.length <= 64 * 1024 * 1024,
+              entry.offset <= data.count - headerEnd,
+              entry.length <= data.count - headerEnd - entry.offset else { return nil }
+        return data.subdata(in: (headerEnd + entry.offset)..<(headerEnd + entry.offset + entry.length))
+    }
+
+    private static func explicitDimensions(in object: [String: Any]) -> Dimensions? {
+        let containers: [[String: Any]] = [
+            object,
+            object["general"] as? [String: Any] ?? [:],
+            object["resolution"] as? [String: Any] ?? [:]
+        ]
+        for container in containers {
+            if let dimensions = dimensions(width: container["width"], height: container["height"]) {
+                return dimensions
+            }
+            if let dimensions = dimensions(from: container["resolution"]) {
+                return dimensions
+            }
+        }
+        return nil
+    }
+
+    private static func dimensions(from value: Any?) -> Dimensions? {
+        if let object = value as? [String: Any] {
+            return dimensions(width: object["width"], height: object["height"])
+        }
+        if let array = value as? [Any] { return dimensions(size: array) }
+        if let string = value as? String {
+            let patterns = [
+                "([0-9]{2,6})\\s*[x×]\\s*([0-9]{2,6})",
+                "^\\s*([0-9]{2,6}(?:\\.[0-9]+)?)\\s*[,; ]\\s*([0-9]{2,6}(?:\\.[0-9]+)?)\\s*$",
+                "(?i)\\bwidth\\s*[=:]\\s*([0-9]{2,6}(?:\\.[0-9]+)?)[^0-9]+\\bheight\\s*[=:]\\s*([0-9]{2,6}(?:\\.[0-9]+)?)"
+            ]
+            for pattern in patterns {
+                guard let regex = try? NSRegularExpression(pattern: pattern),
+                      let match = regex.firstMatch(in: string, range: NSRange(string.startIndex..., in: string)),
+                      let wRange = Range(match.range(at: 1), in: string),
+                      let hRange = Range(match.range(at: 2), in: string),
+                      let width = Double(string[wRange]), let height = Double(string[hRange]),
+                      width > 0, height > 0 else { continue }
+                return Dimensions(width: Int(width.rounded()), height: Int(height.rounded()))
+            }
+        }
+        return nil
+    }
+
+    private static func dimensions(width: Any?, height: Any?) -> Dimensions? {
+        let w = numericDimension(width)
+        let h = numericDimension(height)
+        guard let w, let h, w > 0, h > 0 else { return nil }
+        return Dimensions(width: w, height: h)
+    }
+
+    private static func numericDimension(_ value: Any?) -> Int? {
+        if let number = value as? NSNumber { return Int(number.doubleValue.rounded()) }
+        if let integer = value as? Int { return integer }
+        if let string = value as? String, let number = Double(string.trimmingCharacters(in: .whitespacesAndNewlines)) {
+            return Int(number.rounded())
+        }
+        return nil
+    }
+
+    private static func dimensions(size: [Any]) -> Dimensions? {
+        guard size.count >= 2 else { return nil }
+        return dimensions(width: size[0], height: size[1])
+    }
+
+    private static func htmlDimensions(_ html: String) -> Dimensions? {
+        let tagPattern = "(?is)<meta\\b[^>]*>"
+        guard let tagRegex = try? NSRegularExpression(pattern: tagPattern) else { return nil }
+        let range = NSRange(html.startIndex..., in: html)
+        for match in tagRegex.matches(in: html, range: range) {
+            guard let tagRange = Range(match.range, in: html) else { continue }
+            let tag = String(html[tagRange])
+            let lower = tag.lowercased()
+            if lower.contains("resolution") {
+                if let dimensions = dimensions(from: attributeValue("content", in: tag)) { return dimensions }
+            }
+            if lower.contains("viewport"),
+               let content = attributeValue("content", in: tag) {
+                if let dimensions = dimensions(from: content) { return dimensions }
+            }
+        }
+        let canvasPattern = "(?is)<canvas\\b[^>]*\\bwidth\\s*=\\s*['\"]([0-9]{2,6})['\"][^>]*\\bheight\\s*=\\s*['\"]([0-9]{2,6})['\"][^>]*>"
+        guard let canvasRegex = try? NSRegularExpression(pattern: canvasPattern),
+              let match = canvasRegex.firstMatch(in: html, range: range),
+              let wRange = Range(match.range(at: 1), in: html),
+              let hRange = Range(match.range(at: 2), in: html),
+              let width = Int(html[wRange]), let height = Int(html[hRange]) else { return nil }
+        return Dimensions(width: width, height: height)
+    }
+
+    private static func attributeValue(_ name: String, in tag: String) -> String? {
+        let pattern = "(?i)\\b" + NSRegularExpression.escapedPattern(for: name) + "\\s*=\\s*['\"]([^'\"]*)['\"]"
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: tag, range: NSRange(tag.startIndex..., in: tag)),
+              let valueRange = Range(match.range(at: 1), in: tag) else { return nil }
+        return String(tag[valueRange])
+    }
+
+    private static func boolValue(_ value: Any?) -> Bool {
+        if let bool = value as? Bool { return bool }
+        if let number = value as? NSNumber { return number.boolValue }
+        if let string = value as? String { return (string as NSString).boolValue }
+        return false
+    }
+
+    private static func normalizedPackagePath(_ path: String) -> String {
+        path.split(separator: "/").filter { $0 != "." }.reduce(into: "") { result, component in
+            if component == ".." {
+                if let slash = result.lastIndex(of: "/") { result.removeSubrange(slash...) }
+            } else {
+                result += result.isEmpty ? "" : "/"
+                result += component.lowercased()
+            }
+        }
+    }
+
+    private static func normalized(_ tag: String) -> String {
+        tag.lowercased().filter { $0.isLetter || $0.isNumber }
+    }
+
+    private static func isSelected(
+        _ kind: Kind,
+        widescreen: FRWidescreenResolution,
+        ultraWidescreen: FRUltraWidescreenResolution,
+        dualscreen: FRDualscreenResolution,
+        portrait: FRPortraitScreenResolution,
+        triplescreen: FRTriplescreenResolution,
+        misc: FRMiscResolution
+    ) -> Bool {
+        switch kind {
+        case .widescreen(let value): return widescreen.contains(value)
+        case .ultraWidescreen(let value): return ultraWidescreen.contains(value)
+        case .dualscreen(let value): return dualscreen.contains(value)
+        case .triplescreen(let value): return triplescreen.contains(value)
+        case .portrait(let value): return portrait.contains(value)
+        case .misc(let value): return misc.contains(value)
+        }
+    }
+
+    private static func allResolutionsSelected(
+        widescreen: FRWidescreenResolution,
+        ultraWidescreen: FRUltraWidescreenResolution,
+        dualscreen: FRDualscreenResolution,
+        triplescreen: FRTriplescreenResolution,
+        portrait: FRPortraitScreenResolution,
+        misc: FRMiscResolution
+    ) -> Bool {
+        widescreen == .all &&
+            ultraWidescreen == .all &&
+            dualscreen == .all &&
+            triplescreen == .all &&
+            portrait == .all &&
+            misc == .all
+    }
+
+    private struct BinaryReader {
+        let bytes: [UInt8]
+        var offset = 0
+
+        init(data: Data) { bytes = Array(data) }
+
+        mutating func readInt32() -> Int32? {
+            guard offset <= bytes.count - 4 else { return nil }
+            let value = UInt32(bytes[offset])
+                | (UInt32(bytes[offset + 1]) << 8)
+                | (UInt32(bytes[offset + 2]) << 16)
+                | (UInt32(bytes[offset + 3]) << 24)
+            offset += 4
+            return Int32(bitPattern: value)
+        }
+
+        mutating func readData(count: Int) -> Data? {
+            guard count >= 0, count <= bytes.count - offset else { return nil }
+            defer { offset += count }
+            return Data(bytes[offset..<(offset + count)])
+        }
+    }
 }
 
 struct FRSource: FilterResultsModel {

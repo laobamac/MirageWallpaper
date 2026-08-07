@@ -207,7 +207,7 @@ bool GraphicsPipeline::create(const Device& device, VkRenderPass pass,
         create_info.pBindings    = info.bindings.data();
         create_info.flags        = flags;
         vvk::DescriptorSetLayout layout;
-        VVK_CHECK(device.handle().CreateDescriptorSetLayout(create_info, layout));
+        VVK_CHECK_BOOL_RE(device.handle().CreateDescriptorSetLayout(create_info, layout));
         pipeline.descriptor_layouts.emplace_back(std::move(layout));
     }
     {
@@ -220,7 +220,7 @@ bool GraphicsPipeline::create(const Device& device, VkRenderPass pass,
             .setLayoutCount = (uint32_t)layouts.size(),
             .pSetLayouts    = layouts.data(),
         };
-        VVK_CHECK(device.handle().CreatePipelineLayout(ci, pipeline.layout));
+        VVK_CHECK_BOOL_RE(device.handle().CreatePipelineLayout(ci, pipeline.layout));
     }
 
     std::vector<VkPipelineShaderStageCreateInfo> shaderStages;
@@ -236,6 +236,10 @@ bool GraphicsPipeline::create(const Device& device, VkRenderPass pass,
         if (auto opt = CreateShaderModule(device.handle(), *spv); opt.has_value()) {
             shader_modules.emplace_back(std::move(opt.value()));
             info.module = *shader_modules.back();
+        } else {
+            // Never hand vkCreateGraphicsPipelines a VK_NULL_HANDLE module.
+            rstd_error("create shader module failed");
+            return false;
         }
 
         shaderStages.push_back(info);

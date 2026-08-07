@@ -29,6 +29,10 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)stop;
 - (void)setPaused:(BOOL)paused;
 
+// All forwarded coordinates are normalized against this screen's frame, so it
+// has to be re-resolved whenever the display configuration changes.
+- (void)updateScreen:(NSScreen *)screen;
+
 @end
 
 NS_ASSUME_NONNULL_END

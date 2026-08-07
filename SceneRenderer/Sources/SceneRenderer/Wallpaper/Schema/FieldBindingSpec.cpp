@@ -82,6 +82,71 @@ auto AnimCurve::clone() const -> AnimCurve {
     return result;
 }
 
+auto ScriptBinding::clone() const -> ScriptBinding {
+    return ScriptBinding {
+        .source        = source,
+        .properties    = properties.clone(),
+        .initial_value = initial_value.clone(),
+        .user          = user,
+    };
+}
+
+auto FieldBindings::clone() const -> FieldBindings {
+    FieldBindings result;
+    for (const auto& [field, animation] : animations) result.animations[field] = animation.clone();
+    scriptproperties.iter().for_each([&](auto entry) {
+        auto [field, properties] = entry;
+        (void)result.scriptproperties.insert(field->clone(), properties->clone());
+    });
+    for (const auto& [field, script] : scripts) result.scripts[field] = script.clone();
+    return result;
+}
+
+void FieldBindings::Update(const FieldBindings& other) {
+    for (const auto& [field, animation] : other.animations) animations[field] = animation.clone();
+    other.scriptproperties.iter().for_each([&](auto entry) {
+        auto [field, properties] = entry;
+        (void)scriptproperties.insert(field->clone(), properties->clone());
+    });
+    for (const auto& [field, script] : other.scripts) scripts[field] = script.clone();
+}
+
+std::size_t AbsorbFieldBinding(std::string_view field, const sr::Json& field_value,
+                               FieldBindings& out) {
+    if (! field_value.is_object()) return 0;
+    std::size_t count = 0;
+    auto        name  = std::string(field);
+    if (auto animation = field_value.get("animation"); animation.is_some()) {
+        AnimCurve curve;
+        if (ParseAnimCurve(**animation, curve)) {
+            out.animations[name] = std::move(curve);
+            ++count;
+        }
+    }
+    if (auto properties = field_value.get("scriptproperties"); properties.is_some()) {
+        out.scriptproperties.insert(
+            ::alloc::string::String::make(rstd::cppstd::as_str(field)),
+            (*properties)->clone());
+        ++count;
+    }
+    auto script = field_value.get("script");
+    if (script.is_some() && (*script)->is_string()) {
+        ScriptBinding binding;
+        binding.source = rstd::cppstd::to_string(*(*script)->as_str());
+        if (auto properties = field_value.get("scriptproperties"); properties.is_some())
+            binding.properties = (*properties)->clone();
+        if (auto value = field_value.get("value"); value.is_some())
+            binding.initial_value = (*value)->clone();
+        if (auto user = field_value.get("user"); user.is_some()) {
+            auto string = (*user)->as_str();
+            if (string.is_some()) binding.user = rstd::cppstd::to_string(*string);
+        }
+        out.scripts[name] = std::move(binding);
+        ++count;
+    }
+    return count;
+}
+
 std::size_t AbsorbAllFieldBindings(const sr::Json& obj_json, FieldBindings& out) {
     if (! obj_json.is_object()) return 0;
     std::size_t n      = 0;
@@ -89,35 +154,7 @@ std::size_t AbsorbAllFieldBindings(const sr::Json& obj_json, FieldBindings& out)
     (*object)->iter().for_each([&](auto entry) {
         auto [entry_key, entry_value] = entry;
         const auto  field             = rstd::cppstd::as_string_view(entry_key->as_str());
-        const auto& field_value       = *entry_value;
-        if (! field_value.is_object()) return;
-        if (auto animation = field_value.get("animation"); animation.is_some()) {
-            AnimCurve curve;
-            if (ParseAnimCurve(**animation, curve)) {
-                out.animations[std::string(field)] = std::move(curve);
-                ++n;
-            }
-        }
-        if (auto properties = field_value.get("scriptproperties"); properties.is_some()) {
-            out.scriptproperties.insert(::alloc::string::String::make(rstd::cppstd::as_str(field)),
-                                        (*properties)->clone());
-            ++n;
-        }
-        auto script = field_value.get("script");
-        if (script.is_some() && (*script)->is_string()) {
-            ScriptBinding sb;
-            sb.source = rstd::cppstd::to_string(*(*script)->as_str());
-            if (auto properties = field_value.get("scriptproperties"); properties.is_some())
-                sb.properties = (*properties)->clone();
-            if (auto value = field_value.get("value"); value.is_some())
-                sb.initial_value = (*value)->clone();
-            if (auto user = field_value.get("user"); user.is_some()) {
-                auto string = (*user)->as_str();
-                if (string.is_some()) sb.user = rstd::cppstd::to_string(*string);
-            }
-            out.scripts[std::string(field)] = std::move(sb);
-            ++n;
-        }
+        n += AbsorbFieldBinding(field, *entry_value, out);
     });
     return n;
 }

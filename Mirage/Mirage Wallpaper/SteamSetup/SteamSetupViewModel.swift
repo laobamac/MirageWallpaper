@@ -80,10 +80,13 @@ class SteamSetupViewModel: ObservableObject {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let found = SteamCMDManager.shared.detectSteamCMD()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                if let path = found {
+                switch found {
+                case .found(let path):
                     self?.steamCMDPath = path
                     self?.steamCMDInstallState = .found(path.path)
-                } else {
+                case .rosettaRequired:
+                    self?.steamCMDInstallState = .rosettaRequired
+                case .notFound:
                     self?.steamCMDInstallState = .notFound
                 }
             }
@@ -119,6 +122,7 @@ class SteamSetupViewModel: ObservableObject {
             }
         ) { [weak self] state in
             guard let self else { return }
+            if self.loginState == .success, state != .success { return }
             self.loginState = state
             if case .waitingForGuard(.mobileConfirm) = state {
                 self.startGuardWaitUpdates()
@@ -169,6 +173,17 @@ class SteamSetupViewModel: ObservableObject {
         stopGuardWaitUpdates()
         password = ""
         guardCode = ""
+    }
+
+    func reset() {
+        cancelPendingWork()
+        currentStep = 0
+        steamCMDPath = SteamCMDManager.shared.steamCMDPath
+        steamCMDInstallState = .detecting
+        loginState = .idle
+        errorMessage = nil
+        loginLog.removeAll()
+        username = SteamCMDManager.shared.savedUsername
     }
 
     func completeSetup() {

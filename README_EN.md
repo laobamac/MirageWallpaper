@@ -101,6 +101,8 @@ After sign-in, the SteamCMD console session remains alive while Mirage runs. It 
 
 Workshop presets are explicitly marked in browsing, details, download management, and installed views. A preset contains property values and optional assets, but depends on a base wallpaper. If the dependency is installed, selecting the preset applies it immediately and opens customization. Otherwise, Mirage displays the dependency's name and size and asks whether to download it as well. Presets and base wallpapers remain separate installed items.
 
+> If you've already subscribed to a large number of wallpapers in Wallpaper Engine, you can pull them all at once through SteamCMD instead of downloading them one by one. See [Bulk pull subscribed wallpapers](https://mirage.simplehac.cn/en/workshop/download/#bulk-pull-subscribed-wallpapers).
+
 ## Wallpaper Package Format
 
 A wallpaper directory uses `project.json` as its entry point:

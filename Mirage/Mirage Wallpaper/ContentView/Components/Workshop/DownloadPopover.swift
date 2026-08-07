@@ -96,7 +96,7 @@ struct DownloadPopover: View {
         )) {
             Button("好", role: .cancel) { revealError = nil }
         } message: {
-            Text(revealError ?? "未知错误")
+            Text(revealError ?? L("未知错误"))
         }
     }
 
@@ -112,11 +112,11 @@ struct DownloadPopover: View {
         guard let path = SteamCMDManager.shared.downloadedItemDirectory(
             workshopId: task.workshopItem.publishedFileId
         ) else {
-            revealError = "未找到该壁纸的本地下载目录。"
+            revealError = L("未找到该壁纸的本地下载目录。")
             return
         }
         if !NSWorkspace.shared.open(path) {
-            revealError = "Finder 无法打开该壁纸目录。"
+            revealError = L("Finder 无法打开该壁纸目录。")
         }
     }
 }
@@ -130,7 +130,7 @@ struct DownloadRow: View {
     var body: some View {
         HStack(spacing: 10) {
             WorkshopImage(url: task.workshopItem.previewImageURL, contentMode: .fill)
-                .frame(width: 64, height: 36)
+                .frame(width: 64, height: 64)
                 .clipShape(RoundedRectangle(cornerRadius: 4))
 
             VStack(alignment: .leading, spacing: 3) {
@@ -176,7 +176,7 @@ struct DownloadRow: View {
                         ProgressView(value: 0)
                     }
                     HStack {
-                        Text(percent.map { "\(Int($0 * 100))%" } ?? "正在连接 Steam…")
+                        Text(percent.map { "\(Int($0 * 100))%" } ?? L("正在连接 Steam…"))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Spacer()

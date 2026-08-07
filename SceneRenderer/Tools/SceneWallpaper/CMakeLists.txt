@@ -11,10 +11,15 @@ find_library(COCOA_FRAMEWORK Cocoa REQUIRED)
 find_library(COREGRAPHICS_FRAMEWORK CoreGraphics REQUIRED)
 find_library(METAL_FRAMEWORK Metal REQUIRED)
 find_library(QUARTZCORE_FRAMEWORK QuartzCore REQUIRED)
+# Desktop-picture stills: encodes the composited frame read back through the
+# engine's live-frame callback as HEIC/JPEG.
+find_library(IMAGEIO_FRAMEWORK ImageIO REQUIRED)
+find_library(UNIFORMTYPEIDENTIFIERS_FRAMEWORK UniformTypeIdentifiers REQUIRED)
 
 add_executable(SceneWallpaper
     WallpaperApp.cpp
     ControlChannel.cpp
+    SceneSnapshot.mm
     ../../Sources/SceneRenderer/Host/macOS/MacDesktopHost.mm)
 
 target_link_libraries(SceneWallpaper
@@ -24,6 +29,8 @@ target_link_libraries(SceneWallpaper
         ${COCOA_FRAMEWORK}
         ${COREGRAPHICS_FRAMEWORK}
         ${METAL_FRAMEWORK}
+        ${IMAGEIO_FRAMEWORK}
+        ${UNIFORMTYPEIDENTIFIERS_FRAMEWORK}
         ${QUARTZCORE_FRAMEWORK})
 
 target_include_directories(SceneWallpaper

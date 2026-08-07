@@ -18,6 +18,8 @@ CustomShaderPass::CustomShaderPass(const Desc& desc) {
     m_desc.node                = desc.node;
     m_desc.draw_item           = desc.draw_item;
     m_desc.render_item         = desc.render_item;
+    m_desc.render_view         = desc.render_view;
+    m_desc.alpha_mode          = desc.alpha_mode;
     m_desc.submesh_index       = desc.submesh_index;
     m_desc.texture_bindings    = desc.texture_bindings;
     m_desc.output              = desc.output;
@@ -262,19 +264,42 @@ static std::span<uint8_t> MakeUniformUploadBytes(const sr::ShaderValue& value, s
     return value_u8;
 }
 
+// Locate the uniform in its *owning* block. Reflection emits one Block per
+// uniform buffer, each with member offsets relative to that block, so a name
+// must be resolved against the block that declares it rather than against
+// block 0. (Only one uniform buffer is bound — see the ubo_buf comment in
+// prepare() — so this is a lookup fix, not multi-UBO support.)
+static const ShaderReflected::BlockedUniform*
+FindBlockedUniform(std::span<const ShaderReflected::Block> blocks, std::string_view name) {
+    for (const auto& block : blocks) {
+        auto uni = block.member_map.find(name);
+        if (uni != block.member_map.end()) return &uni->second;
+    }
+    return nullptr;
+}
+
+static bool UniformExists(std::span<const ShaderReflected::Block> blocks, std::string_view name) {
+    return FindBlockedUniform(blocks, name) != nullptr;
+}
+
 static void UpdateUniform(StagingBuffer* buf, const StagingBufferRef& bufref,
-                          const ShaderReflected::Block& block, std::string_view name,
+                          std::span<const ShaderReflected::Block> blocks, std::string_view name,
                           const sr::ShaderValue& value) {
     using namespace sr;
-    auto uni = block.member_map.find(name);
-    if (uni == block.member_map.end()) {
+    const auto* uni = FindBlockedUniform(blocks, name);
+    if (uni == nullptr) {
         return;
     }
 
-    const size_t                         offset    = uni->second.offset;
-    const size_t                         refl_size = uni->second.size;
-    bool                                 compatible {};
-    std::vector<ShaderValue::value_type> resized;
+    const size_t offset    = uni->offset;
+    const size_t refl_size = uni->size;
+    bool         compatible {};
+    // Reused across calls instead of heap-allocating per uniform, per pass, per
+    // frame. Only the size-mismatch path in MakeUniformUploadBytes touches it,
+    // and the span it hands back is consumed before this function returns, so
+    // the buffer is free to be overwritten by the next uniform. thread_local
+    // keeps that true even if uniforms are ever updated off the render thread.
+    static thread_local std::vector<ShaderValue::value_type> resized;
     auto value_u8 = MakeUniformUploadBytes(value, refl_size, resized, compatible);
     if (! compatible) {
         rstd_warn("uniform \"{}\" size mismatch: reflected {} bytes, uploader {} bytes",
@@ -344,7 +369,7 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
         rstd_assert(IsSpecTex(tex_name));
         rstd_assert(scene.renderTargets.count(tex_name) > 0);
         auto& rt        = scene.renderTargets.at(tex_name);
-        out_force_clear = rt.force_clear;
+        out_force_clear = rt.force_clear && ! m_desc.preserve_output;
         auto request = m_desc.output_request.value_or(MakeRenderTargetTextureRequest(tex_name, rt));
         if (auto opt = resources.EnsureTexture(request); opt.has_value()) {
             m_desc.vk_output          = opt.value();
@@ -490,6 +515,7 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
     {
         VkPipelineColorBlendAttachmentState color_blend {};
         VkAttachmentLoadOp                  loadOp { VK_ATTACHMENT_LOAD_OP_DONT_CARE };
+        const auto                          blendmode = material_ref.blenmode;
         {
             VkColorComponentFlags colorMask =
                 VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT;
@@ -499,7 +525,6 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
             if (writes_alpha) colorMask |= VK_COLOR_COMPONENT_A_BIT;
             color_blend.colorWriteMask = colorMask;
 
-            auto blendmode = material_ref.blenmode;
             SetBlend(blendmode, color_blend);
             SetAlphaBlendWritePolicy(color_blend, writes_alpha);
             m_desc.blending = color_blend.blendEnable;
@@ -517,6 +542,7 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
         GraphicsPipeline pipeline_state;
         pipeline_state.toDefault();
         pipeline_state.setSampleCount(m_desc.samples);
+        SetAlphaToCoverage(blendmode, pipeline_state.multisample);
         if (has_depth_attachment) SetDepthState(material_ref, pipeline_state.depth);
         SetCullMode(material_ref.cull_mode, pipeline_state.raster);
         const bool          has_index = m_desc.draw_buffers.hasIndex();
@@ -602,9 +628,19 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
     }
 
     if (! ref->blocks.empty()) {
-        auto& block = ref->blocks.front();
+        // One uniform buffer is allocated and pushed at binding 0 (see
+        // execute()). Size it for the largest reflected block so a member
+        // resolved through a later block can never address past the
+        // allocation; multiple distinct uniform buffers per material are
+        // still not bound separately.
+        unsigned block_size = 0;
+        for (const auto& blk : ref->blocks) block_size = std::max(block_size, blk.size);
+        if (ref->blocks.size() > 1) {
+            rstd_warn("shader declares {} uniform blocks; only the first is bound at binding 0",
+                      ref->blocks.size());
+        }
         rr.dyn_buf->allocateSubRef(
-            block.size, m_desc.ubo_buf, device.limits().minUniformBufferOffsetAlignment);
+            block_size, m_desc.ubo_buf, device.limits().minUniformBufferOffsetAlignment);
     }
 
     if (! ref->blocks.empty()) {
@@ -626,20 +662,27 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
                 };
         }
 
-        auto  block  = ref->blocks.front();
+        // Copied (not referenced): update_op outlives `ref`, which points into
+        // the shader reflection cache. All blocks are kept so a uniform is
+        // resolved against the block that actually declares it.
+        auto  blocks = ref->blocks;
         auto* buf    = rr.dyn_buf;
         auto* bufref = &m_desc.ubo_buf;
 
         auto* node           = m_desc.node;
+        auto  render_view    = m_desc.render_view;
+        auto  alpha_mode     = m_desc.alpha_mode;
         auto* shader_updater = scene.shaderValueUpdater.get();
         auto& sprites        = m_desc.sprites_map;
         auto& vk_textures    = m_desc.vk_textures;
 
         m_desc.update_op = [shader_updater,
-                            block,
+                            blocks,
                             buf,
                             bufref,
                             node,
+                            render_view,
+                            alpha_mode,
                             &sprites,
                             &vk_textures,
                             update_dyn_buf_op,
@@ -649,17 +692,15 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
             // render loop), so no atomic needed.
             if (mat->customShader.dirty) {
                 for (auto& v : mat->customShader.constValues) {
-                    if (exists(block.member_map, v.first)) {
-                        UpdateUniform(buf, *bufref, block, v.first, v.second);
-                    }
+                    UpdateUniform(buf, *bufref, blocks, v.first, v.second);
                 }
                 mat->customShader.dirty = false;
             }
-            auto update_unf_op = [&block, buf, bufref](std::string_view name,
-                                                       sr::ShaderValue value) {
-                UpdateUniform(buf, *bufref, block, name, value);
+            auto update_unf_op = [&blocks, buf, bufref](std::string_view name,
+                                                        sr::ShaderValue value) {
+                UpdateUniform(buf, *bufref, blocks, name, value);
             };
-            shader_updater->UpdateUniforms(node, sprites, update_unf_op);
+            shader_updater->UpdateUniforms(node, sprites, update_unf_op, render_view, alpha_mode);
             // update image slot for sprites
             {
                 for (auto& [i, sp] : sprites) {
@@ -670,8 +711,8 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
             if (update_dyn_buf_op) update_dyn_buf_op();
         };
 
-        auto exists_unf_op = [&block](std::string_view name) {
-            return exists(block.member_map, name);
+        auto exists_unf_op = [&blocks](std::string_view name) {
+            return UniformExists(blocks, name);
         };
         shader_updater->InitUniforms(node, exists_unf_op);
 
@@ -683,9 +724,7 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
             std::array values_array   = { &default_values, &const_values };
             for (auto& values : values_array) {
                 for (auto& v : *values) {
-                    if (exists(block.member_map, v.first)) {
-                        UpdateUniform(buf, *bufref, block, v.first, v.second);
-                    }
+                    UpdateUniform(buf, *bufref, blocks, v.first, v.second);
                 }
             }
             // const_values was just fully written — clear any pending re-push
@@ -766,41 +805,32 @@ void CustomShaderPass::prepareFrameData(RenderingResources&) {
     }
 }
 
+void CustomShaderPass::completeFrameData() {
+    if (! m_desc.draw_buffers.dynamic || m_desc.node == nullptr || m_desc.node->Mesh() == nullptr)
+        return;
+    (void)m_desc.node->Mesh()->ConsumeDirtyFlags(SceneMeshDirtyData);
+}
+
 void CustomShaderPass::prepareRenderScopeDraw(RenderingResources& rr) {
     recordSampledImageBarriers(rr);
 }
 
-void CustomShaderPass::recordSampledImageBarriers(RenderingResources& rr) {
-    auto&                   cmd = rr.command;
-    VkImageSubresourceRange base_srang {
-        .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
-        .baseMipLevel   = 0,
-        .levelCount     = VK_REMAINING_ARRAY_LAYERS,
-        .baseArrayLayer = 0,
-        .layerCount     = VK_REMAINING_MIP_LEVELS,
-    };
-    for (usize i = 0; i < m_desc.vk_textures.size(); i++) {
-        auto& slot    = m_desc.vk_textures[i];
-        int   binding = m_desc.vk_tex_binding[i];
-        if (binding < 0) continue;
-        if (slot.slots.empty()) continue;
-        auto&                img = slot.getActive();
-        VkImageMemoryBarrier imb {
-            .sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-            .pNext            = nullptr,
-            .srcAccessMask    = VK_ACCESS_MEMORY_READ_BIT,
-            .dstAccessMask    = VK_ACCESS_SHADER_READ_BIT,
-            .oldLayout        = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            .newLayout        = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            .image            = img.handle,
-            .subresourceRange = base_srang,
-        };
-
-        cmd.PipelineBarrier(VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                            VK_DEPENDENCY_BY_REGION_BIT,
-                            imb);
-    }
+void CustomShaderPass::recordSampledImageBarriers(RenderingResources&) {
+    // Intentionally records nothing.
+    //
+    // This used to emit one barrier per sampled texture, per pass, per frame —
+    // hundreds per frame in a typical scene. Every one of them was a no-op:
+    // oldLayout == newLayout == SHADER_READ_ONLY_OPTIMAL, so no layout
+    // transition, and srcAccessMask was MEMORY_READ with dstAccessMask
+    // SHADER_READ, so read-after-read, which needs no memory dependency in
+    // Vulkan. It provided no write-after-read or read-after-write protection
+    // either: a barrier whose source access is a read cannot order an earlier
+    // write. Anything actually written this frame is ordered by its render
+    // pass's final layout transition and subpass dependencies instead.
+    //
+    // Under MoltenVK each of these could split the Metal render encoder, so
+    // they were pure cost. Kept as a hook: if a sampled image ever genuinely
+    // needs a transition here, this is where it belongs.
 }
 
 void CustomShaderPass::beginRenderScope(RenderingResources& rr) {

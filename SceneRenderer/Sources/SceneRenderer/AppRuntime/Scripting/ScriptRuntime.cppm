@@ -25,6 +25,9 @@ struct Vec2Value {
 struct Vec3Value {
     double x { 0.0 }, y { 0.0 }, z { 0.0 };
 };
+struct Vec4Value {
+    double x { 0.0 }, y { 0.0 }, z { 0.0 }, w { 0.0 };
+};
 struct ColorValue {
     double r { 0.0 }, g { 0.0 }, b { 0.0 };
 };
@@ -36,7 +39,7 @@ struct BoolValue {
 };
 
 using ScriptValue = std::variant<std::monostate, ScalarValue, BoolValue, Vec2Value, Vec3Value,
-                                 ColorValue, StringValue>;
+                                 Vec4Value, ColorValue, StringValue>;
 
 struct BoneTranslation {
     float x { 0.0f }, y { 0.0f }, z { 0.0f };
@@ -52,6 +55,7 @@ enum class FieldKind
     Bool,
     Vec2,
     Vec3,
+    Vec4,
     Color,
     String
 };
@@ -144,6 +148,13 @@ public:
         std::vector<sr::SceneNode*>                                  clones       = {},
         std::unordered_map<std::string, std::vector<sr::SceneNode*>> asset_clones = {});
 
+    // Pending initializers run in authored layer order once the complete scene
+    // graph is available.
+    void SetInitializationOrder(FieldScript& script, std::uint64_t order);
+
+    // Snapshot used by thisScene.getInitialLayerConfig(layer).
+    void RegisterInitialLayerConfig(sr::SceneNode* node, Json config);
+
     // Install the Scene root that backs `thisScene`. `thisScene.getLayer(name)`
     // searches from this node. Call once per scene after parsing finishes.
     void SetScene(sr::Scene* scene);
@@ -204,6 +215,17 @@ public:
                                   std::function<void(std::string_view)> set_vertical,
                                   std::function<double()>               get_point_size = {},
                                   std::function<void(double)>           set_point_size = {});
+    void RegisterImageAlignmentSetter(sr::SceneNode* node, std::string alignment,
+                                      std::function<void(std::string_view)> setter);
+
+    using LayerFactory = std::function<std::optional<rstd::sync::Arc<sr::SceneNode>>(
+        sr::SceneNode*, std::string_view)>;
+    using LayerConfigFactory = std::function<std::optional<rstd::sync::Arc<sr::SceneNode>>(
+        sr::SceneNode*, Json)>;
+    void SetLayerFactory(LayerFactory factory);
+    void SetLayerConfigFactory(LayerConfigFactory factory);
+    void ClearLayerFactory();
+    void ClearLayerConfigFactory();
 
     // Same exposure rule as FieldScript::Impl above: opaque outside the
     // module, but visible to peer module impl files.
@@ -220,6 +242,7 @@ public:
     const ScriptValue& last_value() const noexcept;
     bool               alive() const noexcept;
     std::string_view   script_sha() const noexcept;
+    std::span<const std::string> RegisteredAssets() const noexcept;
     void               AddAssetCloneQueue(std::string asset, std::vector<sr::SceneNode*> nodes);
 
     // Impl is intentionally exposed inside the sr.script module so
@@ -256,6 +279,15 @@ std::function<void(const ScriptValue&)> MakeNodeTransformApply(rstd::sync::Arc<s
 
 // Build the closure that drives a SceneNode alpha field.
 std::function<void(const ScriptValue&)> MakeNodeAlphaApply(rstd::sync::Arc<sr::SceneNode> node);
+std::function<void(const ScriptValue&)> MakeNodeColorApply(rstd::sync::Arc<sr::SceneNode> node);
+
+std::function<void(const ScriptValue&)> MakeNodeVolumeApply(rstd::sync::Arc<sr::SceneNode> node);
+
+// Build the closure that drives a layer's visibility. Routed through Scene so
+// the render-graph elision set follows; a monostate value (update() returned
+// undefined — the side-effect-only script shape) leaves visibility alone.
+std::function<void(const ScriptValue&)> MakeNodeVisibleApply(rstd::sync::Arc<sr::SceneNode> node,
+                                                             sr::Scene*                     scene);
 
 // Owns one JsRuntime + the actuator list for one Scene. Constructed and
 // populated by the parser, attached to the Scene as an opaque pointer

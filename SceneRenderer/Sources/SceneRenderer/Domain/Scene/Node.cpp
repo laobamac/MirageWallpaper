@@ -20,7 +20,29 @@ Matrix4d SceneNode::GetLocalTrans() const {
 
     trans.pretranslate(m_translate.cast<double>());
 
-    return trans.matrix();
+    return m_local_frame * trans.matrix();
+}
+
+void SceneNode::RotateObjectSpace(const Vector3f& rotation) {
+    const Quaternionf current = AngleAxisf(m_rotation.z(), Vector3f::UnitZ()) *
+                                AngleAxisf(m_rotation.y(), Vector3f::UnitY()) *
+                                AngleAxisf(m_rotation.x(), Vector3f::UnitX());
+    const Quaternionf local = AngleAxisf(rotation.z(), Vector3f::UnitZ()) *
+                              AngleAxisf(rotation.y(), Vector3f::UnitY()) *
+                              AngleAxisf(rotation.x(), Vector3f::UnitX());
+    const Matrix3f composed = (current * local).toRotationMatrix();
+    const float    y = std::asin(std::clamp(-composed(2, 0), -1.0f, 1.0f));
+    float          x {};
+    float          z {};
+    if (std::abs(std::cos(y)) > 1e-6f) {
+        x = std::atan2(composed(2, 1), composed(2, 2));
+        z = std::atan2(composed(1, 0), composed(0, 0));
+    } else {
+        // At gimbal lock only x-z (or x+z) is observable. Choose z=0 and
+        // retain the equivalent orientation in x.
+        x = std::atan2(-composed(1, 2), composed(1, 1));
+    }
+    SetRotation({ x, y, z });
 }
 
 void SceneNode::UpdateTrans() {

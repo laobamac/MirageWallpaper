@@ -176,8 +176,8 @@ inline VkSampleCountFlagBits TextureSampleCount(unsigned sample_count) {
 
 inline TextureKey RenderTargetTextureKey(sr::SceneRenderTarget rt) {
     return TextureKey {
-        .width        = rt.width,
-        .height       = rt.height,
+        .width        = rt.PhysicalWidth(),
+        .height       = rt.PhysicalHeight(),
         .usage        = {},
         .format       = sr::TextureFormat::RGBA8,
         .sample       = rt.sample,
@@ -187,8 +187,8 @@ inline TextureKey RenderTargetTextureKey(sr::SceneRenderTarget rt) {
 
 inline TextureKey RenderTargetTextureKeyNoMip(sr::SceneRenderTarget rt) {
     return TextureKey {
-        .width  = rt.width,
-        .height = rt.height,
+        .width  = rt.PhysicalWidth(),
+        .height = rt.PhysicalHeight(),
         .usage  = {},
         .format = sr::TextureFormat::RGBA8,
         .sample = rt.sample,
@@ -203,8 +203,8 @@ inline TextureKey MsaaTextureKey(sr::SceneRenderTarget rt, VkSampleCountFlagBits
 
 inline TextureKey DepthTextureKey(sr::SceneRenderTarget rt) {
     return TextureKey {
-        .width        = rt.width,
-        .height       = rt.height,
+        .width        = rt.PhysicalWidth(),
+        .height       = rt.PhysicalHeight(),
         .usage        = TexUsage::DEPTH,
         .format       = sr::TextureFormat::D32F,
         .sample       = rt.sample,
@@ -283,6 +283,8 @@ public:
 
     virtual std::string ResolveImportedTextureKey(const TextureRequest&) const = 0;
     virtual std::shared_ptr<Image> ParseImportedTexture(const TextureRequest&) const = 0;
+    virtual std::shared_ptr<VideoPlaybackState>
+    ResolveVideoPlayback(const TextureRequest&) const = 0;
 };
 
 class SnapshotImportedTextureProvider : public ImportedTextureProvider {
@@ -298,6 +300,20 @@ public:
     std::shared_ptr<Image> ParseImportedTexture(const TextureRequest& request) const override {
         if (m_image_parser == nullptr) return nullptr;
         return m_image_parser->Parse(ResolveImportedTextureKey(request));
+    }
+
+    std::shared_ptr<VideoPlaybackState>
+    ResolveVideoPlayback(const TextureRequest& request) const override {
+        const RenderTextureDescRecord* record { nullptr };
+        if (request.imported_texture.has_value()) {
+            record = m_render_scene->textureDesc(*request.imported_texture);
+        }
+        if (record == nullptr) {
+            if (auto id = m_render_scene->textureDescId(request.name)) {
+                record = m_render_scene->textureDesc(*id);
+            }
+        }
+        return record != nullptr ? record->video_control : nullptr;
     }
 
 private:
@@ -336,7 +352,8 @@ public:
             rstd_error("parse tex \"{}\" failed", request.name);
             return std::nullopt;
         }
-        auto slots = m_device->tex_cache().CreateTex(*image);
+        auto playback = m_imported_textures->ResolveVideoPlayback(request);
+        auto slots     = m_device->tex_cache().CreateTex(*image, std::move(playback));
         m_device->tex_cache().MarkVideoTextureActive(image->key);
         return slots;
     }

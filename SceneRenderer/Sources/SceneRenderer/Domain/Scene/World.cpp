@@ -50,7 +50,7 @@ float cubic(float p0, float p1, float p2, float p3, float t) {
            t * t * t * p3;
 }
 
-float curve_end_frame(const SceneAnimationCurve& curve) {
+std::int32_t curve_end_frame(const SceneAnimationCurve& curve) {
     int  end         = curve.length;
     auto absorb_last = [&end](const std::vector<SceneAnimationKey>& keys) {
         if (! keys.empty()) end = std::max(end, keys.back().frame);
@@ -58,29 +58,35 @@ float curve_end_frame(const SceneAnimationCurve& curve) {
     absorb_last(curve.c0);
     absorb_last(curve.c1);
     absorb_last(curve.c2);
-    return static_cast<float>(end);
+    return end;
 }
 
-float animation_frame(const SceneAnimationCurve& curve, double runtime) {
+struct AnimationFrame {
+    float        current { 0.0f };
+    std::int32_t end { 0 };
+    bool         wraps { false };
+};
+
+AnimationFrame animation_frame(const SceneAnimationCurve& curve, double runtime) {
     float fps   = curve.fps > 0.0f ? curve.fps : 30.0f;
     float frame = static_cast<float>(runtime) * fps;
-    float end   = curve_end_frame(curve);
-    if (end <= 0.0f) return frame;
+    const std::int32_t end = curve_end_frame(curve);
+    if (end <= 0) return { .current = frame, .end = end };
 
-    const float end_frame = end;
-    bool        loop = curve.wraploop || curve.mode == "loop" || curve.mode == "repeat";
-    if (loop) {
-        frame = std::fmod(frame, end_frame);
-        if (frame < 0.0f) frame += end_frame;
-        return frame;
-    }
+    const float end_frame = static_cast<float>(end);
     if (curve.mode == "mirror") {
         const float period = 2.0f * end_frame;
         float       folded = std::fmod(frame, period);
         if (folded < 0.0f) folded += period;
-        return folded <= end_frame ? folded : (period - folded);
+        return { .current = folded <= end_frame ? folded : (period - folded), .end = end };
     }
-    return std::clamp(frame, 0.0f, end_frame);
+    bool loop = curve.wraploop || curve.mode == "loop" || curve.mode == "repeat";
+    if (loop) {
+        frame = std::fmod(frame, end_frame);
+        if (frame < 0.0f) frame += end_frame;
+        return { .current = frame, .end = end, .wraps = curve.wraploop };
+    }
+    return { .current = std::clamp(frame, 0.0f, end_frame), .end = end };
 }
 
 float eval_segment(const SceneAnimationKey& a, const SceneAnimationKey& b, float frame) {
@@ -113,27 +119,24 @@ float eval_segment(const SceneAnimationKey& a, const SceneAnimationKey& b, float
     return cubic(p0y, p1y, p2y, p3y, (lo + hi) * 0.5f);
 }
 
-float eval_axis(const std::vector<SceneAnimationKey>& keys, float frame, bool loop,
-                float end_frame) {
+float eval_axis(const std::vector<SceneAnimationKey>& keys, const AnimationFrame& frame) {
     if (keys.empty()) return 0.0f;
-    if (frame <= static_cast<float>(keys.front().frame)) return keys.front().value;
-    for (std::size_t i = 1; i < keys.size(); ++i) {
-        if (frame <= static_cast<float>(keys[i].frame))
-            return eval_segment(keys[i - 1], keys[i], frame);
+    const auto& first = keys.front();
+    const auto& last  = keys.back();
+    if (frame.wraps && frame.current < static_cast<float>(first.frame)) {
+        auto previous = last;
+        previous.frame -= frame.end;
+        if (previous.frame < first.frame) return eval_segment(previous, first, frame.current);
     }
-    // Past the last keyframe. For a looping curve whose length extends beyond
-    // the last key (WE "wraploop"), interpolate the last key back to the first
-    // across [last.frame, end_frame] so the wrap is continuous instead of
-    // holding the last value and snapping at the loop boundary. Uses the last
-    // key's out-tangent and the first key's in-tangent (with wrapped frame
-    // coordinates) so cubic eases match a normal segment.
-    const auto& last = keys.back();
-    if (loop && end_frame > static_cast<float>(last.frame)) {
-        SceneAnimationKey wrapped_first = keys.front();
-        wrapped_first.frame             = static_cast<std::int32_t>(std::ceil(end_frame));
-        if (wrapped_first.frame > last.frame) {
-            return eval_segment(last, wrapped_first, frame);
-        }
+    if (frame.current <= static_cast<float>(first.frame)) return first.value;
+    for (std::size_t i = 1; i < keys.size(); ++i) {
+        if (frame.current <= static_cast<float>(keys[i].frame))
+            return eval_segment(keys[i - 1], keys[i], frame.current);
+    }
+    if (frame.wraps) {
+        auto next = first;
+        next.frame += frame.end;
+        if (next.frame > last.frame) return eval_segment(last, next, frame.current);
     }
     return last.value;
 }
@@ -581,6 +584,7 @@ void RenderSceneSnapshot::Rebuild(Scene& scene, RenderSceneVersion version) {
             .scene_texture = scene_id,
             .key           = key,
             .desc          = desc_it != scene.textures.end() ? desc_it->second : SceneTexture {},
+            .video_control = scene.VideoControl(key),
         });
     }
 
@@ -714,36 +718,139 @@ RenderSceneSnapshot ExtractRenderSceneSnapshot(Scene& scene) {
 
 bool SceneAnimationCurve::Empty() const { return c0.empty() && c1.empty() && c2.empty(); }
 
+SceneAnimationPlayback::SceneAnimationPlayback(std::string name, float fps,
+                                               std::int32_t frame_count, std::string mode,
+                                               bool wraploop, bool start_paused)
+    : m_name(std::move(name)),
+      m_fps(fps > 0.0f ? fps : 30.0f),
+      m_frame_count(std::max(frame_count, 0)),
+      m_mode(std::move(mode)),
+      m_wraploop(wraploop),
+      m_status(start_paused ? SceneAnimationPlaybackStatus::Paused
+                            : SceneAnimationPlaybackStatus::Playing) {}
+
+bool SceneAnimationPlayback::Loops() const {
+    return m_wraploop || m_mode == "loop" || m_mode == "repeat";
+}
+
+float SceneAnimationPlayback::Frame() const {
+    if (m_frame_count <= 0) return 0.0f;
+    const double end = static_cast<double>(m_frame_count);
+    if (m_mode == "mirror") {
+        const double period = 2.0 * end;
+        double       folded = std::fmod(m_phase_frame, period);
+        if (folded < 0.0) folded += period;
+        return static_cast<float>(folded <= end ? folded : period - folded);
+    }
+    if (Loops()) {
+        double frame = std::fmod(m_phase_frame, end);
+        if (frame < 0.0) frame += end;
+        return static_cast<float>(frame);
+    }
+    return static_cast<float>(std::clamp(m_phase_frame, 0.0, end));
+}
+
+bool SceneAnimationPlayback::IsPlaying() const {
+    return m_status == SceneAnimationPlaybackStatus::Playing;
+}
+
+double SceneAnimationPlayback::Duration() const {
+    return m_fps > 0.0f ? static_cast<double>(m_frame_count) / m_fps : 0.0;
+}
+
+void SceneAnimationPlayback::Tick(double runtime) {
+    if (! m_last_runtime) {
+        m_last_runtime = runtime;
+        return;
+    }
+    const double delta = std::max(runtime - *m_last_runtime, 0.0);
+    m_last_runtime     = runtime;
+    if (! IsPlaying() || delta == 0.0 || m_frame_count <= 0) return;
+    m_phase_frame += delta * static_cast<double>(m_fps) * m_rate;
+    if (m_mode == "mirror" || Loops()) return;
+    const double end = static_cast<double>(m_frame_count);
+    if (m_rate >= 0.0 && m_phase_frame >= end) {
+        m_phase_frame = end;
+        m_status      = SceneAnimationPlaybackStatus::Completed;
+    } else if (m_rate < 0.0 && m_phase_frame <= 0.0) {
+        m_phase_frame = 0.0;
+        m_status      = SceneAnimationPlaybackStatus::Completed;
+    }
+}
+
+void SceneAnimationPlayback::Play() {
+    if (m_status == SceneAnimationPlaybackStatus::Stopped ||
+        m_status == SceneAnimationPlaybackStatus::Completed) {
+        m_phase_frame = m_rate < 0.0 ? static_cast<double>(m_frame_count) : 0.0;
+    }
+    m_status = SceneAnimationPlaybackStatus::Playing;
+}
+
+void SceneAnimationPlayback::Stop() {
+    m_phase_frame = 0.0;
+    m_status      = SceneAnimationPlaybackStatus::Stopped;
+}
+
+void SceneAnimationPlayback::Pause() {
+    if (m_status == SceneAnimationPlaybackStatus::Playing)
+        m_status = SceneAnimationPlaybackStatus::Paused;
+}
+
+void SceneAnimationPlayback::SetFrame(double frame) {
+    if (! std::isfinite(frame)) return;
+    m_phase_frame = std::clamp(frame, 0.0, static_cast<double>(m_frame_count));
+    if (m_status == SceneAnimationPlaybackStatus::Stopped ||
+        m_status == SceneAnimationPlaybackStatus::Completed)
+        m_status = SceneAnimationPlaybackStatus::Paused;
+}
+
+void SceneAnimationPlayback::SetRate(double rate) {
+    if (std::isfinite(rate)) m_rate = rate;
+}
+
 float SceneAnimationCurve::EvaluateScalar(float base, double runtime) const {
     if (c0.empty()) return base;
-    const float end   = curve_end_frame(*this);
-    float       value = eval_axis(c0, animation_frame(*this, runtime), wraploop, end);
+    const double local_runtime = playback && fps > 0.0f ? playback->Frame() / fps : runtime;
+    float value = eval_axis(c0, animation_frame(*this, local_runtime));
     return relative ? base + value : value;
 }
 
 Eigen::Vector3f SceneAnimationCurve::EvaluateVec3(const Eigen::Vector3f& base,
                                                   double                 runtime) const {
     if (Empty()) return base;
-    const float     end   = curve_end_frame(*this);
-    float           frame = animation_frame(*this, runtime);
+    const double local_runtime = playback && fps > 0.0f ? playback->Frame() / fps : runtime;
+    const auto      frame = animation_frame(*this, local_runtime);
     Eigen::Vector3f value = base;
     if (! c0.empty())
-        value.x() = relative ? base.x() + eval_axis(c0, frame, wraploop, end)
-                             : eval_axis(c0, frame, wraploop, end);
+        value.x() = relative ? base.x() + eval_axis(c0, frame) : eval_axis(c0, frame);
     if (! c1.empty())
-        value.y() = relative ? base.y() + eval_axis(c1, frame, wraploop, end)
-                             : eval_axis(c1, frame, wraploop, end);
+        value.y() = relative ? base.y() + eval_axis(c1, frame) : eval_axis(c1, frame);
     if (! c2.empty())
-        value.z() = relative ? base.z() + eval_axis(c2, frame, wraploop, end)
-                             : eval_axis(c2, frame, wraploop, end);
+        value.z() = relative ? base.z() + eval_axis(c2, frame) : eval_axis(c2, frame);
     return value;
 }
 
 void SceneNode::TickFieldAnimations(double runtime) {
+    for (const auto& playback : m_field_animation_playbacks) playback->Tick(runtime);
     if (m_origin_curve) SetTranslate(m_origin_curve->EvaluateVec3(m_origin_base, runtime));
     if (m_scale_curve) SetScale(m_scale_curve->EvaluateVec3(m_scale_base, runtime));
     if (m_rotation_curve) SetRotation(m_rotation_curve->EvaluateVec3(m_rotation_base, runtime));
     if (m_alpha_curve) SetUserAlpha(m_alpha_curve->EvaluateScalar(m_base_alpha, runtime));
+}
+
+void SceneNode::RegisterFieldAnimation(
+    const std::shared_ptr<SceneAnimationPlayback>& playback) {
+    if (! playback) return;
+    if (std::find(m_field_animation_playbacks.begin(), m_field_animation_playbacks.end(), playback) ==
+        m_field_animation_playbacks.end())
+        m_field_animation_playbacks.push_back(playback);
+    if (! playback->Name().empty()) m_named_field_animations[playback->Name()] = playback;
+}
+
+std::shared_ptr<SceneAnimationPlayback>
+SceneNode::FindAnimation(std::string_view name) const {
+    auto it = m_named_field_animations.find(std::string(name));
+    return it == m_named_field_animations.end() ? nullptr : it->second;
 }
 
 void SceneCameraPath::CaptureViewport() {
@@ -810,6 +917,22 @@ Scene::Scene()
       m_resource_generation(next_scene_resource_generation()) {}
 Scene::~Scene() = default;
 
+std::optional<SceneCameraTransforms> Scene::ActiveCameraTransforms() const {
+    if (! activeCamera) return std::nullopt;
+    return activeCamera->Transforms();
+}
+
+bool Scene::SetActiveCameraTransforms(const SceneCameraTransforms& transforms) {
+    if (! activeCamera || ! activeCamera->SetTransforms(transforms)) return false;
+    for (const auto& [name, camera] : cameras) {
+        if (camera.get() == activeCamera) {
+            UpdateLinkedCamera(name);
+            break;
+        }
+    }
+    return true;
+}
+
 bool SceneMaterial::SetShaderValueAnimation(std::string                          uniform_name,
                                             std::shared_ptr<SceneAnimationCurve> curve) {
     if (uniform_name.empty() || ! curve || curve->Empty()) return false;
@@ -832,6 +955,7 @@ bool SceneMaterial::SetShaderValueAnimation(std::string                         
 }
 
 bool SceneMaterial::TickShaderValueAnimations(double runtime) {
+    if (customShader.valueAnimations.empty()) return false;
     bool changed = false;
     for (auto& [uniform_name, animation] : customShader.valueAnimations) {
         ShaderValue value = eval_shader_value_animation(animation, runtime);
@@ -856,8 +980,9 @@ bool Scene::EnsureTextureDescriptor(std::string_view key) {
 
     const auto   header = imageParser->ParseHeader(name);
     SceneTexture texture;
-    texture.url    = name;
-    texture.sample = header.sample;
+    texture.url     = name;
+    texture.sample  = header.sample;
+    texture.isVideo = header.type == ImageType::VIDEO;
     if (header.isSprite) {
         texture.isSprite   = true;
         texture.spriteAnim = header.spriteAnim;
@@ -866,9 +991,33 @@ bool Scene::EnsureTextureDescriptor(std::string_view key) {
     return true;
 }
 
+std::shared_ptr<VideoPlaybackState> Scene::VideoControl(std::string_view key) {
+    auto texture = textures.find(std::string(key));
+    if (texture == textures.end() || ! texture->second.isVideo) return nullptr;
+
+    const std::string control_key = texture->second.url.empty() ? std::string(key)
+                                                                : texture->second.url;
+    auto [it, inserted] =
+        m_video_controls.try_emplace(control_key, std::make_shared<VideoPlaybackState>());
+    (void)inserted;
+    return it->second;
+}
+
 bool Scene::SetMaterialShaderValue(SceneMaterial& material, std::string_view uniform_name,
                                    const ShaderValue& value) {
     return material.SetShaderValue(std::string(uniform_name), value);
+}
+
+bool Scene::SetMaterialShaderValueByKey(SceneMaterial& material, std::string_view material_key,
+                                        const ShaderValue& value) {
+    std::string uniform_name(material_key);
+    if (material.customShader.variant) {
+        const auto& aliases = material.customShader.variant->uniform_aliases;
+        if (auto alias = aliases.find(uniform_name); alias != aliases.end()) {
+            uniform_name = alias->second;
+        }
+    }
+    return material.SetShaderValue(std::move(uniform_name), value);
 }
 
 SceneMaterialTextureSlotMutation
@@ -936,9 +1085,15 @@ void Scene::MarkLayerVisibilityElidable(WallpaperLayerId id) {
 }
 
 bool Scene::SetNodeVisible(SceneNode& node, bool visible) {
-    if (node.Visible() == visible) return false;
-
     const i32 id = node.ID();
+    // Same-value calls still have to run when the elision set disagrees with
+    // the node flag: parse-time SetVisible() bypasses this bookkeeping, so the
+    // first user toggle would otherwise no-op and leave the layer emitting.
+    if (node.Visible() == visible) {
+        if (id < 0) return false;
+        if ((visibility_elidable_layer_ids.count(id) != 0) == ! visible) return false;
+    }
+
     node.SetVisible(visible);
     if (id < 0) return false;
 
@@ -968,6 +1123,13 @@ bool Scene::CommitNodeVisibilityChanges() {
 
     if (requires_graph_rebuild) m_render_graph_dirty = true;
     return requires_graph_rebuild;
+}
+
+bool Scene::CommitDynamicTopology() {
+    if (! m_dynamic_topology_dirty) return false;
+    m_dynamic_topology_dirty = false;
+    m_render_graph_dirty      = true;
+    return true;
 }
 
 bool Scene::ApplyUserNodeVisibilityBindings(std::string_view key, const Json& property) {
@@ -1003,6 +1165,42 @@ std::optional<SceneImageEffectRef> Scene::FindNodeImageEffect(const SceneNode& n
     auto effect = effect_layer->FindEffect(name);
     if (! effect) return std::nullopt;
     return SceneImageEffectRef { .layer = effect_layer.get(), .effect = std::move(effect) };
+}
+
+std::optional<SceneImageEffectRef> Scene::FindNodeImageEffect(const SceneNode& node,
+                                                              std::size_t index) {
+    if (node.Camera().empty()) return std::nullopt;
+    auto camera_it = cameras.find(node.Camera());
+    if (camera_it == cameras.end() || ! camera_it->second->HasImgEffect()) return std::nullopt;
+
+    auto& effect_layer = camera_it->second->GetImgEffect();
+    if (! effect_layer || index >= effect_layer->EffectCount()) return std::nullopt;
+    auto effect = effect_layer->GetEffect(index);
+    if (! effect) return std::nullopt;
+    return SceneImageEffectRef { .layer = effect_layer.get(), .effect = std::move(effect) };
+}
+
+std::size_t Scene::NodeImageEffectCount(const SceneNode& node) {
+    if (node.Camera().empty()) return 0;
+    auto camera_it = cameras.find(node.Camera());
+    if (camera_it == cameras.end() || ! camera_it->second->HasImgEffect()) return 0;
+    auto& effect_layer = camera_it->second->GetImgEffect();
+    return effect_layer ? effect_layer->EffectCount() : 0;
+}
+
+std::string Scene::ImageEffectName(const SceneImageEffectRef& ref) const {
+    return ref.effect ? ref.effect->name : std::string {};
+}
+
+bool Scene::ImageEffectRuntimeVisible(const SceneImageEffectRef& ref) const {
+    return ref.effect && ref.effect->runtime_visible;
+}
+
+SceneMaterial* Scene::ImageEffectMaterial(const SceneImageEffectRef& ref, std::size_t index) {
+    if (! ref.effect || index >= ref.effect->nodes.size()) return nullptr;
+    auto node = std::next(ref.effect->nodes.begin(), static_cast<std::ptrdiff_t>(index));
+    if (! node->sceneNode || ! node->sceneNode->Mesh()) return nullptr;
+    return node->sceneNode->Mesh()->Material();
 }
 
 bool Scene::SetImageEffectRuntimeVisible(const SceneImageEffectRef& ref, bool visible) {
@@ -1173,13 +1371,16 @@ void Scene::TickMaterialShaderAnimations() {
 }
 
 void Scene::TickNodeFieldAnimations() {
-    auto tick_node = [runtime = elapsingTime](auto&                             self,
-                                              const rstd::sync::Arc<SceneNode>& node) -> void {
-        if (! node) return;
-        node->TickFieldAnimations(runtime);
-        for (const auto& child : node->GetChildren()) self(self, child);
-    };
-    tick_node(tick_node, sceneGraph);
+    if (! m_field_animated_nodes_built) {
+        auto collect = [this](auto& self, const rstd::sync::Arc<SceneNode>& node) -> void {
+            if (! node) return;
+            if (node->HasFieldAnimations()) m_field_animated_nodes.push_back(node.as_ptr());
+            for (const auto& child : node->GetChildren()) self(self, child);
+        };
+        collect(collect, sceneGraph);
+        m_field_animated_nodes_built = true;
+    }
+    for (auto* node : m_field_animated_nodes) node->TickFieldAnimations(elapsingTime);
 }
 
 void Scene::TickTransformUpdaters() {
@@ -1190,6 +1391,27 @@ void Scene::CaptureCameraPathViewports() {
     for (auto& path : camera_paths) {
         if (path) path->CaptureViewport();
     }
+}
+
+void Scene::EnablePlanarReflection() {
+    m_planar_reflection_enabled = true;
+    const std::string key(WE_REFLECTION_PREFIX);
+    if (renderTargets.count(key) != 0) return;
+
+    i32 width  = ortho[0];
+    i32 height = ortho[1];
+    if (auto primary = renderTargets.find(std::string(SpecTex_Default));
+        primary != renderTargets.end()) {
+        width  = primary->second.width;
+        height = primary->second.height;
+    }
+    renderTargets[key] = {
+        .width             = width,
+        .height            = height,
+        .withDepth         = true,
+        .bind              = { .enable = true, .screen = true },
+        .preserve_on_write = true,
+    };
 }
 
 std::string Scene::EnsureLinkRenderTarget(WallpaperLayerId source_layer,

@@ -17,6 +17,71 @@ enum WEHTML {
                        options: [.regularExpression, .caseInsensitive]) != nil
     }
 
+    /// Rich labels that still need an out-of-process web view.
+    ///
+    /// `NSAttributedString`'s HTML importer resolves referenced resources
+    /// synchronously on the calling (main) thread, so a label pointing at a
+    /// remote image would beachball the settings panel. Those keep the web
+    /// view; everything else — formatting, links, tables, local images —
+    /// renders natively and costs no WebKit content process at all.
+    static func needsWebView(_ raw: String) -> Bool {
+        let s = normalizeAngles(raw)
+        return s.range(of: "<\\s*(img|iframe|video)\\b[^>]*\\bsrc\\s*=\\s*[\"']?\\s*(https?:|//)",
+                       options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    /// Parse a rich label into an `AttributedString`.
+    ///
+    /// Imported fonts and colours are dropped so the surrounding SwiftUI
+    /// environment styles the text, which also keeps it legible in dark mode —
+    /// the importer otherwise hardcodes Times at black.
+    static func attributed(_ raw: String) -> AttributedString? {
+        let key = raw as NSString
+        if let cached = attributedCache.object(forKey: key) { return cached.value }
+
+        let normalized = normalizeAngles(raw)
+        guard let data = normalized.data(using: .utf8) else { return nil }
+        guard let parsed = try? NSAttributedString(
+            data: data,
+            options: [
+                .documentType: NSAttributedString.DocumentType.html,
+                .characterEncoding: String.Encoding.utf8.rawValue,
+            ],
+            documentAttributes: nil
+        ) else { return nil }
+
+        var result = AttributedString(parsed)
+        for run in result.runs {
+            result[run.range].foregroundColor = nil
+            result[run.range].backgroundColor = nil
+            result[run.range].font = nil
+        }
+        // Trailing newlines are an artefact of block-level tags closing.
+        while let last = result.characters.last, last.isNewline || last == " " {
+            result.removeSubrange(result.index(beforeCharacter: result.endIndex)..<result.endIndex)
+        }
+        attributedCache.setObject(Box(result), forKey: key)
+        return result
+    }
+
+    private final class Box {
+        let value: AttributedString
+        init(_ value: AttributedString) { self.value = value }
+    }
+
+    // Parsing HTML is not cheap and SwiftUI re-evaluates bodies freely, so the
+    // result is memoised per source string.
+    private static let attributedCache: NSCache<NSString, Box> = {
+        let cache = NSCache<NSString, Box>()
+        cache.countLimit = 256
+        return cache
+    }()
+
+    private static func normalizeAngles(_ raw: String) -> String {
+        raw.replacingOccurrences(of: "＜", with: "<")
+            .replacingOccurrences(of: "＞", with: ">")
+    }
+
     static func plain(_ raw: String) -> String {
         var s = raw
             .replacingOccurrences(of: "＜", with: "<")
@@ -85,6 +150,26 @@ enum WEHTML {
 // Self-scrolling is disabled; height is measured via JS and the wheel is
 // forwarded to the enclosing ScrollView.
 struct RichHTMLText: View {
+    let html: String
+
+    var body: some View {
+        // Only labels referencing remote resources still pay for a web view.
+        // A property panel with fifteen rich labels used to spin up fifteen
+        // WebKit content processes; now that is normally zero.
+        if WEHTML.needsWebView(html) {
+            RichHTMLWebViewHost(html: html)
+        } else if let attributed = WEHTML.attributed(html) {
+            Text(attributed)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+        } else {
+            Text(WEHTML.plain(html))
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+private struct RichHTMLWebViewHost: View {
     let html: String
     @State private var height: CGFloat = 24
 

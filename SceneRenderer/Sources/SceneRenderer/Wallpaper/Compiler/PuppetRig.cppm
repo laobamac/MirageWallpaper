@@ -86,6 +86,7 @@ public:
         uint16_t        bone_index { 0 }; // hexpat MDAT Attachment.unk
         std::string     name;
         Eigen::Affine3f local_xform { Eigen::Affine3f::Identity() };
+        Eigen::Affine3f bind_xform { Eigen::Affine3f::Identity() };
     };
     struct BoneFrame {
         Eigen::Vector3f position;
@@ -117,6 +118,15 @@ public:
     // Per-bone, per-frame curve (anim.length + 1 samples). Reused by both the
     // mdla>=3 blend_curves block (0..1 weights) and mdla==6 scalar_curves
     // (typically constant per curve).
+    //
+    // Despite the name these are WE's per-bone *opacity* envelopes, not
+    // animation blend weights: `genericimage{2,3,4}.vert` feed them to
+    // `g_BonesAlpha[]` and multiply the LBS-weighted result into the vertex
+    // alpha. Two independent corpus facts pin the semantics down — bones whose
+    // curve dips to 0 while their TRS track holds still (a mathematical no-op
+    // under a pose-blend reading), and single-bone rigid puppets whose curve
+    // ramps 0->1 across a long translation (a pose-blend reading would pin the
+    // sprite at its bind pose for the whole animation instead of fading it in).
     struct BoneFrameCurve {
         std::vector<float> values;
     };
@@ -219,10 +229,20 @@ public:
     bool world_anchored_bones { false };
 
     std::span<const Eigen::Affine3f> genFrame(WPPuppetLayer&, double time) noexcept;
-    void                             prepared();
+    // Per-bone opacity for the pose `genFrame` just produced, in bone order.
+    // Valid until the next genFrame() on the same puppet.
+    std::span<const float> boneAlphas() const noexcept { return m_final_alphas; }
+    // True when any animation ships a blend curve that actually departs from
+    // fully opaque. Drives the SKINNING_ALPHA shader combo, so puppets with
+    // all-1.0 curves (the overwhelming majority) keep their old permutation.
+    bool                           hasAlphaCurves() const noexcept;
+    void                           prepared();
+    std::optional<std::size_t>     attachmentIndex(std::string_view name) const noexcept;
+    std::optional<Eigen::Affine3f> attachmentBindTransform(std::size_t index) const noexcept;
 
 private:
     std::vector<Eigen::Affine3f> m_final_affines;
+    std::vector<float>           m_final_alphas;
 };
 
 class WPPuppetLayer {
@@ -254,8 +274,13 @@ public:
     void prepared(std::span<AnimationLayer>);
 
     std::span<const Eigen::Affine3f> genFrame(double time) noexcept;
+    // Per-bone opacity matching the most recent genFrame(). Call genFrame()
+    // first; this does not advance the animation clock on its own.
+    std::span<const float>           boneAlphas() const noexcept;
     uint32_t                         boneIndex(std::string_view name) const noexcept;
     std::optional<Eigen::Affine3f>   boneTransform(uint32_t index, double time) noexcept;
+    std::optional<Eigen::Affine3f>   attachmentTransform(std::size_t index,
+                                                         double time) noexcept;
 
     void updateInterpolation(double time) noexcept;
 

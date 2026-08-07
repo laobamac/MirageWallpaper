@@ -63,7 +63,12 @@ struct GlyphInfo {
     std::uint32_t atlas_y { 0 };
     std::uint32_t pixel_w { 0 };
     std::uint32_t pixel_h { 0 };
-    // FreeType bearings + advance, fractional pixels.
+    // Geometry dimensions are kept in logical text pixels. The atlas may
+    // rasterise at a higher resolution than the layout in order to retain
+    // edge detail when the scene later scales the layer up.
+    float layout_w { 0.0f };
+    float layout_h { 0.0f };
+    // FreeType bearings + advance, fractional logical pixels.
     float bearing_x { 0.0f };
     float bearing_y { 0.0f };
     float advance_x { 0.0f };
@@ -203,6 +208,12 @@ struct TextLayoutStyle {
 
     std::string halign; // "left" / "right" / contains-substring; default = center
     float       padding { 0.0f };
+
+    // Tight, effect-free layers are centred inside their private render
+    // target and restored to their logical position by the compose quad.
+    // Effect/background layers must retain the font baseline coordinates so
+    // effect projection and logical layer framing use the same origin.
+    bool center_source { true };
 };
 
 struct TextLayoutMetrics {
@@ -213,6 +224,7 @@ struct TextLayoutMetrics {
     float source_center_x { 0.0f };
     float source_center_y { 0.0f };
     float padding { 0.0f };
+    bool  source_centered { true };
 };
 
 struct TextGeometryPolicy {
@@ -238,6 +250,17 @@ struct TextGeometry {
 
 TextGeometry ResolveTextGeometry(const TextGeometryPolicy& policy,
                                  const TextLayoutMetrics&  metrics);
+
+// Resolves WE's text-frame alignment without involving the visible glyph
+// crop. The returned position is the logical frame centre in parent space.
+std::array<float, 2> ResolveTextAnchorPosition(std::string_view horizontal,
+                                               std::string_view vertical,
+                                               float            origin_x,
+                                               float            origin_y,
+                                               float            frame_width,
+                                               float            frame_height,
+                                               float            scale_x,
+                                               float            scale_y);
 
 class TextLayouter {
 public:

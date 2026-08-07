@@ -1,5 +1,6 @@
 #include "../../Sources/SceneRenderer/Host/macOS/MacDesktopHost.h"
 #include "ControlChannel.h"
+#include "SceneSnapshot.h"
 
 #define VK_USE_PLATFORM_METAL_EXT
 #include <vulkan/vulkan.h>
@@ -21,7 +22,10 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <sys/event.h>
+#include <sys/types.h>
 #include <thread>
+#include <unistd.h>
 #include <vector>
 #include <xlocale.h>
 
@@ -61,6 +65,60 @@ void InstallCrashHandler() {
     signal(SIGILL,  CrashHandler);
     signal(SIGFPE,  CrashHandler);
 }
+
+// Terminate when the parent dies.
+//
+// This renderer is spawned as a child of Mirage.app and driven over stdin. If
+// the parent crashes or is force-quit, an orphaned renderer keeps drawing a
+// fullscreen desktop-level window that the user has no way to close, so the
+// child must not outlive the parent. Stdin EOF already covers a clean parent
+// exit (see SceneControlChannel), but the control channel is optional and is
+// only started after Vulkan init + scene load, so it does not cover the
+// startup window or a --control-stdin-less run.
+//
+// kqueue/EVFILT_PROC/NOTE_EXIT is the reliable macOS mechanism: it fires as
+// soon as the watched pid exits, regardless of how it died. If registration
+// fails (parent already gone, pid reused, kqueue unavailable) we fall back to
+// polling getppid(), which becomes 1 once we are reparented to launchd.
+void ParentDeathWatchdogLoop(pid_t parent) {
+    const int kq = ::kqueue();
+    if (kq >= 0) {
+        struct kevent change {};
+        EV_SET(&change, (uintptr_t)parent, EVFILT_PROC, EV_ADD | EV_ENABLE, NOTE_EXIT, 0, nullptr);
+        if (::kevent(kq, &change, 1, nullptr, 0, nullptr) == 0) {
+            for (;;) {
+                struct kevent event {};
+                const int     n = ::kevent(kq, nullptr, 0, &event, 1, nullptr);
+                if (n < 0 && errno == EINTR) continue;
+                break; // n > 0: NOTE_EXIT delivered. n < 0: the filter is gone.
+            }
+            ::close(kq);
+            return;
+        }
+        ::close(kq);
+    }
+    while (::getppid() == parent) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+}
+
+void StartParentDeathWatchdog() {
+    const pid_t parent = ::getppid();
+    // Already reparented to launchd (or launched directly by it): there is no
+    // owning parent to follow, so watching would mean quitting immediately.
+    if (parent <= 1) return;
+    std::thread([parent]() {
+        ParentDeathWatchdogLoop(parent);
+        std::cerr << "[SceneWallpaper] parent process exited; shutting down" << std::endl;
+        SceneRendererMacDesktopStop(nullptr);
+        // The graceful path needs a running NSApp run loop, which may not have
+        // started yet (the parent can die during Vulkan/scene init while the
+        // main thread is still blocked). Give it a moment, then leave for real
+        // rather than linger as an unclosable fullscreen window.
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+        std::_Exit(0);
+    }).detach();
+}
 } // namespace
 
 namespace
@@ -83,6 +141,7 @@ struct Options {
     std::uint32_t             msaa { 1 };
     double                    render_scale { 1.0 };
     std::uint32_t             screen { 0 };
+    std::uint32_t             display_id { 0 };
     int                       run_seconds { 0 };
     bool                      valid_layer { false };
     bool                      graphviz { false };
@@ -122,6 +181,23 @@ void EmitAudioDemand(bool needed) {
               << (needed ? "true" : "false") << "}\n" << std::flush;
 }
 
+/// Answers a {"cmd":"snapshot"} request. The token is echoed verbatim so the app
+/// can match the reply; it is a UUID the app generated, but quote-escape it
+/// anyway rather than trusting the shape of an inbound string.
+void EmitSnapshotDone(const std::string& token, bool ok) {
+    std::string escaped;
+    escaped.reserve(token.size());
+    for (const char c : token) {
+        if (c == '"' || c == '\\') escaped.push_back('\\');
+        // Control characters would produce invalid JSON; a UUID has none.
+        if (static_cast<unsigned char>(c) < 0x20) continue;
+        escaped.push_back(c);
+    }
+    std::lock_guard lock(LifecycleOutputMutex());
+    std::cout << "{\"event\":\"snapshot-done\",\"token\":\"" << escaped
+              << "\",\"ok\":" << (ok ? "true" : "false") << "}\n" << std::flush;
+}
+
 void PrintUsage(const char* argv0) {
     std::cerr
         << "Usage: " << (argv0 != nullptr ? argv0 : "SceneWallpaper")
@@ -138,6 +214,7 @@ void PrintUsage(const char* argv0) {
         << "      --mouse-position X,Y    Initial normalized mouse position\n"
         << "      --input-hz N            Desktop mouse polling rate (default 60)\n"
         << "      --screen N              Screen index to cover (default 0 = main)\n"
+        << "      --display-id N          Core Graphics display ID to cover\n"
         << "      --muted                 Start with audio muted\n"
         << "      --control-stdin         Accept live JSON control commands on stdin\n"
         << "      --deferred-show         Keep the window transparent until activated\n"
@@ -238,6 +315,9 @@ bool ParseArgs(int argc, char** argv, Options& out) {
         } else if (arg == "--screen") {
             const char* value = require_value(i, arg);
             if (value == nullptr || ! ParseUInt(value, out.screen)) return false;
+        } else if (arg == "--display-id") {
+            const char* value = require_value(i, arg);
+            if (value == nullptr || ! ParseUInt(value, out.display_id) || out.display_id == 0) return false;
         } else if (arg == "-f" || arg == "--fps") {
             const char* value = require_value(i, arg);
             if (value == nullptr || ! ParseUInt(value, out.fps)) return false;
@@ -347,6 +427,16 @@ void ActivatedCallback(void* userdata) {
     EmitLifecycleEvent(state, "activated");
 }
 
+void ActivationFailedCallback(void* userdata) {
+    auto* state = static_cast<AppState*>(userdata);
+    EmitLifecycleEvent(state, "activation-failed");
+}
+
+void DeactivatedCallback(void* userdata) {
+    auto* state = static_cast<AppState*>(userdata);
+    EmitLifecycleEvent(state, "deactivated");
+}
+
 std::uint32_t ClampRenderExtent(std::uint32_t value, std::uint32_t fallback) {
     if (value == 0) value = fallback;
     return std::clamp<std::uint32_t>(value, 500u, 65535u);
@@ -365,7 +455,12 @@ int main(int argc, char** argv) {
     if (! ParseArgs(argc, argv, options)) return 1;
 
     setenv("MVK_CONFIG_PRESENT_WITH_COMMAND_BUFFER", "1", /*overwrite=*/0);
-    setenv("MVK_CONFIG_SYNCHRONOUS_QUEUE_SUBMITS", "1", /*overwrite=*/0);
+    // MVK_CONFIG_SYNCHRONOUS_QUEUE_SUBMITS is deliberately NOT set: it makes
+    // every vkQueueSubmit block the calling thread until the Metal command
+    // buffer completes, which stalls the host on top of the frame's own fence
+    // wait and defeats any CPU/GPU overlap. The renderer's synchronisation is
+    // explicit (fences + semaphores), so the asynchronous default is correct.
+    // Still overrideable from the shell for debugging.
 
     sr::SceneWallpaper wallpaper;
     AppState           state;
@@ -375,6 +470,7 @@ int main(int argc, char** argv) {
         .title        = "SceneRenderer Wallpaper",
         .input_hz     = options.input_hz,
         .screen_index = options.screen,
+        .display_id   = options.display_id,
         .deferred_show = options.deferred_show,
     };
     SceneRendererMacDesktopCallbacks callbacks {
@@ -384,6 +480,8 @@ int main(int argc, char** argv) {
         .closed       = nullptr,
         .first_frame_presented = FirstFramePresentedCallback,
         .activated    = ActivatedCallback,
+        .activation_failed = ActivationFailedCallback,
+        .deactivated  = DeactivatedCallback,
         .userdata     = &state,
     };
     state.desktop = SceneRendererMacDesktopCreate(&desktop_config, callbacks);
@@ -391,6 +489,11 @@ int main(int argc, char** argv) {
         std::cerr << "Failed to create macOS desktop wallpaper host\n";
         return 1;
     }
+
+    // From here on there is a window on screen; never let it outlive the
+    // parent that owns it. Installed before the (long) Vulkan + scene init so
+    // a parent that dies during startup is covered too.
+    StartParentDeathWatchdog();
 
     std::uint32_t render_width  = SceneRendererMacDesktopPixelWidth(state.desktop);
     std::uint32_t render_height = SceneRendererMacDesktopPixelHeight(state.desktop);
@@ -510,7 +613,12 @@ int main(int argc, char** argv) {
         control.emplace(
             wallpaper,
             [desktop]() { SceneRendererMacDesktopStop(desktop); },
-            [desktop]() { SceneRendererMacDesktopActivate(desktop); });
+            [desktop]() { SceneRendererMacDesktopActivate(desktop); },
+            [desktop]() { SceneRendererMacDesktopDeactivate(desktop); },
+            [](const std::string& path, const std::string& token) {
+                const bool ok = ! path.empty() && mirage::WriteSceneSnapshot(path);
+                EmitSnapshotDone(token, ok);
+            });
         control->start();
     }
 

@@ -29,9 +29,27 @@ static double SampleBoneCurve(const std::vector<WPPuppet::BoneFrameCurve>&  curv
 static double LayerBoneBlend(const WPPuppet::Animation& anim, unsigned bone_index,
                              const WPPuppet::Animation::InterpolationInfo& info,
                              double                                        layer_blend) {
-    double blend = layer_blend * SampleBoneCurve(anim.blend_curves, bone_index, info);
+    // blend_curves are WE per-bone *opacity* envelopes, not pose blend
+    // weights — the pose math must not see them. Pose blending is driven by
+    // the layer's own blend amount only. See BoneFrameCurve's comment.
+    double blend = layer_blend;
     blend *= SampleBoneCurve(anim.scalar_curves, bone_index, info);
     return std::max(0.0, blend);
+}
+
+// Per-bone opacity contribution of one animation layer, in 0..1.
+//
+// `layer_blend` fades the layer's envelope toward "fully opaque" so a layer
+// that is dialled out cannot darken the sprite: blend 1 yields the raw curve,
+// blend 0 yields 1.0. Layers then multiply together, which is exact for the
+// single-layer case every puppet in the corpus actually uses and stays
+// monotonic and in-range for stacks.
+static double LayerBoneAlpha(const WPPuppet::Animation& anim, unsigned bone_index,
+                             const WPPuppet::Animation::InterpolationInfo& info,
+                             double                                        layer_blend) {
+    const double curve = SampleBoneCurve(anim.blend_curves, bone_index, info);
+    const double w     = std::clamp(layer_blend, 0.0, 1.0);
+    return std::clamp(1.0 + w * (curve - 1.0), 0.0, 1.0);
 }
 
 static bool HasAuthoredTrack(const WPPuppet::BoneTrack& track) {
@@ -101,6 +119,23 @@ void WPPuppet::prepared() {
         }
         b.inv_bind = b.world_bind.inverse();
     }
+    for (auto& attachment : attachments) {
+        attachment.bind_xform = attachment.local_xform;
+        if (attachment.bone_index >= bones.size()) continue;
+
+        std::vector<uint32_t> chain;
+        uint32_t              bone_index = attachment.bone_index;
+        while (bone_index != NO_PARENT && bone_index < bones.size()) {
+            chain.push_back(bone_index);
+            bone_index = bones[bone_index].file_parent;
+        }
+
+        Eigen::Affine3f bone_bind = Eigen::Affine3f::Identity();
+        for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+            bone_bind = bone_bind * bones[*it].local_bind;
+        }
+        attachment.bind_xform = bone_bind * attachment.local_xform;
+    }
     for (auto& anim : anims) {
         anim.frame_time = 1.0f / anim.fps;
         anim.max_time   = anim.length / anim.fps;
@@ -112,6 +147,35 @@ void WPPuppet::prepared() {
     }
 
     m_final_affines.resize(bones.size());
+    m_final_alphas.assign(bones.size(), 1.0f);
+}
+
+// A curve that never leaves 1.0 is indistinguishable from "no curve", so it
+// must not switch the shader permutation on. Anything that dips below opaque
+// (blink envelopes, fade-ins) does.
+bool WPPuppet::hasAlphaCurves() const noexcept {
+    constexpr float opaque_eps = 1e-4f;
+    for (const auto& anim : anims) {
+        for (const auto& curve : anim.blend_curves) {
+            for (float v : curve.values) {
+                if (v < 1.0f - opaque_eps) return true;
+            }
+        }
+    }
+    return false;
+}
+
+std::optional<std::size_t> WPPuppet::attachmentIndex(std::string_view name) const noexcept {
+    for (std::size_t i = 0; i < attachments.size(); ++i) {
+        if (attachments[i].name == name) return i;
+    }
+    return std::nullopt;
+}
+
+std::optional<Eigen::Affine3f>
+WPPuppet::attachmentBindTransform(std::size_t index) const noexcept {
+    if (index >= attachments.size()) return std::nullopt;
+    return attachments[index].bind_xform;
 }
 
 std::span<const Eigen::Affine3f> WPPuppet::genFrame(WPPuppetLayer& puppet_layer,
@@ -205,6 +269,18 @@ std::span<const Eigen::Affine3f> WPPuppet::genFrame(WPPuppetLayer& puppet_layer,
                 scale += blend * (scale_a_delta * one_t + scale_b_delta * t);
             }
         }
+        // Per-bone opacity. Deliberately independent of the pose loop above:
+        // the envelope is a property of the curve, not of the track, and the
+        // bones that matter most here (a lid held still while it fades) have
+        // no authored motion at all. Flat per bone with no parent inheritance,
+        // matching the shader's `g_BonesAlpha[a_BlendIndices.*]` lookup.
+        double alpha = 1.0;
+        for (const auto& layer : puppet_layer.m_layers) {
+            if (layer.anim == nullptr || ! layer.anim_layer.visible) continue;
+            alpha *= LayerBoneAlpha(*layer.anim, i, layer.interp_info, layer.anim_layer.blend);
+        }
+        m_final_alphas[i] = static_cast<float>(std::clamp(alpha, 0.0, 1.0));
+
         if (bone.noBindParent() && world_anchored_bones) {
             trans += bone.vertex_centroid_offset;
         }
@@ -336,6 +412,11 @@ std::span<const Eigen::Affine3f> WPPuppetLayer::genFrame(double time) noexcept {
     return m_puppet->genFrame(*this, time);
 }
 
+std::span<const float> WPPuppetLayer::boneAlphas() const noexcept {
+    if (! m_puppet) return {};
+    return m_puppet->boneAlphas();
+}
+
 uint32_t WPPuppetLayer::boneIndex(std::string_view name) const noexcept {
     if (! m_puppet) return 0;
     for (uint32_t i = 0; i < m_puppet->bones.size(); ++i) {
@@ -351,6 +432,16 @@ std::optional<Eigen::Affine3f> WPPuppetLayer::boneTransform(uint32_t index, doub
     auto frame = genFrame(time);
     if (zero_based >= frame.size()) return std::nullopt;
     return frame[zero_based] * m_puppet->bones[zero_based].world_bind;
+}
+
+std::optional<Eigen::Affine3f> WPPuppetLayer::attachmentTransform(std::size_t index,
+                                                                  double time) noexcept {
+    if (! m_puppet || index >= m_puppet->attachments.size()) return std::nullopt;
+    const auto& attachment = m_puppet->attachments[index];
+    if (attachment.bone_index >= m_puppet->bones.size()) return std::nullopt;
+    auto frame = genFrame(time);
+    if (attachment.bone_index >= frame.size()) return std::nullopt;
+    return frame[attachment.bone_index] * attachment.bind_xform;
 }
 
 void WPPuppetLayer::updateInterpolation(double elapsed) noexcept {

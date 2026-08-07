@@ -64,9 +64,25 @@
     _windowSnapshot = nil;
 }
 
+// A global event monitor is owned by AppKit, not by us: without this the
+// monitor outlives the forwarder. The tool's own -stop at the end of main() is
+// never reached on the EOF path, which terminates via -[NSApp terminate:].
+- (void)dealloc {
+    [self stop];
+}
+
 - (void)setPaused:(BOOL)paused {
     if (paused) [self stop];
     else [self start];
+}
+
+- (void)updateScreen:(NSScreen *)screen {
+    if (screen == nil) return;
+    _screen = screen;
+    // Cached desktop hit-test geometry is display-relative; drop it.
+    _windowSnapshot = nil;
+    _movePending = NO;
+    _lastMovePos = NSMakePoint(-1, -1);
 }
 
 #pragma mark - Desktop hit detection
@@ -128,10 +144,17 @@
     double ny = 1.0 - (p.y - sf.origin.y) / NSHeight(sf);
     if (nx < 0) nx = 0; if (nx > 1) nx = 1;
     if (ny < 0) ny = 0; if (ny > 1) ny = 1;
-    NSString *js = [NSString stringWithFormat:
-        @"(function(){var W=window.innerWidth||1,H=window.innerHeight||1;"
-        "window.__wr_dispatchMouse('%@', %f*W, %f*H, %d);})();", type, nx, ny, buttons];
-    [_webView evaluateJavaScript:js completionHandler:nil];
+    // Constant body, structured arguments. This runs on every mouse move (up to
+    // 60/s); building a fresh source string each time meant WebKit re-parsed and
+    // re-compiled a one-off script for every single event.
+    static NSString *const kDispatchBody =
+        @"var W=window.innerWidth||1,H=window.innerHeight||1;"
+        @"window.__wr_dispatchMouse(t, x*W, y*H, b);";
+    [_webView callAsyncJavaScript:kDispatchBody
+                        arguments:@{ @"t": type, @"x": @(nx), @"y": @(ny), @"b": @(buttons) }
+                          inFrame:nil
+                   inContentWorld:WKContentWorld.pageWorld
+                completionHandler:nil];
 }
 
 #pragma mark - Event handlers

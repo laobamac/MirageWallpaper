@@ -311,6 +311,7 @@ struct RenderProgram {
     }
 
     void finalizeRenderTargetSizes(sr::Scene& scene, VkExtent2D extent,
+                                   VkExtent2D max_framebuffer_extent,
                                    VkSampleCountFlagBits msaa_samples) {
         for (auto& item : scene.renderTargets) {
             auto& rt = item.second;
@@ -332,12 +333,33 @@ struct RenderProgram {
         }
         for (auto& item : scene.renderTargets) {
             auto& rt = item.second;
-            if (! item.first.empty() && (rt.width * rt.height <= 4)) {
+            if (! item.first.empty() && (rt.width <= 0 || rt.height <= 0)) {
                 rstd_error("wrong size for render target: {}", item.first);
-            } else if (rt.has_mipmap) {
+            }
+
+            const auto physical_width = static_cast<sr::i32>(std::clamp<sr::u32>(
+                static_cast<sr::u32>(std::max(rt.width, 1)), 1, max_framebuffer_extent.width));
+            const auto physical_height = static_cast<sr::i32>(std::clamp<sr::u32>(
+                static_cast<sr::u32>(std::max(rt.height, 1)), 1, max_framebuffer_extent.height));
+            const bool physical_size_changed = rt.physical_width != physical_width ||
+                                               rt.physical_height != physical_height;
+            rt.physical_width  = physical_width;
+            rt.physical_height = physical_height;
+            if (physical_size_changed &&
+                (rt.physical_width != rt.width || rt.physical_height != rt.height)) {
+                rstd_warn("clamp render target {} from {}x{} to {}x{}",
+                          item.first,
+                          rt.width,
+                          rt.height,
+                          rt.physical_width,
+                          rt.physical_height);
+            }
+
+            if (rt.has_mipmap) {
                 rt.mipmap_level = std::max(3u,
                                            static_cast<unsigned>(std::floor(
-                                               std::log2(std::min(rt.width, rt.height))))) -
+                                               std::log2(std::min(rt.physical_width,
+                                                                  rt.physical_height))))) -
                                   2u;
             }
         }
@@ -465,6 +487,10 @@ struct RenderProgram {
             if (record.pass != nullptr && record.pass->prepared())
                 record.pass->prepareFrameData(rr);
         }
+        for (auto& record : pass_records) {
+            if (record.pass != nullptr && record.pass->prepared())
+                record.pass->completeFrameData();
+        }
     }
 
     void rebuildScopes() {
@@ -552,6 +578,7 @@ struct VulkanRender::Impl {
     void destroy();
 
     void drawFrame(Scene&);
+    void flushPendingFrame();
 
     bool CreateRenderingResource(RenderingResources&);
     void DestroyRenderingResource(RenderingResources&);
@@ -580,6 +607,12 @@ struct VulkanRender::Impl {
     void                       drawFrameSwapchain();
     void                       drawFrameOffscreen();
     bool                       onSwapchainReady(unsigned width, unsigned height);
+    bool                       createSwapchainSemaphores();
+    // Rebuild the swapchain and everything derived from it. False means the
+    // surface is not presentable right now (0x0 while a display is being
+    // reconfigured) — the caller skips the frame and retries next tick.
+    bool                       recreateSwapchain();
+    void                       retireInFlightFrame();
 
     Instance                m_instance;
     std::unique_ptr<Device> m_device;
@@ -602,6 +635,9 @@ struct VulkanRender::Impl {
 
     bool              m_with_surface { false };
     std::atomic<bool> m_inited { false };
+    // Set when acquire/present reported the swapchain no longer matches the
+    // surface. Consumed at the top / tail of drawFrameSwapchain.
+    bool              m_swapchain_out_of_date { false };
 
     // MSAA sample count for the screen RT only. 1bit = disabled.
     // Resolved against device's framebufferColorSampleCounts in init().
@@ -609,6 +645,10 @@ struct VulkanRender::Impl {
 
     std::unique_ptr<ExSwapchain> m_ex_swapchain;
     RenderingResources           m_rendering_resources;
+    // A swapchain frame has been submitted and its fence not yet awaited. The
+    // wait happens at the head of the next frame instead of right after
+    // present, so the GPU works while the host sleeps on the frame timer.
+    bool                         m_frame_in_flight { false };
 
     // for VUID-vkQueueSubmit-pSignalSemaphores-00067
     std::vector<vvk::Semaphore> m_sem_swap_finish_per_image;
@@ -719,6 +759,7 @@ void VulkanRender::driverUuid(uint8_t out[16]) const {
 bool VulkanRender::init(RenderInitInfo info) { return pImpl->init(std::move(info)); }
 void VulkanRender::destroy() { pImpl->destroy(); }
 void VulkanRender::drawFrame(Scene& scene) { pImpl->drawFrame(scene); };
+void VulkanRender::flushPendingFrame() { pImpl->flushPendingFrame(); }
 void VulkanRender::clearLastRenderGraph(RenderGraphResourceRetention retention) {
     pImpl->clearLastRenderGraph(retention);
 };
@@ -961,6 +1002,56 @@ void VulkanRender::Impl::destroy() {
     m_instance.Destroy();
 }
 
+// (Re)create the two swapchain-scoped semaphore sets. The "render finished"
+// set is per swapchain image (VUID-vkQueueSubmit-pSignalSemaphores-00067) so
+// its size follows the image count, which the driver may change across a
+// rebuild. The acquire semaphore is recreated as well: a VK_SUBOPTIMAL_KHR
+// acquire leaves it signalled, and re-using a signalled semaphore for the next
+// vkAcquireNextImageKHR is invalid.
+bool VulkanRender::Impl::createSwapchainSemaphores() {
+    if (! m_device) return false;
+    VkSemaphoreCreateInfo ci { .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+                               .pNext = nullptr };
+
+    m_rendering_resources.sem_swap_wait_image.reset();
+    VVK_CHECK_BOOL_RE(
+        m_device->handle().CreateSemaphore(ci, m_rendering_resources.sem_swap_wait_image));
+
+    const usize n_images = m_device->swapchain().images().size();
+    m_sem_swap_finish_per_image.clear();
+    m_sem_swap_finish_per_image.resize(n_images);
+    for (auto& s : m_sem_swap_finish_per_image) {
+        VVK_CHECK_BOOL_RE(m_device->handle().CreateSemaphore(ci, s));
+    }
+    return true;
+}
+
+// Full rebuild of the surface swapchain plus everything derived from it.
+// Deliberately narrow: render targets are sized from out_extent (unchanged
+// here) and FinPass blits into the present image without caching a
+// framebuffer for it, so no render pass / pipeline has to be rebuilt.
+bool VulkanRender::Impl::recreateSwapchain() {
+    if (! m_with_surface || ! m_device) return false;
+    const VkSurfaceKHR surface = *m_instance.surface();
+    if (surface == VK_NULL_HANDLE) return false;
+
+    // Waits for device idle, then destroys the old image views and retires
+    // the old VkSwapchainKHR through `oldSwapchain`.
+    if (! m_device->recreateSwapchain(surface)) return false;
+
+    if (! createSwapchainSemaphores()) return false;
+
+    // Format / usage of the present image can differ after renegotiation.
+    if (m_finpass) {
+        m_finpass->setPresentFormat(m_device->swapchain().format());
+        m_finpass->setPresentCanTransferSrc(
+            (m_device->swapchain().usage() & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0);
+    }
+
+    m_swapchain_out_of_date = false;
+    return true;
+}
+
 bool VulkanRender::Impl::CreateRenderingResource(RenderingResources& rr) {
     rr.command = m_render_cmd;
     VVK_CHECK_BOOL_RE(m_device->handle().CreateFence(
@@ -989,16 +1080,7 @@ bool VulkanRender::Impl::CreateRenderingResource(RenderingResources& rr) {
     }
 
     if (m_with_surface) {
-        VkSemaphoreCreateInfo ci { .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
-                                   .pNext = nullptr };
-        VVK_CHECK_BOOL_RE(m_device->handle().CreateSemaphore(ci, rr.sem_swap_wait_image));
-
-        const usize n_images = m_device->swapchain().images().size();
-        m_sem_swap_finish_per_image.clear();
-        m_sem_swap_finish_per_image.resize(n_images);
-        for (auto& s : m_sem_swap_finish_per_image) {
-            VVK_CHECK_BOOL_RE(m_device->handle().CreateSemaphore(ci, s));
-        }
+        if (! createSwapchainSemaphores()) return false;
     }
 
     if (! m_with_surface) {
@@ -1048,6 +1130,11 @@ void VulkanRender::Impl::drawFrame(Scene& scene) {
     if (! (m_inited && m_program.loaded)) return;
 
     if (m_instance.offscreen()) {
+        // Both paths share rr.fence_frame, and the offscreen path submits into
+        // it directly. If the surface went away with a swapchain frame still
+        // in flight, retire it first so the fence is not signalled-but-unreset
+        // at the next submit.
+        retireInFlightFrame();
         drawFrameOffscreen();
         if (m_redraw_cb) m_redraw_cb();
     } else {
@@ -1055,20 +1142,79 @@ void VulkanRender::Impl::drawFrame(Scene& scene) {
     }
 }
 
-void VulkanRender::Impl::drawFrameSwapchain() {
-    static size_t resource_index = 0;
-
+// Wait out a previously submitted swapchain frame, run its deferred per-frame
+// cleanup and reset the fence for reuse. Called at the head of the next frame
+// rather than right after present, so the GPU executes frame N while the host
+// is still in the frame timer's sleep and the event pump for frame N+1 instead
+// of spinning on a fence the instant present returns.
+//
+// Every GPU-visible write in the frame that follows — prepareFrameData into
+// m_dyn_buf, the command buffer re-record, the texture upload staging —
+// happens after this wait, so nothing is ever rewritten while the GPU still
+// reads it. Overlapping more than one frame would additionally require
+// per-frame copies of m_dyn_buf's device buffer and of every descriptor set
+// pointing at it; both are shared today, which is why the depth stops at one.
+void VulkanRender::Impl::retireInFlightFrame() {
+    if (! m_frame_in_flight) return;
     RenderingResources& rr = m_rendering_resources;
-    resource_index         = (resource_index + 1) % 3;
-    uint32_t image_index   = 0;
-    {
-        VVK_CHECK_VOID_RE(m_device->handle().AcquireNextImageKHR(*m_device->swapchain().handle(),
-                                                                 vk_wait_time,
-                                                                 *rr.sem_swap_wait_image,
-                                                                 {},
-                                                                 &image_index));
+    VVK_CHECK_VOID_RE(rr.fence_frame.Wait(vk_wait_time));
+    m_frame_in_flight = false;
+    ReleaseCompletedRetiredResources(rr);
+    m_finpass->finishFrameDump(*m_device);
+    m_device->tex_cache().ReleaseRecordedUploads();
+    rr.pending_upload_value = 0;
+    VVK_CHECK_VOID_RE(rr.fence_frame.Reset());
+    if (m_redraw_cb) m_redraw_cb();
+}
+
+void VulkanRender::Impl::flushPendingFrame() { retireInFlightFrame(); }
+
+void VulkanRender::Impl::drawFrameSwapchain() {
+    RenderingResources& rr = m_rendering_resources;
+
+    retireInFlightFrame();
+
+    // A pending rebuild (or a swapchain we failed to rebuild earlier) has to
+    // be resolved before anything touches the images. While the surface stays
+    // unpresentable — display asleep, 0x0 drawable mid-reconfiguration — we
+    // just skip frames instead of creating an invalid swapchain.
+    if (m_swapchain_out_of_date || ! m_device->swapchain().handle()) {
+        if (! recreateSwapchain()) return;
     }
-    const auto& image = m_device->swapchain().images()[image_index];
+
+    uint32_t image_index = 0;
+    {
+        const VkResult res =
+            m_device->handle().AcquireNextImageKHR(*m_device->swapchain().handle(),
+                                                   vk_wait_time,
+                                                   *rr.sem_swap_wait_image,
+                                                   {},
+                                                   &image_index);
+        if (res == VK_ERROR_OUT_OF_DATE_KHR || res == VK_ERROR_SURFACE_LOST_KHR) {
+            // No image was acquired and the semaphore was not signalled:
+            // rebuild now and drop this frame.
+            rstd_info("swapchain out of date on acquire: {}", vvk::ToString(res));
+            m_swapchain_out_of_date = true;
+            (void)recreateSwapchain();
+            return;
+        }
+        if (res == VK_SUBOPTIMAL_KHR) {
+            // The image is valid and the acquire semaphore *is* signalled, so
+            // render and present this frame normally, then rebuild at the tail
+            // rather than leaving a dangling signalled semaphore behind.
+            m_swapchain_out_of_date = true;
+        } else if (res != VK_SUCCESS) {
+            rstd_error("vkAcquireNextImageKHR failed: {}", vvk::ToString(res));
+            return;
+        }
+    }
+    auto swap_images = m_device->swapchain().images();
+    if (image_index >= swap_images.size() || image_index >= m_sem_swap_finish_per_image.size()) {
+        rstd_error("acquired swapchain image {} out of range", image_index);
+        m_swapchain_out_of_date = true;
+        return;
+    }
+    const auto& image = swap_images[image_index];
 
     m_finpass->setPresent(image);
     // Dynamic vertices, instance counts and uniforms must reach the staging
@@ -1124,7 +1270,14 @@ void VulkanRender::Impl::drawFrameSwapchain() {
         .pSignalSemaphores    = sem_present_done.address(),
     };
 
-    VVK_CHECK_VOID_RE(m_device->graphics_queue().handle.Submit(sub_info, *rr.fence_frame));
+    VVK_CHECK_ACT(
+        {
+            // The acquire semaphore is signalled but nothing will ever wait on
+            // it now. Force a rebuild so it is recreated unsignalled.
+            m_swapchain_out_of_date = true;
+            return;
+        },
+        m_device->graphics_queue().handle.Submit(sub_info, *rr.fence_frame));
     VkPresentInfoKHR present_info {
         .sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
         .pNext              = nullptr,
@@ -1134,15 +1287,21 @@ void VulkanRender::Impl::drawFrameSwapchain() {
         .pSwapchains        = m_device->swapchain().handle().address(),
         .pImageIndices      = &image_index,
     };
-    VVK_CHECK_VOID_RE(m_device->present_queue().handle.Present(present_info));
-    if (m_redraw_cb) m_redraw_cb();
-
-    VVK_CHECK_VOID_RE(rr.fence_frame.Wait(vk_wait_time));
-    ReleaseCompletedRetiredResources(rr);
-    m_finpass->finishFrameDump(*m_device);
-    m_device->tex_cache().ReleaseRecordedUploads();
-    rr.pending_upload_value = 0;
-    VVK_CHECK_VOID_RE(rr.fence_frame.Reset());
+    {
+        const VkResult res = m_device->present_queue().handle.Present(present_info);
+        if (res == VK_ERROR_OUT_OF_DATE_KHR || res == VK_SUBOPTIMAL_KHR ||
+            res == VK_ERROR_SURFACE_LOST_KHR) {
+            rstd_info("swapchain needs rebuild after present: {}", vvk::ToString(res));
+            m_swapchain_out_of_date = true;
+        } else if (res != VK_SUCCESS) {
+            rstd_error("vkQueuePresentKHR failed: {}", vvk::ToString(res));
+        }
+    }
+    // Submitted successfully: the fence is now owned by the GPU and is awaited
+    // at the head of the next frame, which is also where a pending swapchain
+    // rebuild is handled — rebuilding here would tear down images this frame's
+    // work may still be reading.
+    m_frame_in_flight = true;
 }
 void VulkanRender::Impl::drawFrameOffscreen() {
     if (! m_ex_swapchain) return;
@@ -1246,7 +1405,8 @@ void VulkanRender::Impl::UpdateCameraFillMode(sr::Scene& scene, sr::FillMode fil
     auto height = m_device->out_extent().height;
 
     if (width == 0) return;
-    double sw = scene.ortho[0], sh = scene.ortho[1];
+    const auto projection_extent = scene.OrthographicProjectionExtent();
+    double     sw = projection_extent[0], sh = projection_extent[1];
     double fboAspect = width / (double)height, sAspect = sw / sh;
     auto&  gCam    = *scene.cameras.at("global");
     auto&  gPerCam = *scene.cameras.at("global_perspective");
@@ -1322,7 +1482,13 @@ void VulkanRender::Impl::compileRenderGraph(Scene& scene, rg::RenderGraph& rg,
     m_program.buildFromGraph(rg);
     m_program.injectFramePasses(*m_prepass, *m_finpass);
 
-    m_program.finalizeRenderTargetSizes(scene, m_device->out_extent(), m_msaa_samples);
+    const auto limits = m_device->gpu().GetProperties().limits;
+    const VkExtent2D max_framebuffer_extent {
+        std::min(limits.maxImageDimension2D, limits.maxFramebufferWidth),
+        std::min(limits.maxImageDimension2D, limits.maxFramebufferHeight),
+    };
+    m_program.finalizeRenderTargetSizes(
+        scene, m_device->out_extent(), max_framebuffer_extent, m_msaa_samples);
     m_program.finalizeFramePassRequests(scene);
     m_program.finalizeResourceRequests(scene);
     m_device->tex_cache().BeginVideoTextureActivity();
@@ -1341,7 +1507,13 @@ void VulkanRender::Impl::refreshPreparedResources(Scene&                     sce
                                                   const RenderSceneSnapshot& render_scene) {
     if (! m_inited || m_program.pass_records.empty()) return;
 
-    m_program.finalizeRenderTargetSizes(scene, m_device->out_extent(), m_msaa_samples);
+    const auto limits = m_device->gpu().GetProperties().limits;
+    const VkExtent2D max_framebuffer_extent {
+        std::min(limits.maxImageDimension2D, limits.maxFramebufferWidth),
+        std::min(limits.maxImageDimension2D, limits.maxFramebufferHeight),
+    };
+    m_program.finalizeRenderTargetSizes(
+        scene, m_device->out_extent(), max_framebuffer_extent, m_msaa_samples);
     m_program.finalizeFramePassRequests(scene);
     m_program.finalizeResourceRequests(scene);
     m_device->tex_cache().BeginVideoTextureActivity();

@@ -24,6 +24,23 @@ struct SteamCMDStep: View {
                             .foregroundStyle(.secondary)
                     }
 
+                case .rosettaRequired:
+                    VStack(spacing: 16) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 48))
+                            .foregroundStyle(.orange)
+
+                        Text(L("需要安装 Rosetta 2"))
+                            .font(.title2)
+                            .bold()
+
+                        Text(L("当前 Apple 芯片 Mac 尚未安装 Rosetta 2。请先通过 macOS 系统方式安装 Rosetta 2，再重新打开此设置页面。"))
+                            .font(.body)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 30)
+                    }
+
                 case .found(let path):
                     VStack(spacing: 16) {
                         Image(systemName: "checkmark.circle.fill")

@@ -7,6 +7,11 @@ module;
 #include <glslang/Public/ResourceLimits.h>
 #include <SPIRV/GlslangToSpv.h>
 
+#include <cstdio>
+#include <cstdlib>
+#include <fcntl.h>
+#include <unistd.h>
+
 #include "Utils/Sha.hpp"
 module sr.shader_compile;
 import sr.core;
@@ -19,18 +24,57 @@ using namespace sr::vulkan;
 
 namespace
 {
-// Spill a payload to /tmp/<sha1> for post-mortem inspection. Returns the
+// Open a diagnostics dump for writing without ever following a symlink and
+// without reusing an existing inode.
+//
+// The dump names below are derived from shader text that ships inside the
+// wallpaper package, so a package author knows them in advance and can trigger
+// the write on demand (any shader that fails to compile). With plain
+// fopen(..,"wb") a pre-planted symlink at that path turns the dump into an
+// arbitrary-file overwrite with attacker-chosen content (CWE-59 / CWE-377).
+// O_EXCL | O_NOFOLLOW makes both cases a clean failure instead.
+std::FILE* openDumpFileExclusive(const std::string& path) {
+    int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
+    if (fd < 0) return nullptr;
+    std::FILE* file = ::fdopen(fd, "wb");
+    if (file == nullptr) ::close(fd);
+    return file;
+}
+
+// Spill a payload to <tmp>/<sha1> for post-mortem inspection. Returns the
 // written path so callers can mention it in the error message.
 std::string logToTmpfileWithSha1(std::span<const char> in) {
     std::string           name   = utils::genSha1(in);
     std::filesystem::path fspath = std::filesystem::temp_directory_path() / name;
     std::string           path   = fspath.native();
-    auto*                 file   = std::fopen(path.c_str(), "wb");
-    if (! file) return path;
+    // An existing entry is never overwritten. The name is a content hash, so
+    // a dump this process already wrote holds exactly the same bytes; anything
+    // else at that path is not ours to clobber.
+    auto* file = openDumpFileExclusive(path);
+    if (! file) {
+        rstd_warn("could not write shader dump to {}", path);
+        return path;
+    }
     std::fwrite(in.data(), 1, in.size(), file);
     std::fputc('\n', file);
     std::fclose(file);
     return path;
+}
+
+// Per-process directory for SCENERENDERER_DUMP_SPIRV output. mkdtemp creates
+// it atomically with mode 0700 and an unpredictable name, so the dumps written
+// into it cannot be redirected. Empty string means "unavailable" and disables
+// dumping for this run.
+const std::string& spirvDumpDir() {
+    static const std::string dir = []() -> std::string {
+        std::string tmpl =
+            (std::filesystem::temp_directory_path() / "sr_spirv_dump_XXXXXX").native();
+        std::vector<char> buf(tmpl.begin(), tmpl.end());
+        buf.push_back('\0');
+        if (::mkdtemp(buf.data()) == nullptr) return {};
+        return std::string(buf.data());
+    }();
+    return dir;
 }
 
 inline VkShaderStageFlagBits ToVkType(sr::ShaderType s) {
@@ -158,11 +202,16 @@ bool sr::vulkan::GenReflect(std::span<const std::vector<unsigned>> codes,
                 continue;
             }
             if (b.descriptor_type == SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_BUFFER) {
-                auto& block      = b.block;
-                auto  block_name = std::string(block.name).empty() ? bind_name : block.name;
+                auto&       block      = b.block;
+                std::string block_name = (block.name != nullptr && block.name[0] != '\0')
+                                             ? std::string(block.name)
+                                             : std::string(bind_name);
                 ref.blocks.push_back(ShaderReflected::Block {
-                    .size = block.size, .name = block.name, .member_map = {} });
-                auto& ref_block = ref.blocks.front();
+                    .size = block.size, .name = block_name, .member_map = {} });
+                // Must be back(): front() dumped every block's members into
+                // the first block's map, so with more than one uniform block
+                // uniforms were written at another block's offsets.
+                auto& ref_block = ref.blocks.back();
 
                 vkbinding.binding         = b.binding;
                 vkbinding.descriptorCount = 1;
@@ -389,16 +438,17 @@ bool sr::vulkan::CompileAndLinkShaderUnits(std::span<const ShaderCompUnit> compU
             return false;
         }
 
-        if (std::getenv("SCENERENDERER_DUMP_SPIRV")) {
+        if (std::getenv("SCENERENDERER_DUMP_SPIRV") && ! spirvDumpDir().empty()) {
             static int  dump_idx = 0;
-            std::string base     = "/tmp/sr_dump_" + std::to_string(dump_idx++) + "_" + entry_str;
+            std::string base =
+                spirvDumpDir() + "/sr_dump_" + std::to_string(dump_idx++) + "_" + entry_str;
             std::string spv_path = base + ".spv";
             std::string src_path = base + ".glsl";
-            if (auto* f = std::fopen(spv_path.c_str(), "wb")) {
+            if (auto* f = openDumpFileExclusive(spv_path)) {
                 std::fwrite(spv->spirv.data(), sizeof(u32), spv->spirv.size(), f);
                 std::fclose(f);
             }
-            if (auto* f = std::fopen(src_path.c_str(), "wb")) {
+            if (auto* f = openDumpFileExclusive(src_path)) {
                 std::fwrite(unit.src.data(), 1, unit.src.size(), f);
                 std::fclose(f);
             }

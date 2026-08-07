@@ -92,6 +92,12 @@ echo "[bundle] 收集场景引擎依赖..."
 collect_deps "$RENDERERS/SceneWallpaper"
 collect_deps "$SCENE_SAVER_LIB"
 
+# 视频渲染器依赖 libav*（转码无法解码的编码，如 VP9/AV1）。场景引擎恰好也链接同一批
+# 库，但不能依赖这个副作用：否则场景引擎一旦不再链接 ffmpeg，视频渲染器就会带着
+# 绝对路径的 /usr/local 依赖发布，在没有 Homebrew 的机器上启动即失败。
+echo "[bundle] 收集视频引擎依赖..."
+collect_deps "$RENDERERS/VideoWallpaper"
+
 MVK_BASE=$(basename "$MOLTENVK")
 if ! is_copied "$MVK_BASE"; then
     cp -f "$(resolve "$MOLTENVK")" "$FRAMEWORKS/$MVK_BASE"

@@ -56,7 +56,9 @@ inline usize GenParticleData(std::span<const std::unique_ptr<ParticleInstance>> 
             float lifetime = p.lifetime;
             specOp(p, { &lifetime });
 
-            auto  pos  = inst->GetBoundedData().pos + p.position;
+            auto  pos  = inst->PositionsInWorldSpace()
+                            ? p.position
+                            : inst->GetBoundedData().pos + p.position;
             float size = p.size / 2.0f;
 
             usize offset = 0;
@@ -151,7 +153,9 @@ inline usize GenParticlePointData(std::span<const std::unique_ptr<ParticleInstan
             float lifetime = p.lifetime;
             specOp(p, { &lifetime });
 
-            auto  pos  = inst->GetBoundedData().pos + p.position;
+            auto  pos  = inst->PositionsInWorldSpace()
+                            ? p.position
+                            : inst->GetBoundedData().pos + p.position;
             float size = p.size / 2.0f;
 
             std::fill(v.begin(), v.begin() + (isize)one_size, 0.0f);
@@ -193,7 +197,9 @@ inline usize GenParticleInstanceData(std::span<const std::unique_ptr<ParticleIns
     usize i = 0;
     for (const auto& inst : instances) {
         if (inst->IsNoLiveParticle()) continue;
-        const Eigen::Vector3f base = inst->GetBoundedData().pos;
+        const Eigen::Vector3f base = inst->PositionsInWorldSpace()
+                                         ? Eigen::Vector3f::Zero()
+                                         : inst->GetBoundedData().pos;
         for (const auto& p : inst->Particles()) {
             if (! ParticleModify::LifetimeOk(p)) continue;
 
@@ -225,7 +231,8 @@ inline usize GenParticleInstanceData(std::span<const std::unique_ptr<ParticleIns
 // endpoints + Catmull-Rom neighbour positions as splineCP0/CP1 (the vert shader
 // derives the GS-side tangents from them). Returns the number of segment
 // vertices emitted; vertices land at [base_index, base_index+ret).
-inline size_t GenRopeParticleSegments(const Particle& p, const ParticleTrail& trail,
+inline size_t GenRopeTrailSegments(const ParticleInstance& instance, const Particle& p,
+                                      const ParticleTrail& trail,
                                       const ParticleRawGenSpecOp& specOp, WPGOption opt,
                                       SceneVertexArray& sv, std::span<float> dst,
                                       size_t base_index) {
@@ -233,26 +240,28 @@ inline size_t GenRopeParticleSegments(const Particle& p, const ParticleTrail& tr
     std::array<float, 32> v {};
     size_t                emitted = 0;
 
-    if (trail.len < 2) return 0;
+    if (trail.len == 0) return 0;
 
     float size     = p.size / 2.0f;
     float lifetime = p.lifetime;
     specOp(p, { &lifetime });
 
-    const float in_ParticleTrailLength = (float)trail.len;
+    const float in_ParticleTrailLength = (float)trail.sample_count;
+    const Vector3f base = instance.PositionsInWorldSpace()
+                              ? Vector3f::Zero()
+                              : instance.GetBoundedData().pos;
+    auto point = [&](uint16_t point_index) {
+        if (point_index == 0) return base + p.position;
+        return base + trail.At(static_cast<uint16_t>(trail.len - point_index));
+    };
 
-    // trail.At(0) = oldest, At(len-1) = newest. Segments connect (j-1) -> j.
-    for (uint16_t j = 1; j < trail.len; j++) {
-        Vector3f pre_pos = trail.At((uint16_t)(j - 1));
-        Vector3f cur_pos = trail.At(j);
-        // Catmull-Rom neighbour samples for the cubic-Bezier subdivision; the
-        // GS hardcoded 0.15 factor matches Catmull-Rom tension 0.5 (theoretical
-        // 1/6 ≈ 0.167). At the trail endpoints fall back to the segment ends
-        // so those boundary spans render flat.
-        Vector3f scp = (j >= 2) ? trail.At((uint16_t)(j - 2)) : pre_pos;
-        Vector3f ecp = (j + 1 < trail.len) ? trail.At((uint16_t)(j + 1)) : cur_pos;
+    for (uint16_t sample = 0; sample < trail.len; ++sample) {
+        Vector3f pre_pos = point(sample);
+        Vector3f cur_pos = point(static_cast<uint16_t>(sample + 1));
+        Vector3f scp = point(sample == 0 ? 0 : static_cast<uint16_t>(sample - 1));
+        Vector3f ecp = point(std::min<uint16_t>(static_cast<uint16_t>(sample + 2), trail.len));
 
-        const float in_ParticleTrailPosition = (float)(j - 1);
+        const float in_ParticleTrailPosition = (float)sample;
 
         size_t off = 0;
         v[off++]   = pre_pos[0];
@@ -297,7 +306,7 @@ inline size_t GenRopeParticleSegments(const Particle& p, const ParticleTrail& tr
     return emitted;
 }
 
-inline size_t GenRopeParticleData(std::span<const std::unique_ptr<ParticleInstance>> instances,
+inline size_t GenRopeTrailData(std::span<const std::unique_ptr<ParticleInstance>> instances,
                                   const ParticleRawGenSpecOp& specOp, WPGOption opt,
                                   SceneVertexArray& sv) {
     auto   dst   = sv.DynamicWriteData();
@@ -310,7 +319,100 @@ inline size_t GenRopeParticleData(std::span<const std::unique_ptr<ParticleInstan
         for (size_t si = 0; si < n; si++) {
             if (! ParticleModify::LifetimeOk(particles[si])) continue;
             total +=
-                GenRopeParticleSegments(particles[si], trails[si], specOp, opt, sv, dst, total);
+                GenRopeTrailSegments(*inst, particles[si], trails[si], specOp, opt, sv, dst, total);
+        }
+    }
+    sv.CommitDynamicVertexCount(total);
+    return total;
+}
+
+inline size_t GenAuthoredRopeData(
+    std::span<const std::unique_ptr<ParticleInstance>> instances,
+    const ParticleRawGenSpecOp& specOp, WPGOption opt, SceneVertexArray& sv,
+    std::optional<u32> sequence_count) {
+    auto   dst      = sv.DynamicWriteData();
+    size_t total    = 0;
+    const auto one_size = sv.OneSize();
+    for (const auto& inst : instances) {
+        if (inst->IsNoLiveParticle()) continue;
+        std::vector<const Particle*> particles;
+        for (const auto& particle : inst->Particles())
+            if (ParticleModify::LifetimeOk(particle)) particles.push_back(&particle);
+        std::sort(particles.begin(), particles.end(), [](const Particle* lhs, const Particle* rhs) {
+            return lhs->spawn_sequence < rhs->spawn_sequence;
+        });
+        if (particles.size() < 2) continue;
+        const Vector3f base = inst->PositionsInWorldSpace()
+                                  ? Vector3f::Zero()
+                                  : inst->GetBoundedData().pos;
+
+        auto emit_group = [&](size_t begin, size_t end) {
+            if (end - begin < 2) return true;
+            const auto& newest = *particles[end - 1];
+            const auto& before = *particles[end - 2];
+            const float newest_age = newest.init.lifetime - newest.lifetime;
+            const float before_age = before.init.lifetime - before.lifetime;
+            const float emit_period = before_age - newest_age;
+            float sequence_offset = 0.0f;
+            if (emit_period > 1e-6f)
+                sequence_offset = -std::clamp(newest_age / emit_period, 0.0f, 1.0f);
+            const size_t segment_count = end - begin - 1;
+            for (size_t index = begin; index < end - 1; ++index) {
+                const auto& current = *particles[index];
+                const auto& previous = *particles[index == begin ? begin : index - 1];
+                const auto& next = *particles[index + 1];
+                const auto& after = *particles[std::min(index + 2, end - 1)];
+                float lifetime = current.lifetime;
+                specOp(current, { &lifetime });
+                std::array<float, 32> value {};
+                size_t offset = 0;
+                auto write3 = [&](const Vector3f& source) {
+                    value[offset++] = source.x();
+                    value[offset++] = source.y();
+                    value[offset++] = source.z();
+                };
+                write3(base + current.position);
+                value[offset++] = current.size * 0.5f;
+                write3(base + next.position);
+                value[offset++] = static_cast<float>(segment_count);
+                write3(base + previous.position);
+                value[offset++] = static_cast<float>(index - begin) + sequence_offset;
+                write3(base + after.position);
+                value[offset++] = opt.thick_format ? next.size * 0.5f : 0.0f;
+                if (opt.thick_format) {
+                    value[offset++] = next.color.x();
+                    value[offset++] = next.color.y();
+                    value[offset++] = next.color.z();
+                    value[offset++] = next.alpha;
+                }
+                value[offset++] = current.color.x();
+                value[offset++] = current.color.y();
+                value[offset++] = current.color.z();
+                value[offset++] = current.alpha;
+                rstd_assert(offset == one_size);
+                const size_t out_offset = total * one_size;
+                if (out_offset + one_size > dst.size()) return false;
+                std::copy_n(value.data(), one_size, dst.data() + out_offset);
+                ++total;
+            }
+            return true;
+        };
+
+        if (! sequence_count.has_value()) {
+            if (! emit_group(0, particles.size())) break;
+            continue;
+        }
+        const u64 count = std::max<u64>(*sequence_count, 2u);
+        size_t begin = 0;
+        while (begin < particles.size()) {
+            const u64 group = particles[begin]->spawn_sequence / count;
+            size_t end = begin + 1;
+            while (end < particles.size() && particles[end]->spawn_sequence / count == group) ++end;
+            if (! emit_group(begin, end)) {
+                begin = particles.size();
+                break;
+            }
+            begin = end;
         }
     }
     sv.CommitDynamicVertexCount(total);
@@ -333,7 +435,8 @@ struct RopeQuadAttrSlots {
 // macOS the rope segment fan-out the .geom would do is done here instead: each
 // trail segment becomes four vertices (a quad) with per-corner UVs, matching
 // the non-GS vertex-shader path selected by SetRopeParticleMesh.
-inline size_t GenRopeParticleQuadSegments(const Particle& p, const ParticleTrail& trail,
+inline size_t GenRopeTrailQuadSegments(const ParticleInstance& instance, const Particle& p,
+                                          const ParticleTrail& trail,
                                           const ParticleRawGenSpecOp& specOp, WPGOption opt,
                                           const RopeQuadAttrSlots& slots, SceneVertexArray& sv,
                                           std::span<float> dst, size_t base_index) {
@@ -354,13 +457,13 @@ inline size_t GenRopeParticleQuadSegments(const Particle& p, const ParticleTrail
     };
 
     rstd_assert(one_size <= v.size());
-    if (trail.len < 2) return 0;
+    if (trail.len == 0) return 0;
 
     float size     = p.size / 2.0f;
     float lifetime = p.lifetime;
     specOp(p, { &lifetime });
 
-    const float in_ParticleTrailLength = (float)trail.len;
+    const float in_ParticleTrailLength = (float)trail.sample_count;
     const std::array<std::array<float, 2>, 4> uvs {
         std::array { 0.0f, 0.0f },
         std::array { 0.0f, 1.0f },
@@ -368,14 +471,22 @@ inline size_t GenRopeParticleQuadSegments(const Particle& p, const ParticleTrail
         std::array { 1.0f, 0.0f },
     };
 
-    size_t emitted = 0;
-    for (uint16_t j = 1; j < trail.len; j++) {
-        Vector3f pre_pos = trail.At((uint16_t)(j - 1));
-        Vector3f cur_pos = trail.At(j);
-        Vector3f scp     = (j >= 2) ? trail.At((uint16_t)(j - 2)) : pre_pos;
-        Vector3f ecp     = (j + 1 < trail.len) ? trail.At((uint16_t)(j + 1)) : cur_pos;
+    const Vector3f base = instance.PositionsInWorldSpace()
+                              ? Vector3f::Zero()
+                              : instance.GetBoundedData().pos;
+    auto point = [&](uint16_t point_index) {
+        if (point_index == 0) return base + p.position;
+        return base + trail.At(static_cast<uint16_t>(trail.len - point_index));
+    };
 
-        const float in_ParticleTrailPosition = (float)(j - 1);
+    size_t emitted = 0;
+    for (uint16_t sample = 0; sample < trail.len; ++sample) {
+        Vector3f pre_pos = point(sample);
+        Vector3f cur_pos = point(static_cast<uint16_t>(sample + 1));
+        Vector3f scp = point(sample == 0 ? 0 : static_cast<uint16_t>(sample - 1));
+        Vector3f ecp = point(std::min<uint16_t>(static_cast<uint16_t>(sample + 2), trail.len));
+
+        const float in_ParticleTrailPosition = (float)sample;
         for (usize q = 0; q < uvs.size(); ++q) {
             std::fill(v.begin(), v.begin() + (isize)one_size, 0.0f);
             write4(slots.position, pre_pos[0], pre_pos[1], pre_pos[2], size);
@@ -400,7 +511,7 @@ inline size_t GenRopeParticleQuadSegments(const Particle& p, const ParticleTrail
     return emitted;
 }
 
-inline size_t GenRopeParticleQuadData(std::span<const std::unique_ptr<ParticleInstance>> instances,
+inline size_t GenRopeTrailQuadData(std::span<const std::unique_ptr<ParticleInstance>> instances,
                                       const ParticleRawGenSpecOp& specOp, WPGOption opt,
                                       SceneVertexArray& sv) {
     const auto attrs = sv.GetAttrOffsetMap();
@@ -425,8 +536,119 @@ inline size_t GenRopeParticleQuadData(std::span<const std::unique_ptr<ParticleIn
         for (size_t si = 0; si < n; si++) {
             if (! ParticleModify::LifetimeOk(particles[si])) continue;
             total +=
-                GenRopeParticleQuadSegments(particles[si], trails[si], specOp, opt, slots, sv, dst,
+                GenRopeTrailQuadSegments(*inst, particles[si], trails[si], specOp, opt, slots, sv, dst,
                                             total);
+        }
+    }
+    sv.CommitDynamicVertexCount(total * 4);
+    return total;
+}
+
+inline size_t GenAuthoredRopeQuadData(
+    std::span<const std::unique_ptr<ParticleInstance>> instances,
+    const ParticleRawGenSpecOp& specOp, WPGOption opt, SceneVertexArray& sv,
+    std::optional<u32> sequence_count) {
+    const auto attrs = sv.GetAttrOffsetMap();
+    const RopeQuadAttrSlots slots {
+        .position = FindAttrSlot(attrs, WE_IN_POSITIONVEC4),
+        .endpoint = FindAttrSlot(attrs, WE_IN_TEXCOORDVEC4),
+        .cp_start = FindAttrSlot(attrs, WE_IN_TEXCOORDVEC4C1),
+        .cp_end4  = FindAttrSlot(attrs, WE_IN_TEXCOORDVEC4C2),
+        .cp_end3  = FindAttrSlot(attrs, WE_IN_TEXCOORDVEC3C2),
+        .color2   = FindAttrSlot(attrs, WE_IN_TEXCOORDVEC4C3),
+        .uv4      = FindAttrSlot(attrs, WE_IN_TEXCOORDC4),
+        .uv3      = FindAttrSlot(attrs, WE_IN_TEXCOORDC3),
+        .color    = FindAttrSlot(attrs, WE_IN_COLOR),
+    };
+    const std::array<std::array<float, 2>, 4> uvs {
+        std::array { 0.0f, 0.0f }, std::array { 0.0f, 1.0f },
+        std::array { 1.0f, 1.0f }, std::array { 1.0f, 0.0f },
+    };
+    auto   dst      = sv.DynamicWriteData();
+    const auto one_size = sv.OneSize();
+    size_t total    = 0;
+    for (const auto& inst : instances) {
+        if (inst->IsNoLiveParticle()) continue;
+        std::vector<const Particle*> particles;
+        for (const auto& particle : inst->Particles())
+            if (ParticleModify::LifetimeOk(particle)) particles.push_back(&particle);
+        std::sort(particles.begin(), particles.end(), [](const Particle* lhs, const Particle* rhs) {
+            return lhs->spawn_sequence < rhs->spawn_sequence;
+        });
+        if (particles.size() < 2) continue;
+        const Vector3f base = inst->PositionsInWorldSpace()
+                                  ? Vector3f::Zero()
+                                  : inst->GetBoundedData().pos;
+
+        auto emit_group = [&](size_t begin, size_t end) {
+            if (end - begin < 2) return true;
+            const auto& newest = *particles[end - 1];
+            const auto& before = *particles[end - 2];
+            const float newest_age = newest.init.lifetime - newest.lifetime;
+            const float before_age = before.init.lifetime - before.lifetime;
+            const float emit_period = before_age - newest_age;
+            float sequence_offset = 0.0f;
+            if (emit_period > 1e-6f)
+                sequence_offset = -std::clamp(newest_age / emit_period, 0.0f, 1.0f);
+            const size_t segment_count = end - begin - 1;
+            for (size_t index = begin; index < end - 1; ++index) {
+                const auto& current = *particles[index];
+                const auto& previous = *particles[index == begin ? begin : index - 1];
+                const auto& next = *particles[index + 1];
+                const auto& after = *particles[std::min(index + 2, end - 1)];
+                float lifetime = current.lifetime;
+                specOp(current, { &lifetime });
+                for (usize corner = 0; corner < uvs.size(); ++corner) {
+                    std::array<float, 64> value {};
+                    auto write2 = [&](AttrSlot slot, float x, float y) {
+                        if (! slot.enabled) return;
+                        value[slot.offset] = x;
+                        value[slot.offset + 1] = y;
+                    };
+                    auto write4 = [&](AttrSlot slot, const Vector3f& source, float w) {
+                        if (! slot.enabled) return;
+                        value[slot.offset] = source.x();
+                        value[slot.offset + 1] = source.y();
+                        value[slot.offset + 2] = source.z();
+                        value[slot.offset + 3] = w;
+                    };
+                    write4(slots.position, base + current.position, current.size * 0.5f);
+                    write4(slots.endpoint, base + next.position, static_cast<float>(segment_count));
+                    write4(slots.cp_start,
+                           base + previous.position,
+                           static_cast<float>(index - begin) + sequence_offset);
+                    if (opt.thick_format) {
+                        write4(slots.cp_end4, base + after.position, next.size * 0.5f);
+                        write4(slots.color2, next.color, next.alpha);
+                        write2(slots.uv4, uvs[corner][0], uvs[corner][1]);
+                    } else {
+                        write4(slots.cp_end3, base + after.position, 0.0f);
+                        write2(slots.uv3, uvs[corner][0], uvs[corner][1]);
+                    }
+                    write4(slots.color, current.color, current.alpha);
+                    const size_t out_offset = (total * 4 + corner) * one_size;
+                    if (out_offset + one_size > dst.size()) return false;
+                    std::copy_n(value.data(), one_size, dst.data() + out_offset);
+                }
+                ++total;
+            }
+            return true;
+        };
+        if (! sequence_count.has_value()) {
+            if (! emit_group(0, particles.size())) break;
+            continue;
+        }
+        const u64 count = std::max<u64>(*sequence_count, 2u);
+        size_t begin = 0;
+        while (begin < particles.size()) {
+            const u64 group = particles[begin]->spawn_sequence / count;
+            size_t end = begin + 1;
+            while (end < particles.size() && particles[end]->spawn_sequence / count == group) ++end;
+            if (! emit_group(begin, end)) {
+                begin = particles.size();
+                break;
+            }
+            begin = end;
         }
     }
     sv.CommitDynamicVertexCount(total * 4);
@@ -455,7 +677,8 @@ inline void updateIndexArray(uint32_t index, size_t count, SceneIndexArray& iarr
 } // namespace
 
 void WPParticleRawGener::GenGLData(std::span<const std::unique_ptr<ParticleInstance>> instances,
-                                   SceneMesh& mesh, ParticleRawGenSpecOp& specOp) {
+                                   SceneMesh& mesh, ParticleRawGenSpecOp& specOp,
+                                   std::optional<u32> rope_sequence_count) {
     if (mesh.ParticleInstanced()) {
         auto& instance_sv = mesh.GetVertexArray(1);
         WPGOption opt;
@@ -472,7 +695,9 @@ void WPParticleRawGener::GenGLData(std::span<const std::unique_ptr<ParticleInsta
     WPGOption opt;
     opt.thick_format = sv.GetOption(WE_CB_THICK_FORMAT);
 
-    if (sv.GetOption(WE_PRENDER_ROPE)) {
+    const bool authored_rope = sv.GetOption(WE_PRENDER_ROPE);
+    const bool rope_trail    = sv.GetOption(WE_PRENDER_ROPE_TRAIL);
+    if (authored_rope || rope_trail) {
         // Rope/spline. With a geometry shader (POINT primitive) it's one vertex
         // per segment expanded on the GPU. On macOS (no GS) the mesh is a
         // TRIANGLE list with an index buffer and the segments are expanded to
@@ -481,9 +706,15 @@ void WPParticleRawGener::GenGLData(std::span<const std::unique_ptr<ParticleInsta
         // mark.
         usize segment_num = 0;
         if (mesh.Primitive() == MeshPrimitive::POINT) {
-            segment_num = GenRopeParticleData(instances, specOp, opt, sv);
+            segment_num = authored_rope
+                              ? GenAuthoredRopeData(
+                                    instances, specOp, opt, sv, rope_sequence_count)
+                              : GenRopeTrailData(instances, specOp, opt, sv);
         } else {
-            segment_num     = GenRopeParticleQuadData(instances, specOp, opt, sv);
+            segment_num = authored_rope
+                              ? GenAuthoredRopeQuadData(
+                                    instances, specOp, opt, sv, rope_sequence_count)
+                              : GenRopeTrailQuadData(instances, specOp, opt, sv);
             auto& si        = mesh.GetIndexArray(0);
             u32   index_num = (u32)(si.DataCount() / 6);
             if (segment_num > index_num) {

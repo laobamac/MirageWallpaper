@@ -30,7 +30,7 @@ export namespace sr
 //   ├── texi stamp ("TEXI0001")
 //   ├── format       int32  (0=RGBA8, 4=BC3, 6=BC2, 7=BC1, 8=RG8, 9=R8)
 //   ├── flags        uint32 (bit0=noInterpolation bit1=clampUVs bit2=sprite
-//   │                        bit20..22=compo1..3)
+//   │                        bit20..23=compo1..4)
 //   ├── width/height int32 ×2  pow-2 texture coord size (or pic size when not pow-2)
 //   ├── map_w/h      int32 ×2  original picture size (== width/height when pow-2)
 //   ├── reserved_a   int32  unused, never observed != 0

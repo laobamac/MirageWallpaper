@@ -7,6 +7,7 @@ enum {
     VRManifestErrorInvalidJSON,
     VRManifestErrorWrongType,
     VRManifestErrorMissingVideo,
+    VRManifestErrorUnsafePath,
 };
 
 @interface VRVideoManifest ()
@@ -41,6 +42,30 @@ static NSSet<NSString *> *VRVideoExtensions(void) {
       ]];
     });
     return extensions;
+}
+
+// Resolve a manifest-supplied relative path inside `directory`, or nil if it
+// escapes. project.json is untrusted Workshop content, so a "file" entry of
+// "../../../../Users/you/Movies/private.mov" must not end up playing on the
+// desktop. Same containment pattern as WRURLSchemeHandler
+// -safePathForRelative:inDirectory:: canonicalize BOTH sides (standardize and
+// resolve symlinks, since a symlinked entry inside the directory can point
+// anywhere) and require equality with the root or a "<root>/" prefix.
+static NSString *VRContainedPath(NSString *relative, NSString *directory) {
+    if (relative.length == 0) return nil;
+    while (relative.length > 0 && [relative characterAtIndex:0] == '/') {
+        relative = [relative substringFromIndex:1];
+    }
+    if (relative.length == 0) return nil;
+    NSString *base = [[directory stringByStandardizingPath] stringByResolvingSymlinksInPath];
+    if (base.length == 0) return nil;
+    NSString *combined = [base stringByAppendingPathComponent:relative];
+    NSString *standardized = [[combined stringByStandardizingPath] stringByResolvingSymlinksInPath];
+    if (![standardized isEqualToString:base] &&
+        ![standardized hasPrefix:[base stringByAppendingString:@"/"]]) {
+        return nil;
+    }
+    return standardized;
 }
 
 static NSString *VRFindFirstVideoFile(NSString *directory) {
@@ -130,12 +155,23 @@ static NSDictionary<NSString *, id> *VRManifestUserProperties(NSDictionary *json
         return nil;
     }
 
-    NSString *videoPath = [[directory stringByAppendingPathComponent:videoFile] stringByStandardizingPath];
+    NSString *videoPath = VRContainedPath(videoFile, directory);
+    if (videoPath == nil) {
+        if (error != NULL) {
+            *error = VRMakeError(VRManifestErrorUnsafePath,
+                                 @"project.json 'file' entry escapes the wallpaper directory",
+                                 nil);
+        }
+        return nil;
+    }
     BOOL isVideoDir = NO;
     if (![NSFileManager.defaultManager fileExistsAtPath:videoPath isDirectory:&isVideoDir] || isVideoDir) {
+        // Report the manifest-relative name, never the resolved absolute path:
+        // the latter turns this error into an arbitrary-path existence oracle.
         if (error != NULL) {
             *error = VRMakeError(VRManifestErrorMissingVideo,
-                                 [NSString stringWithFormat:@"video file not found: %@", videoPath],
+                                 [NSString stringWithFormat:@"video file not found in wallpaper directory: %@",
+                                                            videoFile],
                                  nil);
         }
         return nil;

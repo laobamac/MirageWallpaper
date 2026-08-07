@@ -116,21 +116,30 @@ bool StagingBuffer::increaseBuf(VkDeviceSize nsize) {
     if (m_stage_raw == nullptr) {
         VVK_CHECK_BOOL_RE(mapStageBuf());
     }
-    auto                 newsize = m_stage_buf.req_size + nsize;
-    std::vector<uint8_t> tmp;
-    tmp.resize(newsize);
-    std::memcpy(tmp.data(), m_stage_raw, m_stage_buf.req_size);
+    if (nsize > std::numeric_limits<VkDeviceSize>::max() - m_stage_buf.req_size) return false;
+    auto current  = static_cast<VkDeviceSize>(m_stage_buf.req_size);
+    auto required = current + nsize;
+    auto growth   = std::max(current / 2, m_size_step);
+    auto newsize  = growth > std::numeric_limits<VkDeviceSize>::max() - current
+                        ? required
+                        : std::max(required, current + growth);
 
-    m_stage_raw = nullptr;
+    VmaBufferParameters new_stage;
+    if (! CreateStagingBuffer(m_device.vma_allocator(), newsize, new_stage)) return false;
+    void* new_raw = nullptr;
+    if (new_stage.handle.MapMemory(&new_raw) != VK_SUCCESS) return false;
+    if (new_raw == nullptr) {
+        new_stage.handle.UnMapMemory();
+        return false;
+    }
+    std::memcpy(new_raw, m_stage_raw, m_stage_buf.req_size);
+
     m_stage_buf.handle.UnMapMemory();
-    m_stage_buf.handle = nullptr;
-
-    if (! CreateStagingBuffer(m_device.vma_allocator(), newsize, m_stage_buf)) return false;
-    VVK_CHECK_BOOL_RE(mapStageBuf());
-    std::memcpy(m_stage_raw, tmp.data(), newsize);
+    m_stage_buf = std::move(new_stage);
+    m_stage_raw = new_raw;
 
     m_gpu_buf.handle = nullptr;
-    rstd_info("increase buffer size: {}", nsize);
+    rstd_info("increase buffer size: {}", newsize);
     return true;
 }
 
@@ -191,7 +200,9 @@ bool StagingBuffer::allocateSubRef(VkDeviceSize size, StagingBufferRef& ref,
 
     auto& block = *p_block;
     if (old_block_num < m_virtual_blocks.size()) {
-        if (! increaseBuf(block.size)) {
+        auto required = block.offset + block.size;
+        if (required > m_stage_buf.req_size &&
+            ! increaseBuf(required - m_stage_buf.req_size)) {
             auto& block = m_virtual_blocks.back();
             vmaClearVirtualBlock(block.handle);
             vmaDestroyVirtualBlock(block.handle);
@@ -225,7 +236,15 @@ bool StagingBuffer::writeToBuf(const StagingBufferRef& ref, std::span<uint8_t> d
                                size_t offset) {
     CHECK_REF(ref, return false);
 
-    if (m_stage_raw == nullptr) mapStageBuf();
+    if (m_stage_raw == nullptr && (mapStageBuf() != VK_SUCCESS || m_stage_raw == nullptr))
+        return false;
+    // `offset` comes from shader-reflected uniform offsets, so it is only as
+    // trustworthy as the reflection. Without this guard `ref.size - offset`
+    // wraps around and the copy runs past the mapped staging region.
+    if (offset >= ref.size) {
+        rstd_error("stage write out of range: offset {} >= size {}", offset, ref.size);
+        return false;
+    }
     VkDeviceSize size = std::min<VkDeviceSize>(ref.size - offset, data.size());
     uint8_t*     raw  = (uint8_t*)m_stage_raw;
     std::copy(data.begin(), data.begin() + size, raw + ref.offset + offset);
@@ -236,7 +255,12 @@ bool StagingBuffer::writeToBuf(const StagingBufferRef& ref, std::span<uint8_t> d
 bool StagingBuffer::fillBuf(const StagingBufferRef& ref, size_t offset, size_t size, uint8_t c) {
     CHECK_REF(ref, return false);
 
-    if (m_stage_raw == nullptr) mapStageBuf();
+    if (m_stage_raw == nullptr && (mapStageBuf() != VK_SUCCESS || m_stage_raw == nullptr))
+        return false;
+    if (offset >= ref.size) {
+        rstd_error("stage fill out of range: offset {} >= size {}", offset, ref.size);
+        return false;
+    }
     VkDeviceSize size_     = std::min<VkDeviceSize>(ref.size - offset, size);
     uint8_t*     raw       = (uint8_t*)m_stage_raw;
     uint8_t*     raw_begin = raw + ref.offset + offset;

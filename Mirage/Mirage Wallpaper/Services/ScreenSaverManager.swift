@@ -201,7 +201,12 @@ final class ScreenSaverManager {
             "wallpaperID": wallpaper.id,
             "title": wallpaper.project.title,
             "kind": wallpaper.kind.rawValue,
-            "renderDirectory": wallpaper.renderDirectory.path,
+            // Both paths must share one shape: the screen saver derives the
+            // entry's relative path by stripping this prefix from entryPath,
+            // and resolvedEntryURL is symlink-resolved by PathContainment.
+            // Resolving here keeps that derivation working when any component
+            // of the wallpaper directory is a symlink.
+            "renderDirectory": wallpaper.renderDirectory.resolvingSymlinksInPath().path,
             "entryPath": wallpaper.resolvedEntryURL.path,
             "assetOverlays": wallpaper.assetOverlayDirectories.map(\.path),
             "properties": propertyValues,

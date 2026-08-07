@@ -16,11 +16,11 @@ export namespace sr
 {
 
 // File header preceding the per-mesh body. Per hexpat: 4-byte version tag +
-// u32 vertex layout flag + u32 always-one + u32 mesh_count.
+// u32 vertex layout flag + u32 skin_count + u32 mesh_count.
 struct WPMdlHeader {
     i32 mdlv { 13 };
     u32 mdl_flag { 0 }; // vertex layout bitmask; mdlv<=14 meshes inherit this
-    u32 unk_a { 1 };    // always_one in hexpat
+    u32 skin_count { 1 };
     u32 mesh_count { 1 };
 };
 
@@ -30,7 +30,7 @@ struct WPMdl {
     // One element per header.mesh_count. mesh_count > 1 only seen on static
     // (non-puppet) meshes; renderer currently consumes meshes[0] only.
     struct Mesh {
-        std::string mat_json_file;
+        std::vector<std::string> mat_json_files;
         u32         flag_a { 0 }; // hexpat Mesh.flag_a (usually 0; 2 has trailing 1)
         bool        has_flag_a2_one { false };
         u32         flag { 0 }; // per-mesh vertex layout flag (mdlv>14); 0 = inherit header
@@ -106,12 +106,14 @@ struct WPMdl {
 
 class WPMdlParser {
 public:
-    // Reads only the bytes preceding mat_json_file. Cheap; safe to call
+    // Reads only the bytes preceding mat_json_files. Cheap; safe to call
     // over the whole corpus even on mdls that would hang full Parse.
     static bool ParseHeader(std::string_view path, fs::VFS&, WPMdlHeader&);
 
     static bool                             Parse(std::string_view path, fs::VFS&, WPMdl&);
     static std::optional<wpscene::Material> ParseMaterial(std::string_view ref, fs::VFS&);
+    static std::optional<std::size_t>        FindMeshByMaterial(const WPMdl&,
+                                                                std::string_view material_ref);
 
     static void AddPuppetShaderInfo(WPShaderInfo& info, const WPMdl& mdl);
     static void AddPuppetMatInfo(wpscene::Material& mat, const WPMdl& mdl);
@@ -121,16 +123,14 @@ public:
     // be wired separately via AddPuppetShaderInfo / AddPuppetMatInfo when the
     // mesh has bone weights.
     static void GenMeshFromMdl(SceneMesh::Submesh& submesh, const WPMdl::Mesh& src,
-                               std::array<float, 2> texcoord_scale  = { 1.0f, 1.0f },
-                               Eigen::Vector3f      position_offset = Eigen::Vector3f::Zero());
+                               std::array<float, 2> texcoord_scale = { 1.0f, 1.0f });
 
     // Like GenMeshFromMdl, but the submesh draws only the parts whose `id` is
     // in `clip_part_ids` — used for clipping-mask submeshes that only cover the
     // affected (e.g. iris) parts. Material slot is the caller's responsibility.
     static void GenMaskSubmeshFromMdl(SceneMesh::Submesh& submesh, const WPMdl::Mesh& src,
                                       std::span<const uint32_t> clip_part_ids,
-                                      std::array<float, 2>      texcoord_scale = { 1.0f, 1.0f },
-                                      Eigen::Vector3f position_offset = Eigen::Vector3f::Zero());
+                                      std::array<float, 2> texcoord_scale = { 1.0f, 1.0f });
 };
 
 } // namespace sr

@@ -19,24 +19,41 @@ inline std::tuple<u32, bool> FindLastParticle(std::span<const Particle> ps, u32 
     return { 0, false };
 }
 
-inline u32 GetEmitNum(double& timer, float speed) {
+inline u32 GetEmitNum(double timer, float speed) {
     if (speed <= 0.0f) return 0;
-    double emitDur = 1.0f / speed;
-    if (emitDur > timer) return 0;
-    u32 num = timer / emitDur;
-    while (emitDur < timer) timer -= emitDur;
-    if (timer < 0) timer = 0;
-    return num;
+    if (! std::isfinite(speed)) return std::numeric_limits<u32>::max();
+    const double emit_duration = 1.0 / static_cast<double>(speed);
+    if (timer < emit_duration) return 0;
+    const double count = std::floor(timer / emit_duration);
+    if (count >= static_cast<double>(std::numeric_limits<u32>::max()))
+        return std::numeric_limits<u32>::max();
+    return static_cast<u32>(count);
 }
 
 inline double EmitDuration(float speed) noexcept { return speed > 0.0f ? 1.0 / speed : 0.0; }
 
-inline u32 ResolveEmitNum(double& timer, float speed, u32 instantaneous, bool one_per_frame,
+inline u32 ResolveEmitNum(double timer, float speed, u32 instantaneous, bool one_per_frame,
                           bool empty) {
     if (instantaneous > 0 && empty) return instantaneous;
     if (speed <= 0.0f) return 0;
     u32 emit_num = GetEmitNum(timer, speed);
-    return one_per_frame ? 1 : emit_num;
+    return one_per_frame && emit_num > 1 ? 1 : emit_num;
+}
+
+inline void CommitEmitNum(double& timer, float speed, u32 requested, u32 emitted,
+                          bool one_per_frame) {
+    if (requested == 0 || speed <= 0.0f) return;
+    if (! std::isfinite(speed)) {
+        timer = 0.0;
+        return;
+    }
+    const double duration = 1.0 / static_cast<double>(speed);
+    double remaining = std::max(0.0, timer - duration * static_cast<double>(emitted));
+    if (emitted < requested)
+        remaining = std::min(remaining, duration);
+    else if (one_per_frame)
+        remaining = std::fmod(remaining, duration);
+    timer = remaining;
 }
 
 inline u32 Emitt(std::vector<Particle>& particles, u32 num, u32 maxcount, bool sort,
@@ -83,7 +100,7 @@ inline u32 Emitt(std::vector<Particle>& particles, u32 num, u32 maxcount, bool s
         });
     }
 
-    return i + 1;
+    return i;
 }
 
 inline float AudioResponseScale(std::span<const float> audio, const ParticleAudioResponse& ar) {
@@ -181,20 +198,19 @@ inline Eigen::Vector3d ResolveEmitterOrigin(std::span<const ParticleControlpoint
 }
 
 ParticleEmittOp ParticleBoxEmitterArgs::MakeEmittOp(ParticleBoxEmitterArgs a) {
-    double timer { 0.0f };
-    double elapsed { 0.0f };
-    return [a, timer, elapsed](std::vector<Particle>&       ps,
+    return [a](ParticleEmitterState& state,
+                               std::vector<Particle>&       ps,
                                std::vector<ParticleInitOp>& inis,
                                u32                          maxcount,
                                double                       timepass,
                                std::span<const float>
                                    audio_average,
                                std::span<const ParticleControlpoint>
-                                   cps) mutable {
-        elapsed += timepass;
-        if (a.duration > 0.0f && elapsed > a.duration) return;
+                               cps) mutable {
+        state.elapsed += timepass;
+        if (a.duration > 0.0f && state.elapsed > a.duration) return;
 
-        timer += timepass;
+        state.timer += timepass;
         Eigen::Vector3d origin = ResolveEmitterOrigin(cps, a.controlpoint, a.orgin);
         auto            GenBox = [&]() {
             Eigen::Vector3d pos;
@@ -212,30 +228,30 @@ ParticleEmittOp ParticleBoxEmitterArgs::MakeEmittOp(ParticleBoxEmitterArgs a) {
         };
         float emit_speed = a.emitSpeed * AudioResponseScale(audio_average, a.audio_response);
         u32   emit_num =
-            ResolveEmitNum(timer, emit_speed, a.instantaneous, a.one_per_frame, ps.empty());
+            ResolveEmitNum(state.timer, emit_speed, a.instantaneous, a.one_per_frame, ps.empty());
         if (emit_num == 0) return;
-        Emitt(ps, emit_num, maxcount, a.sort, [&]() {
+        const u32 emitted = Emitt(ps, emit_num, maxcount, a.sort, [&]() {
             return Spwan(GenBox, inis, EmitDuration(emit_speed));
         });
+        CommitEmitNum(state.timer, emit_speed, emit_num, emitted, a.one_per_frame);
     };
 }
 
 ParticleEmittOp ParticleSphereEmitterArgs::MakeEmittOp(ParticleSphereEmitterArgs a) {
     using namespace Eigen;
-    double timer { 0.0f };
-    double elapsed { 0.0f };
-    return [a, timer, elapsed](std::vector<Particle>&       ps,
+    return [a](ParticleEmitterState& state,
+                               std::vector<Particle>&       ps,
                                std::vector<ParticleInitOp>& inis,
                                u32                          maxcount,
                                double                       timepass,
                                std::span<const float>
                                    audio_average,
                                std::span<const ParticleControlpoint>
-                                   cps) mutable {
-        elapsed += timepass;
-        if (a.duration > 0.0f && elapsed > a.duration) return;
+                               cps) mutable {
+        state.elapsed += timepass;
+        if (a.duration > 0.0f && state.elapsed > a.duration) return;
 
-        timer += timepass;
+        state.timer += timepass;
         Eigen::Vector3d origin     = ResolveEmitterOrigin(cps, a.controlpoint, a.orgin);
         Eigen::Vector3d directions = Eigen::Vector3f { a.directions.data() }.cast<double>();
         u32             dimensions = ActiveAxisCount(directions);
@@ -256,10 +272,11 @@ ParticleEmittOp ParticleSphereEmitterArgs::MakeEmittOp(ParticleSphereEmitterArgs
         };
         float emit_speed = a.emitSpeed * AudioResponseScale(audio_average, a.audio_response);
         u32   emit_num =
-            ResolveEmitNum(timer, emit_speed, a.instantaneous, a.one_per_frame, ps.empty());
+            ResolveEmitNum(state.timer, emit_speed, a.instantaneous, a.one_per_frame, ps.empty());
         if (emit_num == 0) return;
-        Emitt(ps, emit_num, maxcount, a.sort, [&]() {
+        const u32 emitted = Emitt(ps, emit_num, maxcount, a.sort, [&]() {
             return Spwan(GenSphere, inis, EmitDuration(emit_speed));
         });
+        CommitEmitNum(state.timer, emit_speed, emit_num, emitted, a.one_per_frame);
     };
 }

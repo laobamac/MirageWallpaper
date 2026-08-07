@@ -21,6 +21,35 @@ inline std::string ToStdString(RstdPath path) {
     return std::string(reinterpret_cast<const char*>(path.data()), path.len());
 }
 
+// Authored asset references are relative to /assets, but some packages use
+// ".." to step out of a nested authoring folder. Normalize those references
+// while clamping parent traversal at the asset root. PhysicalFs still performs
+// its independent lexical and symlink containment checks before touching disk.
+inline std::string ResolveAssetPath(std::string_view path) {
+    std::vector<std::string_view> components;
+    usize                         begin = 0;
+    while (begin <= path.size()) {
+        const usize end = path.find('/', begin);
+        const auto  part = path.substr(begin, end == std::string_view::npos
+                                                   ? path.size() - begin
+                                                   : end - begin);
+        if (part == "..") {
+            if (! components.empty()) components.pop_back();
+        } else if (! part.empty() && part != ".") {
+            components.push_back(part);
+        }
+        if (end == std::string_view::npos) break;
+        begin = end + 1;
+    }
+
+    std::string resolved = "/assets";
+    for (const auto component : components) {
+        resolved.push_back('/');
+        resolved.append(component);
+    }
+    return resolved;
+}
+
 // -- Bswap -----------------------------------------------------------------
 
 template<typename T>
@@ -107,7 +136,10 @@ protected:
         if (! m_noswap) {
             x = bswap<T>(x);
         }
-        return Write_impl(reinterpret_cast<char*>(&x), sizeof(x)) != sizeof(x);
+        // true == the whole integer was written. (Write_impl now returns a
+        // byte count; the previous `!= sizeof(x)` test only happened to read
+        // as "success" because fwrite was called with nmemb == 1.)
+        return Write_impl(reinterpret_cast<char*>(&x), sizeof(x)) == sizeof(x);
     }
 
 public:
@@ -214,13 +246,17 @@ public:
 
 protected:
     CBinaryStream(std::string_view path, std::FILE* file): m_path(path), m_file(file) {}
+    // element size 1 / count sizeInBytes, so the return value is a real byte
+    // count. With (size=sizeInBytes, nmemb=1) a short write/read reports 0
+    // even though the buffer was partially transferred, which hides
+    // truncation from every caller.
     virtual usize Write_impl(const void* buffer, usize sizeInBytes) override {
-        return std::fwrite(buffer, sizeInBytes, 1, m_file);
+        return std::fwrite(buffer, 1, sizeInBytes, m_file);
     }
 
 public:
     virtual usize Read(void* buffer, usize sizeInBytes) override {
-        return sizeInBytes * std::fread(buffer, sizeInBytes, 1, m_file);
+        return std::fread(buffer, 1, sizeInBytes, m_file);
     }
     virtual char* Gets(char* buffer, usize sizeStr) override {
         rstd_assert(sizeStr < std::numeric_limits<int>::max());
@@ -390,7 +426,10 @@ public:
     virtual ~LimitedBinaryStream() = default;
 
 private:
-    bool CheckInArea(idx pos) const { return pos > 0 && pos <= Size(); }
+    // Offset 0 is a valid position: rejecting it made SeekSet(0) / Rewind()
+    // always fail on disk-backed pkg entries, while the memory-backed
+    // streams (SharedMemBinaryStream) accept it.
+    bool CheckInArea(idx pos) const { return pos >= 0 && pos <= Size(); }
 
     bool SeekInMPos(void) { return m_infs->SeekSet(m_start + m_pos); }
     bool SeekInPos(idx pos) {
@@ -433,7 +472,7 @@ public:
         return SeekInPos(pos);
     }
     virtual bool SeekEnd(idx offset) {
-        idx pos = Size() - 1 - offset;
+        idx pos = Size() + offset;
         return SeekInPos(pos);
     }
     virtual isize Size() const { return m_end - m_start; }
@@ -562,25 +601,109 @@ public:
 
     bool Contains(RstdPath path) const override {
         auto fullpath = FullPath(path);
-        return std::filesystem::exists(fullpath);
+        if (! fullpath) return false;
+        return std::filesystem::exists(*fullpath);
     }
     std::shared_ptr<IBinaryStream> Open(RstdPath path) override {
-        return CreateCBinaryStream(FullPath(path));
+        auto fullpath = FullPath(path);
+        if (! fullpath) return nullptr;
+        return CreateCBinaryStream(*fullpath);
     }
     std::shared_ptr<IBinaryStreamW> OpenW(RstdPath path) override {
-        std::filesystem::path full_path { FullPath(path) };
+        auto fullpath = FullPath(path);
+        if (! fullpath) return nullptr;
+        std::filesystem::path full_path { *fullpath };
         std::filesystem::create_directories(full_path.parent_path());
         return CreateCBinaryStreamW(full_path.native());
     }
 
 private:
-    std::string FullPath(RstdPath path) const {
+    // Root of this fs, normalized once and without a trailing separator so it
+    // can be compared component-wise.
+    std::filesystem::path NormalizedRoot() const {
+        auto root = m_path.lexically_normal();
+        // "a/b/" normalizes with an empty trailing component; drop it so the
+        // component walk below lines up with a joined path.
+        if (root.filename().empty() && root.has_relative_path()) root = root.parent_path();
+        return root;
+    }
+
+    // Component-wise prefix test: a raw string compare would accept
+    // "/a/bc" as being inside "/a/b".
+    static bool IsInside(const std::filesystem::path& root, const std::filesystem::path& full) {
+        auto rit = root.begin();
+        auto fit = full.begin();
+        for (; rit != root.end(); ++rit, ++fit) {
+            if (fit == full.end() || *fit != *rit) return false;
+        }
+        return true;
+    }
+
+    // Symlink-resolving counterpart of `lexically_normal`. `weakly_canonical`
+    // is not among the names rstd.cppstd re-exports, so it is spelled out:
+    // canonicalize the longest prefix of `p` that exists (which follows every
+    // symlink on it) and re-attach the components that do not exist yet. Every
+    // call uses the std::error_code overload, so a filesystem error surfaces as
+    // nullopt instead of an exception; callers must treat nullopt as "escape".
+    static std::optional<std::filesystem::path> ResolveSymlinks(const std::filesystem::path& p) {
+        std::error_code ec;
+        auto            direct = std::filesystem::canonical(p, ec);
+        if (! ec) return direct;
+
+        std::filesystem::path head;
+        std::filesystem::path tail;
+        bool                  in_tail = false;
+        for (const auto& part : p) {
+            if (! in_tail) {
+                auto            next = head / part;
+                std::error_code exists_ec;
+                if (std::filesystem::exists(next, exists_ec)) {
+                    head = next;
+                    continue;
+                }
+                in_tail = true;
+            }
+            tail /= part;
+        }
+        if (head.empty()) return std::nullopt;
+        ec.clear();
+        auto resolved_head = std::filesystem::canonical(head, ec);
+        if (ec) return std::nullopt;
+        return (resolved_head / tail).lexically_normal();
+    }
+
+    // Joins `path` under the fs root and refuses anything that leaves it.
+    // Paths reaching here come straight out of wallpaper packages
+    // ("../../../../etc/passwd" in scene.json), and this is the only place
+    // they become a real filesystem path. Returns nullopt on escape, which
+    // every caller turns into the same "not found" result it already produces
+    // for a missing file.
+    std::optional<std::string> FullPath(RstdPath path) const {
         auto local_path = path;
         if (path.has_root()) {
             auto stripped = path.strip_prefix(RstdPath("/"));
             if (stripped.is_some()) local_path = *stripped;
         }
-        auto fullpath = m_path / ToStdString(local_path);
+        const auto root     = NormalizedRoot();
+        const auto fullpath = (root / ToStdString(local_path)).lexically_normal();
+        // Gate 1, lexical. Catches "..", absolute paths and every other purely
+        // textual escape, and has to stay first because it is the only gate
+        // that works when the target does not exist yet (OpenW).
+        if (! IsInside(root, fullpath)) {
+            rstd_error("\"{}\" escapes the fs root, refusing", path);
+            return std::nullopt;
+        }
+        // Gate 2, physical. `lexically_normal` never touches the filesystem, so
+        // a symlink shipped inside the package ("evil" -> "/", then
+        // "evil/etc/passwd") passes gate 1 and still opens an arbitrary file.
+        // Redo the same walk with both sides resolved through their symlinks;
+        // an unresolvable path counts as an escape, never as a pass.
+        const auto real_root = ResolveSymlinks(root);
+        const auto real_full = ResolveSymlinks(fullpath);
+        if (! real_root || ! real_full || ! IsInside(*real_root, *real_full)) {
+            rstd_error("\"{}\" escapes the fs root through a symlink, refusing", path);
+            return std::nullopt;
+        }
         return fullpath.string();
     }
     std::filesystem::path m_path;

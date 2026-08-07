@@ -10,6 +10,7 @@ struct WorkshopView: View {
     @EnvironmentObject private var globalSettingsViewModel: GlobalSettingsViewModel
     @ObservedObject var workshopViewModel: WorkshopViewModel
     @ObservedObject var viewModel: ContentViewModel
+    @ObservedObject var wallpaperViewModel: WallpaperViewModel
 
     @State private var hoveredId: String?
     @State private var isDownloadPopoverPresented = false
@@ -22,9 +23,34 @@ struct WorkshopView: View {
             }
 
             HStack {
+                Button {
+                    viewModel.isFilterReveal.toggle()
+                } label: {
+                    Label("筛选", systemImage: "checklist.checked")
+                }
+                .buttonStyle(.borderedProminent)
+
                 WorkshopSearchBar(workshopViewModel: workshopViewModel)
 
                 Spacer()
+
+                Button {
+                    workshopViewModel.refreshSearch()
+                } label: {
+                    Group {
+                        if workshopViewModel.isLoading {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Image(systemName: "arrow.triangle.2.circlepath")
+                        }
+                    }
+                    .frame(width: 16, height: 16)
+                }
+                .disabled(workshopViewModel.isLoading)
+                .help("刷新创意工坊")
+
+                WallpaperGridViewMenu(viewModel: viewModel)
 
                 Button {
                     isDownloadPopoverPresented.toggle()
@@ -56,75 +82,165 @@ struct WorkshopView: View {
                 steamSetupBanner
             }
 
+            if let message = workshopViewModel.pageNavigationMessage {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    Text(message)
+                        .font(.caption)
+                    Spacer()
+                    Button {
+                        workshopViewModel.pageNavigationMessage = nil
+                    } label: {
+                        Image(systemName: "xmark")
+                    }
+                    .buttonStyle(.plain)
+                    .help("关闭")
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(Color.orange.opacity(0.1))
+            }
+
             if workshopViewModel.isLoading && workshopViewModel.items.isEmpty {
-                VStack(spacing: 16) {
-                    ProgressView()
-                        .scaleEffect(1.5)
-                    Text("正在搜索创意工坊...")
-                        .foregroundStyle(.secondary)
+                ZStack(alignment: .bottom) {
+                    VStack(spacing: 16) {
+                        ProgressView()
+                            .scaleEffect(1.5)
+                        Text("正在搜索创意工坊...")
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                    if workshopViewModel.totalPages > 1 {
+                        PageNavigator(
+                            currentPage: workshopViewModel.currentPage,
+                            pageCount: workshopViewModel.totalPages,
+                            onSelect: workshopViewModel.goToPage
+                        )
+                        .padding(.bottom, 12)
+                    }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if workshopViewModel.items.isEmpty && !workshopViewModel.isLoading {
-                VStack(spacing: 12) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 40))
-                        .foregroundStyle(.tertiary)
-                    if let error = workshopViewModel.error {
-                        Text("加载失败")
-                            .font(.title3)
-                            .foregroundStyle(.secondary)
-                        Text(error)
-                            .font(.caption)
-                            .foregroundStyle(.red)
-                        Button("重试") { workshopViewModel.search() }
-                            .buttonStyle(.borderedProminent)
-                    } else {
-                        Text("没有找到壁纸")
-                            .font(.title3)
-                            .foregroundStyle(.secondary)
-                        Text("试试调整搜索条件或筛选标签")
-                            .font(.caption)
+                ZStack(alignment: .bottom) {
+                    VStack(spacing: 12) {
+                        Image(systemName: "magnifyingglass")
+                            .font(.system(size: 40))
                             .foregroundStyle(.tertiary)
+                        if let error = workshopViewModel.error {
+                            Text("加载失败")
+                                .font(.title3)
+                                .foregroundStyle(.secondary)
+                            Text(error)
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                            Button("重试") { workshopViewModel.search() }
+                                .buttonStyle(.borderedProminent)
+                        } else {
+                            Text("没有找到壁纸")
+                                .font(.title3)
+                                .foregroundStyle(.secondary)
+                            Text("试试调整搜索条件或筛选标签")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                    if workshopViewModel.totalPages > 1 {
+                        PageNavigator(
+                            currentPage: workshopViewModel.currentPage,
+                            pageCount: workshopViewModel.totalPages,
+                            onSelect: workshopViewModel.goToPage
+                        )
+                        .padding(.bottom, 12)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ScrollView {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 240, maximum: 340), spacing: 14)],
-                              alignment: .leading, spacing: 14) {
-                        ForEach(workshopViewModel.items) { item in
-                            // O(1) lookups against the cached installed-state set;
-                            // no filesystem access during card rendering.
-                            WorkshopItemCard(
-                                item: item,
-                                isHovered: hoveredId == item.id,
-                                isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
-                                presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
-                                downloadState: workshopViewModel.downloadState(for: item.publishedFileId)
-                            )
-                            .overlay {
-                                if workshopViewModel.selectedItem?.id == item.id {
-                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                        .stroke(Color.accentColor, lineWidth: 2)
+                ScrollViewReader { proxy in
+                    ZStack(alignment: .bottom) {
+                        ScrollView {
+                            Color.clear
+                                .frame(height: 0)
+                                .id("workshopTop")
+
+                            LazyVGrid(
+                                columns: [GridItem(.adaptive(
+                                    minimum: viewModel.explorerIconSize,
+                                    maximum: viewModel.explorerIconSize * 2
+                                ), spacing: 14)],
+                                alignment: .leading,
+                                spacing: 14
+                            ) {
+                                ForEach(workshopViewModel.items) { item in
+                                    WorkshopItemCard(
+                                        item: item,
+                                        isHovered: hoveredId == item.id,
+                                        isSelected: workshopViewModel.selectedItem?.id == item.id,
+                                        isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
+                                        presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
+                                        downloadState: workshopViewModel.downloadState(for: item.publishedFileId)
+                                    )
+                                    .onHover { hovered in
+                                        hoveredId = hovered ? item.id : nil
+                                    }
+                                    .onTapGesture {
+                                        workshopViewModel.selectWorkshopItem(item)
+                                    }
+                                    .contextMenu {
+                                        if let wallpaper = workshopViewModel.installedItem(
+                                            workshopId: item.publishedFileId
+                                        ) {
+                                            ExplorerItemMenu(
+                                                contentViewModel: viewModel,
+                                                wallpaperViewModel: wallpaperViewModel,
+                                                workshopViewModel: workshopViewModel,
+                                                current: wallpaper
+                                            )
+                                            ExplorerGlobalMenu(
+                                                contentViewModel: viewModel,
+                                                wallpaperViewModel: wallpaperViewModel
+                                            )
+                                        } else {
+                                            WorkshopCardContextMenu(
+                                                item: item,
+                                                workshopViewModel: workshopViewModel
+                                            )
+                                            WallpaperGridViewMenu(viewModel: viewModel)
+                                        }
+                                    }
                                 }
                             }
-                            .onHover { hovered in
-                                hoveredId = hovered ? item.id : nil
+
+                            if workshopViewModel.isLoading {
+                                ProgressView()
+                                    .padding()
                             }
-                            .onTapGesture {
-                                workshopViewModel.selectWorkshopItem(item)
+
+                            if workshopViewModel.totalPages > 1 {
+                                Color.clear.frame(height: 58)
                             }
                         }
-                    }
-                    .padding(.vertical, 4)
+                        .contextMenu {
+                            WallpaperGridViewMenu(viewModel: viewModel)
+                        }
 
-                    if workshopViewModel.isLoading {
-                        ProgressView()
-                            .padding()
+                        if workshopViewModel.totalPages > 1 {
+                            PageNavigator(
+                                currentPage: workshopViewModel.currentPage,
+                                pageCount: workshopViewModel.totalPages,
+                                onSelect: workshopViewModel.goToPage
+                            )
+                            .padding(.bottom, 12)
+                        }
                     }
-
-                    pageControls
-                        .padding(.vertical, 8)
+                    .onChange(of: workshopViewModel.currentPage) { _, _ in
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            proxy.scrollTo("workshopTop", anchor: .top)
+                        }
+                    }
                 }
             }
         }
@@ -201,32 +317,6 @@ struct WorkshopView: View {
             }
             .buttonStyle(.borderedProminent)
         }
-    }
-
-    var pageControls: some View {
-        HStack(spacing: 8) {
-            Spacer()
-            Button {
-                workshopViewModel.loadPreviousPage()
-            } label: {
-                Image(systemName: "chevron.left")
-            }
-            .disabled(workshopViewModel.currentPage <= 1)
-
-            Text("\(workshopViewModel.currentPage) / \(workshopViewModel.totalPages)")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .frame(minWidth: 60)
-
-            Button {
-                workshopViewModel.loadNextPage()
-            } label: {
-                Image(systemName: "chevron.right")
-            }
-            .disabled(workshopViewModel.currentPage >= workshopViewModel.totalPages)
-            Spacer()
-        }
-        .buttonStyle(.bordered)
     }
 
     var steamSetupBanner: some View {

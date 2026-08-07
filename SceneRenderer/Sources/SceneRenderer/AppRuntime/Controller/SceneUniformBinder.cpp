@@ -119,6 +119,7 @@ void SceneUniformUpdater::InitUniforms(SceneNode* pNode, const ExistsUniformOp& 
     auto& info                  = m_nodeUniformInfoMap[pNode];
     info.has_MI                 = existsOp(G_MI);
     info.has_M                  = existsOp(G_M);
+    info.has_NORMALMODELMATRIX  = existsOp(G_NORMALMODELMATRIX);
     info.has_AM                 = existsOp(G_AM);
     info.has_MVP                = existsOp(G_MVP);
     info.has_MVPI               = existsOp(G_MVPI);
@@ -133,6 +134,7 @@ void SceneUniformUpdater::InitUniforms(SceneNode* pNode, const ExistsUniformOp& 
     info.has_VP = existsOp(G_VP);
 
     info.has_BONES               = existsOp(G_BONES);
+    info.has_BONESALPHA          = existsOp(G_BONESALPHA);
     info.has_TIME                = existsOp(G_TIME);
     info.has_FRAMETIME           = existsOp(G_FRAMETIME);
     info.has_DAYTIME             = existsOp(G_DAYTIME);
@@ -145,6 +147,9 @@ void SceneUniformUpdater::InitUniforms(SceneNode* pNode, const ExistsUniformOp& 
     info.has_SCREEN              = existsOp(G_SCREEN);
     info.has_LP                  = existsOp(G_LP);
     info.has_LCR                 = existsOp(G_LCR);
+    info.has_LIGHTDIRECTIONTYPE  = existsOp(G_LIGHTDIRECTIONTYPE);
+    info.has_LIGHTCONEEXPONENT   = existsOp(G_LIGHTCONEEXPONENT);
+    info.has_LIGHTCASTSHADOW     = existsOp(G_LIGHTCASTSHADOW);
     info.has_USERALPHA           = existsOp(G_USERALPHA);
     info.has_COLOR4              = existsOp(G_COLOR4);
     info.has_COLOR               = existsOp(G_COLOR);
@@ -165,7 +170,9 @@ void SceneUniformUpdater::InitUniforms(SceneNode* pNode, const ExistsUniformOp& 
 }
 
 void SceneUniformUpdater::UpdateUniforms(SceneNode* pNode, sprite_map_t& sprites,
-                                         const UpdateUniformOp& updateOp) {
+                                         const UpdateUniformOp& updateOp,
+                                         SceneRenderViewKind render_view,
+                                         SceneRenderAlphaMode alpha_mode) {
     if (! pNode->Mesh()) return;
 
     pNode->UpdateTrans();
@@ -187,20 +194,27 @@ void SceneUniformUpdater::UpdateUniforms(SceneNode* pNode, sprite_map_t& sprites
     // auto& shadervs = material->customShader.updateValueList;
     // const auto& valueSet = material->customShader.valueSet;
 
-    rstd_assert(exists(m_nodeUniformInfoMap, pNode));
-    const auto& info = m_nodeUniformInfoMap[pNode];
+    auto info_it = m_nodeUniformInfoMap.find(pNode);
+    rstd_assert(info_it != m_nodeUniformInfoMap.end());
+    const auto& info = info_it->second;
 
-    bool hasNodeData = exists(m_nodeDataMap, pNode);
+    auto  node_data_it = m_nodeDataMap.find(pNode);
+    bool  hasNodeData  = node_data_it != m_nodeDataMap.end();
+    auto* nodeDataPtr  = hasNodeData ? &node_data_it->second : nullptr;
     if (hasNodeData) {
-        auto& nodeData = m_nodeDataMap.at(pNode);
+        auto& nodeData = *nodeDataPtr;
         for (const auto& el : nodeData.renderTargets) {
-            if (m_scene->renderTargets.count(el.second) == 0) continue;
-            const auto& rt = m_scene->renderTargets[el.second];
+            auto rt_it = m_scene->renderTargets.find(el.second);
+            if (rt_it == m_scene->renderTargets.end()) continue;
+            const auto& rt = rt_it->second;
 
             const auto& unifrom_tex = info.texs[el.first];
 
             if (unifrom_tex.has_resolution) {
-                std::array<i32, 4> resolution_uint({ rt.width, rt.height, rt.width, rt.height });
+                std::array<i32, 4> resolution_uint({ rt.PhysicalWidth(),
+                                                     rt.PhysicalHeight(),
+                                                     rt.PhysicalWidth(),
+                                                     rt.PhysicalHeight() });
                 updateOp(WE_GLTEX_RESOLUTION_NAMES[el.first],
                          ShaderValue(array_cast<float>(resolution_uint)));
             }
@@ -208,9 +222,28 @@ void SceneUniformUpdater::UpdateUniforms(SceneNode* pNode, sprite_map_t& sprites
                 updateOp(WE_GLTEX_MIPMAPINFO_NAMES[el.first], (float)rt.mipmap_level);
             }
         }
-        if (nodeData.puppet_layer && nodeData.puppet_layer->hasPuppet() && info.has_BONES) {
+        if (nodeData.puppet_layer && nodeData.puppet_layer->hasPuppet() &&
+            (info.has_BONES || info.has_BONESALPHA)) {
             auto data = nodeData.puppet_layer->genFrame(m_scene->elapsingTime);
-            updateOp(G_BONES, std::span<const float> { data[0].data(), data.size() * 16 });
+            if (info.has_BONES) {
+                updateOp(G_BONES, std::span<const float> { data[0].data(), data.size() * 16 });
+            }
+            // Per-bone opacity envelope for the same frame. genFrame() above
+            // refreshed it; reading it here costs nothing and must not advance
+            // the animation clock a second time. std140 gives each scalar array
+            // element its own 16-byte register, so pack into .x and zero .yzw —
+            // uploading them contiguously would leave every bone past the first
+            // quarter reading padding (i.e. fully transparent).
+            if (info.has_BONESALPHA) {
+                auto alphas = nodeData.puppet_layer->boneAlphas();
+                if (! alphas.empty()) {
+                    m_bone_alpha_pack_scratch.assign(alphas.size() * 4, 0.0f);
+                    for (std::size_t i = 0; i < alphas.size(); ++i) {
+                        m_bone_alpha_pack_scratch[i * 4] = alphas[i];
+                    }
+                    updateOp(G_BONESALPHA, std::span<const float>(m_bone_alpha_pack_scratch));
+                }
+            }
         }
     }
 
@@ -226,7 +259,7 @@ void SceneUniformUpdater::UpdateUniforms(SceneNode* pNode, sprite_map_t& sprites
     bool reqETVP  = info.has_ETVP;
     bool reqETVPI = info.has_ETVPI;
 
-    Matrix4d viewProTrans = camera->GetViewProjectionMatrix();
+    Matrix4d viewProTrans = camera->GetViewProjectionMatrix(render_view);
     if (m_cameraShake.enable && camera == m_scene->activeCamera && camera->AllowCameraShake() &&
         m_cameraShake.amplitude > 0.0f && m_cameraShake.speed > 0.0f) {
         const float base_extent =
@@ -246,14 +279,20 @@ void SceneUniformUpdater::UpdateUniforms(SceneNode* pNode, sprite_map_t& sprites
     if (info.has_VP) {
         updateOp(G_VP, ShaderValue::fromMatrix(viewProTrans));
     }
-    if (info.has_EYEPOSITION && hasNodeData && m_nodeDataMap.at(pNode).use_camera_eye_position) {
-        const auto eye = camera->GetPosition().cast<float>();
-        updateOp(G_EYEPOSITION, std::array<float, 3> { eye.x(), eye.y(), eye.z() });
+    if (info.has_EYEPOSITION && hasNodeData) {
+        if (nodeDataPtr->eye_position_override.has_value()) {
+            updateOp(G_EYEPOSITION, *nodeDataPtr->eye_position_override);
+        } else if (nodeDataPtr->use_camera_eye_position || camera->IsPerspective()) {
+            const auto eye = camera->GetPosition(render_view).cast<float>();
+            updateOp(G_EYEPOSITION, std::array<float, 3> { eye.x(), eye.y(), eye.z() });
+        }
     }
-    if (reqM || reqMVP || reqMI || reqMVPI || reqEffectModel) {
-        Matrix4d modelTrans = pNode->ModelTrans();
-        if (hasNodeData && cam_name != "effect") {
-            const auto& nodeData   = m_nodeDataMap.at(pNode);
+    if (reqM || info.has_NORMALMODELMATRIX || reqMVP || reqMI || reqMVPI || reqEffectModel) {
+        Matrix4d modelTrans = hasNodeData && nodeDataPtr->vertices_in_world_space
+                                  ? Matrix4d::Identity()
+                                  : pNode->ModelTrans();
+        if (hasNodeData && cam_name != "effect" && ! nodeDataPtr->vertices_in_world_space) {
+            const auto& nodeData   = *nodeDataPtr;
             auto        cameraNode = camera->GetAttachedNode();
             const bool  layerLocalEffectSource =
                 camera->HasImgEffect() && cameraNode.is_some() && *cameraNode == pNode;
@@ -284,7 +323,7 @@ void SceneUniformUpdater::UpdateUniforms(SceneNode* pNode, sprite_map_t& sprites
                 Vector2f mouseVec =
                     Scaling(1.0f, -1.0f) * (Vector2f { 0.5f, 0.5f } - Vector2f(&m_mousePos[0]));
                 mouseVec        = mouseVec.cwiseProduct(ortho) * m_parallax.mouseinfluence;
-                Vector3f camPos = camera->GetPosition().cast<float>();
+                Vector3f camPos = camera->GetPosition(render_view).cast<float>();
                 Vector2f paraVec =
                     (nodePos.head<2>() - camPos.head<2>() + mouseVec).cwiseProduct(depth) *
                     m_parallax.amount;
@@ -294,7 +333,18 @@ void SceneUniformUpdater::UpdateUniforms(SceneNode* pNode, sprite_map_t& sprites
             }
         }
 
+        modelTrans *= pNode->GeometryTransform();
+        modelTrans *= pNode->Mesh()->GeometryTransform();
+
         if (reqM) updateOp(G_M, ShaderValue::fromMatrix(modelTrans));
+        if (info.has_NORMALMODELMATRIX) {
+            Matrix3d normal_model = modelTrans.block<3, 3>(0, 0);
+            if (std::abs(normal_model.determinant()) > 1e-12)
+                normal_model = normal_model.inverse().transpose();
+            else
+                normal_model.setIdentity();
+            updateOp(G_NORMALMODELMATRIX, ShaderValue::fromMatrix(normal_model));
+        }
         if (reqAM) updateOp(G_AM, ShaderValue::fromMatrix(modelTrans));
         if (reqMI) updateOp(G_MI, ShaderValue::fromMatrix(modelTrans.inverse()));
         if (reqMVP) {
@@ -305,8 +355,8 @@ void SceneUniformUpdater::UpdateUniforms(SceneNode* pNode, sprite_map_t& sprites
         if (reqEffectModel) {
             Matrix4d layerModel  = modelTrans;
             Matrix4d effectModel = modelTrans;
-            if (hasNodeData && m_nodeDataMap.at(pNode).effect_projection_node != nullptr) {
-                const auto& nodeData = m_nodeDataMap.at(pNode);
+            if (hasNodeData && nodeDataPtr->effect_projection_node != nullptr) {
+                const auto& nodeData = *nodeDataPtr;
                 auto*       source   = nodeData.effect_projection_node;
                 source->UpdateTrans();
                 layerModel  = source->ModelTrans();
@@ -328,7 +378,8 @@ void SceneUniformUpdater::UpdateUniforms(SceneNode* pNode, sprite_map_t& sprites
                 updateOp(G_EFFECTMODELMATRIX, ShaderValue::fromMatrix(effectModel));
             if (reqEMVP || reqEMVPI) {
                 SceneCamera* effect_camera = m_scene->activeCamera ? m_scene->activeCamera : camera;
-                const Matrix4d effect_mvp  = effect_camera->GetViewProjectionMatrix() * effectModel;
+                const Matrix4d effect_mvp =
+                    effect_camera->GetViewProjectionMatrix(render_view) * effectModel;
                 if (reqEMVP) updateOp(G_EMVP, ShaderValue::fromMatrix(effect_mvp));
                 if (reqEMVPI)
                     updateOp(G_EFFECTMODELVIEWPROJECTIONMATRIXINVERSE,
@@ -409,6 +460,11 @@ void SceneUniformUpdater::UpdateUniforms(SceneNode* pNode, sprite_map_t& sprites
         std::array<float, kMaxLights * 4> lights_pos { 0 };
         std::array<float, kMaxLights * 4> lights_color_radius { 0 };
         std::array<float, 12>             lights_color_legacy { 0 };
+        std::array<float, kMaxLights * 4> lights_direction_type { 0 };
+        std::array<float, kMaxLights * 4> lights_cone_exponent { 0 };
+        std::array<float, kMaxLights>     lights_cast_shadow { 0 };
+        for (unsigned light = 0; light < kMaxLights; ++light)
+            lights_direction_type[light * 4 + 3] = -1.0f;
         unsigned                          i = 0;
         for (auto& l : m_scene->lights) {
             if (i == kMaxLights) break;
@@ -417,18 +473,35 @@ void SceneUniformUpdater::UpdateUniforms(SceneNode* pNode, sprite_map_t& sprites
                 continue;
             }
             rstd_assert(l->node() != nullptr);
-            const auto& trans              = l->node()->Translate();
+            auto* light_node = l->node();
+            light_node->UpdateTrans();
+            const auto transform           = light_node->ModelTrans();
+            const auto trans               = transform.block<3, 1>(0, 3).cast<float>();
             lights_pos[i * 4 + 0]          = trans.x();
             lights_pos[i * 4 + 1]          = trans.y();
             lights_pos[i * 4 + 2]          = trans.z();
             lights_pos[i * 4 + 3]          = 0.0f;
-            const auto color               = l->color();
+            auto color = l->color();
+            if (light_node->IsColorOverridden())
+                color = light_node->Color() * l->desc().intensity;
             lights_color_radius[i * 4 + 0] = color.x();
             lights_color_radius[i * 4 + 1] = color.y();
             lights_color_radius[i * 4 + 2] = color.z();
             lights_color_radius[i * 4 + 3] = l->radius();
+            Eigen::Vector3d local_direction = Eigen::Vector3d::UnitX();
+            if (l->type() != SceneLightType::Spot) local_direction = -local_direction;
+            const auto direction =
+                (transform.block<3, 3>(0, 0) * local_direction).normalized().cast<float>();
+            lights_direction_type[i * 4 + 0] = direction.x();
+            lights_direction_type[i * 4 + 1] = direction.y();
+            lights_direction_type[i * 4 + 2] = direction.z();
+            lights_direction_type[i * 4 + 3] = static_cast<float>(l->type());
+            lights_cone_exponent[i * 4 + 0]  = l->desc().inner_cone_cos;
+            lights_cone_exponent[i * 4 + 1]  = l->desc().outer_cone_cos;
+            lights_cone_exponent[i * 4 + 2]  = l->desc().exponent;
+            lights_cast_shadow[i]            = l->desc().cast_shadow ? 1.0f : 0.0f;
             if (i < 3) {
-                const auto& cp = l->premultipliedColor();
+                const auto cp = color * l->radius() * l->radius();
                 std::copy(cp.begin(), cp.end(), lights_color_legacy.begin() + i * 4);
             }
             i++;
@@ -436,6 +509,11 @@ void SceneUniformUpdater::UpdateUniforms(SceneNode* pNode, sprite_map_t& sprites
         updateOp(G_LP, lights_pos);
         updateOp(G_LCP, lights_color_legacy);
         updateOp(G_LCR, lights_color_radius);
+        if (info.has_LIGHTDIRECTIONTYPE)
+            updateOp(G_LIGHTDIRECTIONTYPE, lights_direction_type);
+        if (info.has_LIGHTCONEEXPONENT)
+            updateOp(G_LIGHTCONEEXPONENT, lights_cone_exponent);
+        if (info.has_LIGHTCASTSHADOW) updateOp(G_LIGHTCASTSHADOW, lights_cast_shadow);
     }
 
     // Script-driven per-frame overrides. updateOp overlays the material's
@@ -447,8 +525,8 @@ void SceneUniformUpdater::UpdateUniforms(SceneNode* pNode, sprite_map_t& sprites
     auto push_color = [&updateOp](const Eigen::Vector3f& color) {
         updateOp(G_COLOR, std::array<float, 3> { color.x(), color.y(), color.z() });
     };
-    if (pNode->IsAlphaOverridden()) {
-        const float eff_alpha = pNode->EffectiveAlpha();
+    if (pNode->IsAlphaOverridden(alpha_mode)) {
+        const float eff_alpha = pNode->EffectiveAlpha(alpha_mode);
         if (info.has_USERALPHA) {
             updateOp(G_USERALPHA, eff_alpha);
         }

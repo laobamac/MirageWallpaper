@@ -20,14 +20,35 @@ import sr.pkg.puppet;
 export namespace sr
 {
 
-using SceneObjectVar = std::variant<wpscene::ImageObject, wpscene::ParticleObject,
-                                    wpscene::SoundObject, wpscene::LightObject, wpscene::TextObject,
+using SceneObjectVar = std::variant<wpscene::ImageObject, wpscene::ShapeObject,
+                                    wpscene::ParticleObject, wpscene::SoundObject,
+                                    wpscene::LightObject, wpscene::TextObject,
                                     wpscene::ModelObject, wpscene::CameraObject>;
 
 struct PuppetLayerRegistry {
     std::unordered_map<SceneNode*, std::shared_ptr<WPPuppetLayer>> by_node;
     std::unordered_map<SceneNode*, std::shared_ptr<WPPuppetLayer>> fallback_by_node;
 };
+
+enum class TextRenderMode
+{
+    Direct,
+    Offscreen,
+};
+
+struct TextSurfaceRequirements {
+    bool has_effect { false };
+    bool copy_background { false };
+    bool opaque_background { false };
+    bool linked_source { false };
+};
+
+constexpr TextRenderMode ResolveTextRenderMode(TextSurfaceRequirements requirements) {
+    return requirements.has_effect || requirements.copy_background ||
+                   requirements.opaque_background || requirements.linked_source
+               ? TextRenderMode::Offscreen
+               : TextRenderMode::Direct;
+}
 
 // Per-Parse state. Built by BuildContext, mutated by ProcessObjects,
 // finalized by FinalizeScene. Holding it as a public struct lets the
@@ -37,7 +58,9 @@ struct ParseContext {
     SceneUniformUpdater*                     shader_updater { nullptr };
     i32                                      ortho_w { 0 };
     i32                                      ortho_h { 0 };
+    bool                                     orthographic_scene { false };
     fs::VFS*                                 vfs { nullptr };
+    wpscene::SceneVersion                    pkg_version { wpscene::kSceneVersionUnknown };
     rstd::Option<rstd::ref<rstd::json::Map>> user_properties;
 
     ShaderValueMap                           global_base_uniforms;
@@ -49,6 +72,14 @@ struct ParseContext {
     // bindings come in. Installed onto the Scene by FinalizeScene.
     // Stays null when no object has any script binding.
     std::unique_ptr<sr::script::ScriptScene> script_scene;
+    using ImageAlignmentSetter =
+        std::function<void(SceneNode*, std::string_view)>;
+    struct ImageAlignmentBinding {
+        SceneNode*           node { nullptr };
+        std::string          alignment;
+        ImageAlignmentSetter setter;
+    };
+    std::vector<ImageAlignmentBinding> image_alignment_bindings;
     std::shared_ptr<PuppetLayerRegistry> puppet_layers { std::make_shared<PuppetLayerRegistry>() };
 
     // ID → (parent_id, node) for every parseable object. Filled by each
@@ -73,6 +104,8 @@ struct ParseContext {
     };
     std::unordered_map<std::int32_t, NodeRef>       node_id_map;
     std::unordered_map<std::int32_t, std::uint32_t> object_parent_ids;
+    std::unordered_map<std::int32_t, std::uint64_t> script_initialization_orders;
+    std::unordered_map<std::int32_t, Json>          initial_layer_configs;
     Set<std::int32_t>                               solid_layer_ids;
     // Scene.json declaration order. Reparenting in this order keeps each
     // container's children in the order they appeared in scene.json (so
@@ -90,13 +123,18 @@ struct ParseContext {
     struct CreateLayerAssetRequest {
         sr::script::FieldScript* script { nullptr };
         std::int32_t              owner_id { 0 };
-        std::string               source;
     };
     std::vector<CreateLayerAssetRequest> create_layer_asset_requests;
+    wavsen::audio::SoundManager*          sound_manager { nullptr };
 
     std::unordered_map<std::int32_t, std::string> system_media_image_fallbacks;
+    Set<std::int32_t>                             linked_source_ids;
     Set<std::int32_t>                             hidden_link_source_ids;
+    Set<std::string>                              unresolved_shader_values;
+    bool                                          scene_has_scripts { false };
     bool                                          scene_layer_text_writes { false };
+
+    bool IsLinkedSource(std::int32_t id) const { return linked_source_ids.contains(id); }
 };
 
 struct ProcessOpts {

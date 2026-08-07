@@ -85,7 +85,7 @@ struct SteamLoginStep: View {
                         Button {
                             showLog.toggle()
                         } label: {
-                            Label(showLog ? "隐藏日志" : "显示 SteamCMD 日志", systemImage: "terminal")
+                            Label(LocalizedStringKey(showLog ? "隐藏日志" : "显示 SteamCMD 日志"), systemImage: "terminal")
                                 .font(.caption2)
                         }
                         .buttonStyle(.plain)
@@ -211,7 +211,7 @@ struct SteamLoginStep: View {
                 .font(.system(size: 36))
                 .foregroundStyle(.blue)
 
-            Text(type == .email ? "请输入邮箱验证码" : "请输入手机验证码")
+            Text(LocalizedStringKey(type == .email ? "请输入邮箱验证码" : "请输入手机验证码"))
                 .font(.callout)
                 .bold()
 

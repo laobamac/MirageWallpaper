@@ -17,7 +17,7 @@ class SteamSetupWindowController: NSWindowController, NSWindowDelegate {
         )
         window.title = L("Steam 创意工坊设置")
         window.titlebarAppearsTransparent = true
-        window.isMovableByWindowBackground = true
+        window.isMovableByWindowBackground = false
         window.isReleasedWhenClosed = false
         window.level = .floating
         window.isFloatingPanel = true

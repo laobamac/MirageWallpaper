@@ -201,7 +201,11 @@ bool ParseFloatList(std::string_view s, std::vector<float>& out) {
 // day/night scenes track the user's actual clock.
 float LocalTimeOfDay() {
     const std::time_t now = std::time(nullptr);
-    std::tm           tm_local {};
+    static std::time_t s_cached_second { -1 };
+    static float       s_cached_frac { 0.0f };
+    if (now == s_cached_second) return s_cached_frac;
+
+    std::tm tm_local {};
 #if defined(_WIN32)
     localtime_s(&tm_local, &now);
 #else
@@ -213,6 +217,8 @@ float LocalTimeOfDay() {
     float frac = seconds / 86400.0f;
     if (! std::isfinite(frac) || frac < 0.0f) frac = 0.0f;
     if (frac > 1.0f) frac = 1.0f;
+    s_cached_second = now;
+    s_cached_frac   = frac;
     return frac;
 }
 
@@ -705,9 +711,10 @@ void ApplyUserPropertyToParticles(Scene& scene, const std::string& key, const Js
     auto write_scalar = [&](float& dst) {
         if (coerced.value.size() >= 1) dst = coerced.value[0];
     };
-    auto write_vec3 = [&](std::array<float, 3>& dst, float scale) {
-        if (coerced.value.size() < 3) return;
+    auto write_vec3 = [&](std::array<float, 3>& dst, float scale) -> bool {
+        if (coerced.value.size() < 3) return false;
         dst = { coerced.value[0] * scale, coerced.value[1] * scale, coerced.value[2] * scale };
+        return true;
     };
 
     for (auto& b : it->second) {
@@ -741,7 +748,10 @@ void ApplyUserPropertyToParticles(Scene& scene, const std::string& key, const Js
                 idx = std::stoi(f.substr(std::string_view("controlpoint").size()));
             } catch (...) {
             }
-            if (idx >= 0 && idx < 8) write_vec3(st->controlpoint[idx], 1.0f);
+            if (idx >= 0 && idx < 8) {
+                std::array<float, 3> point {};
+                if (write_vec3(point, 1.0f)) st->controlpoint[idx] = point;
+            }
         } else if (f.starts_with("controlpointangle")) {
             int idx = -1;
             try {
@@ -774,7 +784,13 @@ void ApplyUserPropertyToCameraParallax(Scene& scene, const std::string& key, con
 
     float value = coerced.value[0];
     for (const auto& field : it->second) {
-        if (field == "cameraparallaxmouseinfluence")
+        if (field == "cameraparallax")
+            scene.shaderValueUpdater->SetCameraParallaxEnabled(value >= 0.5f);
+        else if (field == "cameraparallaxamount")
+            scene.shaderValueUpdater->SetCameraParallaxAmount(value);
+        else if (field == "cameraparallaxdelay")
+            scene.shaderValueUpdater->SetCameraParallaxDelay(value);
+        else if (field == "cameraparallaxmouseinfluence")
             scene.shaderValueUpdater->SetCameraParallaxMouseInfluence(value);
     }
 }
@@ -1084,13 +1100,20 @@ private:
 
 void SceneRenderController::on(RenderStop&& m) {
     m_stopped = m.stop;
-    if (m.stop)
+    if (m.stop) {
         frame_timer.Stop();
-    else
+        m_render->flushPendingFrame();
+    } else {
         frame_timer.Run();
+    }
 }
 
 void SceneRenderController::on(RenderDraw&&) {
+    if (m_stopped) {
+        frame_timer.FrameBegin();
+        frame_timer.FrameEnd();
+        return;
+    }
     frame_timer.FrameBegin();
     if (m_rg) {
         m_scene->shaderValueUpdater->FrameBegin();
@@ -1175,11 +1198,14 @@ void SceneRenderController::on(RenderDraw&&) {
                 const float old   = slot.load(std::memory_order_relaxed);
                 slot.store(std::max(old * 0.75f, level), std::memory_order_relaxed);
             }
-            m_scene->shaderValueUpdater->SetAudioSpectrum(
-                std::span<const float, 64>(fi.audio_left),
-                std::span<const float, 64>(fi.audio_right));
+            if (m_scene->uses_audio_spectrum) {
+                m_scene->shaderValueUpdater->SetAudioSpectrum(
+                    std::span<const float, 64>(fi.audio_left),
+                    std::span<const float, 64>(fi.audio_right));
+            }
             m_scene->TickNodeFieldAnimations();
             sr::script::TickSceneScripts(*m_scene, fi);
+            m_scene->CommitDynamicTopology();
             m_scene->CommitNodeVisibilityChanges();
             m_scene->TickCameraPaths();
             m_scene->TickMaterialShaderAnimations();

@@ -77,6 +77,8 @@ public:
     // copied to the GPU. Command-buffer work remains in execute()/the render
     // scope hooks below.
     virtual void prepareFrameData(RenderingResources&) {}
+    // Runs after every pass has consumed the current CPU-side frame data.
+    virtual void completeFrameData() {}
     virtual bool supportsRenderScope() const { return false; }
     virtual bool canJoinRenderScopeAfter(const VulkanPass&) const { return false; }
     virtual void prepareRenderScopeDraw(RenderingResources&) {}

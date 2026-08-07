@@ -121,6 +121,15 @@ bool Instance::ChoosePhysicalDevice(const CheckGpuOp&             checkgpu,
         if (uuid.size() > 0) {
             decltype(uuid) device_uuid { device_id_props.deviceUUID };
             if (std::equal(uuid.begin(), uuid.end(), device_uuid.begin(), device_uuid.end())) {
+                // A pinned UUID selects *which* GPU to prefer, never whether
+                // it is usable: queue families and required features still
+                // have to validate, otherwise device creation walks into a
+                // GPU with (for instance) no graphics queue at all.
+                if (! checkgpu(d)) {
+                    rstd_error("gpu \"{}\" matches the requested uuid but is not usable",
+                               props.deviceName);
+                    continue;
+                }
                 final_props = props;
                 final_gpu   = d;
                 break;

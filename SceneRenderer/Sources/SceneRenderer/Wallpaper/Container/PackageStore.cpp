@@ -43,6 +43,12 @@ std::string LowerPath(std::string_view p) {
     return s;
 }
 
+// Builds the rooted component path used as the pkg map key. `..` is resolved
+// by popping the previous component instead of being preserved, so `a/../b`
+// and `b` name the same entry and a leading `..` cannot walk out of the
+// package (pop() is a no-op once we are back at "/"). Resolving rather than
+// dropping keeps producer and consumer consistent: both the keys stored from
+// the pkg header and the keys built from lookup paths go through here.
 std::string RootedComponentPath(RstdPath path) {
     auto out        = rstd::path::PathBuf::from("/");
     auto components = path.components();
@@ -50,6 +56,10 @@ std::string RootedComponentPath(RstdPath path) {
         auto component = components.next();
         if (component.is_none()) break;
         if ((*component).is_root_dir() || (*component).is_cur_dir()) continue;
+        if ((*component).is_parent_dir()) {
+            (void)out.pop();
+            continue;
+        }
         out.push(RstdPath((*component).as_os_str()));
     }
     return ToStdString(out.as_path());
@@ -82,9 +92,29 @@ std::unique_ptr<WPPkgFs> WPPkgFs::CreatePkgFs(std::string_view pkgpath,
     std::string ver = std::move(*maybe_ver);
     rstd_info("pkg version: {}", ver);
 
+    const isize signed_size = pkg.Size();
+    if (signed_size < 0) return nullptr;
+    const u64 file_size = static_cast<u64>(signed_size);
+
     std::vector<PkgFile> pkgfiles;
     i32                  entryCount = pkg.ReadInt32();
     if (entryCount < 0) return nullptr;
+    // On disk every entry costs at least a 4 byte path length, one path byte
+    // and the 4 byte offset/length pair, so a pkg of this size cannot possibly
+    // describe more than file_size/13 entries. Without this bound a ~20 byte
+    // pkg claiming 0x7FFFFFFF entries makes us push_back two billion structs
+    // before any read fails (ReadInt32 returns 0 at EOF and ReadSizedString
+    // happily yields an empty string).
+    constexpr u64 kMinEntrySize = 4 + 1 + 4 + 4;
+    if (static_cast<u64>(entryCount) > file_size / kMinEntrySize) {
+        rstd_error("pkg declares {} entries, too many for a {} byte pkg", entryCount, file_size);
+        return nullptr;
+    }
+    // The count is bounded by the file size now, but a big pkg could still
+    // name millions of entries, so reserve a fixed amount rather than the
+    // declared one; the vector grows on its own if the entries are real.
+    constexpr usize kInitialEntryReserve = 1024;
+    pkgfiles.reserve(std::min<usize>(static_cast<usize>(entryCount), kInitialEntryReserve));
     for (i32 i = 0; i < entryCount; i++) {
         auto maybe_path = ReadSizedString(pkg, 4096);
         if (! maybe_path) return nullptr;
@@ -99,7 +129,22 @@ std::unique_ptr<WPPkgFs> WPPkgFs::CreatePkgFs(std::string_view pkgpath,
     pkgfs->m_pkgData     = std::move(memory_data);
     pkgfs->m_pkg_version = std::move(ver);
     idx headerSize       = pkg.Tell();
+    if (headerSize < 0) return nullptr;
     for (auto& el : pkgfiles) {
+        // Entry offsets are relative to the end of the header. Check the
+        // absolute [begin, end) range against the real file size; offset and
+        // length are non-negative i32 and headerSize <= file_size, so the u64
+        // sum cannot overflow.
+        const u64 begin = static_cast<u64>(headerSize) + static_cast<u64>(el.offset);
+        const u64 end   = begin + static_cast<u64>(el.length);
+        if (end > file_size) {
+            rstd_error("pkg entry \"{}\" range [{}, {}) outside the {} byte pkg",
+                       el.path,
+                       begin,
+                       end,
+                       file_size);
+            return nullptr;
+        }
         el.offset += headerSize;
         pkgfs->m_files.insert({ LowerPath(el.path), el });
     }

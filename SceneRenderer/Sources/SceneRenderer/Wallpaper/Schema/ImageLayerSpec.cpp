@@ -86,6 +86,10 @@ bool ObjectInstance::FromJson(const sr::Json& json) {
     return true;
 }
 
+void ObjectInstance::ApplyTo(Material& material) const {
+    material.MergeBindingOverrides(textures, usertextures, combos);
+}
+
 bool EffectFbo::FromJson(const sr::Json& json) {
     sr::GetJsonValue(json, "name", name);
     sr::GetJsonValue(json, "format", format);
@@ -214,6 +218,25 @@ bool ImageObject::FromJson(const sr::Json& json, fs::VFS& vfs) {
     return FromJson(json, vfs, kSceneVersionUnknown);
 }
 
+bool ImageObject::FromAsset(std::string_view asset, std::array<float, 2> asset_size, fs::VFS& vfs,
+                            SceneVersion version) {
+    auto object = rstd::json::Map::make();
+    auto set    = [&](std::string_view key, sr::Json value) {
+        object.insert(::alloc::string::String::make(rstd::cppstd::as_str(key)), std::move(value));
+    };
+    set("id", rstd::into<sr::Json>(id));
+    set("name", sr::JsonFromStd("__createLayer:" + std::string(asset)));
+    set("image", sr::JsonFromStd(asset));
+    set("origin", sr::JsonFromStd("0 0 0"));
+    set("angles", sr::JsonFromStd("0 0 0"));
+    set("scale", sr::JsonFromStd("1 1 1"));
+    set("size",
+        sr::JsonFromStd(std::to_string(asset_size[0]) + " " + std::to_string(asset_size[1])));
+    set("visible", rstd::into<sr::Json>(true));
+    auto json = sr::Json::Object(std::move(object));
+    return FromJson(json, vfs, version);
+}
+
 std::optional<ImageAssetInfo> sr::wpscene::LoadImageAssetInfo(fs::VFS&         vfs,
                                                                std::string_view image) {
     auto parsed_image = sr::ParseJson(fs::GetFileContent(vfs, "/assets/" + std::string(image)));
@@ -303,11 +326,12 @@ bool ImageObject::FromJson(const sr::Json& json, fs::VFS& vfs, SceneVersion v) {
         ! copy_background_value;
 
     if (jImage.get("material").is_some()) {
-        std::string matPath;
-        sr::GetJsonValue(jImage, "material", matPath);
-        auto parsed_material = sr::ParseJson(fs::GetFileContent(vfs, "/assets/" + matPath));
+        sr::GetJsonValue(jImage, "material", material_path);
+        auto parsed_material =
+            sr::ParseJson(fs::GetFileContent(vfs, "/assets/" + material_path));
         if (parsed_material.is_err()) {
-            rstd_error("Can't parse material json {}: {}", matPath, parsed_material.unwrap_err());
+            rstd_error(
+                "Can't parse material json {}: {}", material_path, parsed_material.unwrap_err());
             return false;
         }
         auto jMat = parsed_material.unwrap();
@@ -324,8 +348,11 @@ bool ImageObject::FromJson(const sr::Json& json, fs::VFS& vfs, SceneVersion v) {
         if (array.is_some()) {
             for (const auto& jE : **array) {
                 ImageEffect wpeff;
-                wpeff.FromJson(jE, vfs, v);
-                effects.push_back(std::move(wpeff));
+                // An effect can be unavailable in a Workshop package (or be
+                // unsupported by this renderer). Do not retain a half-parsed
+                // placeholder: later code would treat it as a real pass and
+                // suppress the otherwise valid base image.
+                if (wpeff.FromJson(jE, vfs, v)) effects.push_back(std::move(wpeff));
             }
         }
     }
@@ -340,6 +367,7 @@ bool ImageObject::FromJson(const sr::Json& json, fs::VFS& vfs, SceneVersion v) {
     sr::GetJsonValue(json, "parent", parent, false);
     sr::GetJsonValue(json, "attachment", attachment, false);
     sr::GetJsonValue(json, "perspective", perspective, false);
+    sr::GetJsonValue(json, "reflected", reflected, false);
     sr::GetJsonValue(json, "copybackground", copybackground, false);
     sr::GetJsonValue(json, "solid", solid, false);
     sr::GetJsonValue(json, "opaquebackground", opaquebackground, false);
@@ -353,7 +381,41 @@ bool ImageObject::FromJson(const sr::Json& json, fs::VFS& vfs, SceneVersion v) {
     if (auto instance_json = json.get("instance");
         instance_json.is_some() && (*instance_json)->is_object()) {
         instance.FromJson(**instance_json);
+        instance.ApplyTo(material);
     }
+    AbsorbAllFieldBindings(json, field_bindings);
+    return true;
+}
+
+bool ShapeObject::FromJson(const sr::Json& json, fs::VFS& vfs, SceneVersion v) {
+    sr::GetJsonValue(json, "shape", shape);
+    ReadVisibleProperty(json, visible, visible_user);
+    visible_user_key = visible_user.name;
+    sr::GetJsonValue(json, "name", name, false);
+    sr::GetJsonValue(json, "id", id, false);
+    sr::GetJsonValue(json, "origin", origin);
+    sr::GetJsonValue(json, "angles", angles);
+    sr::GetJsonValue(json, "scale", scale);
+
+    if (auto values = json.get("effects"); values.is_some()) {
+        auto array = (*values)->as_array();
+        if (array.is_some()) {
+            for (const auto& json_effect : **array) {
+                ImageEffect effect;
+                if (effect.FromJson(json_effect, vfs, v)) effects.push_back(std::move(effect));
+            }
+        }
+    }
+
+    sr::GetJsonValue(json, "locktransforms", locktransforms, false);
+    sr::GetJsonValue(json, "muteineditor", muteineditor, false);
+    sr::GetJsonValue(json, "nointerpolation", nointerpolation, false);
+    sr::GetJsonValue(json, "reflected", reflected, false);
+    sr::GetJsonValue(json, "castshadow", castshadow, false);
+    sr::GetJsonValue(json, "disablepropagation", disablepropagation, false);
+    sr::GetJsonValue(json, "parent", parent, false);
+    sr::GetJsonValue(json, "attachment", attachment, false);
+    sr::GetJsonValue(json, "dependencies", dependencies, false);
     AbsorbAllFieldBindings(json, field_bindings);
     return true;
 }

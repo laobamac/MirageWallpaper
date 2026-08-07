@@ -34,11 +34,11 @@ struct ScreenSaverPage: SettingsPage {
         Form {
             Section {
                 HStack {
-                    Label(status.isInstalled ? "Mirage 动态屏保已安装" : "Mirage 动态屏保尚未安装",
+                    Label(LocalizedStringKey(status.isInstalled ? "Mirage 动态屏保已安装" : "Mirage 动态屏保尚未安装"),
                           systemImage: status.isInstalled ? "checkmark.seal.fill" : "rectangle.dashed")
                         .foregroundStyle(status.isInstalled ? .green : .secondary)
                     Spacer()
-                    Button(status.isInstalled ? "重新安装" : "安装") {
+                    Button(LocalizedStringKey(status.isInstalled ? "重新安装" : "安装")) {
                         performAsync { try manager.install() }
                     }
                     if status.isInstalled {

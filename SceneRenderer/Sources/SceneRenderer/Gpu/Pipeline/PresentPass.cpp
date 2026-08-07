@@ -1,7 +1,9 @@
 module;
 
+#include <atomic>
 #include <cstdlib>
 #include <fstream>
+#include <mutex>
 #define VK_USE_PLATFORM_METAL_EXT
 #include <vulkan/vulkan.h>
 #include <rstd/macro.hpp>
@@ -26,14 +28,13 @@ using LiveMetalFrameCallback = void (*)(void* mtl_texture, uint32_t width, uint3
 std::mutex         g_live_frame_mutex;
 LiveFrameCallback g_live_frame_callback { nullptr };
 void*             g_live_frame_userdata { nullptr };
+std::atomic<bool> g_live_frame_present { false };
 std::mutex              g_live_metal_frame_mutex;
 LiveMetalFrameCallback g_live_metal_frame_callback { nullptr };
 void*                  g_live_metal_frame_userdata { nullptr };
+std::atomic<bool>      g_live_metal_frame_present { false };
 
-bool LiveFrameRequested() {
-    std::scoped_lock lock(g_live_frame_mutex);
-    return g_live_frame_callback != nullptr;
-}
+bool LiveFrameRequested() { return g_live_frame_present.load(std::memory_order_acquire); }
 
 void DispatchLiveFrame(const uint8_t* rgba, uint32_t width, uint32_t height) {
     LiveFrameCallback cb { nullptr };
@@ -46,10 +47,7 @@ void DispatchLiveFrame(const uint8_t* rgba, uint32_t width, uint32_t height) {
     if (cb != nullptr) cb(rgba, width, height, userdata);
 }
 
-bool LiveMetalFrameRequested() {
-    std::scoped_lock lock(g_live_metal_frame_mutex);
-    return g_live_metal_frame_callback != nullptr;
-}
+bool LiveMetalFrameRequested() { return g_live_metal_frame_present.load(std::memory_order_acquire); }
 
 void DispatchLiveMetalFrame(void* mtl_texture, uint32_t width, uint32_t height) {
     LiveMetalFrameCallback cb { nullptr };
@@ -96,9 +94,22 @@ bool EnvEnabled(const char* primary) {
     return value != nullptr && value[0] != '\0' && value[0] != '0';
 }
 
-bool PresentTestEnabled() { return EnvEnabled("SCENERENDERER_TEST_PRESENT"); }
+bool PresentTestEnabled() {
+    static const bool v = EnvEnabled("SCENERENDERER_TEST_PRESENT");
+    return v;
+}
 bool PresentDumpRequested() {
-    return EnvPath("SCENERENDERER_DUMP_PRESENT") != nullptr;
+    static const bool v = EnvPath("SCENERENDERER_DUMP_PRESENT") != nullptr;
+    return v;
+}
+
+const char* FrameDumpPath() {
+    static const char* v = EnvPath("SCENERENDERER_DUMP_FRAME");
+    return v;
+}
+const char* PresentDumpPath() {
+    static const char* v = EnvPath("SCENERENDERER_DUMP_PRESENT");
+    return v;
 }
 
 void WritePpm(std::ofstream& out, const uint8_t* pixels, uint32_t width, uint32_t height,
@@ -122,12 +133,14 @@ extern "C" void SceneRendererSetLiveFrameCallback(LiveFrameCallback cb, void* us
     std::scoped_lock lock(g_live_frame_mutex);
     g_live_frame_callback = cb;
     g_live_frame_userdata = userdata;
+    g_live_frame_present.store(cb != nullptr, std::memory_order_release);
 }
 
 extern "C" void SceneRendererSetLiveMetalFrameCallback(LiveMetalFrameCallback cb, void* userdata) {
     std::scoped_lock lock(g_live_metal_frame_mutex);
     g_live_metal_frame_callback = cb;
     g_live_metal_frame_userdata = userdata;
+    g_live_metal_frame_present.store(cb != nullptr, std::memory_order_release);
 }
 
 FinPass::FinPass(const Desc& desc): m_desc(desc) {}
@@ -158,7 +171,7 @@ std::vector<PassTextureRequestDiagnostic> FinPass::textureRequestDiagnostics() c
 void FinPass::recordFrameDump(const Device& device, RenderingResources& rr) {
     const bool live_frame = LiveFrameRequested();
     if ((m_dump_done && ! live_frame) || m_dump_pending) return;
-    const char* dump_path = EnvPath("SCENERENDERER_DUMP_FRAME");
+    const char* dump_path = FrameDumpPath();
     if ((dump_path == nullptr || dump_path[0] == '\0') && ! live_frame) return;
 
     const uint32_t width  = m_desc.vk_result.extent.width;
@@ -212,7 +225,7 @@ void FinPass::recordFrameDump(const Device& device, RenderingResources& rr) {
 
 void FinPass::recordPresentDump(const Device& device, RenderingResources& rr) {
     if (m_present_dump_done || m_present_dump_pending) return;
-    const char* dump_path = EnvPath("SCENERENDERER_DUMP_PRESENT");
+    const char* dump_path = PresentDumpPath();
     if (dump_path == nullptr) return;
     if (! m_desc.present_can_transfer_src) {
         if (! m_present_dump_warned) {

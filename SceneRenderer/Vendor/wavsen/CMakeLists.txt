@@ -131,6 +131,15 @@ target_sources(wavsen_video PRIVATE
     src/video/video_decoder.cpp
     src/video/yuv_to_rgba.cpp
 )
+if(APPLE)
+    enable_language(OBJCXX)
+    target_sources(wavsen_video PRIVATE src/video/metal_import.mm)
+    set_source_files_properties(src/video/metal_import.mm
+        PROPERTIES COMPILE_OPTIONS "-Wno-everything")
+    find_library(WAVSEN_COREVIDEO_FRAMEWORK CoreVideo REQUIRED)
+    find_library(WAVSEN_METAL_FRAMEWORK Metal REQUIRED)
+    find_library(WAVSEN_IOSURFACE_FRAMEWORK IOSurface REQUIRED)
+endif()
 target_link_libraries(wavsen_video
     PUBLIC
         rstd::rstd
@@ -139,6 +148,9 @@ target_link_libraries(wavsen_video
         wavsen::ffi::vulkan
     PRIVATE
         rstd.log
+        $<$<BOOL:${APPLE}>:${WAVSEN_COREVIDEO_FRAMEWORK}>
+        $<$<BOOL:${APPLE}>:${WAVSEN_METAL_FRAMEWORK}>
+        $<$<BOOL:${APPLE}>:${WAVSEN_IOSURFACE_FRAMEWORK}>
 )
 set_property(TARGET wavsen_video PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_target_properties(wavsen_video PROPERTIES CXX_SCAN_FOR_MODULES ON)

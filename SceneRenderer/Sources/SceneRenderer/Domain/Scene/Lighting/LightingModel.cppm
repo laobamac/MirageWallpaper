@@ -31,7 +31,7 @@ public:
         float           exponent { 1.0f };
         float           attenuation { 0.0f };
         float           mindistance { 0.0f };
-        // Cone angle cosines (cos(half-angle)). Identity (1.0) = no falloff.
+        // Cone angle cosines. Identity (1.0) = no falloff.
         float inner_cone_cos { 1.0f };
         float outer_cone_cos { 1.0f };
         float light_source_size { 0.0f };

@@ -33,7 +33,7 @@ struct AboutUsView: View {
     }
 
     private var build: String {
-        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "开发构建"
+        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? L("开发构建")
     }
 
     private var commit: String {
@@ -203,7 +203,7 @@ struct AboutUsView: View {
                 NSPasteboard.general.setString(usdtAddress, forType: .string)
                 copiedUSDTAddress = true
             } label: {
-                Label(copiedUSDTAddress ? "地址已复制" : "复制地址", systemImage: copiedUSDTAddress ? "checkmark" : "doc.on.doc")
+                Label(LocalizedStringKey(copiedUSDTAddress ? "地址已复制" : "复制地址"), systemImage: copiedUSDTAddress ? "checkmark" : "doc.on.doc")
             }
             .buttonStyle(.bordered)
         }

@@ -34,6 +34,12 @@ inline Vector3d GenRandomVec3(const std::array<float, 3>& min, const std::array<
     return result;
 }
 
+inline float GenRandom(float min, float max, float exponent) {
+    float value = Random::get(0.0f, 1.0f);
+    if (exponent != 1.0f) value = std::pow(value, exponent);
+    return static_cast<float>(algorism::lerp(value, min, max));
+}
+
 inline float UiColorToLinear(float value) { return value * value; }
 
 inline float UiScalarToLinear(float value) { return value; }
@@ -47,6 +53,7 @@ struct SingleRandom {
     static void ReadFromJson(const Json& j, SingleRandom& r) {
         sr::GetJsonValue(j, "min", r.min, false);
         sr::GetJsonValue(j, "max", r.max, false);
+        sr::GetJsonValue(j, "exponent", r.exponent, false);
     };
 };
 struct VecRandom {
@@ -57,6 +64,7 @@ struct VecRandom {
     static void ReadFromJson(const Json& j, VecRandom& r) {
         sr::GetJsonValue(j, "min", r.min, false);
         sr::GetJsonValue(j, "max", r.max, false);
+        sr::GetJsonValue(j, "exponent", r.exponent, false);
     };
 };
 struct TurbulentRandom {
@@ -119,19 +127,19 @@ ParticleInitOp WPParticleParser::genParticleInitOp(const Json& wpj) {
             SingleRandom r = { 0.0f, 1.0f };
             SingleRandom::ReadFromJson(wpj, r);
             return [=](Particle& p, double) {
-                PM::InitLifetime(p, Random::get(r.min, r.max));
+                PM::InitLifetime(p, GenRandom(r.min, r.max, r.exponent));
             };
         } else if (name == "sizerandom") {
             SingleRandom r = { 0.0f, 20.0f };
             SingleRandom::ReadFromJson(wpj, r);
             return [=](Particle& p, double) {
-                PM::InitSize(p, Random::get(r.min, r.max));
+                PM::InitSize(p, GenRandom(r.min, r.max, r.exponent));
             };
         } else if (name == "alpharandom") {
             SingleRandom r = { 0.05f, 1.0f };
             SingleRandom::ReadFromJson(wpj, r);
             return [=](Particle& p, double) {
-                PM::InitAlpha(p, Random::get(r.min, r.max));
+                PM::InitAlpha(p, GenRandom(r.min, r.max, r.exponent));
             };
         } else if (name == "velocityrandom") {
             VecRandom r;
@@ -139,7 +147,9 @@ ParticleInitOp WPParticleParser::genParticleInitOp(const Json& wpj) {
             r.max[0] = r.max[1] = 32.0f;
             VecRandom::ReadFromJson(wpj, r);
             return [=](Particle& p, double) {
-                auto result = GenRandomVec3(r.min, r.max);
+                Vector3d result;
+                for (usize component = 0; component < 3; ++component)
+                    result[component] = GenRandom(r.min[component], r.max[component], r.exponent);
                 PM::ChangeVelocity(p, result[0], result[1], result[2]);
             };
         } else if (name == "rotationrandom") {
@@ -147,7 +157,9 @@ ParticleInitOp WPParticleParser::genParticleInitOp(const Json& wpj) {
             r.max[2] = rstd::f32_::consts::TAU;
             VecRandom::ReadFromJson(wpj, r);
             return [=](Particle& p, double) {
-                auto result = GenRandomVec3(r.min, r.max);
+                Vector3d result;
+                for (usize component = 0; component < 3; ++component)
+                    result[component] = GenRandom(r.min[component], r.max[component], r.exponent);
                 PM::ChangeRotation(p, result[0], result[1], result[2]);
             };
         } else if (name == "angularvelocityrandom") {
@@ -156,7 +168,9 @@ ParticleInitOp WPParticleParser::genParticleInitOp(const Json& wpj) {
             r.max[2] = 5.0f;
             VecRandom::ReadFromJson(wpj, r);
             return [=](Particle& p, double) {
-                auto result = GenRandomVec3(r.min, r.max);
+                Vector3d result;
+                for (usize component = 0; component < 3; ++component)
+                    result[component] = GenRandom(r.min[component], r.max[component], r.exponent);
                 PM::ChangeAngularVelocity(p, result[0], result[1], result[2]);
             };
         } else if (name == "turbulentvelocityrandom") {
@@ -175,7 +189,7 @@ ParticleInitOp WPParticleParser::genParticleInitOp(const Json& wpj) {
                 Vector3f result;
                 do {
                     result = algorism::CurlNoise(pos.cast<double>()).cast<float>().normalized();
-                    pos += result * 0.005f / r.timescale;
+                    pos += result * 0.005f * static_cast<float>(r.timescale);
                     duration -= 0.01f;
                 } while (duration > 0.01f);
                 // limit direction
@@ -468,11 +482,8 @@ ParticleOperatorOp WPParticleParser::genParticleOperatorOp(
                         info.world_from_local_dir * PM::GetVelocity(p).cast<double>();
                     Vector3d acc =
                         info.local_from_world_dir * algorism::DragForce(world_velocity, drag);
-                    if (info.world_space)
-                        acc += info.local_from_world_dir * vecG;
-                    else
-                        acc += vecG;
-                    PM::Accelerate(p, speed * acc, info.time_pass);
+                    acc += speed * (info.world_space ? info.local_from_world_dir * vecG : vecG);
+                    PM::Accelerate(p, acc, info.time_pass);
                 }
             };
         } else if (name == "angularmovement") {
@@ -578,7 +589,8 @@ ParticleOperatorOp WPParticleParser::genParticleOperatorOp(
                 for (auto& p : info.particles) {
                     Vector3d pos = PM::GetPos(p).cast<double>();
                     pos.x() += phase + tur.timescale * info.time;
-                    Vector3d result = speed * algorism::CurlNoise(pos * tur.scale * 2).normalized();
+                    Vector3d result = speed * over_state->speed *
+                                      algorism::CurlNoise(pos * tur.scale * 2).normalized();
                     for (usize i = 0; i < 3; i++) {
                         if (tur.mask[i] == 0) result[i] = 0;
                     }
@@ -588,15 +600,26 @@ ParticleOperatorOp WPParticleParser::genParticleOperatorOp(
         } else if (name == "vortex") {
             Vortex v = Vortex::ReadFromJson(wpj);
             return [=](const ParticleInfo& info) {
-                Vector3d offset  = info.controlpoints[v.controlpoint].offset +
-                                   (Vector3f { v.offset.data() }).cast<double>();
-                Vector3d axis    = (Vector3f { v.axis.data() }).cast<double>();
+                const auto& cp = info.controlpoints[v.controlpoint];
+                Vector3d offset = cp.offset + cp.rotation *
+                                                  (Vector3f { v.offset.data() }).cast<double>();
+                Vector3d axis = cp.rotation * (Vector3f { v.axis.data() }).cast<double>();
+                if (info.world_space) {
+                    offset = (info.world_from_spawn_space *
+                              Eigen::Vector4d(offset.x(), offset.y(), offset.z(), 1.0))
+                                 .head<3>();
+                    axis = info.world_from_spawn_space.block<3, 3>(0, 0) * axis;
+                }
+                if (axis.squaredNorm() <= 1e-12) axis = Vector3d::UnitZ();
+                axis.normalize();
                 double   dis_mid = v.distanceouter - v.distanceinner + 0.1f;
 
                 for (auto& p : info.particles) {
-                    Vector3d pos      = p.position.cast<double>();
-                    Vector3d direct   = -axis.cross(pos).normalized();
-                    double   distance = (pos - offset).norm();
+                    Vector3d relative = p.position.cast<double>() - offset;
+                    Vector3d radial = relative - axis * relative.dot(axis);
+                    double distance = radial.norm();
+                    if (distance <= 1e-9) continue;
+                    Vector3d direct = -axis.cross(radial).normalized();
                     if (dis_mid < 0 || distance < v.distanceinner) {
                         PM::Accelerate(p, direct * v.speedinner, info.time_pass);
                     }
@@ -613,8 +636,13 @@ ParticleOperatorOp WPParticleParser::genParticleOperatorOp(
         } else if (name == "controlpointattract") {
             ControlPointForce c = ControlPointForce::ReadFromJson(wpj);
             return [=](const ParticleInfo& info) {
-                Vector3d offset = info.controlpoints[c.controlpoint].offset +
-                                  Vector3f { c.origin.data() }.cast<double>();
+                const auto& cp = info.controlpoints[c.controlpoint];
+                Vector3d offset =
+                    cp.offset + cp.rotation * Vector3f { c.origin.data() }.cast<double>();
+                if (info.world_space)
+                    offset = (info.world_from_spawn_space *
+                              Eigen::Vector4d(offset.x(), offset.y(), offset.z(), 1.0))
+                                 .head<3>();
                 for (auto& p : info.particles) {
                     Vector3d diff     = offset - PM::GetPos(p).cast<double>();
                     double   distance = diff.norm();
@@ -671,7 +699,8 @@ ParticleEmittOp WPParticleParser::genParticleEmittOp(const wpscene::Emitter& wpe
         sphere.sort           = sort;
         return ParticleSphereEmitterArgs::MakeEmittOp(sphere);
     } else
-        return [](std::vector<Particle>&,
+        return [](ParticleEmitterState&,
+                  std::vector<Particle>&,
                   std::vector<ParticleInitOp>&,
                   uint32_t,
                   double,

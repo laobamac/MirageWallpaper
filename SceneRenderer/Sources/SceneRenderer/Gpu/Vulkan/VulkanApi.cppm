@@ -312,6 +312,13 @@ struct ImageSlotsRef {
 class Swapchain {
 public:
     static bool                      Create(Device&, VkSurfaceKHR, VkExtent2D, Swapchain&);
+    // Rebuild against the surface's current capabilities, handing the live
+    // VkSwapchainKHR to the driver as `oldSwapchain`. Returns false when the
+    // surface is momentarily unusable (0x0 extent while a display is being
+    // reconfigured); the caller skips the frame and retries. The caller must
+    // have waited for device idle.
+    static bool                      Recreate(Device&, VkSurfaceKHR, VkExtent2D, Swapchain&);
+    void                             Destroy();
     const vvk::SwapchainKHR&         handle() const;
     VkFormat                         format() const;
     VkExtent2D                       extent() const;
@@ -320,6 +327,8 @@ public:
     std::span<const ImageParameters> images() const;
 
 private:
+    bool build(Device&, VkSurfaceKHR, VkExtent2D, VkSwapchainKHR old_swapchain);
+
     vvk::SwapchainKHR            m_handle;
     VkSurfaceFormatKHR           m_format;
     VkExtent2D                   m_extent;
@@ -380,7 +389,7 @@ public:
 
     std::optional<VmaImageParameters> CreateRenderTargetTex(uint32_t width, uint32_t height,
                                                             VkFormat);
-    ImageSlotsRef                    CreateTex(Image&);
+    ImageSlotsRef                    CreateTex(Image&, std::shared_ptr<VideoPlaybackState> = {});
 
     std::optional<ImageParameters> Query(std::string_view key, TextureKey content_hash,
                                          bool persist = false);
@@ -417,7 +426,7 @@ private:
     /* VIDEO-typed Image branch of CreateTex: registers a wavsen
      * VideoDecoder + stable RGBA8 VkImage and returns an ImageSlotsRef
      * pointing at that same VkImage so material binding is transparent. */
-    ImageSlotsRef       CreateVideoTex(Image&);
+    ImageSlotsRef       CreateVideoTex(Image&, std::shared_ptr<VideoPlaybackState>);
     const Device&                m_device;
     Map<std::string, ImageSlots> m_tex_map;
     VideoDecodeOptions           m_video_decode_options;
@@ -479,6 +488,15 @@ public:
                          VkSurfaceKHR surface);
 
     void Destroy();
+
+    // Rebuild the surface swapchain (VK_ERROR_OUT_OF_DATE_KHR, resolution
+    // change, display hot-plug). Waits for device idle before touching the old
+    // objects. Returns false when the surface can't back a swapchain yet, in
+    // which case the swapchain handle is left null and the caller must keep
+    // skipping frames. The render extent (out_extent) is intentionally not
+    // changed: render targets are sized independently and blitted to the
+    // swapchain by FinPass.
+    bool recreateSwapchain(VkSurfaceKHR surface);
 
     const auto&                  graphics_queue() const { return m_graphics_queue; }
     const auto&                  present_queue() const { return m_present_queue; }

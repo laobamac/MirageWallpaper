@@ -80,6 +80,26 @@ void SceneControlChannel::dispatchLine(const char* line) {
         m_wallpaper.pause();
     } else if (cmd == "resume" || cmd == "play") {
         m_wallpaper.play();
+    } else if (cmd == "power") {
+        // The app is the sole judge of occlusion, lock, sleep, battery and
+        // thermal state — this renderer's window is deliberately never reported
+        // as occluded, so it cannot observe any of that itself. Here we only
+        // obey the final state: "pause" stops the frame timer outright,
+        // "run"/"throttle" differ solely in the frame rate carried alongside.
+        auto state = msg.get("state");
+        if (state.is_none() || ! (*state)->is_string()) return;
+        const std::string power = rstd::cppstd::to_string(*(*state)->as_str());
+        if (power == "pause") {
+            m_wallpaper.pause();
+            return;
+        }
+        if (power != "run" && power != "throttle") return;
+        auto fps = msg.get("fps");
+        if (fps.is_some() && (*fps)->is_number()) {
+            auto number = (*fps)->as_u64();
+            if (number.is_some()) m_wallpaper.setFps(static_cast<std::uint32_t>(*number));
+        }
+        m_wallpaper.play();
     } else if (cmd == "volume") {
         auto value = msg.get("value");
         if (value.is_some() && (*value)->is_number()) {
@@ -129,8 +149,28 @@ void SceneControlChannel::dispatchLine(const char* line) {
             ++index;
         }
         m_wallpaper.setAudioSpectrum(std::move(left), std::move(right));
+    } else if (cmd == "snapshot") {
+        // Mirage.app wants a still of the live frame for the system desktop
+        // picture. The outcome must always be reported, or the requester waits
+        // out its whole timeout.
+        if (! m_on_snapshot) return;
+        auto path = msg.get("path");
+        auto token = msg.get("token");
+        const std::string token_text =
+            (token.is_some() && (*token)->is_string())
+                ? rstd::cppstd::to_string(*(*token)->as_str())
+                : std::string {};
+        const std::string path_text =
+            (path.is_some() && (*path)->is_string())
+                ? rstd::cppstd::to_string(*(*path)->as_str())
+                : std::string {};
+        m_on_snapshot(path_text, token_text);
     } else if (cmd == "activate") {
         if (m_on_activate) m_on_activate();
+    } else if (cmd == "deactivate") {
+        m_wallpaper.setMuted(true);
+        m_wallpaper.pause();
+        if (m_on_deactivate) m_on_deactivate();
     } else if (cmd == "quit") {
         m_running.store(false);
         if (m_on_quit) m_on_quit();

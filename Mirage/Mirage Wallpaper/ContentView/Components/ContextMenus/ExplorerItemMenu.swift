@@ -5,35 +5,85 @@
 //
 
 import SwiftUI
+import AppKit
 
 struct ExplorerItemMenu: SubviewOfContentView {
     
     @ObservedObject var viewModel: ContentViewModel
     @ObservedObject var wallpaperViewModel: WallpaperViewModel
+    @ObservedObject var workshopViewModel: WorkshopViewModel
     
     var hoveredWallpaper: WEWallpaper
     
-    init(contentViewModel viewModel: ContentViewModel, wallpaperViewModel: WallpaperViewModel, current hoveredWallpaper: WEWallpaper) {
+    init(contentViewModel viewModel: ContentViewModel,
+         wallpaperViewModel: WallpaperViewModel,
+         workshopViewModel: WorkshopViewModel = AppDelegate.shared.workshopViewModel,
+         current hoveredWallpaper: WEWallpaper) {
         self.wallpaperViewModel = wallpaperViewModel
         self.viewModel = viewModel
+        self.workshopViewModel = workshopViewModel
         self.hoveredWallpaper = hoveredWallpaper
     }
     
     var body: some View {
         Group {
             Section {
+                if displays.count > 1 {
+                    Menu {
+                        ForEach(displays) { info in
+                            Button {
+                                apply(to: info)
+                            } label: {
+                                Label(displayTitle(info), systemImage: "display")
+                            }
+                        }
+                        Divider()
+                        Button {
+                            applyToAll()
+                        } label: {
+                            Label("所有显示器", systemImage: "rectangle.on.rectangle")
+                        }
+                    } label: {
+                        Label("设为壁纸", systemImage: "photo.fill")
+                    }
+                    .disabled(!canApply)
+                } else {
+                    Button {
+                        if let info = displays.first { apply(to: info) }
+                    } label: {
+                        Label("设为壁纸", systemImage: "photo.fill")
+                    }
+                    .disabled(!canApply || displays.isEmpty)
+                }
+
                 Button(action: setAsScreenSaver) {
                     Label("设为屏保", systemImage: "sparkles.tv")
                 }
-                .disabled(!hoveredWallpaper.isValid || hoveredWallpaper.kind == .unsupported)
+                .disabled(!canApply)
             }
 
             Section {
-                Button {
-                    
-                } label: {
-                    Label("加入播放列表", systemImage: "plus")
-                }.disabled(true)
+                if displays.count > 1 {
+                    Menu {
+                        ForEach(displays) { info in
+                            Button {
+                                PlaylistManager.shared.add(hoveredWallpaper, to: info.index)
+                            } label: {
+                                Label(displayTitle(info), systemImage: "display")
+                            }
+                        }
+                    } label: {
+                        Label("加入播放列表", systemImage: "plus")
+                    }
+                    .disabled(!hoveredWallpaper.isValid)
+                } else {
+                    Button {
+                        PlaylistManager.shared.add(hoveredWallpaper, to: 0)
+                    } label: {
+                        Label("加入播放列表", systemImage: "plus")
+                    }
+                    .disabled(!hoveredWallpaper.isValid)
+                }
                 Button {
                     viewModel.hoveredWallpaper = hoveredWallpaper
                     viewModel.isUnsubscribeConfirming = true
@@ -41,18 +91,30 @@ struct ExplorerItemMenu: SubviewOfContentView {
                     Label("删除壁纸", systemImage: "xmark")
                 }
                 Button {
-                    
+                    FavoritesManager.shared.toggle(hoveredWallpaper.id)
+                    NotificationCenter.default.post(name: .favoritesChanged, object: nil)
                 } label: {
-                    Label("加入收藏", systemImage: "heart.fill")
-                }.disabled(true)
+                    Label(
+                        LocalizedStringKey(isFavorite ? "取消收藏" : "加入收藏"),
+                        systemImage: isFavorite ? "heart.slash.fill" : "heart.fill"
+                    )
+                }
             }
             
             Section {
                 Button {
-                    
+                    openInWorkshop()
                 } label: {
                     Label("在创意工坊中打开", systemImage: "cloud.fill")
-                }.disabled(true)
+                }
+                .disabled(workshopURL == nil)
+                if let creator = workshopViewModel.installedCreator(for: hoveredWallpaper) {
+                    Button {
+                        workshopViewModel.openCreatorProfile(creator)
+                    } label: {
+                        Label(LocalizedStringKey("查看作者主页和作品"), systemImage: "person.crop.circle")
+                    }
+                }
                 Menu("相关壁纸") {
                     Link(destination: URL(string: "https://github.com/laobamac/MirageWallpaper")!) {
                         Label("浏览该作者全部", systemImage: "person.fill")
@@ -77,10 +139,20 @@ struct ExplorerItemMenu: SubviewOfContentView {
             
             Section {
                 Button {
-                    
+                    WallpaperShortcutManager.shared.presentRecorder(for: hoveredWallpaper)
                 } label: {
-                    Label("设置快捷键", systemImage: "command.square")
-                }.disabled(true)
+                    Label(
+                        LocalizedStringKey(hasShortcut ? "更改快捷键" : "设置快捷键"),
+                        systemImage: "command.square"
+                    )
+                }
+                if hasShortcut {
+                    Button {
+                        WallpaperShortcutManager.shared.clearShortcut(for: hoveredWallpaper)
+                    } label: {
+                        Label(LocalizedStringKey("移除快捷键"), systemImage: "command.square.fill")
+                    }
+                }
                 Button {
                     NSWorkspace.shared.selectFile(nil,
                                                   inFileViewerRootedAtPath: hoveredWallpaper.wallpaperDirectory.path(percentEncoded: false))
@@ -90,6 +162,67 @@ struct ExplorerItemMenu: SubviewOfContentView {
             }
         }
         .labelStyle(.titleAndIcon)
+    }
+
+    private var displays: [DisplayInfo] {
+        wallpaperViewModel.connectedDisplays
+    }
+
+    private var canApply: Bool {
+        hoveredWallpaper.isValid && hoveredWallpaper.kind != .unsupported
+    }
+
+    private var isFavorite: Bool {
+        FavoritesManager.shared.isFavorite(hoveredWallpaper.id)
+    }
+
+    private var workshopURL: URL? {
+        hoveredWallpaper.verifiedWorkshopURL()
+    }
+
+    private var hasShortcut: Bool {
+        WallpaperShortcutManager.shared.shortcut(for: hoveredWallpaper) != nil
+    }
+
+    private func displayTitle(_ info: DisplayInfo) -> String {
+        var text = L("显示器 %d", info.index + 1)
+        text += " · " + info.name
+        if info.isMain { text += L(" · 主屏") }
+        return text
+    }
+
+    private func apply(to info: DisplayInfo) {
+        wallpaperViewModel.requestApply(hoveredWallpaper, to: info.key)
+    }
+
+    private func openInWorkshop() {
+        guard let id = hoveredWallpaper.verifiedWorkshopID() else { return }
+        Task { @MainActor in
+            let fetched = try? await SteamWebAPI.shared.getFileDetails(workshopIds: [id])
+            let item = workshopViewModel.installedWorkshopItems[id]
+                ?? fetched?.first(where: {
+                    $0.publishedFileId == id && $0.consumerAppId == 431960
+                })
+            guard let item else {
+                if let workshopURL {
+                    NSWorkspace.shared.open(workshopURL)
+                }
+                return
+            }
+            workshopViewModel.selectedItem = item
+            workshopViewModel.showCustomization = false
+            workshopViewModel.showCreatorProfile = false
+            viewModel.topTabBarSelection = 2
+        }
+    }
+
+    private func applyToAll() {
+        if hoveredWallpaper.kind == .web, !wallpaperViewModel.isTrusted(hoveredWallpaper) {
+            viewModel.warningUnsafeWallpaperModal(which: hoveredWallpaper,
+                                                  action: .applyToAllDisplays)
+            return
+        }
+        wallpaperViewModel.applyToAllDisplays(hoveredWallpaper)
     }
 
     private func setAsScreenSaver() {
@@ -125,5 +258,293 @@ struct ExplorerItemMenu: SubviewOfContentView {
                 }
             }
         }
+    }
+}
+
+struct WorkshopCardContextMenu: View {
+    let item: WorkshopItem
+    @ObservedObject var workshopViewModel: WorkshopViewModel
+
+    var body: some View {
+        Group {
+            Section {
+                Button {
+                    workshopViewModel.downloadItem(item)
+                } label: {
+                    Label(
+                        LocalizedStringKey(item.isPreset ? "下载预设" : "下载壁纸"),
+                        systemImage: "arrow.down.circle.fill"
+                    )
+                }
+                .disabled(workshopViewModel.downloadState(for: item.publishedFileId) != nil)
+
+                Button {
+                    workshopViewModel.selectWorkshopItem(item)
+                } label: {
+                    Label(LocalizedStringKey("查看壁纸详情"), systemImage: "info.circle")
+                }
+            }
+
+            Section {
+                Button {
+                    guard let url = URL(
+                        string: "https://steamcommunity.com/sharedfiles/filedetails/?id=\(item.publishedFileId)"
+                    ) else { return }
+                    NSWorkspace.shared.open(url)
+                } label: {
+                    Label(LocalizedStringKey("在 Steam 中查看"), systemImage: "safari")
+                }
+
+                if let creator = WorkshopCreator(item: item) {
+                    Button {
+                        workshopViewModel.openCreatorProfile(creator)
+                    } label: {
+                        Label(LocalizedStringKey("查看作者主页和作品"), systemImage: "person.crop.circle")
+                    }
+                }
+            }
+        }
+        .labelStyle(.titleAndIcon)
+    }
+}
+
+struct WallpaperShortcut: Codable, Equatable {
+    let keyCode: UInt16
+    let modifierRawValue: UInt
+    let keyLabel: String
+
+    var modifierFlags: NSEvent.ModifierFlags {
+        NSEvent.ModifierFlags(rawValue: modifierRawValue)
+    }
+
+    var displayName: String {
+        var value = ""
+        if modifierFlags.contains(.control) { value += "⌃" }
+        if modifierFlags.contains(.option) { value += "⌥" }
+        if modifierFlags.contains(.shift) { value += "⇧" }
+        if modifierFlags.contains(.command) { value += "⌘" }
+        value += keyLabel.isEmpty ? L("按键 %d", Int(keyCode)) : keyLabel
+        return value
+    }
+}
+
+final class WallpaperShortcutManager: ObservableObject {
+    static let shared = WallpaperShortcutManager()
+
+    @Published var recordingWallpaper: WEWallpaper?
+    @Published private(set) var recordingError: String?
+
+    private static let modifierMask: NSEvent.ModifierFlags = [.command, .option, .control, .shift]
+    private let defaultsKey = "WallpaperShortcutsV1"
+    private var shortcuts: [String: WallpaperShortcut] = [:]
+    private var localMonitor: Any?
+    private var globalMonitor: Any?
+
+    private init() {
+        load()
+        installMonitors()
+    }
+
+    deinit {
+        if let localMonitor { NSEvent.removeMonitor(localMonitor) }
+        if let globalMonitor { NSEvent.removeMonitor(globalMonitor) }
+    }
+
+    func shortcut(for wallpaper: WEWallpaper) -> WallpaperShortcut? {
+        shortcuts[wallpaper.id]
+    }
+
+    func presentRecorder(for wallpaper: WEWallpaper) {
+        recordingError = nil
+        recordingWallpaper = wallpaper
+        AppDelegate.shared.openMainWindow()
+    }
+
+    func cancelRecording() {
+        recordingError = nil
+        recordingWallpaper = nil
+    }
+
+    func clearShortcut(for wallpaper: WEWallpaper) {
+        shortcuts[wallpaper.id] = nil
+        persist()
+        if recordingWallpaper?.id == wallpaper.id {
+            cancelRecording()
+        } else {
+            objectWillChange.send()
+        }
+    }
+
+    private func installMonitors() {
+        localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self else { return event }
+            if self.recordingWallpaper != nil {
+                return self.record(event) ? nil : event
+            }
+            return self.handleShortcut(event) ? nil : event
+        }
+
+        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            DispatchQueue.main.async {
+                _ = self?.handleShortcut(event)
+            }
+        }
+    }
+
+    private func record(_ event: NSEvent) -> Bool {
+        guard let wallpaper = recordingWallpaper else { return false }
+        if event.keyCode == 53 {
+            cancelRecording()
+            return true
+        }
+
+        let modifiers = event.modifierFlags.intersection(Self.modifierMask)
+        guard !modifiers.isEmpty else {
+            recordingError = L("快捷键必须包含至少一个修饰键。")
+            return true
+        }
+
+        let shortcut = WallpaperShortcut(
+            keyCode: event.keyCode,
+            modifierRawValue: modifiers.rawValue,
+            keyLabel: Self.keyLabel(for: event)
+        )
+        guard !Self.isReserved(shortcut) else {
+            recordingError = L("该快捷键由 macOS 或 Mirage 保留，请选择其他组合。")
+            return true
+        }
+
+        if let duplicate = shortcuts.first(where: {
+            $0.key != wallpaper.id && $0.value.keyCode == shortcut.keyCode
+                && $0.value.modifierRawValue == shortcut.modifierRawValue
+        }) {
+            let title = WEWallpaper.load(from: URL(fileURLWithPath: duplicate.key)).project.title
+            recordingError = L("该快捷键已用于“%@”。", title)
+            return true
+        }
+
+        shortcuts[wallpaper.id] = shortcut
+        persist()
+        recordingError = nil
+        recordingWallpaper = nil
+        objectWillChange.send()
+        return true
+    }
+
+    private func handleShortcut(_ event: NSEvent) -> Bool {
+        guard recordingWallpaper == nil, !event.isARepeat else { return false }
+        let modifiers = event.modifierFlags.intersection(Self.modifierMask)
+        guard let wallpaperID = shortcuts.first(where: {
+            $0.value.keyCode == event.keyCode && $0.value.modifierRawValue == modifiers.rawValue
+        })?.key else { return false }
+
+        let wallpaper = WEWallpaper.load(from: URL(fileURLWithPath: wallpaperID))
+        guard wallpaper.isValid, wallpaper.kind != .unsupported else {
+            shortcuts[wallpaperID] = nil
+            persist()
+            return true
+        }
+
+        AppDelegate.shared.openMainWindow()
+        AppDelegate.shared.wallpaperViewModel.requestApply(wallpaper)
+        return true
+    }
+
+    private func load() {
+        guard let data = UserDefaults.standard.data(forKey: defaultsKey),
+              let decoded = try? JSONDecoder().decode([String: WallpaperShortcut].self, from: data) else {
+            return
+        }
+        shortcuts = decoded
+    }
+
+    private func persist() {
+        guard let data = try? JSONEncoder().encode(shortcuts) else { return }
+        UserDefaults.standard.set(data, forKey: defaultsKey)
+    }
+
+    private static func isReserved(_ shortcut: WallpaperShortcut) -> Bool {
+        let flags = shortcut.modifierFlags
+        if flags == [.command] && [4, 12, 13, 46].contains(shortcut.keyCode) {
+            return true
+        }
+        if flags == [.command] && [48, 49].contains(shortcut.keyCode) {
+            return true
+        }
+        if flags == [.control] && shortcut.keyCode == 49 {
+            return true
+        }
+        return false
+    }
+
+    private static func keyLabel(for event: NSEvent) -> String {
+        let named: [UInt16: String] = [
+            36: "↩", 48: "⇥", 49: "Space", 51: "⌫", 53: "⎋",
+            115: "↖", 116: "⇞", 117: "⌦", 119: "↘", 121: "⇟",
+            123: "←", 124: "→", 125: "↓", 126: "↑"
+        ]
+        if let value = named[event.keyCode] {
+            return value == "Space" ? L("空格") : value
+        }
+        let functionKeys: [UInt16: String] = [
+            122: "F1", 120: "F2", 99: "F3", 118: "F4", 96: "F5", 97: "F6",
+            98: "F7", 100: "F8", 101: "F9", 109: "F10", 103: "F11", 111: "F12"
+        ]
+        if let value = functionKeys[event.keyCode] { return value }
+        return event.charactersIgnoringModifiers?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .uppercased() ?? ""
+    }
+}
+
+struct WallpaperShortcutRecorderSheet: View {
+    let wallpaper: WEWallpaper
+    @ObservedObject var manager: WallpaperShortcutManager
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "command.square")
+                .font(.system(size: 34))
+                .foregroundStyle(.secondary)
+
+            Text(L("设置壁纸快捷键"))
+                .font(.headline)
+            Text(wallpaper.project.title)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+
+            if let shortcut = manager.shortcut(for: wallpaper) {
+                Text(L("当前快捷键：%@", shortcut.displayName))
+                    .font(.callout.monospaced())
+            }
+
+            Text(L("请按下新的快捷键组合。快捷键必须包含 Command、Option、Control 或 Shift。"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+
+            if let error = manager.recordingError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+            }
+
+            HStack {
+                Button(L("清除快捷键")) {
+                    manager.clearShortcut(for: wallpaper)
+                }
+                .disabled(manager.shortcut(for: wallpaper) == nil)
+
+                Spacer()
+
+                Button(L("取消")) {
+                    manager.cancelRecording()
+                }
+                .keyboardShortcut(.cancelAction)
+            }
+        }
+        .padding(24)
+        .frame(width: 420)
     }
 }

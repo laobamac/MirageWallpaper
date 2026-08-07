@@ -43,7 +43,7 @@ public:
     float       subdivision { 3.0f };
     // Trail history depth per rope-head particle (= number of trail nodes).
     // Only consumed by rope/trail renderers; default matches WE behaviour.
-    i32 segments { 16 };
+    i32 segments { 4 };
 };
 
 class Initializer {
@@ -70,6 +70,7 @@ public:
     std::array<float, 3>   origin { 0, 0, 0 };
     std::array<int32_t, 3> sign { 0, 0, 0 };
     u32                    instantaneous { 0 };
+    u32                    max_emit_per_period { 0 };
     float                  speedmin { 0 };
     float                  speedmax { 0 };
     u32                    audioprocessingmode { 0 };
@@ -112,7 +113,7 @@ public:
     std::string animationmode;
     float       sequencemultiplier { 1.0f };
     uint32_t    maxcount { 1 };
-    uint32_t    starttime { 0 };
+    float       starttime { 0.0f };
     EFlags      flags { 0 };
 };
 class ParticleChild {
@@ -128,7 +129,7 @@ public:
     i32         maxcount { 20 };
 
     // flags
-    i32   controlpointstartindex { 0 };
+    std::optional<i32> controlpointstartindex;
     float probability { 1.0f };
 
     std::array<float, 3> angles { 0, 0, 0 };
@@ -159,7 +160,7 @@ public:
     // controlpoint{0..7} carry "x y z" triplet strings (per-particle CP
     // overrides); controlpointangle{0..7} carry euler triplets in the same
     // string format. Captured into static arrays of array<float,3>.
-    std::array<std::array<float, 3>, 8> controlpoint {};
+    std::array<std::optional<std::array<float, 3>>, 8> controlpoint {};
     std::array<std::array<float, 3>, 8> controlpointangle {};
 
     // field name (e.g. "alpha", "size", "color", "colorn", "lifetime",
@@ -175,6 +176,7 @@ class ParticleObject {
 public:
     bool                     FromJson(const sr::Json&, fs::VFS&);               // legacy
     bool                     FromJson(const sr::Json&, fs::VFS&, SceneVersion); // canonical
+    bool                     FromAsset(std::string_view asset, fs::VFS&);
     int32_t                  id;
     std::string              name;
     std::array<float, 3>     origin { 0.0f, 0.0f, 0.0f };
@@ -190,6 +192,7 @@ public:
     bool                      locktransforms { false };
     bool                      muteineditor { false };
     bool                      nointerpolation { false };
+    bool                      reflected { true };
     std::uint32_t             parent { 0 };
     std::string               attachment;
     std::vector<std::int32_t> dependencies;

@@ -7,7 +7,8 @@ extern "C" {
 struct SceneRendererMacDesktopConfig {
     const char* title;
     std::uint32_t input_hz;
-    std::uint32_t screen_index; // 0 = main screen; N selects NSScreen.screens[N]
+    std::uint32_t screen_index;
+    std::uint32_t display_id;
     // Keep the window in the compositor, but fully transparent, until
     // SceneRendererMacDesktopActivate(). This allows CAMetalLayer to produce
     // drawables while the previous wallpaper remains visible.
@@ -22,9 +23,17 @@ struct SceneRendererMacDesktopCallbacks {
     // Fired once, from Metal's drawable-presented callback, after the first
     // real scene frame has reached the presentation path.
     void (*first_frame_presented)(void* userdata);
-    // Fired once after activation and a subsequent drawable presentation.
+    // Fired once AppKit and WindowServer confirm that an already-prepared
+    // wallpaper window is visible with the validated display geometry.
     // The parent can safely retire the previous wallpaper at this point.
     void (*activated)(void* userdata);
+    // Fired only after a failed activation has been hidden again and that
+    // hidden state is confirmed by AppKit and WindowServer.
+    void (*activation_failed)(void* userdata);
+    // Fired after AppKit and WindowServer both report the wallpaper window hidden.
+    // The parent may then reveal a prepared replacement without two live desktop
+    // surfaces being visible at the same time.
+    void (*deactivated)(void* userdata);
     void* userdata;
 };
 
@@ -35,6 +44,7 @@ int   SceneRendererMacDesktopRun(void* handle);
 void  SceneRendererMacDesktopStop(void* handle);
 void  SceneRendererMacDesktopWake(void* handle);
 void  SceneRendererMacDesktopActivate(void* handle);
+void  SceneRendererMacDesktopDeactivate(void* handle);
 // Borrowed CAMetalLayer pointer used to create VK_EXT_metal_surface.
 void* SceneRendererMacDesktopMetalLayer(void* handle);
 std::uint32_t SceneRendererMacDesktopPixelWidth(void* handle);

@@ -17,7 +17,7 @@ bool ParticleChild::FromJson(const sr::Json& json, fs::VFS& vfs) {
         return false;
     }
 
-    auto parsed_particle = sr::ParseJson(fs::GetFileContent(vfs, "/assets/" + name));
+    auto parsed_particle = sr::ParseJson(fs::GetFileContent(vfs, fs::ResolveAssetPath(name)));
     if (parsed_particle.is_err()) {
         rstd_error("Can't parse particle json {}: {}", name, parsed_particle.unwrap_err());
         return false;
@@ -27,7 +27,12 @@ bool ParticleChild::FromJson(const sr::Json& json, fs::VFS& vfs) {
     if (! obj.FromJson(jParticle, vfs)) return false;
 
     sr::GetJsonValue(json, "maxcount", maxcount, false);
-    sr::GetJsonValue(json, "controlpointstartindex", controlpointstartindex, false);
+    if (auto value = json.get("controlpointstartindex");
+        value.is_some() && ! (*value)->is_null()) {
+        i32 parsed {};
+        sr::GetJsonValue(json, "controlpointstartindex", parsed, false);
+        controlpointstartindex = parsed;
+    }
     sr::GetJsonValue(json, "probability", probability, false);
     sr::GetJsonValue(json, "origin", origin, false);
     sr::GetJsonValue(json, "scale", scale, false);
@@ -49,6 +54,7 @@ bool ParticleControlpoint::FromJson(const sr::Json& json) {
 bool ParticleRender::FromJson(const sr::Json& json) {
     sr::GetJsonValue(json, "name", name);
 
+    if (name == "ropetrail") subdivision = 1.0f;
     if (sstart_with(name, "rope")) {
         sr::GetJsonValue(json, "subdivision", subdivision, false);
     }
@@ -66,6 +72,7 @@ bool Emitter::FromJson(const sr::Json& json) {
     sr::GetJsonValue(json, "speedmin", speedmin, false);
     sr::GetJsonValue(json, "speedmax", speedmax, false);
     sr::GetJsonValue(json, "instantaneous", instantaneous, false);
+    sr::GetJsonValue(json, "maxtoemitperperiod", max_emit_per_period, false);
     sr::GetJsonValue(json, "distancemax", distancemax, false);
     sr::GetJsonValue(json, "distancemin", distancemin, false);
     sr::GetJsonValue(json, "rate", rate, false);
@@ -143,7 +150,11 @@ bool ParticleInstanceoverride::FromJosn(const sr::Json& json) {
                                    "controlpointangle3", "controlpointangle4", "controlpointangle5",
                                    "controlpointangle6", "controlpointangle7" };
         for (int i = 0; i < 8; ++i) {
-            sr::GetJsonValue(json, cp_keys[i], controlpoint[i], false);
+            if (auto value = json.get(cp_keys[i]); value.is_some() && ! (*value)->is_null()) {
+                std::array<float, 3> point {};
+                sr::GetJsonValue(json, cp_keys[i], point, false);
+                controlpoint[i] = point;
+            }
             bind(cp_keys[i]);
             sr::GetJsonValue(json, cpa_keys[i], controlpointangle[i], false);
             bind(cpa_keys[i]);
@@ -217,7 +228,8 @@ bool Particle::FromJson(const sr::Json& json, fs::VFS& vfs) {
     if (json.get("material").is_some()) {
         std::string matPath;
         sr::GetJsonValue(json, "material", matPath);
-        auto parsed_material = sr::ParseJson(fs::GetFileContent(vfs, "/assets/" + matPath));
+        auto parsed_material =
+            sr::ParseJson(fs::GetFileContent(vfs, fs::ResolveAssetPath(matPath)));
         if (parsed_material.is_err()) {
             rstd_error("Can't parse material json {}: {}", matPath, parsed_material.unwrap_err());
             return false;
@@ -245,6 +257,16 @@ bool ParticleObject::FromJson(const sr::Json& json, fs::VFS& vfs) {
     return FromJson(json, vfs, kSceneVersionUnknown);
 }
 
+bool ParticleObject::FromAsset(std::string_view asset, fs::VFS& vfs) {
+    particle = std::string(asset);
+    auto parsed_particle = sr::ParseJson(fs::GetFileContent(vfs, fs::ResolveAssetPath(particle)));
+    if (parsed_particle.is_err()) {
+        rstd_error("Can't parse particle json {}: {}", particle, parsed_particle.unwrap_err());
+        return false;
+    }
+    return particleObj.FromJson(parsed_particle.unwrap(), vfs);
+}
+
 bool ParticleObject::FromJson(const sr::Json& json, fs::VFS& vfs, SceneVersion /*v*/) {
     sr::GetJsonValue(json, "particle", particle);
     ReadVisibleProperty(json, visible, visible_user);
@@ -264,6 +286,7 @@ bool ParticleObject::FromJson(const sr::Json& json, fs::VFS& vfs, SceneVersion /
     sr::GetJsonValue(json, "locktransforms", locktransforms, false);
     sr::GetJsonValue(json, "muteineditor", muteineditor, false);
     sr::GetJsonValue(json, "nointerpolation", nointerpolation, false);
+    sr::GetJsonValue(json, "reflected", reflected, false);
     sr::GetJsonValue(json, "parent", parent, false);
     sr::GetJsonValue(json, "attachment", attachment, false);
     sr::GetJsonValue(json, "dependencies", dependencies, false);
@@ -273,7 +296,7 @@ bool ParticleObject::FromJson(const sr::Json& json, fs::VFS& vfs, SceneVersion /
 
     AbsorbAllFieldBindings(json, field_bindings);
 
-    auto parsed_particle = sr::ParseJson(fs::GetFileContent(vfs, "/assets/" + particle));
+    auto parsed_particle = sr::ParseJson(fs::GetFileContent(vfs, fs::ResolveAssetPath(particle)));
     if (parsed_particle.is_err()) {
         rstd_error("Can't parse particle json {}: {}", particle, parsed_particle.unwrap_err());
         return false;

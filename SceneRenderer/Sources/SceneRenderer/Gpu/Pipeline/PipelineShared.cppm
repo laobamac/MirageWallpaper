@@ -14,7 +14,8 @@ inline void SetBlend(BlendMode bm, VkPipelineColorBlendAttachmentState& state) {
     state.colorBlendOp = VK_BLEND_OP_ADD;
     state.alphaBlendOp = VK_BLEND_OP_ADD;
     switch (bm) {
-    case BlendMode::Disable: state.blendEnable = false; break;
+    case BlendMode::Disable:
+    case BlendMode::AlphaToCoverage:
     case BlendMode::Normal: state.blendEnable = false; break;
     case BlendMode::Translucent:
         state.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
@@ -31,6 +32,10 @@ inline void SetBlend(BlendMode bm, VkPipelineColorBlendAttachmentState& state) {
     }
 }
 
+inline void SetAlphaToCoverage(BlendMode bm, VkPipelineMultisampleStateCreateInfo& state) {
+    state.alphaToCoverageEnable = bm == BlendMode::AlphaToCoverage;
+}
+
 inline void SetAlphaBlendWritePolicy(VkPipelineColorBlendAttachmentState& state,
                                      bool                                 writes_alpha) {
     if (writes_alpha) return;
@@ -43,6 +48,7 @@ inline void SetAttachmentLoadOp(BlendMode bm, VkAttachmentLoadOp& load_op) {
     case BlendMode::Disable:
     case BlendMode::Normal: load_op = VK_ATTACHMENT_LOAD_OP_DONT_CARE; break;
     case BlendMode::Additive:
+    case BlendMode::AlphaToCoverage:
     case BlendMode::Translucent: load_op = VK_ATTACHMENT_LOAD_OP_LOAD; break;
     }
 }
@@ -50,6 +56,7 @@ inline void SetAttachmentLoadOp(BlendMode bm, VkAttachmentLoadOp& load_op) {
 inline bool IsDepthWritingBlendMode(BlendMode bm) {
     switch (bm) {
     case BlendMode::Disable:
+    case BlendMode::AlphaToCoverage:
     case BlendMode::Normal: return true;
     case BlendMode::Additive:
     case BlendMode::Translucent: return false;

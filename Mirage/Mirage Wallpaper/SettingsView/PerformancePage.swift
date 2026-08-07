@@ -80,13 +80,25 @@ struct PerformancePage: SettingsPage {
                     Text("从内存加载（减少磁盘读取）").tag(GSWallpaperLoadSource.memory)
                 }
 
+                Picker("动图预览播放方式", selection: Binding(
+                    get: { viewModel.settings.animatedPreviewPlaybackMode },
+                    set: { viewModel.settings.animatedPreviewPlayback = $0 }
+                )) {
+                    Text("鼠标悬停时播放").tag(GSAnimatedPreviewPlayback.hover)
+                    Text("当前可见壁纸持续播放").tag(GSAnimatedPreviewPlayback.visible)
+                }
+
                 HStack {
                     Text("帧率")
                     Spacer()
                     MirageSlider(value: $viewModel.settings.fps, in: 10...120, step: 1)
                         .frame(width: 150)
-                        .onChange(of: viewModel.settings.fps) { _, v in
-                            AppDelegate.shared.wallpaperViewModel.renderer.setFps(Int(v))
+                        .onChange(of: viewModel.settings.fps) { _, _ in
+                            // Route through the playback policy rather than
+                            // pushing the raw value: the policy centre owns the
+                            // final frame rate and may be capping it for thermal
+                            // or low-power reasons the slider knows nothing about.
+                            AppDelegate.shared.wallpaperViewModel.reapplyFrameRate()
                         }
                     Text(String(format: "%.0f", viewModel.settings.fps))
                         .frame(width: 30).monospacedDigit()
@@ -116,7 +128,7 @@ struct PerformancePage: SettingsPage {
 // one-shot action (it mutates several settings at once), so this stays a button
 // with hover feedback rather than a persistent selection.
 private struct QualityPresetButton: View {
-    let title: String
+    let title: LocalizedStringKey
     let action: () -> Void
 
     @State private var hovering = false

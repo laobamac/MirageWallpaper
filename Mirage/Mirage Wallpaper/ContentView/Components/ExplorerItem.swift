@@ -13,29 +13,33 @@ struct ExplorerItem: View {
     // other cell in the grid to rebuild.
     let isSelected: Bool
 
+    @EnvironmentObject private var globalSettingsViewModel: GlobalSettingsViewModel
     @State private var hovering = false
 
     var body: some View {
         ZStack(alignment: .bottom) {
             GifImage(contentsOf: wallpaper.project.preview.isEmpty
-                ? Bundle.main.url(forResource: "WallpaperNotFound", withExtension: "mp4")!
-                : wallpaper.previewURL,
+                     ? Bundle.main.url(forResource: "WallpaperNotFound", withExtension: "mp4")!
+                     : wallpaper.previewURL,
                      // Only the hovered cell or the active wallpaper animates its
                      // preview; every other cell stays a cheap static thumbnail.
-                     animates: hovering || isSelected)
+                     animates: hovering || isSelected ||
+                        globalSettingsViewModel.settings.animatedPreviewPlaybackMode == .visible)
             .resizable()
             .scaleEffect(hovering ? 1.03 : 1.0)
             .aspectRatio(1.0, contentMode: .fit)
             .clipped()
 
-            Text(wallpaper.project.title)
-                .lineLimit(2)
-                .frame(maxWidth: .infinity, minHeight: 30)
-                .padding(4)
-                .background(Color(white: 0, opacity: hovering ? 0.4 : 0.2))
-                .font(.footnote)
-                .multilineTextAlignment(.center)
-                .foregroundStyle(Color(white: hovering ? 0.9 : 0.7))
+            VStack(spacing: 0) {
+                Text(wallpaper.project.title)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, minHeight: 30)
+                    .padding(4)
+                    .background(Color(white: 0, opacity: hovering ? 0.4 : 0.2))
+                    .font(.footnote)
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(Color(white: hovering ? 0.9 : 0.7))
+            }
         }
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(

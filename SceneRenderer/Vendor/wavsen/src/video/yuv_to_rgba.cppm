@@ -95,6 +95,16 @@ public:
                              std::uint32_t dst_h, const ColorMatrix& cm, ConvertTarget target)
         -> rstd::Result<int, Error>;
 
+    /* Zero-copy VideoToolbox path (macOS): imports the CVPixelBuffer's Y
+     * and CbCr planes as R8 / R8G8 VkImages via VK_EXT_metal_objects and
+     * runs nv12_to_rgba.comp into `dst`. `cv_pixel_buffer` is a
+     * CVPixelBufferRef (type-erased). Imported images live until the next
+     * convert_metal_frame call. */
+    auto convert_metal_frame(void* cv_pixel_buffer, std::uint32_t src_w, std::uint32_t src_h,
+                             VkImage dst, std::uint32_t dst_w, std::uint32_t dst_h,
+                             const ColorMatrix& cm, ConvertTarget target)
+        -> rstd::Result<int, Error>;
+
     /* Zero-copy VAAPI path: imports the DrmFrameView's dma-buf fds as
      * a disjoint multi-plane VkImage (NV12 → R8 + R8G8 plane views),
      * runs the same nv12_to_rgba.comp into `dst`. The transient
@@ -121,6 +131,11 @@ private:
     int  convert_drm_prime_(const DrmFrameView& drm, VkImage dst, std::uint32_t dst_w,
                             std::uint32_t dst_h, const ColorMatrix& cm, ConvertTarget target,
                             Error* err);
+#if defined(__APPLE__)
+    int  convert_metal_frame_(void* cv_pixel_buffer, std::uint32_t src_w, std::uint32_t src_h,
+                              VkImage dst, std::uint32_t dst_w, std::uint32_t dst_h,
+                              const ColorMatrix& cm, ConvertTarget target, Error* err);
+#endif
 
     VkInstance       instance_ { VK_NULL_HANDLE };
     VkPhysicalDevice phys_ { VK_NULL_HANDLE };
@@ -172,6 +187,15 @@ private:
         VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE
     };
     std::uint32_t last_drm_memory_count_ { 0 };
+
+    /* Metal-import cycle: prior frame's two plane VkImages + their
+     * type-erased CoreVideo/Metal holds + views, released one frame late. */
+    VkImage     last_metal_images_[2] { VK_NULL_HANDLE, VK_NULL_HANDLE };
+    void*       last_metal_holds_[2] { nullptr, nullptr };
+    VkImageView last_metal_y_view_ { VK_NULL_HANDLE };
+    VkImageView last_metal_uv_view_ { VK_NULL_HANDLE };
+    VkImageView last_metal_dst_view_ { VK_NULL_HANDLE };
+    bool        metal_bridge_ready_ { false };
 
     PFN_vkGetSemaphoreFdKHR        vkGetSemaphoreFdKHR_ { nullptr };
     PFN_vkGetMemoryFdPropertiesKHR vkGetMemoryFdPropertiesKHR_ { nullptr };

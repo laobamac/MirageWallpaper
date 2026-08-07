@@ -113,14 +113,14 @@ void SceneImageEffectLayer::ResolveEffect(const SceneMesh& default_mesh,
     }
     if (m_final_resolve_effect) resolve_effect(*m_final_resolve_effect);
     if (last_output != nullptr) {
-        last_output->output  = m_final_target;
+        last_output->output  = m_final_target_override.value_or(m_final_target);
         auto& mesh           = *(last_output->sceneNode->Mesh());
         auto& material       = *mesh.Material();
         material.blenmode    = m_final_blend;
         material.depth_test  = m_final_depth_test;
         material.depth_write = m_final_depth_write;
         material.cull_mode   = m_final_cull_mode;
-        if (m_final_local) {
+        if (m_final_local_override.value_or(m_final_local)) {
             last_output->sceneNode->SetCamera(std::string(effect_cam));
             last_output->sceneNode->SetParentAnchor(nullptr);
             last_output->sceneNode->CopyTrans(default_node);

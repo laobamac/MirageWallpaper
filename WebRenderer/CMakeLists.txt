@@ -36,6 +36,9 @@ find_library(AUDIOTOOLBOX_FRAMEWORK AudioToolbox     REQUIRED)
 find_library(AUDIOUNIT_FRAMEWORK    AudioUnit        REQUIRED)
 find_library(ACCELERATE_FRAMEWORK   Accelerate       REQUIRED)
 find_library(FOUNDATION_FRAMEWORK   Foundation       REQUIRED)
+# Desktop-picture stills: encodes the WKWebView snapshot as HEIC/JPEG.
+find_library(IMAGEIO_FRAMEWORK      ImageIO          REQUIRED)
+find_library(UNIFORMTYPEIDENTIFIERS_FRAMEWORK UniformTypeIdentifiers REQUIRED)
 
 set(WR_FRAMEWORKS
     ${COCOA_FRAMEWORK}
@@ -45,6 +48,8 @@ set(WR_FRAMEWORKS
     ${AUDIOTOOLBOX_FRAMEWORK}
     ${AUDIOUNIT_FRAMEWORK}
     ${ACCELERATE_FRAMEWORK}
+    ${IMAGEIO_FRAMEWORK}
+    ${UNIFORMTYPEIDENTIFIERS_FRAMEWORK}
     ${FOUNDATION_FRAMEWORK})
 
 add_subdirectory(Sources/WebRenderer)

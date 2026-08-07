@@ -71,6 +71,8 @@ inline constexpr std::string_view WE_IN_TEXCOORDC3 { "a_TexCoordC3" };
 inline constexpr std::string_view WE_IN_TEXCOORDC4 { "a_TexCoordC4" };
 inline constexpr std::string_view WE_CB_BLENDMODE { "BLENDMODE" };
 inline constexpr std::string_view WE_CB_BONECOUNT { "BONECOUNT" };
+inline constexpr std::string_view WE_CB_SCENE_ORTHO { "SCENE_ORTHO" };
+inline constexpr std::string_view OWE_CB_IMAGE_LAYER { "OWE_IMAGE_LAYER" };
 inline constexpr std::string_view WE_CB_SPRITESHEET { "SPRITESHEET" };
 inline constexpr std::string_view WE_CB_SPRITESHEETBLENDNPOT { "SPRITESHEETBLENDNPOT" };
 inline constexpr std::string_view WE_CB_THICK_FORMAT { "THICKFORMAT" };
@@ -81,14 +83,21 @@ inline constexpr std::string_view WE_CB_REFLECTION { "REFLECTION" };
 inline constexpr std::string_view WE_CB_NORMALMAP { "NORMALMAP" };
 inline constexpr std::string_view WE_CB_MORPHING { "MORPHING" };
 inline constexpr std::string_view WE_CB_SKINNING { "SKINNING" };
+// Gates `uniform float g_BonesAlpha[BONECOUNT]` plus the per-vertex alpha
+// multiply in the WE image shaders. Only set when the puppet actually ships a
+// non-trivial per-bone opacity envelope, so puppets without one keep their
+// current shader permutation.
+inline constexpr std::string_view WE_CB_SKINNING_ALPHA { "SKINNING_ALPHA" };
 inline constexpr std::string_view WE_CB_POINTEMITTER { "POINTEMITTER" };
 inline constexpr std::string_view WE_CB_LINEEMITTER { "LINEEMITTER" };
 inline constexpr std::string_view WE_PRENDER_ROPE { "PRENDER_ROPE" };
+inline constexpr std::string_view WE_PRENDER_ROPE_TRAIL { "PRENDER_ROPE_TRAIL" };
 
 // Compile-time (name, type) pair for declarative attribute layouts.
 struct VertexAttrSpec {
     std::string_view name;
     VertexType       type;
+    bool             padding { true };
 };
 
 namespace VAttr
@@ -102,10 +111,10 @@ inline constexpr VertexAttrSpec TexCoordVec4 { WE_IN_TEXCOORDVEC4, VertexType::F
 inline constexpr VertexAttrSpec TexCoordVec4C1 { WE_IN_TEXCOORDVEC4C1, VertexType::FLOAT4 };
 inline constexpr VertexAttrSpec TexCoordVec4C2 { WE_IN_TEXCOORDVEC4C2, VertexType::FLOAT4 };
 inline constexpr VertexAttrSpec TexCoordVec4C3 { WE_IN_TEXCOORDVEC4C3, VertexType::FLOAT4 };
-inline constexpr VertexAttrSpec TexCoordVec3C2 { WE_IN_TEXCOORDVEC3C2, VertexType::FLOAT4 };
+inline constexpr VertexAttrSpec TexCoordVec3C2 { WE_IN_TEXCOORDVEC3C2, VertexType::FLOAT3, false };
 inline constexpr VertexAttrSpec TexCoordC2 { WE_IN_TEXCOORDC2, VertexType::FLOAT2 };
-inline constexpr VertexAttrSpec TexCoordC3 { WE_IN_TEXCOORDC3, VertexType::FLOAT4 };
-inline constexpr VertexAttrSpec TexCoordC4 { WE_IN_TEXCOORDC4, VertexType::FLOAT4 };
+inline constexpr VertexAttrSpec TexCoordC3 { WE_IN_TEXCOORDC3, VertexType::FLOAT2, false };
+inline constexpr VertexAttrSpec TexCoordC4 { WE_IN_TEXCOORDC4, VertexType::FLOAT2, false };
 inline constexpr VertexAttrSpec Color { WE_IN_COLOR, VertexType::FLOAT4 };
 inline constexpr VertexAttrSpec BlendIndices { WE_IN_BLENDINDICES, VertexType::UINT4 };
 inline constexpr VertexAttrSpec BlendWeights { WE_IN_BLENDWEIGHTS, VertexType::FLOAT4 };
@@ -142,8 +151,15 @@ inline constexpr std::string_view G_ETVPI { "g_EffectTextureProjectionMatrixInve
 inline constexpr std::string_view G_LP { "g_LightsPosition" };
 inline constexpr std::string_view G_LCP { "g_LightsColorPremultiplied" };
 inline constexpr std::string_view G_LCR { "g_LightsColorRadius" };
+inline constexpr std::string_view G_LIGHTDIRECTIONTYPE { "g_LightsDirectionType" };
+inline constexpr std::string_view G_LIGHTCONEEXPONENT { "g_LightsConeExponent" };
+inline constexpr std::string_view G_LIGHTCASTSHADOW { "g_LightsCastShadow" };
 inline constexpr std::string_view G_LIGHTAMBIENTCOLOR { "g_LightAmbientColor" };
 inline constexpr std::string_view G_LIGHTSKYLIGHTCOLOR { "g_LightSkylightColor" };
+inline constexpr std::string_view G_FOGDISTANCECOLOR { "g_FogDistanceColor" };
+inline constexpr std::string_view G_FOGDISTANCEPARAMS { "g_FogDistanceParams" };
+inline constexpr std::string_view G_FOGHEIGHTCOLOR { "g_FogHeightColor" };
+inline constexpr std::string_view G_FOGHEIGHTPARAMS { "g_FogHeightParams" };
 
 inline constexpr std::string_view G_TIME { "g_Time" };
 inline constexpr std::string_view G_FRAMETIME { "g_Frametime" };

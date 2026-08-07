@@ -2,6 +2,7 @@ module;
 
 #include <atomic>
 #include <climits>
+#include <cmath>
 #include <initializer_list>
 
 export module sr.scene;
@@ -114,7 +115,7 @@ inline std::size_t SceneShaderCodeHash(const SceneShader& shader) {
 
 struct SceneShaderTextureCompileInfo {
     bool                enabled { false };
-    std::array<bool, 3> components { false, false, false };
+    std::array<bool, 4> components { false, false, false, false };
 };
 
 struct SceneShaderVariantStage {
@@ -158,6 +159,7 @@ struct SceneTexture {
     std::string     url;
     TextureSample   sample;
     bool            isSprite { false };
+    bool            isVideo { false };
     SpriteAnimation spriteAnim;
 };
 
@@ -175,6 +177,10 @@ struct SceneRenderTarget {
 
     i32      width;
     i32      height;
+    // Authored layout extent stays intact when the backend must cap the
+    // actual Vulkan allocation to device limits.
+    i32      physical_width { 0 };
+    i32      physical_height { 0 };
     bool     allowReuse { false };
     bool     withDepth { false };
     bool     has_mipmap { false };
@@ -198,6 +204,9 @@ struct SceneRenderTarget {
     // Later graph versions of this RT keep earlier color content. Use this
     // for composition targets, not transient effect outputs.
     bool preserve_on_write { false };
+
+    i32 PhysicalWidth() const { return physical_width > 0 ? physical_width : width; }
+    i32 PhysicalHeight() const { return physical_height > 0 ? physical_height : height; }
 };
 
 // ============================================================================
@@ -354,7 +363,7 @@ inline std::vector<SceneVertexArray::SceneVertexAttribute>
 MakeAttrSet(std::span<const VertexAttrSpec> specs) {
     std::vector<SceneVertexArray::SceneVertexAttribute> out;
     out.reserve(specs.size());
-    for (auto& s : specs) out.push_back({ std::string(s.name), s.type });
+    for (auto& s : specs) out.push_back({ std::string(s.name), s.type, s.padding });
     return out;
 }
 
@@ -656,22 +665,24 @@ public:
 
 private:
     ShaderValue ShapeShaderValue(std::string_view uniform_name, const ShaderValue& value) const {
-        if (value.size() != 1) return value;
+        if (value.size() == 0) return value;
 
         size_t target_size = 0;
         if (auto it = customShader.constValues.find(std::string(uniform_name));
             it != customShader.constValues.end()) {
             target_size = it->second.size();
         }
-        if (target_size <= 1 && customShader.shader) {
+        if (customShader.shader) {
             if (auto it = customShader.shader->default_uniforms.find(std::string(uniform_name));
                 it != customShader.shader->default_uniforms.end()) {
-                target_size = it->second.size();
+                target_size = std::max(target_size, it->second.size());
             }
         }
-        if (target_size <= 1 || target_size > 4) return value;
+        if (target_size <= value.size() || target_size > 4) return value;
 
-        std::vector<float> shaped(target_size, value[0]);
+        const float        fill = value.size() == 1 ? value[0] : 0.0f;
+        std::vector<float> shaped(target_size, fill);
+        for (std::size_t index = 0; index < value.size(); ++index) shaped[index] = value[index];
         return ShaderValue(std::span<const float>(shaped));
     }
 
@@ -752,6 +763,7 @@ public:
         // clipping-mask submeshes to write into a shared `_rt_puppet_mask`
         // that the main puppet pass samples via g_Texture8.
         std::string output_override;
+        bool        preserve_output { false };
     };
 
     SceneMesh(bool dynamic = false)
@@ -827,6 +839,11 @@ public:
 
     SceneMaterial* Material() { return m_materials.empty() ? nullptr : m_materials[0].get(); }
 
+    const Eigen::Matrix4d& GeometryTransform() const { return m_data->geometry_transform; }
+    void                   SetGeometryTransform(Eigen::Matrix4d transform) {
+        m_data->geometry_transform = std::move(transform);
+    }
+
     void ChangeMeshDataFrom(const SceneMesh& o) { m_data = o.m_data; }
 
     const std::vector<DrawRange>& DrawRanges() const {
@@ -839,6 +856,7 @@ public:
 
 private:
     struct Data {
+        Eigen::Matrix4d      geometry_transform { Eigen::Matrix4d::Identity() };
         std::vector<Submesh> submeshes;
     };
 
@@ -869,22 +887,37 @@ struct SceneImageEffect;
 class SceneImageEffectLayer;
 struct ScenePostProcess;
 
+enum class SceneRenderViewKind
+{
+    Primary,
+    Reflection,
+};
+
+enum class SceneRenderAlphaMode
+{
+    Composite,
+    DependencyCapture,
+};
+
 // ============================================================================
 // SceneCamera.h
 // ============================================================================
 
+struct SceneCameraTransforms {
+    Eigen::Vector3d eye { Eigen::Vector3d::Zero() };
+    Eigen::Vector3d center { -Eigen::Vector3d::UnitZ() };
+    Eigen::Vector3d up { Eigen::Vector3d::UnitY() };
+};
+
 class SceneCamera {
 public:
-    explicit SceneCamera(i32 width, i32 height, float near, float far)
-        : m_width(width),
-          m_height(height),
-          m_aspect(m_width / m_height),
-          m_nearClip(near),
-          m_farClip(far),
-          m_perspective(false) {}
+    static SceneCamera MakeOrthographic(double width, double height, double near, double far) {
+        return SceneCamera(OrthographicTag {}, width, height, near, far);
+    }
 
-    explicit SceneCamera(float aspect, float near, float far, float fov)
-        : m_aspect(aspect), m_nearClip(near), m_farClip(far), m_fov(fov), m_perspective(true) {}
+    static SceneCamera MakePerspective(double aspect, double near, double far, double fov) {
+        return SceneCamera(PerspectiveTag {}, aspect, near, far, fov);
+    }
 
     SceneCamera(const SceneCamera& cam) { Clone(cam); }
 
@@ -925,12 +958,14 @@ public:
         m_lookat = true;
     }
     bool IsLookAt() const { return m_lookat; }
+    SceneCameraTransforms Transforms() const;
+    bool                  SetTransforms(const SceneCameraTransforms& transforms);
 
     void  AttatchImgEffect(std::shared_ptr<SceneImageEffectLayer> eff) { m_imgEffect = eff; }
     bool  HasImgEffect() const { return (bool)m_imgEffect; }
     auto& GetImgEffect() { return m_imgEffect; }
 
-    Eigen::Vector3d GetPosition() const;
+    Eigen::Vector3d GetPosition(SceneRenderViewKind view = SceneRenderViewKind::Primary) const;
     Eigen::Vector3d GetDirection() const;
 
     // Lazy: recomputes from m_node->ModelTrans() on every call. Cheap when
@@ -938,7 +973,8 @@ public:
     // m_dirty), correctness-keeping when scripts / parent-chain attachment
     // shift the node between frames.
     Eigen::Matrix4d GetViewMatrix();
-    Eigen::Matrix4d GetViewProjectionMatrix();
+    Eigen::Matrix4d
+    GetViewProjectionMatrix(SceneRenderViewKind view = SceneRenderViewKind::Primary);
 
     rstd::Option<SceneNode*> GetAttachedNode() const {
         if (m_node == nullptr) return rstd::None();
@@ -962,7 +998,21 @@ public:
     }
 
 private:
-    void CalculateViewProjectionMatrix();
+    struct OrthographicTag {};
+    struct PerspectiveTag {};
+
+    explicit SceneCamera(OrthographicTag, double width, double height, double near, double far)
+        : m_width(width),
+          m_height(height),
+          m_aspect(m_width / m_height),
+          m_nearClip(near),
+          m_farClip(far),
+          m_perspective(false) {}
+
+    explicit SceneCamera(PerspectiveTag, double aspect, double near, double far, double fov)
+        : m_aspect(aspect), m_nearClip(near), m_farClip(far), m_fov(fov), m_perspective(true) {}
+    void            CalculateViewProjectionMatrix();
+    Eigen::Matrix4d CalculateReflectionViewProjectionMatrix();
 
     double m_width { 1.0f };
     double m_height { 1.0f };
@@ -996,6 +1046,43 @@ struct SceneAnimationKey {
     float        back_y { 0.0f };
 };
 
+enum class SceneAnimationPlaybackStatus { Playing, Paused, Stopped, Completed };
+
+class SceneAnimationPlayback {
+public:
+    SceneAnimationPlayback(std::string name, float fps, std::int32_t frame_count,
+                           std::string mode, bool wraploop, bool start_paused);
+
+    void Tick(double runtime);
+    void Play();
+    void Stop();
+    void Pause();
+    void SetFrame(double frame);
+    void SetRate(double rate);
+
+    float                        Frame() const;
+    bool                         IsPlaying() const;
+    double                       Rate() const { return m_rate; }
+    float                        Fps() const { return m_fps; }
+    std::int32_t                 FrameCount() const { return m_frame_count; }
+    double                       Duration() const;
+    const std::string&           Name() const { return m_name; }
+    SceneAnimationPlaybackStatus Status() const { return m_status; }
+
+private:
+    bool Loops() const;
+
+    std::string                  m_name;
+    float                        m_fps { 30.0f };
+    std::int32_t                 m_frame_count { 0 };
+    std::string                  m_mode;
+    bool                         m_wraploop { false };
+    double                       m_rate { 1.0 };
+    double                       m_phase_frame { 0.0 };
+    std::optional<double>        m_last_runtime;
+    SceneAnimationPlaybackStatus m_status { SceneAnimationPlaybackStatus::Playing };
+};
+
 struct SceneAnimationCurve {
     std::vector<SceneAnimationKey> c0;
     std::vector<SceneAnimationKey> c1;
@@ -1005,6 +1092,7 @@ struct SceneAnimationCurve {
     std::string                    mode;
     bool                           wraploop { false };
     bool                           relative { false };
+    std::shared_ptr<SceneAnimationPlayback> playback;
 
     bool            Empty() const;
     float           EvaluateScalar(float base, double runtime) const;
@@ -1135,6 +1223,8 @@ public:
     void        SetCamera(const std::string& name) { m_cameraName = name; }
     bool        Perspective() const { return m_perspective; }
     void        SetPerspective(bool value) { m_perspective = value; }
+    bool        Reflected() const { return m_reflected; }
+    void        SetReflected(bool value) { m_reflected = value; }
     void        AddMesh(std::shared_ptr<SceneMesh> mesh) { m_mesh = mesh; }
     void        AppendChild(rstd::sync::Arc<SceneNode> sub) {
         sub->m_parent = this;
@@ -1149,15 +1239,24 @@ public:
     const auto& Translate() const { return m_translate; }
     const auto& Rotation() const { return m_rotation; }
     const auto& Scale() const { return m_scale; }
+    const auto& LocalFrame() const { return m_local_frame; }
+    void        SetLocalFrame(Eigen::Matrix4d frame) {
+        m_local_frame = std::move(frame);
+        MarkTransDirty();
+    }
     void        SetRotation(Eigen::Vector3f v) {
+        if (m_rotation == v) return;
         m_rotation = v;
         MarkTransDirty();
     }
+    void RotateObjectSpace(const Eigen::Vector3f& rotation);
     void SetTranslate(Eigen::Vector3f v) {
+        if (m_translate == v) return;
         m_translate = v;
         MarkTransDirty();
     }
     void SetScale(Eigen::Vector3f v) {
+        if (m_scale == v) return;
         m_scale = v;
         MarkTransDirty();
     }
@@ -1166,6 +1265,10 @@ public:
     // reading `thisLayer.size` then fall back to the legacy 100×100 stub.
     const auto& Size() const { return m_size; }
     void        SetSize(Eigen::Vector2f v) { m_size = v; }
+    const auto& GeometryTransform() const { return m_geometry_transform; }
+    void        SetGeometryTransform(Eigen::Matrix4d transform) {
+        m_geometry_transform = std::move(transform);
+    }
 
     // Script-driven per-frame overrides. The renderer maps these onto the
     // shader's available runtime tint uniforms without touching baked values
@@ -1173,19 +1276,29 @@ public:
     //
     // Visibility writes are runtime alpha updates too: hidden nodes force 0,
     // and visible nodes restore the baked alpha after a prior hide.
-    bool IsAlphaOverridden() const {
-        return m_alpha_overridden || m_visible_overridden ||
-               (m_alpha_source != nullptr && m_alpha_source->IsAlphaOverridden());
+    bool IsAlphaOverridden(SceneRenderAlphaMode mode = SceneRenderAlphaMode::Composite) const {
+        return m_alpha_overridden ||
+               (mode == SceneRenderAlphaMode::Composite && m_visible_overridden) ||
+               (m_alpha_source != nullptr && m_alpha_source->IsAlphaOverridden(mode));
     }
-    float EffectiveAlpha() const {
-        float alpha = m_visible ? (m_alpha_overridden ? m_user_alpha : m_base_alpha) : 0.0f;
-        if (m_alpha_source != nullptr && m_alpha_source->IsAlphaOverridden())
-            alpha *= m_alpha_source->EffectiveAlpha();
+    float EffectiveAlpha(SceneRenderAlphaMode mode = SceneRenderAlphaMode::Composite) const {
+        const bool apply_visibility = mode == SceneRenderAlphaMode::Composite;
+        float alpha = (! apply_visibility || m_visible)
+                          ? (m_alpha_overridden ? m_user_alpha : m_base_alpha)
+                          : 0.0f;
+        if (m_alpha_source != nullptr && m_alpha_source->IsAlphaOverridden(mode))
+            alpha *= m_alpha_source->EffectiveAlpha(mode);
         return alpha;
     }
     bool  Visible() const { return m_visible; }
     float UserAlpha() const { return m_user_alpha; }
     void  SetVisible(bool v) {
+        if (m_sound_control && v != m_visible) {
+            if (v)
+                m_sound_control->Play();
+            else
+                m_sound_control->Stop();
+        }
         m_visible            = v;
         m_visible_overridden = true;
     }
@@ -1195,18 +1308,28 @@ public:
     }
     void SetOriginAnimation(SceneAnimationCurve curve) {
         m_origin_base  = m_translate;
+        RegisterFieldAnimation(curve.playback);
         m_origin_curve = std::move(curve);
     }
     void SetScaleAnimation(SceneAnimationCurve curve) {
         m_scale_base  = m_scale;
+        RegisterFieldAnimation(curve.playback);
         m_scale_curve = std::move(curve);
     }
     void SetRotationAnimation(SceneAnimationCurve curve) {
         m_rotation_base  = m_rotation;
+        RegisterFieldAnimation(curve.playback);
         m_rotation_curve = std::move(curve);
     }
-    void SetAlphaAnimation(SceneAnimationCurve curve) { m_alpha_curve = std::move(curve); }
+    void SetAlphaAnimation(SceneAnimationCurve curve) {
+        RegisterFieldAnimation(curve.playback);
+        m_alpha_curve = std::move(curve);
+    }
     void TickFieldAnimations(double runtime);
+    std::shared_ptr<SceneAnimationPlayback> FindAnimation(std::string_view name) const;
+    bool HasFieldAnimations() const {
+        return m_origin_curve || m_scale_curve || m_rotation_curve || m_alpha_curve;
+    }
     void SetAlphaSource(SceneNode* node) { m_alpha_source = node; }
 
     const std::string& VisibleUserKey() const { return m_visible_user_binding.key; }
@@ -1251,9 +1374,42 @@ public:
     TextureAnimatorState&       TexAnim() { return m_tex_anim; }
     const TextureAnimatorState& TexAnim() const { return m_tex_anim; }
 
+    void SetPlaybackControl(std::function<void()> play, std::function<void()> stop,
+                            std::function<void()> pause, std::function<bool()> is_playing) {
+        m_play_control       = std::move(play);
+        m_stop_control       = std::move(stop);
+        m_pause_control      = std::move(pause);
+        m_is_playing_control = std::move(is_playing);
+    }
+    void SetLayerPropertyControl(
+        std::function<std::vector<float>(std::string_view)> get,
+        std::function<void(std::string_view, std::span<const float>)> apply) {
+        m_property_get   = std::move(get);
+        m_property_apply = std::move(apply);
+    }
+    std::optional<std::vector<float>> ControlledProperty(std::string_view field) const {
+        if (! m_property_get) return std::nullopt;
+        auto value = m_property_get(field);
+        if (value.empty()) return std::nullopt;
+        return value;
+    }
+    bool ApplyControlledProperty(std::string_view field, std::span<const float> value) {
+        if (! m_property_apply) return false;
+        m_property_apply(field, value);
+        return true;
+    }
+
     void Play() {
         if (m_sound_control) {
             m_sound_control->Play();
+            return;
+        }
+        if (m_video_control) {
+            m_video_control->Play();
+            return;
+        }
+        if (m_play_control) {
+            m_play_control();
             return;
         }
         m_layer_playing = true;
@@ -1263,6 +1419,14 @@ public:
             m_sound_control->Stop();
             return;
         }
+        if (m_video_control) {
+            m_video_control->Stop();
+            return;
+        }
+        if (m_stop_control) {
+            m_stop_control();
+            return;
+        }
         m_layer_playing = false;
     }
     void Pause() {
@@ -1270,24 +1434,47 @@ public:
             m_sound_control->Pause();
             return;
         }
+        if (m_video_control) {
+            m_video_control->Pause();
+            return;
+        }
+        if (m_pause_control) {
+            m_pause_control();
+            return;
+        }
         m_layer_playing = false;
     }
     bool IsPlaying() const {
         if (m_sound_control) return m_sound_control->IsPlaying();
+        if (m_video_control) return m_video_control->Snapshot().playing;
+        if (m_is_playing_control) return m_is_playing_control();
         return m_layer_playing;
     }
-    void SetSoundControl(std::shared_ptr<SceneSoundControl> c) { m_sound_control = std::move(c); }
+    void SetSoundControl(std::shared_ptr<SceneSoundControl> c) {
+        m_sound_control = std::move(c);
+        if (m_sound_control) m_sound_control->SetVolume(m_volume);
+    }
     SceneSoundControl* SoundControl() const { return m_sound_control.get(); }
+    void SetVideoControl(std::shared_ptr<VideoPlaybackState> control) {
+        m_video_control = std::move(control);
+    }
+    std::shared_ptr<VideoPlaybackState> VideoControlHandle() const { return m_video_control; }
+    float Volume() const { return m_volume; }
+    void SetVolume(float volume) {
+        m_volume = std::clamp(volume, 0.0f, 1.0f);
+        if (m_sound_control) m_sound_control->SetVolume(m_volume);
+    }
 
     void CopyTrans(const SceneNode& node) {
+        m_local_frame = node.m_local_frame;
         m_translate = node.m_translate;
         m_scale     = node.m_scale;
         m_rotation  = node.m_rotation;
         MarkTransDirty();
     }
 
-    void            UpdateTrans();
-    Eigen::Matrix4d ModelTrans() const { return m_trans; };
+    void                   UpdateTrans();
+    const Eigen::Matrix4d& ModelTrans() const { return m_trans; };
 
     SceneMesh*                        Mesh() { return m_mesh.get(); }
     const std::shared_ptr<SceneMesh>& MeshShared() const { return m_mesh; }
@@ -1330,6 +1517,7 @@ public:
 
 private:
     void MarkTransDirty();
+    void RegisterFieldAnimation(const std::shared_ptr<SceneAnimationPlayback>& playback);
 
     i32         m_id { -1 };
     std::string m_name;
@@ -1340,7 +1528,9 @@ private:
     Eigen::Vector3f m_translate { 0.0f, 0.0f, 0.0f };
     Eigen::Vector3f m_scale { 1.0f, 1.0f, 1.0f };
     Eigen::Vector3f m_rotation { 0.0f, 0.0f, 0.0f };
+    Eigen::Matrix4d m_local_frame { Eigen::Matrix4d::Identity() };
     Eigen::Vector2f m_size { 0.0f, 0.0f };
+    Eigen::Matrix4d m_geometry_transform { Eigen::Matrix4d::Identity() };
 
     bool                               m_visible { true };
     SceneUserVisibilityBinding         m_visible_user_binding {};
@@ -1355,6 +1545,10 @@ private:
     std::optional<SceneAnimationCurve> m_scale_curve;
     std::optional<SceneAnimationCurve> m_rotation_curve;
     std::optional<SceneAnimationCurve> m_alpha_curve;
+    std::vector<std::shared_ptr<SceneAnimationPlayback>>
+        m_field_animation_playbacks;
+    std::unordered_map<std::string, std::shared_ptr<SceneAnimationPlayback>>
+        m_named_field_animations;
     float                              m_brightness { 1.0f };
     bool                               m_brightness_overridden { false };
     Eigen::Vector3f                    m_color { 1.0f, 1.0f, 1.0f };
@@ -1362,13 +1556,22 @@ private:
     Eigen::Vector3f                    m_base_color { 1.0f, 1.0f, 1.0f };
     float                              m_base_alpha { 1.0f };
     TextureAnimatorState               m_tex_anim {};
+    std::function<void()>               m_play_control;
+    std::function<void()>               m_stop_control;
+    std::function<void()>               m_pause_control;
+    std::function<bool()>               m_is_playing_control;
+    std::function<std::vector<float>(std::string_view)> m_property_get;
+    std::function<void(std::string_view, std::span<const float>)> m_property_apply;
     bool                               m_layer_playing { true };
+    float                              m_volume { 1.0f };
     std::shared_ptr<SceneSoundControl> m_sound_control;
+    std::shared_ptr<VideoPlaybackState> m_video_control;
 
     std::shared_ptr<SceneMesh> m_mesh;
 
     std::string m_cameraName;
     bool        m_perspective { false };
+    bool        m_reflected { false };
 
     // Raw back-link. Safe because tree topology is frozen post-parse (see
     // class header) and the dtor clears children's m_parent before any
@@ -1467,6 +1670,18 @@ public:
         m_resolved     = false;
     }
     const auto& FinalTarget() const { return m_final_target; }
+    void SetFinalOutputOverride(std::string target, bool local) {
+        if (m_final_target_override == target && m_final_local_override == local) return;
+        m_final_target_override = std::move(target);
+        m_final_local_override  = local;
+        m_resolved              = false;
+    }
+    void ClearFinalOutputOverride() {
+        if (! m_final_target_override && ! m_final_local_override) return;
+        m_final_target_override.reset();
+        m_final_local_override.reset();
+        m_resolved = false;
+    }
     void        SetFinalCamera(std::string camera) {
         if (m_final_camera == camera) return;
         m_final_camera = std::move(camera);
@@ -1483,6 +1698,12 @@ public:
     }
     void SetSkipWhenNoRuntimeEffect(bool value) { m_skip_when_no_runtime_effect = value; }
     bool SkipWhenNoRuntimeEffect() const { return m_skip_when_no_runtime_effect; }
+    void SetRequiresSourceDraw(bool value) {
+        if (m_requires_source_draw == value) return;
+        m_requires_source_draw = value;
+        m_resolved             = false;
+    }
+    bool RequiresSourceDraw() const { return m_requires_source_draw; }
 
     // Idempotent: second and later calls are no-ops until any of the
     // mutating setters above (or AddEffect) flips m_resolved back to false.
@@ -1507,14 +1728,17 @@ private:
 
     bool                       fullscreen { false };
     bool                       m_final_local { false };
+    std::optional<bool>        m_final_local_override;
     std::unique_ptr<SceneMesh> m_final_mesh;
     BlendMode                  m_final_blend;
     bool                       m_final_depth_test { false };
     bool                       m_final_depth_write { false };
     CullMode                   m_final_cull_mode { CullMode::None };
     std::string                m_final_target { SpecTex_Default };
+    std::optional<std::string> m_final_target_override;
     std::string                m_final_camera;
     bool                       m_skip_when_no_runtime_effect { false };
+    bool                       m_requires_source_draw { true };
     bool                       m_resolved { false };
 
     std::vector<std::shared_ptr<SceneImageEffect>>                    m_effects;
@@ -1586,6 +1810,9 @@ struct Particle {
     // is compacted as particles die, so operator-local state must never key
     // itself by the transient vector index.
     u32       slot_id { std::numeric_limits<u32>::max() };
+    // Monotonic emission identity. Rope renderers connect particles in this
+    // authored order even though the dense live array is compacted.
+    u64       spawn_sequence { 0 };
     InitValue init {};
 };
 
@@ -1598,6 +1825,9 @@ struct ParticleControlpoint {
     bool            worldspace { false };
     Eigen::Vector3d base_offset { 0, 0, 0 };
     Eigen::Vector3d offset { 0, 0, 0 };
+    Eigen::Matrix3d rotation { Eigen::Matrix3d::Identity() };
+    std::optional<Eigen::Vector3d> runtime_position;
+    Eigen::Vector3d runtime_angles { 0.0, 0.0, 0.0 };
 };
 
 struct ParticleInfo {
@@ -1605,17 +1835,26 @@ struct ParticleInfo {
     std::span<const ParticleControlpoint> controlpoints;
     Eigen::Matrix3d                       world_from_local_dir { Eigen::Matrix3d::Identity() };
     Eigen::Matrix3d                       local_from_world_dir { Eigen::Matrix3d::Identity() };
+    Eigen::Matrix4d                       world_from_spawn_space { Eigen::Matrix4d::Identity() };
     bool                                  world_space { false };
     double                                time;
     double                                time_pass;
 };
 
 using ParticleInitOp     = std::function<void(Particle&, double)>;
+using ParticleContextInitOp =
+    std::function<void(Particle&, std::span<const ParticleControlpoint>)>;
 using ParticleOperatorOp = std::function<void(const ParticleInfo&)>;
 
+struct ParticleEmitterState {
+    double timer { 0.0 };
+    double elapsed { 0.0 };
+};
+
 using ParticleEmittOp = std::function<void(
-    std::vector<Particle>&, std::vector<ParticleInitOp>&, uint32_t maxcount, double timepass,
-    std::span<const float> audio_average, std::span<const ParticleControlpoint> controlpoints)>;
+    ParticleEmitterState&, std::vector<Particle>&, std::vector<ParticleInitOp>&,
+    uint32_t maxcount, double timepass, std::span<const float> audio_average,
+    std::span<const ParticleControlpoint> controlpoints)>;
 
 struct ParticleAudioResponse {
     bool                 enable { false };
@@ -1868,6 +2107,11 @@ enum class ParticleAnimationMode
 class ParticleSystem;
 class ParticleSubSystem;
 
+struct ParticlePlaybackState {
+    std::atomic<bool> playing { true };
+    std::atomic<u32>  reset_sequence { 0 };
+};
+
 // Per-slot trail history for rope-head particles. positions[head] is the
 // newest; len counts valid samples (0..capacity). Capacity is decided by the
 // SubSystem and is the same for every slot in one instance.
@@ -1875,16 +2119,32 @@ struct ParticleTrail {
     std::vector<Eigen::Vector3f> positions;
     uint16_t                     head { 0 };
     uint16_t                     len { 0 };
+    uint16_t                     sample_count { 0 };
+    Eigen::Vector3f              previous_position { Eigen::Vector3f::Zero() };
+    bool                         has_previous_position { false };
 
     void Reset() noexcept {
-        head = 0;
-        len  = 0;
+        head                  = 0;
+        len                   = 0;
+        sample_count          = 0;
+        previous_position     = Eigen::Vector3f::Zero();
+        has_previous_position = false;
+    }
+    void Initialize(const Eigen::Vector3f& p) noexcept {
+        if (positions.empty()) return;
+        std::fill(positions.begin(), positions.end(), p);
+        head                  = 0;
+        len                   = static_cast<uint16_t>(positions.size());
+        sample_count          = 1;
+        previous_position     = p;
+        has_previous_position = true;
     }
     void Push(const Eigen::Vector3f& p) noexcept {
         if (positions.empty()) return;
         head            = (uint16_t)((head + 1) % positions.size());
         positions[head] = p;
         if (len < positions.size()) len++;
+        if (sample_count < positions.size()) sample_count++;
     }
     // Returns oldest -> newest sample at logical index i in [0, len).
     Eigen::Vector3f At(uint16_t i) const noexcept {
@@ -1922,14 +2182,27 @@ public:
     std::span<const ParticleTrail> Trails() const;
     std::vector<ParticleTrail>&    TrailsVec();
 
+    ParticleEmitterState& EmitterState(usize index) {
+        if (m_emitter_states.size() <= index) m_emitter_states.resize(index + 1);
+        return m_emitter_states[index];
+    }
+    bool WarmupPending() const noexcept { return m_warmup_pending; }
+    void FinishWarmup() noexcept { m_warmup_pending = false; }
+    void SetPositionsInWorldSpace(bool value) noexcept { m_positions_in_world_space = value; }
+    bool PositionsInWorldSpace() const noexcept { return m_positions_in_world_space; }
+
     BoundedData& GetBoundedData();
+    const BoundedData& GetBoundedData() const { return m_bounded_data; }
 
 private:
     bool                       m_is_death { false };
     bool                       m_no_live_particle { false };
     std::vector<Particle>      m_particles;
     std::vector<ParticleTrail> m_trails;
+    std::vector<ParticleEmitterState> m_emitter_states;
     BoundedData                m_bounded_data;
+    bool                       m_warmup_pending { true };
+    bool                       m_positions_in_world_space { false };
 };
 
 class ParticleSubSystem : NoCopy, NoMove {
@@ -1937,16 +2210,32 @@ public:
     enum class SpawnType
     {
         STATIC,
+        STATIC_CONTROLPOINT,
         EVENT_FOLLOW,
         EVENT_SPAWN,
         EVENT_DEATH,
     };
 
+    static u32 EffectiveInstanceCapacity(u32 max_instance_count, SpawnType spawn_type) noexcept {
+        // A static subsystem owns exactly one persistent instance. maxcount
+        // only bounds event-spawned instance pools.
+        return spawn_type == SpawnType::STATIC ? 1u : max_instance_count;
+    }
+    static std::optional<u32> MaxParticleCapacity(u32 max_count, u32 max_instance_count,
+                                                  SpawnType spawn_type) noexcept {
+        u32 result {};
+        if (__builtin_mul_overflow(
+                max_count, EffectiveInstanceCapacity(max_instance_count, spawn_type), &result))
+            return std::nullopt;
+        return result;
+    }
+
 public:
     ParticleSubSystem(ParticleSystem& p, std::shared_ptr<SceneMesh> sm, uint32_t maxcount,
                       double rate, u32 maxcount_instance, double probability, SpawnType type,
                       ParticleRawGenSpecOp specOp, ParticleFollowAnchor follow_anchor = {},
-                      u32 trail_length = 0, double start_time = 0.0, bool world_space = false);
+                      u32 trail_length = 0, double trail_duration = 0.0,
+                      double start_time = 0.0, bool world_space = false);
     ~ParticleSubSystem();
 
     void Emitt();
@@ -1955,11 +2244,16 @@ public:
 
     void AddEmitter(ParticleEmittOp&&);
     void AddInitializer(ParticleInitOp&&);
+    void AddContextInitializer(ParticleContextInitOp&&);
     void AddOperator(ParticleOperatorOp&&);
 
     void SetUsesAudioResponse() noexcept { m_uses_audio_response = true; }
     void SetUsesMouseControlpoint() noexcept { m_uses_mouse_controlpoint = true; }
     void SetNeedsDirectionTransform() noexcept { m_needs_direction_transform = true; }
+    void SetControlpointOverrideOp(
+        std::function<void(std::span<ParticleControlpoint>)> operation) {
+        m_controlpoint_override_op = std::move(operation);
+    }
 
     void AddChild(std::unique_ptr<ParticleSubSystem>&&);
 
@@ -1971,21 +2265,45 @@ public:
     // Emitt() time to map world-space inputs (link_mouse cursor) into
     // the particle's local emit space via the node's inverse model.
     void SetOwnerNode(SceneNode* n) { m_owner_node = n; }
+    void SetPlaybackState(std::shared_ptr<ParticlePlaybackState> state) {
+        m_playback_state = std::move(state);
+    }
+    void SetRopeSequenceCount(u32 value) { m_rope_sequence_count = std::max(value, 2u); }
+    std::optional<u32> RopeSequenceCount() const { return m_rope_sequence_count; }
+    void SetRateSource(std::function<double()> source) { m_rate_source = std::move(source); }
+    void SetParentControlpointStartIndex(i32 value) {
+        m_parent_controlpoint_start_index = value;
+    }
 
     SpawnType       Type() const;
     u32             MaxInstanceCount() const;
-    Eigen::Vector3f FollowPosition(const Particle& p) const;
+    std::optional<u32> MaxParticleCapacity() const noexcept {
+        u32 result {};
+        if (__builtin_mul_overflow(m_maxcount, m_maxcount_instance, &result)) return std::nullopt;
+        return result;
+    }
+    Eigen::Vector3f RenderPosition(const ParticleInstance&, const Particle&) const;
+    Eigen::Vector3f FollowWorldPosition(const ParticleInstance&, const Particle&) const;
 
 private:
     void Tick(double frame_time, bool update_mesh);
-    void Warmup();
+    void Warmup(ParticleInstance&, double,
+                std::span<const float>, const Eigen::Matrix3d&, const Eigen::Matrix3d&,
+                const Eigen::Matrix4d&);
     void Advance(double frame_time, bool update_mesh);
+    void SimulateInstance(ParticleInstance&, double, std::span<const float>,
+                          const Eigen::Matrix3d&, const Eigen::Matrix3d&,
+                          const Eigen::Matrix4d&, usize trail_sample_steps,
+                          double trail_sample_remainder);
+    bool SyncPlayback();
     u32  AcquireParticleSlotId();
     void ReleaseParticleSlotId(Particle&);
     void RebindOrKillChildParticles(ParticleInstance&, isize old_index, isize new_index);
     void CompactInstance(ParticleInstance&);
     void ClearInstanceParticles(ParticleInstance&);
     std::unique_ptr<ParticleInstance> MakeInstance();
+    Eigen::Vector3f OwnerLocalToWorld(const Eigen::Vector3f&) const;
+    Eigen::Vector3f OwnerWorldToLocal(const Eigen::Vector3f&) const;
 
     ParticleSystem&              m_sys;
     std::shared_ptr<SceneMesh>   m_mesh;
@@ -1993,18 +2311,20 @@ private:
     std::vector<ParticleEmittOp> m_emiters;
 
     std::vector<ParticleInitOp>     m_initializers;
+    std::vector<ParticleContextInitOp> m_context_initializers;
     std::vector<ParticleOperatorOp> m_operators;
 
     std::array<ParticleControlpoint, 8> m_controlpoints;
+    std::function<void(std::span<ParticleControlpoint>)> m_controlpoint_override_op;
 
     ParticleRawGenSpecOp m_genSpecOp;
     ParticleFollowAnchor m_follow_anchor;
     u32                  m_maxcount;
     double               m_rate;
+    std::function<double()> m_rate_source;
     double               m_time;
     double               m_start_time { 0.0 };
     bool                 m_world_space { false };
-    bool                 m_started { false };
     bool                 m_uses_audio_response { false };
     bool                 m_uses_mouse_controlpoint { false };
     bool                 m_needs_direction_transform { false };
@@ -2016,9 +2336,16 @@ private:
     double    m_probability { 1.0f };
     SpawnType m_spawn_type { SpawnType::STATIC };
     u32       m_trail_length { 0 };
+    double    m_trail_sample_interval { 0.0 };
+    double    m_trail_sample_accumulator { 0.0 };
+    std::optional<u32> m_rope_sequence_count;
+    std::optional<i32> m_parent_controlpoint_start_index;
     u32       m_next_particle_slot_id { 0 };
+    u64       m_next_spawn_sequence { 0 };
     std::vector<u32> m_free_particle_slot_ids;
     bool      m_mesh_has_geometry { false };
+    std::shared_ptr<ParticlePlaybackState> m_playback_state;
+    u32       m_seen_reset_sequence { 0 };
 
 public:
     u32 TrailLength() const { return m_trail_length; }
@@ -2034,7 +2361,7 @@ public:
     virtual ~IParticleRawGener() = default;
 
     virtual void GenGLData(std::span<const std::unique_ptr<ParticleInstance>>, SceneMesh&,
-                           ParticleRawGenSpecOp&) = 0;
+                           ParticleRawGenSpecOp&, std::optional<u32> rope_sequence_count) = 0;
 };
 
 class Scene;
@@ -2061,7 +2388,7 @@ public:
     virtual ~WPParticleRawGener() {};
 
     virtual void GenGLData(std::span<const std::unique_ptr<ParticleInstance>>, SceneMesh&,
-                           ParticleRawGenSpecOp&);
+                           ParticleRawGenSpecOp&, std::optional<u32> rope_sequence_count);
 };
 
 // ============================================================================
@@ -2079,7 +2406,9 @@ public:
 
     virtual void FrameBegin()                                                      = 0;
     virtual void InitUniforms(SceneNode*, const ExistsUniformOp&)                  = 0;
-    virtual void UpdateUniforms(SceneNode*, sprite_map_t&, const UpdateUniformOp&) = 0;
+    virtual void UpdateUniforms(SceneNode*, sprite_map_t&, const UpdateUniformOp&,
+                                SceneRenderViewKind  = SceneRenderViewKind::Primary,
+                                SceneRenderAlphaMode = SceneRenderAlphaMode::Composite) = 0;
     virtual void FrameEnd()                                                        = 0;
 
     virtual void MouseInput(double x, double y)                     = 0;
@@ -2087,6 +2416,9 @@ public:
     virtual void SetScreenSize(i32 w, i32 h)                        = 0;
     virtual void SetAudioSpectrum(std::span<const float, 64> left,
                                   std::span<const float, 64> right) = 0;
+    virtual void SetCameraParallaxEnabled(bool value)               = 0;
+    virtual void SetCameraParallaxAmount(float value)               = 0;
+    virtual void SetCameraParallaxDelay(float value)                = 0;
     virtual void SetCameraParallaxMouseInfluence(float value)       = 0;
     virtual void SetCameraShakeEnabled(bool value)                  = 0;
     virtual void SetCameraShakeAmplitude(float value)               = 0;
@@ -2256,6 +2588,7 @@ struct RenderTextureDescRecord {
     SceneTextureId      scene_texture;
     std::string         key;
     SceneTexture        desc;
+    std::shared_ptr<VideoPlaybackState> video_control;
 };
 
 struct RenderTargetDescRecord {
@@ -2390,6 +2723,11 @@ public:
     std::unordered_set<std::string>       m_camera_path_touched;
     std::unordered_set<std::string>       m_camera_path_reset;
 
+    // Flat list of nodes carrying a field-animation curve, built once on
+    // first tick. sceneGraph shape is immutable after parse.
+    std::vector<SceneNode*> m_field_animated_nodes;
+    bool                    m_field_animated_nodes_built { false };
+
     // WE layer IDs the render-graph build may elide when nothing links to
     // them, or route to `_rt_link_<id>` when something does. Two flavours
     // land here:
@@ -2491,12 +2829,20 @@ public:
 
     std::optional<SceneImageEffectRef> FindNodeImageEffect(const SceneNode& node,
                                                            std::string_view name);
+    std::optional<SceneImageEffectRef> FindNodeImageEffect(const SceneNode& node,
+                                                           std::size_t index);
+    std::size_t NodeImageEffectCount(const SceneNode& node);
+    std::string ImageEffectName(const SceneImageEffectRef& ref) const;
+    bool        ImageEffectRuntimeVisible(const SceneImageEffectRef& ref) const;
+    SceneMaterial* ImageEffectMaterial(const SceneImageEffectRef& ref, std::size_t index);
     bool SetImageEffectRuntimeVisible(const SceneImageEffectRef& ref, bool visible);
     bool ConsumeRenderGraphDirty() {
         bool dirty           = m_render_graph_dirty;
         m_render_graph_dirty = false;
         return dirty;
     }
+    void MarkDynamicTopologyDirty() { m_dynamic_topology_dirty = true; }
+    bool CommitDynamicTopology();
     // Script frequently assigns a layer's visibility more than once in a
     // tick (for example, hide every day/night layer and then show one set).
     // Apply only the final state to render-graph membership after all scripts
@@ -2542,6 +2888,8 @@ public:
 
     bool first_frame_ok { false };
     bool uses_audio_spectrum { false };
+    bool fog_distance_enabled { false };
+    bool fog_height_enabled { false };
 
     SceneMesh default_effect_mesh;
 
@@ -2549,12 +2897,20 @@ public:
 
     std::unique_ptr<ParticleSystem> paritileSys;
 
-    SceneCamera* activeCamera;
+    SceneCamera* activeCamera { nullptr };
 
     std::array<float, 2>               pointerPosition { 0.5f, 0.5f };
     std::array<std::atomic<float>, 16> audioAverage {};
 
     i32                  ortho[2] { 1920, 1080 };
+    float                viewport_scale { 1.0f };
+    void SetViewportScale(float scale) {
+        viewport_scale = std::isfinite(scale) && scale > 0.0f ? scale : 1.0f;
+    }
+    std::array<double, 2> OrthographicProjectionExtent() const {
+        return { static_cast<double>(ortho[0]) / viewport_scale,
+                 static_cast<double>(ortho[1]) / viewport_scale };
+    }
     std::array<float, 3> clearColor { 1.0f, 1.0f, 1.0f };
     std::string          clearColorUserKey;
 
@@ -2580,12 +2936,19 @@ public:
     }
 
     void        TickCameraPaths();
+    std::optional<SceneCameraTransforms> ActiveCameraTransforms() const;
+    bool SetActiveCameraTransforms(const SceneCameraTransforms& transforms);
     void        TickMaterialShaderAnimations();
     void        CaptureCameraPathViewports();
+    void        EnablePlanarReflection();
+    bool        PlanarReflectionEnabled() const { return m_planar_reflection_enabled; }
     std::string EnsureLinkRenderTarget(WallpaperLayerId source_layer, const SceneNode& source_node);
     bool        EnsureTextureDescriptor(std::string_view key);
+    std::shared_ptr<VideoPlaybackState> VideoControl(std::string_view key);
     bool        SetMaterialShaderValue(SceneMaterial& material, std::string_view uniform_name,
                                        const ShaderValue& value);
+    bool SetMaterialShaderValueByKey(SceneMaterial& material, std::string_view material_key,
+                                     const ShaderValue& value);
     SceneMaterialTextureSlotMutation SetMaterialTextureSlot(SceneMaterial& material, uint32_t slot,
                                                             std::string_view texture);
     SceneMaterialShaderVariantMutation
@@ -2622,8 +2985,11 @@ private:
     uint32_t                                 m_resource_generation { 0 };
     SceneResourceIndex                       m_resource_index;
     bool                                     m_render_graph_dirty { false };
+    bool                                     m_dynamic_topology_dirty { false };
+    bool                                     m_planar_reflection_enabled { false };
     Map<i32, SceneNode*>                     m_pending_node_visibility_changes;
     Map<i32, std::string>                    m_render_group_cameras;
+    Map<std::string, std::shared_ptr<VideoPlaybackState>> m_video_controls;
     std::vector<SceneUserPropertyDiagnostic> m_user_property_diagnostics;
 };
 

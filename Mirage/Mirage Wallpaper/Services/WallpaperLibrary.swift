@@ -60,9 +60,28 @@ final class WallpaperLibrary {
     static let shared = WallpaperLibrary()
 
     private let fm = FileManager.default
+
+    /// What a cached preset's resolution depended on, so a cache hit can be
+    /// re-checked cheaply. The plain signature covers a wallpaper's *own*
+    /// project.json and directory only — installing or deleting the base
+    /// wallpaper of a preset changes neither, so without this probe a preset
+    /// keeps whatever status it had the first time it was loaded: stuck on
+    /// "缺少基础壁纸" after the base arrives, or still shown as playable after
+    /// the base is deleted.
+    private struct DependencyProbe {
+        let dependencyID: String
+        /// nil when the dependency could not be resolved at load time.
+        let resolvedDirectory: URL?
+        /// mtime#size of the resolved base's project.json.
+        let resolvedSignature: String?
+        /// The base's entry file, which `load` required to exist.
+        let resolvedEntryPath: String?
+    }
+
     private struct CachedWallpaper {
         let signature: String
         let wallpaper: WEWallpaper
+        let dependencyProbe: DependencyProbe?
     }
     private let loadCacheLock = NSLock()
     private var loadCache: [String: CachedWallpaper] = [:]
@@ -118,10 +137,12 @@ final class WallpaperLibrary {
     func setWorkshopDirectory(_ url: URL?) {
         UserDefaults.standard.set(url?.path, forKey: workshopKey)
         restartMonitoringIfNeeded()
+        libraryDidChange(at: nil)
     }
     func setImportedDirectory(_ url: URL?) {
         UserDefaults.standard.set(url?.path, forKey: importedKey)
         restartMonitoringIfNeeded()
+        libraryDidChange(at: nil)
     }
 
     var librarySources: [WallpaperLibrarySource] {
@@ -210,12 +231,15 @@ final class WallpaperLibrary {
                 forKeys: [.contentModificationDateKey, .fileSizeKey])
             let directoryValues = try? url.resourceValues(forKeys: [.contentModificationDateKey])
             let signature = "\(projectValues?.contentModificationDate?.timeIntervalSince1970 ?? 0)#\(projectValues?.fileSize ?? 0)#\(directoryValues?.contentModificationDate?.timeIntervalSince1970 ?? 0)"
-            if let cached = previous[path], cached.signature == signature {
+            if let cached = previous[path], cached.signature == signature,
+               isDependencyProbeStillValid(cached.dependencyProbe) {
                 next[path] = cached
                 return cached.wallpaper
             }
             let wallpaper = WEWallpaper.load(from: url)
-            next[path] = CachedWallpaper(signature: signature, wallpaper: wallpaper)
+            next[path] = CachedWallpaper(signature: signature,
+                                        wallpaper: wallpaper,
+                                        dependencyProbe: makeDependencyProbe(for: wallpaper))
             return wallpaper
         }
 
@@ -223,6 +247,54 @@ final class WallpaperLibrary {
         loadCache = next
         loadCacheLock.unlock()
         return wallpapers
+    }
+
+    /// Records what a preset's cached resolution rests on. Non-presets get nil
+    /// and cost nothing.
+    private func makeDependencyProbe(for wallpaper: WEWallpaper) -> DependencyProbe? {
+        guard let dependencyID = wallpaper.presetDependency?.rawValue else { return nil }
+        guard wallpaper.presetStatus == .resolved else {
+            return DependencyProbe(dependencyID: dependencyID,
+                                   resolvedDirectory: nil,
+                                   resolvedSignature: nil,
+                                   resolvedEntryPath: nil)
+        }
+        // A resolved preset renders out of the base wallpaper's directory.
+        let baseDirectory = wallpaper.renderDirectory
+        return DependencyProbe(dependencyID: dependencyID,
+                               resolvedDirectory: baseDirectory,
+                               resolvedSignature: projectSignature(at: baseDirectory),
+                               resolvedEntryPath: wallpaper.resolvedEntryURL.path)
+    }
+
+    /// True when a cached preset can be reused. Costs one or two `stat()`s per
+    /// preset per refresh; non-presets short-circuit immediately.
+    private func isDependencyProbeStillValid(_ probe: DependencyProbe?) -> Bool {
+        guard let probe else { return true }
+        guard let directory = probe.resolvedDirectory else {
+            // Was unresolved. Any candidate directory appearing means the base
+            // may now be installed, so re-resolve.
+            return workshopItemDirectories(for: probe.dependencyID).isEmpty
+        }
+        // Was resolved. The base's manifest must still be there and unchanged,
+        // and its entry file must still exist — `WEWallpaper.load` required
+        // both, and deleting either invalidates this preset.
+        //
+        // For a chained preset the recorded directory is the *ultimate* base, so
+        // the immediate dependency is checked separately: removing that middle
+        // link leaves the ultimate base intact and would otherwise go unnoticed.
+        guard !workshopItemDirectories(for: probe.dependencyID).isEmpty else { return false }
+        guard projectSignature(at: directory) == probe.resolvedSignature else { return false }
+        guard let entryPath = probe.resolvedEntryPath else { return false }
+        return fm.fileExists(atPath: entryPath)
+    }
+
+    /// mtime#size of a wallpaper directory's project.json, or nil if absent.
+    private func projectSignature(at directory: URL) -> String? {
+        let projectURL = directory.appending(path: "project.json")
+        guard let values = try? projectURL.resourceValues(
+            forKeys: [.contentModificationDateKey, .fileSizeKey]) else { return nil }
+        return "\(values.contentModificationDate?.timeIntervalSince1970 ?? 0)#\(values.fileSize ?? 0)"
     }
 
     // MARK: - 导入
@@ -241,6 +313,7 @@ final class WallpaperLibrary {
         } catch {
             throw WPImportError.copyFailed(error.localizedDescription)
         }
+        libraryDidChange(at: dest)
         return dest
     }
 
@@ -273,6 +346,7 @@ final class WallpaperLibrary {
         } catch {
             throw WPImportError.copyFailed(error.localizedDescription)
         }
+        libraryDidChange(at: dest)
         return dest
     }
 
@@ -308,14 +382,29 @@ final class WallpaperLibrary {
 
     func trash(_ wallpaper: WEWallpaper) throws {
         try fm.trashItem(at: wallpaper.wallpaperDirectory, resultingItemURL: nil)
+        libraryDidChange(at: wallpaper.wallpaperDirectory)
     }
 
     func delete(_ wallpaper: WEWallpaper) throws {
         try fm.removeItem(at: wallpaper.wallpaperDirectory)
+        libraryDidChange(at: wallpaper.wallpaperDirectory)
     }
 
     func isImported(_ wallpaper: WEWallpaper) -> Bool {
         wallpaper.wallpaperDirectory.path.hasPrefix(importedDirectory.path)
+    }
+
+    /// True when a wallpaper lives in one of the Steam/SteamCMD sources. This
+    /// is intentionally separate from `isImported`: a numeric folder name in a
+    /// user-selected import directory is not enough evidence that it is a
+    /// Workshop item.
+    func isWorkshopSource(_ wallpaper: WEWallpaper) -> Bool {
+        let path = wallpaper.wallpaperDirectory.standardizedFileURL.path
+        return librarySources.contains { source in
+            guard source.role != .imported else { return false }
+            let prefix = source.url.standardizedFileURL.path
+            return path == prefix || path.hasPrefix(prefix + "/")
+        }
     }
 
     // MARK: - Directory Monitoring
@@ -332,8 +421,9 @@ final class WallpaperLibrary {
                 eventMask: [.write, .delete, .rename],
                 queue: .main
             )
-            source.setEventHandler {
+            source.setEventHandler { [weak self] in
                 onChange()
+                self?.libraryDidChange(at: nil)
             }
             source.setCancelHandler { close(descriptor) }
             directoryMonitors.append(DirectoryMonitor(source: source, descriptor: descriptor))
@@ -355,4 +445,19 @@ final class WallpaperLibrary {
         guard let callback = monitoringCallback else { return }
         startMonitoringWorkshopDirectory(onChange: callback)
     }
+
+    private func libraryDidChange(at url: URL?) {
+        loadCacheLock.lock()
+        if let url {
+            loadCache.removeValue(forKey: url.standardizedFileURL.path)
+        } else {
+            loadCache.removeAll()
+        }
+        loadCacheLock.unlock()
+        NotificationCenter.default.post(name: .wallpaperLibraryChanged, object: url)
+    }
+}
+
+extension Notification.Name {
+    static let wallpaperLibraryChanged = Notification.Name("wallpaperLibraryChanged")
 }

@@ -10,6 +10,38 @@ protocol SubviewOfContentView: View {
     var viewModel: ContentViewModel { get set }
 }
 
+private struct FilterSidebarLayout<Sidebar: View, Content: View>: View {
+    private let isPresented: Bool
+    private let sidebar: Sidebar
+    private let content: Content
+
+    init(
+        isPresented: Bool,
+        @ViewBuilder sidebar: () -> Sidebar,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.isPresented = isPresented
+        self.sidebar = sidebar()
+        self.content = content()
+    }
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            content
+                .padding(.leading, isPresented ? 235 : 0)
+                .animation(nil, value: isPresented)
+            sidebar
+                .frame(width: 225)
+                .offset(x: isPresented ? 0 : -225)
+                .opacity(isPresented ? 1 : 0)
+                .allowsHitTesting(isPresented)
+                .accessibilityHidden(!isPresented)
+                .animation(.easeInOut(duration: 0.18), value: isPresented)
+        }
+        .clipped()
+    }
+}
+
 struct ContentView: View {
     @EnvironmentObject var globalSettingsViewModel: GlobalSettingsViewModel
     @ObservedObject private var localization = MirageLocalization.shared
@@ -18,6 +50,8 @@ struct ContentView: View {
     @ObservedObject var wallpaperViewModel: WallpaperViewModel
     @ObservedObject var workshopViewModel: WorkshopViewModel
     @ObservedObject var rmskinViewModel: RmskinViewModel
+    @ObservedObject private var shortcutManager = WallpaperShortcutManager.shared
+    @StateObject private var steamSetupViewModel = SteamSetupViewModel()
 
     init(viewModel: ContentViewModel, wallpaperViewModel: WallpaperViewModel, workshopViewModel: WorkshopViewModel = AppDelegate.shared.workshopViewModel, rmskinViewModel: RmskinViewModel = AppDelegate.shared.rmskinViewModel) {
         self.viewModel = viewModel
@@ -29,34 +63,31 @@ struct ContentView: View {
     var body: some View {
         ZStack {
             HSplitView {
-                VStack(spacing: 5) {
-                    if viewModel.isStaging {
-                        TopTabBar(contentViewModel: viewModel)
+                if viewModel.isStaging {
+                    VStack(spacing: 5) {
+                        TopTabBar(contentViewModel: viewModel,
+                                  wallpaperViewModel: wallpaperViewModel)
                         ProjectFeedbackBanner()
                         switch viewModel.topTabBarSelection {
                         case 0:
                             ExplorerTopBar(contentViewModel: viewModel)
                                 .environmentObject(globalSettingsViewModel)
-                            HStack(spacing: 0) {
-                                HStack(spacing: 0) {
+                            FilterSidebarLayout(isPresented: viewModel.isFilterReveal, sidebar: {
                                     FilterResults(viewModel: viewModel)
-                                }
-                                .frame(width: viewModel.isFilterReveal ? 225 : 0)
-                                .opacity(viewModel.isFilterReveal ? 1 : 0)
-
-                                WallpaperExplorer(contentViewModel: viewModel, wallpaperViewModel: wallpaperViewModel)
+                            }, content: {
+                                WallpaperExplorer(contentViewModel: viewModel,
+                                                  wallpaperViewModel: wallpaperViewModel)
                                     .onDrop(of: [.fileURL], delegate: viewModel)
                                     .contextMenu {
                                         ExplorerGlobalMenu(contentViewModel: viewModel,
                                                            wallpaperViewModel: wallpaperViewModel)
                                     }
-                                    .padding(.leading, viewModel.isFilterReveal ? 10 : 0)
-                            }
-                            .animation(.default, value: viewModel.isFilterReveal)
+                            })
                         case 1:
                             DiscoverView(
                                 workshopViewModel: workshopViewModel,
-                                viewModel: viewModel
+                                viewModel: viewModel,
+                                wallpaperViewModel: wallpaperViewModel
                             )
                         case 3:
                             HStack(spacing: 0) {
@@ -85,37 +116,45 @@ struct ContentView: View {
                             }
                             .animation(.default, value: viewModel.isFilterReveal)
                         case 2:
-                            ExplorerTopBar(contentViewModel: viewModel)
-                                .environmentObject(globalSettingsViewModel)
-                            HStack(spacing: 0) {
+                            FilterSidebarLayout(isPresented: viewModel.isFilterReveal, sidebar: {
                                 WorkshopFilterSidebar(workshopViewModel: workshopViewModel)
-                                    .frame(width: viewModel.isFilterReveal ? 225 : 0)
-                                    .opacity(viewModel.isFilterReveal ? 1 : 0)
-
+                            }, content: {
                                 WorkshopView(
                                     workshopViewModel: workshopViewModel,
-                                    viewModel: viewModel
+                                    viewModel: viewModel,
+                                    wallpaperViewModel: wallpaperViewModel
                                 )
-                                .padding(.leading, viewModel.isFilterReveal ? 10 : 0)
-                            }
-                            .animation(.default, value: viewModel.isFilterReveal)
+                            })
                         default:
                             EmptyView()
                         }
-                        ExplorerBottomBar()
+                        if viewModel.topTabBarSelection == 0 {
+                            ExplorerBottomBar(contentViewModel: viewModel,
+                                              wallpaperViewModel: wallpaperViewModel)
+                        }
                     }
                 }
                 .padding()
 
-                if viewModel.isStaging {
-                    if viewModel.topTabBarSelection == 0 {
-                        WallpaperPreview(contentViewModel: viewModel, wallpaperViewModel: wallpaperViewModel)
+                    if workshopViewModel.showCreatorProfile,
+                       let creator = workshopViewModel.selectedCreator {
+                        CreatorProfileView(
+                            creator: creator,
+                            workshopViewModel: workshopViewModel
+                        )
+                        .frame(maxWidth: 420)
+                    } else if viewModel.topTabBarSelection == 0 {
+                        WallpaperPreview(contentViewModel: viewModel,
+                                        wallpaperViewModel: wallpaperViewModel,
+                                        workshopViewModel: workshopViewModel)
                             .frame(maxWidth: 320)
                     } else if viewModel.topTabBarSelection == 3 {
                         WidgetPreview(viewModel: rmskinViewModel)
                             .frame(maxWidth: 320)
                     } else if workshopViewModel.showCustomization {
-                        WallpaperPreview(contentViewModel: viewModel, wallpaperViewModel: wallpaperViewModel)
+                        WallpaperPreview(contentViewModel: viewModel,
+                                        wallpaperViewModel: wallpaperViewModel,
+                                        workshopViewModel: workshopViewModel)
                             .frame(maxWidth: 320)
                     } else {
                         WorkshopItemDetail(
@@ -124,7 +163,6 @@ struct ContentView: View {
                         )
                         .frame(maxWidth: 320)
                     }
-                }
             }
             .opacity(viewModel.isStaging ? 1 : 0)
             .blur(radius: viewModel.isStaging ? 0 : 2.0)
@@ -138,22 +176,19 @@ struct ContentView: View {
         }
         .confirmationDialog("删除壁纸",
                             isPresented: $viewModel.isUnsubscribeConfirming) {
-            if let url = viewModel.hoveredWallpaper?.wallpaperDirectory {
+            if let wallpaper = viewModel.hoveredWallpaper {
+                let url = wallpaper.wallpaperDirectory
                 Button("立即删除", role: .destructive) {
                     WEWallpaper.invalidateSizeCache()
-                    try? FileManager.default.removeItem(at: url)
-                    if url == wallpaperViewModel.currentWallpaper.wallpaperDirectory {
-                        wallpaperViewModel.currentWallpaper = WallpaperViewModel.invalidWallpaper
-                    }
+                    try? WallpaperLibrary.shared.delete(wallpaper)
+                    wallpaperViewModel.removeWallpaper(at: url)
                     viewModel.hoveredWallpaper = nil
                     viewModel.refresh()
                 }
                 Button("移到废纸篓") {
                     WEWallpaper.invalidateSizeCache()
-                    try? FileManager.default.trashItem(at: url, resultingItemURL: nil)
-                    if url == wallpaperViewModel.currentWallpaper.wallpaperDirectory {
-                        wallpaperViewModel.currentWallpaper = WallpaperViewModel.invalidWallpaper
-                    }
+                    try? WallpaperLibrary.shared.trash(wallpaper)
+                    wallpaperViewModel.removeWallpaper(at: url)
                     viewModel.hoveredWallpaper = nil
                     viewModel.refresh()
                 }
@@ -162,7 +197,7 @@ struct ContentView: View {
                 viewModel.hoveredWallpaper = nil
             }
         } message: {
-            Text("确定要删除“\(viewModel.hoveredWallpaper?.project.title ?? "该壁纸")”吗？")
+            Text(L("确定要删除“%@”吗？", viewModel.hoveredWallpaper?.project.title ?? L("该壁纸")))
         }
         .alert(isPresented: $viewModel.importAlertPresented, error: viewModel.importAlertError) { }
         .alert(item: $viewModel.screenSaverFeedback) { feedback in
@@ -193,17 +228,22 @@ struct ContentView: View {
             FirstLaunchView()
                 .environmentObject(globalSettingsViewModel)
         }
-        .sheet(isPresented: $viewModel.isDisplaySettingsReveal) {
-            DisplaySettings(viewModel: viewModel)
-                .padding()
-                .frame(width: 520, height: 450)
+        .sheet(item: $shortcutManager.recordingWallpaper, onDismiss: {
+            shortcutManager.cancelRecording()
+        }) { wallpaper in
+            WallpaperShortcutRecorderSheet(
+                wallpaper: wallpaper,
+                manager: shortcutManager
+            )
         }
-        .sheet(isPresented: $viewModel.isUnsafeWallpaperWarningPresented) {
-            UnsafeWallpaper(wallpaper: wallpaperViewModel.nextCurrentWallpaper)
+        .sheet(item: $viewModel.pendingTrustRequest) { request in
+            UnsafeWallpaper(request: request)
                 .frame(width: 600, height: 300)
         }
-        .sheet(isPresented: $viewModel.isSteamSetupPresented) {
-            SteamSetupView(viewModel: SteamSetupViewModel())
+        .sheet(isPresented: $viewModel.isSteamSetupPresented, onDismiss: {
+            steamSetupViewModel.reset()
+        }) {
+            SteamSetupView(viewModel: steamSetupViewModel)
                 .frame(width: 560, height: 640)
         }
         .sheet(isPresented: $globalSettingsViewModel.isSettingsPresented, onDismiss: {
@@ -214,7 +254,14 @@ struct ContentView: View {
             SettingsView()
                 .environmentObject(globalSettingsViewModel)
         }
+        // Applied outside the sheets so the card also floats over an open sheet,
+        // and after them so it is the topmost layer in the window.
+        .overlay(alignment: .bottomTrailing) {
+            VideoTranscodeOverlay()
+                .allowsHitTesting(false)
+        }
         .environment(\.locale, localization.locale)
+        .frame(minWidth: 1000, minHeight: 640)
     }
 }
 

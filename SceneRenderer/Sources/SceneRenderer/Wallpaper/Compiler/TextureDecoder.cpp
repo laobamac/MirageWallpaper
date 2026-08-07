@@ -26,21 +26,46 @@ enum class WPTexFlagEnum : uint32_t
 
     compo1 = 20,
     compo2 = 21,
-    compo3 = 22
+    compo3 = 22,
+    compo4 = 23
 };
 using WPTexFlags = BitFlags<WPTexFlagEnum>;
 
 namespace
 {
-char* Lz4Decompress(const char* src, int size, int decompressed_size) {
-    char* dst       = new char[(usize)decompressed_size];
-    int   load_size = LZ4_decompress_safe(src, dst, size, decompressed_size);
+// Decompression-bomb guards. Both `size` and `decompressed_size` come
+// straight out of the (untrusted, Workshop-sourced) .tex body, and the
+// destination has to be allocated *before* LZ4_decompress_safe can apply any
+// bounds checking — so without a cap a 100-byte body can request 2 GiB.
+// 256 MiB is the smallest cap that still admits the content that legitimately
+// exists: a 4096x4096 RGBA8 mip is exactly 64 MiB, and scene wallpapers ship
+// 4K backdrops in wider formats as well as 8192x8192 mip 0 (256 MiB at RGBA8).
+// The ratio cap below is the one that does the real work — LZ4's theoretical
+// maximum expansion is 255:1, so 256 rejects any body that claims more output
+// than the format can physically produce, whatever the absolute size.
+constexpr u64 kMaxLz4DecompressedSize = 256ull * 1024 * 1024; // 256 MiB
+constexpr u64 kMaxLz4ExpansionRatio   = 256;
+
+bool Lz4Decompress(const char* src, int size, int decompressed_size, std::vector<char>& dst) {
+    if (size <= 0 || decompressed_size <= 0) {
+        rstd_error("lz4 invalid sizes (src={}, decompressed={})", size, decompressed_size);
+        return false;
+    }
+    if ((u64)decompressed_size > kMaxLz4DecompressedSize ||
+        (u64)decompressed_size > (u64)size * kMaxLz4ExpansionRatio) {
+        rstd_error("lz4 decompressed size {} rejected for {} compressed bytes",
+                   decompressed_size,
+                   size);
+        return false;
+    }
+    dst.assign((usize)decompressed_size, '\0');
+    int load_size = LZ4_decompress_safe(src, dst.data(), size, decompressed_size);
     if (load_size < decompressed_size) {
         rstd_error("lz4 decompress failed");
-        delete[] dst;
-        return nullptr;
+        dst.clear();
+        return false;
     }
-    return dst;
+    return true;
 }
 
 // Magic-bytes sniffer used as a fallback when the .tex header's
@@ -91,6 +116,33 @@ TextureFormat ToTexFormate(int type) {
         return TextureFormat::RGBA8;
     }
 }
+
+// Minimum number of bytes a `width` x `height` mipmap must occupy in `format`.
+// BC1/DXT1 stores 8 bytes per 4x4 texel block, BC2/BC3 (DXT3/DXT5) 16; the
+// remaining formats are plain bytes-per-pixel. Dimensions are attacker
+// controlled, so the arithmetic is done in u64 and dimensions no real texture
+// could have yield a byte count that can never be satisfied. Returns 0 when
+// the layout is unknown — callers must treat that as "reject".
+u64 MinMipmapBytes(TextureFormat format, i32 width, i32 height) {
+    if (width <= 0 || height <= 0) return 0;
+    // Far above any hardware limit; keeps w * h * bpp well inside u64.
+    constexpr u64 kMaxDimension = 1ull << 16;
+    const u64     w             = (u64)width;
+    const u64     h             = (u64)height;
+    if (w > kMaxDimension || h > kMaxDimension) return std::numeric_limits<u64>::max();
+    const u64 blocks = ((w + 3) / 4) * ((h + 3) / 4);
+    switch (format) {
+    case TextureFormat::BC1: return blocks * 8ull;
+    case TextureFormat::BC2:
+    case TextureFormat::BC3: return blocks * 16ull;
+    case TextureFormat::R8: return w * h;
+    case TextureFormat::RG8: return w * h * 2ull;
+    case TextureFormat::RGB8: return w * h * 3ull;
+    case TextureFormat::RGBA8:
+    case TextureFormat::D32F: return w * h * 4ull;
+    }
+    return 0;
+}
 // Reads the fixed-layout portion of a .tex header (everything up to and
 // including the optional image_type slot). Populates `header.extraHeader`
 // with the version stamps + flag bits the renderer consumes downstream,
@@ -118,6 +170,7 @@ WPTexFormatVersion LoadHeader(fs::IBinaryStream& file, ImageHeader& header) {
         header.extraHeader["compo1"].val = flags[WPTexFlagEnum::compo1];
         header.extraHeader["compo2"].val = flags[WPTexFlagEnum::compo2];
         header.extraHeader["compo3"].val = flags[WPTexFlagEnum::compo3];
+        header.extraHeader["compo4"].val = flags[WPTexFlagEnum::compo4];
     }
 
     /*
@@ -311,6 +364,18 @@ std::shared_ptr<Image> TextureAssetDecoder::Parse(const std::string& name) {
             if (src_size <= 0 || mipmap.width <= 0 || mipmap.height <= 0 || decompressed_size < 0)
                 return nullptr;
 
+            // The declared body size is attacker controlled and was never
+            // reconciled with the stream: reject anything the file cannot
+            // actually hold before allocating (or seeking) for it.
+            const i64 remaining = (i64)file.Size() - (i64)file.Tell();
+            if (remaining < 0 || (i64)src_size > remaining) {
+                rstd_error("TextureAssetDecoder: mipmap body {} exceeds {} remaining bytes in {}",
+                           src_size,
+                           remaining,
+                           name);
+                return nullptr;
+            }
+
             // Peek the first 16 bytes of the body so we can route MP4 /
             // WebM containers into the video-tex path without ever
             // pulling the (possibly hundreds of MiB) payload into RAM.
@@ -339,37 +404,40 @@ std::shared_ptr<Image> TextureAssetDecoder::Parse(const std::string& name) {
                 file.SeekSet(body_off);
             }
 
-            char* result;
-            result = new char[(usize)src_size];
-            file.Read(result, (usize)src_size);
+            // Value-initialised: a short read must never leave uninitialised
+            // heap bytes to be copied into the texture upload.
+            std::vector<char> result((usize)src_size, '\0');
+            if (file.Read(result.data(), (usize)src_size) != (usize)src_size) {
+                rstd_error("TextureAssetDecoder: short read of {} mipmap bytes in {}",
+                           src_size,
+                           name);
+                return nullptr;
+            }
 
             // is LZ4 compress
             if (LZ4_compressed) {
-                char* decompressed_char = Lz4Decompress(result, src_size, decompressed_size);
-                src_size                = decompressed_size;
-                if (decompressed_char != nullptr) {
-                    delete[] result;
-                    result = decompressed_char;
-                } else {
+                std::vector<char> decompressed;
+                if (! Lz4Decompress(result.data(), src_size, decompressed_size, decompressed)) {
                     rstd_error("lz4 decompress failed");
-                    delete[] result;
                     return nullptr;
                 }
+                result   = std::move(decompressed);
+                src_size = decompressed_size;
             }
             // is image container — declared image_type takes precedence; if
             // it's UNKNOWN, sniff the magic bytes so PKGV0022+ assets that
             // ship containerised PNG/JPEG with image_type=-1 still decode.
             ImageType embedded = img.header.type;
             if (ver.body_has_image_type() && embedded == ImageType::UNKNOWN) {
-                embedded = DetectEmbeddedImageType((const unsigned char*)result, (usize)src_size);
+                embedded =
+                    DetectEmbeddedImageType((const unsigned char*)result.data(), (usize)src_size);
             }
             if (ver.body_has_image_type() && embedded != ImageType::UNKNOWN) {
                 int32_t w, h, n;
-                auto*   data =
-                    stbi_load_from_memory((const unsigned char*)result, src_size, &w, &h, &n, 4);
+                auto*   data = stbi_load_from_memory(
+                    (const unsigned char*)result.data(), src_size, &w, &h, &n, 4);
                 if (data == nullptr) {
                     rstd_error("stbi failed to decode embedded image (type={})", (int)embedded);
-                    delete[] result;
                     return nullptr;
                 }
                 img.header.type   = embedded;
@@ -377,15 +445,54 @@ std::shared_ptr<Image> TextureAssetDecoder::Parse(const std::string& name) {
                 mipmap.data       = ImageDataPtr((uint8_t*)data, [](uint8_t* data) {
                     stbi_image_free((unsigned char*)data);
                 });
-                src_size          = w * h * 4;
+                // u64 math: w * h * 4 overflows i32 for the dimensions stb
+                // will happily hand back.
+                const u64 decoded = (u64)std::max<i32>(w, 0) * (u64)std::max<i32>(h, 0) * 4ull;
+                if (decoded == 0 || decoded > (u64)std::numeric_limits<i32>::max()) {
+                    rstd_error("embedded image {}x{} is out of range in {}", w, h, name);
+                    return nullptr;
+                }
+                // The .tex header records the padded / power-of-two tex size,
+                // but the embedded container holds the image at its true size
+                // and that is what stb just handed us. Adopt the decoded
+                // geometry: the buffer is w * h * 4 bytes, so both the
+                // validation below and TextureCache's vkCmdCopyBufferToImage
+                // extent have to describe the decoded image, not the header.
+                src_size      = (i32)decoded;
+                mipmap.width  = w;
+                mipmap.height = h;
+                if (i_mipmap == 0) {
+                    // TextureCache creates the VkImage from the *slot* extent
+                    // and copies each level with the *mipmap* extent, so mip 0
+                    // disagreeing with its slot is a copy past the image.
+                    img_slot.width  = w;
+                    img_slot.height = h;
+                    SetHeaderPow2(img.header, w, h);
+                }
             } else {
                 mipmap.data = ImageDataPtr(new uint8_t[(usize)src_size], [](uint8_t* data) {
                     delete[] data;
                 });
-                std::copy(result, result + src_size, mipmap.data.get());
+                std::copy(result.data(), result.data() + src_size, mipmap.data.get());
+            }
+
+            // Reconcile the declared geometry with what actually arrived:
+            // TextureCache stages `size` bytes but issues a
+            // vkCmdCopyBufferToImage over width x height, reading past the
+            // staging allocation whenever the body is short for the format.
+            const u64 needed = MinMipmapBytes(img.header.format, mipmap.width, mipmap.height);
+            if (needed == 0 || (u64)src_size < needed) {
+                rstd_error("TextureAssetDecoder: mipmap {}x{} (format {}) needs {} bytes but only "
+                           "{} decoded in {}",
+                           mipmap.width,
+                           mipmap.height,
+                           (int)img.header.format,
+                           needed,
+                           src_size,
+                           name);
+                return nullptr;
             }
             mipmap.size = src_size * (i32)sizeof(uint8_t);
-            delete[] result;
         }
     }
     return img_ptr;
@@ -438,6 +545,10 @@ ImageHeader TextureAssetDecoder::ParseHeaderUncached(const std::string& name) {
         std::vector<std::vector<float>> imageDatas(image_count);
         for (usize i_image = 0; i_image < image_count; i_image++) {
             int mipmap_count = file.ReadInt32();
+            if (mipmap_count < 0) {
+                rstd_error("TextureAssetDecoder: negative sprite mip count for {}", name);
+                return header;
+            }
             for (int32_t i_mipmap = 0; i_mipmap < mipmap_count; i_mipmap++) {
                 int32_t width  = file.ReadInt32();
                 int32_t height = file.ReadInt32();
@@ -451,8 +562,11 @@ ImageHeader TextureAssetDecoder::ParseHeaderUncached(const std::string& name) {
                     (void)LZ4_compressed;
                     (void)decompressed_size;
                 }
-                long src_size = file.ReadInt32();
-                file.SeekCur(src_size);
+                i32 src_size = file.ReadInt32();
+                if (src_size < 0 || ! file.SeekCur(src_size)) {
+                    rstd_error("TextureAssetDecoder: invalid sprite mip body for {}", name);
+                    return header;
+                }
             }
         }
         // sprite pos
@@ -471,6 +585,10 @@ ImageHeader TextureAssetDecoder::ParseHeaderUncached(const std::string& name) {
             return header;
         }
         int32_t framecount = file.ReadInt32();
+        if (framecount <= 0) {
+            rstd_error("TextureAssetDecoder: no sprite frames for {}", name);
+            return header;
+        }
         if (ver.sprite_has_atlas_size()) {
             i32 width  = file.ReadInt32();
             i32 height = file.ReadInt32();
@@ -531,6 +649,10 @@ ImageHeader TextureAssetDecoder::ParseHeaderUncached(const std::string& name) {
             sf.yAxis[1] /= spriteHeight;
             sf.rate = sf.height / sf.width;
             header.spriteAnim.AppendFrame(sf);
+        }
+        if (header.spriteAnim.numFrames() == 0) {
+            rstd_error("TextureAssetDecoder: no valid sprite frames for {}", name);
+            return header;
         }
     } else {
         i32 mipmap_count = file.ReadInt32();

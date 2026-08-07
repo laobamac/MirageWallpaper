@@ -180,11 +180,9 @@ jobs:
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
             release_tag="$GITHUB_REF_NAME"
             release_title="Mirage ${GITHUB_REF_NAME}"
-            prerelease_flag=()
           else
             release_tag="prerelease"
             release_title="Mirage Pre-release ${short_commit}"
-            prerelease_flag=(--prerelease)
             if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
               gh release delete "$release_tag" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
             fi
@@ -197,12 +195,20 @@ jobs:
             git log -1 --format='%s%n%n%b' "$GITHUB_SHA"
           } > "$notes_file"
 
-          gh release create "$release_tag" release-assets/* \
-            --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" \
-            --title "$release_title" \
-            --notes-file "$notes_file" \
-            "${prerelease_flag[@]}"
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            gh release create "$release_tag" release-assets/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "$release_title" \
+              --notes-file "$notes_file"
+          else
+            gh release create "$release_tag" release-assets/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "$release_title" \
+              --notes-file "$notes_file" \
+              --prerelease
+          fi
 
           echo "tag=$release_tag" >> "$GITHUB_OUTPUT"
           echo "build_number=$build_number" >> "$GITHUB_OUTPUT"

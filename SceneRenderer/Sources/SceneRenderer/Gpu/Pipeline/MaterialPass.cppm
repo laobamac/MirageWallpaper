@@ -20,6 +20,8 @@ public:
         SceneNode*      node { nullptr };
         SceneDrawItemId draw_item;
         RenderItemId    render_item;
+        SceneRenderViewKind render_view { SceneRenderViewKind::Primary };
+        SceneRenderAlphaMode alpha_mode { SceneRenderAlphaMode::Composite };
         // Which submesh of node->Mesh() this pass renders. SceneToRenderGraph
         // emits one pass per (node, submesh).
         uint32_t                           submesh_index { 0 };
@@ -99,6 +101,7 @@ public:
     void execute(const Device&, RenderingResources&) override;
     void destory(const Device&, RenderingResources&) override;
     void prepareFrameData(RenderingResources&) override;
+    void completeFrameData() override;
     bool supportsRenderScope() const override;
     bool canJoinRenderScopeAfter(const VulkanPass& previous) const override;
     void prepareRenderScopeDraw(RenderingResources&) override;

@@ -551,15 +551,24 @@ struct WEWallpaper: Codable, RawRepresentable, Identifiable, Equatable, Hashable
 
     var id: String { wallpaperDirectory.path(percentEncoded: false) }
 
-    var entryURL: URL { renderDirectory.appending(path: project.file) }
+    // `project.file` and `project.preview` are decoded verbatim from an
+    // untrusted project.json, so both go through PathContainment. These stay
+    // non-optional for their many call sites; a manifest that tries to escape
+    // its own directory falls back to that directory *and* makes the wallpaper
+    // invalid (see `isValid`), so no caller ever renders the escaping path.
+    var entryURL: URL {
+        PathContainment.containedURL(project.file, in: renderDirectory) ?? renderDirectory
+    }
     var resolvedEntryURL: URL {
         if kind == .scene {
-            let package = renderDirectory.appending(path: "scene.pkg")
+            let package = PathContainment.containedURL("scene.pkg", in: renderDirectory) ?? renderDirectory
             if FileManager.default.fileExists(atPath: package.path) { return package }
         }
         return entryURL
     }
-    var previewURL: URL { wallpaperDirectory.appending(path: project.preview) }
+    var previewURL: URL {
+        PathContainment.containedURL(project.preview, in: wallpaperDirectory) ?? wallpaperDirectory
+    }
     var kind: WallpaperKind { project.normalizedType }
     var isPreset: Bool { presetDependency != nil }
     var needsPresetDependency: Bool {
@@ -573,8 +582,15 @@ struct WEWallpaper: Codable, RawRepresentable, Identifiable, Equatable, Hashable
         case .circularDependency: return L("预设循环依赖")
         }
     }
+    // A manifest whose `file` or `preview` points outside its own directory is
+    // a path-traversal attempt by the package, not a usable wallpaper.
+    var hasContainedManifestPaths: Bool {
+        PathContainment.isContained(project.file, in: renderDirectory)
+            && PathContainment.isContained(project.preview, in: wallpaperDirectory)
+    }
     var isValid: Bool {
-        project != .invalid && !project.file.isEmpty && (!isPreset || presetStatus == .resolved)
+        project != .invalid && !project.file.isEmpty && hasContainedManifestPaths
+            && (!isPreset || presetStatus == .resolved)
     }
 
     var rawValue: String {

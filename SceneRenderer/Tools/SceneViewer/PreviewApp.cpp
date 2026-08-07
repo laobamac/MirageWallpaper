@@ -233,7 +233,9 @@ int main(int argc, char** argv) {
     // debug window. This helps avoid CAMetalLayer transactions lingering until
     // the window is closed.
     setenv("MVK_CONFIG_PRESENT_WITH_COMMAND_BUFFER", "1", /*overwrite=*/0);
-    setenv("MVK_CONFIG_SYNCHRONOUS_QUEUE_SUBMITS", "1", /*overwrite=*/0);
+    // Synchronous queue submits are deliberately left off — see the matching
+    // note in WallpaperApp.cpp. Explicit fences/semaphores already order the
+    // frame; blocking inside vkQueueSubmit only removes CPU/GPU overlap.
 #if GLFW_VERSION_MAJOR > 3 || (GLFW_VERSION_MAJOR == 3 && GLFW_VERSION_MINOR >= 4)
     glfwInitVulkanLoader(vkGetInstanceProcAddr);
 #endif

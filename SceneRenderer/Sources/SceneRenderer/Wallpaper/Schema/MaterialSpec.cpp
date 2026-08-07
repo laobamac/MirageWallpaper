@@ -36,22 +36,21 @@ void MergeUserTextures(const rstd::json::Array& src, rstd::json::Array& dst) {
 void LoadConstantShaderValue(std::string name, const sr::Json& json,
                              std::unordered_map<std::string, std::vector<float>>& constant_values,
                              std::unordered_map<std::string, std::string>&        user_values,
-                             std::unordered_map<std::string, AnimCurve>&          animations) {
+                             std::unordered_map<std::string, AnimCurve>&          animations,
+                             FieldBindings&                                       bindings) {
     std::vector<float> value;
     sr::GetJsonValue(json, value);
     constant_values[name] = std::move(value);
     if (! json.is_object()) return;
 
+    (void)AbsorbFieldBinding(name, json, bindings);
+
     if (auto user = json.get("user"); user.is_some()) {
         auto string = (*user)->as_str();
         if (string.is_some()) user_values[name] = rstd::cppstd::to_string(*string);
     }
-    if (auto animation = json.get("animation"); animation.is_some()) {
-        AnimCurve curve;
-        if (ParseAnimCurve(**animation, curve)) {
-            animations[name] = std::move(curve);
-        }
-    }
+    if (auto animation = bindings.animations.find(name); animation != bindings.animations.end())
+        animations[name] = animation->second.clone();
 }
 
 } // namespace
@@ -69,6 +68,7 @@ auto sr::wpscene::Material::clone() const -> Material {
     clone.constantshadervalues_user = constantshadervalues_user;
     clone.user_shader_values        = user_shader_values;
     clone.use_puppet                = use_puppet;
+    clone.constantshadervalues_bindings = constantshadervalues_bindings.clone();
     MergeUserTextures(usertextures, clone.usertextures);
     for (const auto& [name, curve] : constantshadervalues_animations)
         clone.constantshadervalues_animations[name] = curve.clone();
@@ -99,6 +99,7 @@ void MaterialPass::Update(const MaterialPass& p) {
     for (const auto& el : p.constantshadervalues_animations) {
         constantshadervalues_animations[el.first] = el.second.clone();
     }
+    constantshadervalues_bindings.Update(p.constantshadervalues_bindings);
     for (const auto& el : p.user_shader_values) {
         user_shader_values[el.first] = el.second;
     }
@@ -109,14 +110,7 @@ void MaterialPass::Update(const MaterialPass& p) {
 }
 
 void Material::MergePass(const MaterialPass& p) {
-    int32_t i = -1;
-    for (const auto& el : p.textures) {
-        i++;
-        if (p.textures.size() > textures.size()) textures.resize(p.textures.size());
-        if (! el.empty()) {
-            textures[i] = el;
-        }
-    }
+    MergeBindingOverrides(p.textures, p.usertextures, p.combos);
     for (const auto& el : p.constantshadervalues) {
         constantshadervalues[el.first] = el.second;
     }
@@ -126,13 +120,21 @@ void Material::MergePass(const MaterialPass& p) {
     for (const auto& el : p.constantshadervalues_animations) {
         constantshadervalues_animations[el.first] = el.second.clone();
     }
+    constantshadervalues_bindings.Update(p.constantshadervalues_bindings);
     for (const auto& el : p.user_shader_values) {
         user_shader_values[el.first] = el.second;
     }
-    MergeUserTextures(p.usertextures, usertextures);
-    for (const auto& el : p.combos) {
-        combos[el.first] = el.second;
+}
+
+void Material::MergeBindingOverrides(
+    const std::vector<std::string>& textures, const rstd::json::Array& usertextures,
+    const std::unordered_map<std::string, int32_t>& combos) {
+    if (textures.size() > this->textures.size()) this->textures.resize(textures.size());
+    for (std::size_t i = 0; i < textures.size(); ++i) {
+        if (! textures[i].empty()) this->textures[i] = textures[i];
     }
+    MergeUserTextures(usertextures, this->usertextures);
+    for (const auto& [key, value] : combos) this->combos[key] = value;
 }
 
 bool MaterialPass::FromJson(const sr::Json& json) {
@@ -161,7 +163,8 @@ bool MaterialPass::FromJson(const sr::Json& json) {
                                         *entry_value,
                                         constantshadervalues,
                                         constantshadervalues_user,
-                                        constantshadervalues_animations);
+                                        constantshadervalues_animations,
+                                        constantshadervalues_bindings);
             });
     }
     LoadUserShaderValues(json, user_shader_values);
@@ -236,7 +239,8 @@ bool Material::FromJson(const sr::Json& json, SceneVersion /*v*/) {
                                         *entry_value,
                                         constantshadervalues,
                                         constantshadervalues_user,
-                                        constantshadervalues_animations);
+                                        constantshadervalues_animations,
+                                        constantshadervalues_bindings);
             });
     }
     LoadUserShaderValues(jContent, user_shader_values);

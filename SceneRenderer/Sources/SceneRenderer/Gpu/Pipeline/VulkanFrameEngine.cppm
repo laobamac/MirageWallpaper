@@ -92,6 +92,7 @@ public:
     void destroy();
 
     void drawFrame(Scene&);
+    void flushPendingFrame();
 
     void clearLastRenderGraph(
         RenderGraphResourceRetention retention = RenderGraphResourceRetention::KeepSceneTextures);

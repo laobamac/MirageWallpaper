@@ -9,13 +9,15 @@ using micros = std::chrono::microseconds;
 using namespace std::chrono;
 
 FrameTimer::FrameTimer(std::function<void()> cb)
-    : m_callback(cb), m_frame_busy_count(0), m_timer([this]() {
+    : m_callback(cb), m_frame_busy_count(0), m_timer([this]() -> bool {
           i32 expected = 0;
           if (m_callback &&
               m_frame_busy_count.compare_exchange_strong(expected, 1,
                                                          std::memory_order_acq_rel)) {
               m_callback();
+              return true;
           }
+          return false;
       }) {
     SetRequiredFps(15);
 }

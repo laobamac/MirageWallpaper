@@ -14,6 +14,7 @@ export namespace sr
 struct SceneUniformInfo {
     bool has_MI { false };
     bool has_M { false };
+    bool has_NORMALMODELMATRIX { false };
     bool has_AM { false };
     bool has_MVP { false };
     bool has_MVPI { false };
@@ -27,6 +28,7 @@ struct SceneUniformInfo {
     bool has_VP { false };
 
     bool has_BONES { false };
+    bool has_BONESALPHA { false };
     bool has_TIME { false };
     bool has_FRAMETIME { false };
     bool has_DAYTIME { false };
@@ -39,6 +41,9 @@ struct SceneUniformInfo {
     bool has_SCREEN { false };
     bool has_LP { false };
     bool has_LCR { false };
+    bool has_LIGHTDIRECTIONTYPE { false };
+    bool has_LIGHTCONEEXPONENT { false };
+    bool has_LIGHTCASTSHADOW { false };
     bool has_USERALPHA { false };
     bool has_COLOR4 { false };
     bool has_COLOR { false };
@@ -65,6 +70,11 @@ struct SceneUniformNodeData {
     std::vector<std::pair<usize, std::string>> renderTargets;
     std::shared_ptr<WPPuppetLayer>             puppet_layer;
     bool                                       use_camera_eye_position { false };
+    // Particle generators with the WE world-space flag bake model-space
+    // placement into each spawned vertex. Their draw transform must therefore
+    // be identity or the layer transform would be applied twice.
+    bool                                       vertices_in_world_space { false };
+    std::optional<std::array<float, 3>>        eye_position_override;
     SceneNode*                                 effect_projection_node { nullptr };
     std::array<float, 2>                       effect_projection_size { 0.0f, 0.0f };
 };
@@ -91,7 +101,8 @@ public:
     void FrameBegin() override;
 
     void InitUniforms(SceneNode*, const ExistsUniformOp&) override;
-    void UpdateUniforms(SceneNode*, sprite_map_t&, const UpdateUniformOp&) override;
+    void UpdateUniforms(SceneNode*, sprite_map_t&, const UpdateUniformOp&, SceneRenderViewKind,
+                        SceneRenderAlphaMode) override;
     void FrameEnd() override;
     void MouseInput(double, double) override;
     void SetTexelSize(float x, float y) override;
@@ -102,6 +113,12 @@ public:
     void CopyNodeData(void* src, void* dst);
     void SetCameraParallax(const SceneCameraParallax& value) { m_parallax = value; }
     void SetCameraShake(const SceneCameraShake& value) { m_cameraShake = value; }
+    void SetCameraParallaxEnabled(bool value) override { m_parallax.enable = value; }
+    void SetCameraParallaxAmount(float value) override { m_parallax.amount = value; }
+    void SetCameraParallaxDelay(float value) override {
+        m_parallax.delay   = std::max(value, 0.0f);
+        m_mouseDelayedTime = std::min(m_mouseDelayedTime, static_cast<double>(m_parallax.delay));
+    }
     void SetCameraParallaxMouseInfluence(float value) override {
         m_parallax.mouseinfluence = value;
     }
@@ -149,6 +166,12 @@ private:
     // the widest case is 64 bands * 4 = 256 floats. Kept as a member to avoid
     // heap-allocating a fresh std::vector on every band, every frame.
     std::array<float, 64 * 4> m_audio_pack_scratch {};
+
+    // Same std140 story for `uniform float g_BonesAlpha[BONECOUNT]`: a scalar
+    // array still burns a full 16-byte register per element, so each bone's
+    // opacity goes in .x of its own vec4. Sized on demand (bone counts vary per
+    // puppet) but reused across frames.
+    std::vector<float> m_bone_alpha_pack_scratch;
 
     Map<void*, SceneUniformNodeData> m_nodeDataMap;
     Map<void*, SceneUniformInfo>     m_nodeUniformInfoMap;

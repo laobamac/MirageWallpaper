@@ -4,14 +4,21 @@
 
 @implementation VRMemoryAssetLoader {
     NSData *_data;
+    dispatch_data_t _backing;
     NSURL *_assetURL;
     NSString *_contentType;
     dispatch_queue_t _loaderQueue;
 }
 
 + (instancetype)loaderWithFileURL:(NSURL *)fileURL error:(NSError **)error {
+    // Map, don't read. A 2 GB video used to be pulled into anonymous memory in
+    // full and synchronously — on the main thread, since this runs before
+    // [app run] — and NSDataReadingUncached explicitly told the kernel it may
+    // not reclaim any of it, so the whole file stayed resident for the lifetime
+    // of the wallpaper. Mapped pages fault in on demand and evict under
+    // pressure, which is exactly the behaviour wanted for linear playback.
     NSData *data = [NSData dataWithContentsOfURL:fileURL
-                                         options:NSDataReadingUncached
+                                         options:NSDataReadingMappedIfSafe
                                            error:error];
     if (data == nil) return nil;
 
@@ -23,6 +30,17 @@
 
     VRMemoryAssetLoader *loader = [VRMemoryAssetLoader new];
     loader->_data = data;
+    // Wrapped once so range requests can be answered with zero-copy subranges.
+    // AVFoundation asks for the whole resource at offset 0, and the previous
+    // subdataWithRange: answered that by allocating and copying a second full
+    // copy of the file — peak memory was twice the file size. The destructor
+    // block captures `data`, so every outstanding subrange keeps the mapping
+    // alive even if this loader is replaced.
+    loader->_backing = dispatch_data_create(
+        data.bytes, data.length,
+        dispatch_get_global_queue(QOS_CLASS_UTILITY, 0),
+        ^{ (void)data; });
+    if (loader->_backing == nil) return nil;
     loader->_assetURL = assetURL;
     UTType *type = [UTType typeWithFilenameExtension:fileURL.pathExtension];
     loader->_contentType = type.identifier ?: UTTypeMovie.identifier;
@@ -65,7 +83,8 @@
                                 ? available
                                 : MIN((NSUInteger)request.requestedLength, available);
         if (length > 0) {
-            [request respondWithData:[_data subdataWithRange:NSMakeRange(offset, length)]];
+            dispatch_data_t slice = dispatch_data_create_subrange(_backing, offset, length);
+            if (slice != nil) [request respondWithData:(NSData *)(id)slice];
         }
     }
     [loadingRequest finishLoading];

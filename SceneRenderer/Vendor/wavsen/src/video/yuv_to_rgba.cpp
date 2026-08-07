@@ -6,6 +6,9 @@ module;
  * full header into the GMF for the implementation. */
 #include <vulkan/vulkan.h>
 #include "nv12_to_rgba.spv.h" // generated at build time by glslangValidator
+#if defined(__APPLE__)
+#include "metal_import.h"
+#endif
 
 module wavsen.video;
 
@@ -316,6 +319,18 @@ YuvToRgba::~YuvToRgba() {
         for (uint32_t i = 0; i < last_drm_memory_count_; ++i) {
             if (last_drm_memories_[i]) vkFreeMemory(device_, last_drm_memories_[i], nullptr);
         }
+        if (last_metal_y_view_) vkDestroyImageView(device_, last_metal_y_view_, nullptr);
+        if (last_metal_uv_view_) vkDestroyImageView(device_, last_metal_uv_view_, nullptr);
+        if (last_metal_dst_view_) vkDestroyImageView(device_, last_metal_dst_view_, nullptr);
+#if defined(__APPLE__)
+        for (int i = 0; i < 2; ++i) {
+            if (last_metal_images_[i] || last_metal_holds_[i]) {
+                MetalImportedPlane prev { last_metal_images_[i], last_metal_holds_[i] };
+                MetalImportReleasePlane(device_, &prev);
+            }
+        }
+        if (metal_bridge_ready_) MetalImportShutdown(device_);
+#endif
         if (dpool_) vkDestroyDescriptorPool(device_, dpool_, nullptr);
         if (signal_sem_) vkDestroySemaphore(device_, signal_sem_, nullptr);
         if (done_fence_) vkDestroyFence(device_, done_fence_, nullptr);
@@ -1703,6 +1718,278 @@ auto YuvToRgba::convert_drm_prime(const DrmFrameView& drm, VkImage dst, uint32_t
     int   fd = convert_drm_prime_(drm, dst, dst_w, dst_h, cm, target, &err);
     if (fd < 0 && ! err.message.empty()) return rstd::Err(std::move(err));
     return rstd::Ok(fd);
+}
+
+#if defined(__APPLE__)
+int YuvToRgba::convert_metal_frame_(void* cv_pixel_buffer, uint32_t src_w, uint32_t src_h,
+                                    VkImage dst, uint32_t dst_w, uint32_t dst_h,
+                                    const ColorMatrix& cm, ConvertTarget target, Error* err) {
+    if (dst == VK_NULL_HANDLE) {
+        fail(err, "convert_metal_frame: dst null");
+        return -1;
+    }
+    if (! cv_pixel_buffer) {
+        fail(err, "convert_metal_frame: pixel buffer null");
+        return -1;
+    }
+    if ((dst_w & 1u) || (dst_h & 1u)) {
+        fail(err, "convert_metal_frame: dst dims must be even");
+        return -1;
+    }
+    if (dst_w > max_w_ || dst_h > max_h_) {
+        fail(err, "convert_metal_frame: dst exceeds configured max extent");
+        return -1;
+    }
+
+    if (! metal_bridge_ready_) {
+        if (! MetalImportInit(instance_, device_)) {
+            fail(err, "convert_metal_frame: MetalImportInit failed");
+            return -1;
+        }
+        metal_bridge_ready_ = true;
+    }
+
+    if (fence_pending_) {
+        if (VkResult r = vkWaitForFences(device_, 1, &done_fence_, VK_TRUE, 1'000'000'000ull);
+            r != VK_SUCCESS) {
+            fail(err, std::string("vkWaitForFences: ") + vk_result_str(r));
+            return -1;
+        }
+        if (VkResult r = vkResetFences(device_, 1, &done_fence_); r != VK_SUCCESS) {
+            fail(err, std::string("vkResetFences: ") + vk_result_str(r));
+            return -1;
+        }
+        fence_pending_ = false;
+    }
+
+    /* Release last cycle's imported planes + views now the GPU has drained. */
+    for (int i = 0; i < 2; ++i) {
+        if (last_metal_images_[i] || last_metal_holds_[i]) {
+            MetalImportedPlane prev { last_metal_images_[i], last_metal_holds_[i] };
+            MetalImportReleasePlane(device_, &prev);
+            last_metal_images_[i] = VK_NULL_HANDLE;
+            last_metal_holds_[i]  = nullptr;
+        }
+    }
+    if (last_metal_dst_view_) {
+        vkDestroyImageView(device_, last_metal_dst_view_, nullptr);
+        last_metal_dst_view_ = VK_NULL_HANDLE;
+    }
+    if (last_metal_y_view_) {
+        vkDestroyImageView(device_, last_metal_y_view_, nullptr);
+        last_metal_y_view_ = VK_NULL_HANDLE;
+    }
+    if (last_metal_uv_view_) {
+        vkDestroyImageView(device_, last_metal_uv_view_, nullptr);
+        last_metal_uv_view_ = VK_NULL_HANDLE;
+    }
+
+    MetalImportedPlane y_plane {};
+    MetalImportedPlane uv_plane {};
+    if (! MetalImportPlane(
+            device_, cv_pixel_buffer, 0, VK_FORMAT_R8_UNORM, src_w, src_h, &y_plane)) {
+        fail(err, "convert_metal_frame: Y plane import failed");
+        return -1;
+    }
+    if (! MetalImportPlane(device_,
+                           cv_pixel_buffer,
+                           1,
+                           VK_FORMAT_R8G8_UNORM,
+                           src_w / 2,
+                           src_h / 2,
+                           &uv_plane)) {
+        MetalImportReleasePlane(device_, &y_plane);
+        fail(err, "convert_metal_frame: UV plane import failed");
+        return -1;
+    }
+
+    VkImageView y_view = VK_NULL_HANDLE, uv_view = VK_NULL_HANDLE, dst_view = VK_NULL_HANDLE;
+    auto        cleanup = [&]() {
+        if (dst_view) vkDestroyImageView(device_, dst_view, nullptr);
+        if (y_view) vkDestroyImageView(device_, y_view, nullptr);
+        if (uv_view) vkDestroyImageView(device_, uv_view, nullptr);
+        MetalImportReleasePlane(device_, &y_plane);
+        MetalImportReleasePlane(device_, &uv_plane);
+    };
+
+    {
+        VkImageViewCreateInfo vci {};
+        vci.sType      = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        vci.viewType   = VK_IMAGE_VIEW_TYPE_2D;
+        vci.components = { VK_COMPONENT_SWIZZLE_IDENTITY,
+                           VK_COMPONENT_SWIZZLE_IDENTITY,
+                           VK_COMPONENT_SWIZZLE_IDENTITY,
+                           VK_COMPONENT_SWIZZLE_IDENTITY };
+        vci.image            = y_plane.image;
+        vci.format           = VK_FORMAT_R8_UNORM;
+        vci.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+        if (VkResult r = vkCreateImageView(device_, &vci, nullptr, &y_view); r != VK_SUCCESS) {
+            fail(err, std::string("vkCreateImageView(Y metal): ") + vk_result_str(r));
+            cleanup();
+            return -1;
+        }
+        vci.image            = uv_plane.image;
+        vci.format           = VK_FORMAT_R8G8_UNORM;
+        if (VkResult r = vkCreateImageView(device_, &vci, nullptr, &uv_view); r != VK_SUCCESS) {
+            fail(err, std::string("vkCreateImageView(UV metal): ") + vk_result_str(r));
+            cleanup();
+            return -1;
+        }
+        VkImageViewUsageCreateInfo storage_usage {};
+        storage_usage.sType  = VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO;
+        storage_usage.usage  = VK_IMAGE_USAGE_STORAGE_BIT;
+        vci.pNext            = &storage_usage;
+        vci.image            = dst;
+        vci.format           = VK_FORMAT_R8G8B8A8_UNORM;
+        if (VkResult r = vkCreateImageView(device_, &vci, nullptr, &dst_view); r != VK_SUCCESS) {
+            fail(err, std::string("vkCreateImageView(dst metal): ") + vk_result_str(r));
+            cleanup();
+            return -1;
+        }
+    }
+
+    {
+        VkDescriptorImageInfo dii_y { sampler_, y_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        VkDescriptorImageInfo dii_uv { sampler_, uv_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        VkDescriptorImageInfo dii_d { VK_NULL_HANDLE, dst_view, VK_IMAGE_LAYOUT_GENERAL };
+        VkWriteDescriptorSet  ws[3] {};
+        for (int i = 0; i < 3; ++i) {
+            ws[i].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            ws[i].dstSet          = dset_;
+            ws[i].dstBinding      = static_cast<uint32_t>(i);
+            ws[i].descriptorCount = 1;
+        }
+        ws[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        ws[0].pImageInfo     = &dii_y;
+        ws[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        ws[1].pImageInfo     = &dii_uv;
+        ws[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        ws[2].pImageInfo     = &dii_d;
+        vkUpdateDescriptorSets(device_, 3, ws, 0, nullptr);
+    }
+
+    if (VkResult r = vkResetCommandBuffer(cmd_, 0); r != VK_SUCCESS) {
+        fail(err, std::string("vkResetCommandBuffer: ") + vk_result_str(r));
+        cleanup();
+        return -1;
+    }
+    VkCommandBufferBeginInfo bi {};
+    bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    if (VkResult r = vkBeginCommandBuffer(cmd_, &bi); r != VK_SUCCESS) {
+        fail(err, std::string("vkBeginCommandBuffer: ") + vk_result_str(r));
+        cleanup();
+        return -1;
+    }
+
+    barrier_image(cmd_,
+                  y_plane.image,
+                  0,
+                  VK_ACCESS_SHADER_READ_BIT,
+                  VK_IMAGE_LAYOUT_UNDEFINED,
+                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+    barrier_image(cmd_,
+                  uv_plane.image,
+                  0,
+                  VK_ACCESS_SHADER_READ_BIT,
+                  VK_IMAGE_LAYOUT_UNDEFINED,
+                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+    barrier_dst_to_storage(cmd_, dst, target);
+
+    vkCmdBindPipeline(cmd_, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_);
+    vkCmdBindDescriptorSets(
+        cmd_, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_layout_, 0, 1, &dset_, 0, nullptr);
+    ShaderPushConstants pc {};
+    pc.dst_w = dst_w;
+    pc.dst_h = dst_h;
+    for (int i = 0; i < 3; ++i) {
+        pc.m_r[i]    = cm.m_r[i];
+        pc.m_g[i]    = cm.m_g[i];
+        pc.m_b[i]    = cm.m_b[i];
+        pc.offset[i] = cm.offset[i];
+    }
+    vkCmdPushConstants(cmd_, pipeline_layout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+    vkCmdDispatch(cmd_, (dst_w + 7) / 8, (dst_h + 7) / 8, 1);
+
+    barrier_dst_from_storage(cmd_, dst, target, queue_family_);
+
+    if (VkResult r = vkEndCommandBuffer(cmd_); r != VK_SUCCESS) {
+        fail(err, std::string("vkEndCommandBuffer: ") + vk_result_str(r));
+        cleanup();
+        return -1;
+    }
+
+    VkSubmitInfo si {};
+    si.sType                   = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    si.commandBufferCount      = 1;
+    si.pCommandBuffers         = &cmd_;
+    VkSemaphore signal_sems[1] = { signal_sem_ };
+    if (target_exports_sync_fd(target)) {
+        si.signalSemaphoreCount = 1;
+        si.pSignalSemaphores    = signal_sems;
+    }
+    if (VkResult r = vkQueueSubmit(queue_, 1, &si, done_fence_); r != VK_SUCCESS) {
+        fail(err, std::string("vkQueueSubmit: ") + vk_result_str(r));
+        cleanup();
+        return -1;
+    }
+    fence_pending_ = true;
+
+    int sync_fd = -1;
+    if (target_exports_sync_fd(target)) {
+        if (! vkGetSemaphoreFdKHR_) {
+            fail(err, "vkGetSemaphoreFdKHR missing");
+            cleanup();
+            return -1;
+        }
+        VkSemaphoreGetFdInfoKHR sgfi {};
+        sgfi.sType      = VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR;
+        sgfi.semaphore  = signal_sem_;
+        sgfi.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
+        if (VkResult r = vkGetSemaphoreFdKHR_(device_, &sgfi, &sync_fd); r != VK_SUCCESS) {
+            fail(err, std::string("vkGetSemaphoreFdKHR: ") + vk_result_str(r));
+            cleanup();
+            return -1;
+        }
+    }
+
+    /* Cycle imports + views one frame so GPU drains before release. */
+    last_metal_images_[0] = y_plane.image;
+    last_metal_holds_[0]  = y_plane.hold;
+    last_metal_images_[1] = uv_plane.image;
+    last_metal_holds_[1]  = uv_plane.hold;
+    last_metal_y_view_   = y_view;
+    last_metal_uv_view_  = uv_view;
+    last_metal_dst_view_ = dst_view;
+    return sync_fd;
+}
+#endif
+
+auto YuvToRgba::convert_metal_frame(void* cv_pixel_buffer, uint32_t src_w, uint32_t src_h,
+                                    VkImage dst, uint32_t dst_w, uint32_t dst_h,
+                                    const ColorMatrix& cm, ConvertTarget target)
+    -> rstd::Result<int, Error> {
+#if defined(__APPLE__)
+    Error err;
+    int   fd = convert_metal_frame_(
+        cv_pixel_buffer, src_w, src_h, dst, dst_w, dst_h, cm, target, &err);
+    if (fd < 0 && ! err.message.empty()) return rstd::Err(std::move(err));
+    return rstd::Ok(fd);
+#else
+    (void)cv_pixel_buffer;
+    (void)src_w;
+    (void)src_h;
+    (void)dst;
+    (void)dst_w;
+    (void)dst_h;
+    (void)cm;
+    (void)target;
+    return rstd::Err(Error { "convert_metal_frame: not supported on this platform" });
+#endif
 }
 
 } // namespace wavsen::video

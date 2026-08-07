@@ -7,6 +7,7 @@
 import SwiftUI
 import UniformTypeIdentifiers
 import Combine
+import CoreGraphics
 
 struct ScreenSaverFeedback: Identifiable {
     let id = UUID()
@@ -38,9 +39,8 @@ class ContentViewModel: ObservableObject, DropDelegate {
     @AppStorage("FRTag") public var tag = FRTag.all { didSet { currentPage = 1 } }
     
     @AppStorage("FilterReveal") var isFilterReveal = false
-    @AppStorage("ExplorerIconSize") var explorerIconSize: Double = 200
+    @AppStorage("ExplorerIconSize") var explorerIconSize: Double = 170
     
-    @Published var isDisplaySettingsReveal = false
     @Published var importAlertPresented = false
     @Published var isStaging = false
     
@@ -51,15 +51,53 @@ class ContentViewModel: ObservableObject, DropDelegate {
         didSet { scheduleRecomputePage() }
     }
     
-    @Published var isUnsafeWallpaperWarningPresented = false
-    
+    /// The wallpaper the trust sheet is currently asking about, together with
+    /// what to do once the user confirms. Carrying both here is what keeps the
+    /// sheet honest: it used to read `nextCurrentWallpaper` at render time,
+    /// which is written *after* the `willSet` that presents the sheet, so the
+    /// dialog could name the previously selected wallpaper while authorizing
+    /// this one. Per-screen requests also need the screen index preserved.
+    struct PendingTrustRequest: Identifiable {
+        enum Action {
+            case applyToCurrent
+            case applyOnDisplay(CGDirectDisplayID)
+            case applyToAllDisplays
+        }
+        let id = UUID()
+        let wallpaper: WEWallpaper
+        let action: Action
+    }
+
+    @Published var pendingTrustRequest: PendingTrustRequest?
+
     @Published var hoveredWallpaper: WEWallpaper?
     
     @Published var isUnsubscribeConfirming = false
 
     @Published var screenSaverFeedback: ScreenSaverFeedback?
 
-    @Published var searchText = "" { didSet { currentPage = 1 } }
+    // Debounced: every keystroke used to kick off a full search + filter + sort
+    // over the whole library. The pipeline already runs off the main thread, but
+    // typing "landscape" still queued nine complete passes of which only the
+    // last mattered. Matches the 500 ms debounce the Workshop search already had.
+    @Published var searchText = "" {
+        didSet {
+            guard searchText != oldValue else { return }
+            searchDebounceWorkItem?.cancel()
+            let work = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                if self.currentPage != 1 {
+                    self.currentPage = 1  // its didSet schedules the recompute
+                } else {
+                    self.scheduleRecomputePage()
+                }
+            }
+            searchDebounceWorkItem = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
+        }
+    }
+
+    private var searchDebounceWorkItem: DispatchWorkItem?
 
     @Published var isSteamSetupPresented = false
     
@@ -74,6 +112,7 @@ class ContentViewModel: ObservableObject, DropDelegate {
     private var refreshWorkItem: DispatchWorkItem?
     private var refreshInFlight = false
     private var refreshAgain = false
+    @Published private(set) var isRefreshing = false
 
     convenience init(isStaging: Bool, topTabBarSelection: Int = 0) {
         self.init()
@@ -83,6 +122,38 @@ class ContentViewModel: ObservableObject, DropDelegate {
     }
 
     init() {
+        switch explorerIconSize {
+        case 100:
+            explorerIconSize = 140
+        case 125:
+            explorerIconSize = 170
+        case 150:
+            explorerIconSize = 200
+        case 140, 170, 200:
+            break
+        default:
+            explorerIconSize = 170
+        }
+        let resolutionMigrationKey = "FRWidescreenResolutionMigrationV2"
+        if !UserDefaults.standard.bool(forKey: resolutionMigrationKey) {
+            let raw = widescreenResolution.rawValue
+            if raw == FRWidescreenResolution.legacyAll.rawValue
+                || raw == FRWidescreenResolution.interimAll.rawValue
+                || raw == FRWidescreenResolution.all.rawValue {
+                widescreenResolution = .all
+            } else {
+                var migratedRaw = 0
+                if raw & (1 << 0) != 0 { migratedRaw |= 1 << 0 }
+                if raw & (1 << 1) != 0 { migratedRaw |= 1 << 1 }
+                if raw & (1 << 2) != 0 { migratedRaw |= 1 << 3 }
+                if raw & (1 << 3) != 0 { migratedRaw |= 1 << 4 }
+                if raw & (1 << 4) != 0 { migratedRaw |= 1 << 5 }
+                if raw & (1 << 5) != 0 { migratedRaw |= 1 << 2 }
+                if raw & (1 << 6) != 0 { migratedRaw |= 1 << 0 }
+                widescreenResolution = FRWidescreenResolution(rawValue: migratedRaw)
+            }
+            UserDefaults.standard.set(true, forKey: resolutionMigrationKey)
+        }
         downloadObserver = NotificationCenter.default.publisher(for: .workshopItemDownloaded)
             .debounce(for: .seconds(1), scheduler: RunLoop.main)
             .sink { [weak self] _ in
@@ -146,6 +217,12 @@ class ContentViewModel: ObservableObject, DropDelegate {
         let showOnly: FRShowOnly
         let type: FRType
         let ageRating: FRAgeRating
+        let widescreenResolution: FRWidescreenResolution
+        let ultraWidescreenResolution: FRUltraWidescreenResolution
+        let dualscreenResolution: FRDualscreenResolution
+        let triplescreenResolution: FRTriplescreenResolution
+        let potraitscreenResolution: FRPortraitScreenResolution
+        let miscResolution: FRMiscResolution
         let source: FRSource
         let tag: FRTag
         let sortingBy: WEWallpaperSortingMethod
@@ -163,6 +240,12 @@ class ContentViewModel: ObservableObject, DropDelegate {
             showOnly: showOnly,
             type: type,
             ageRating: ageRating,
+            widescreenResolution: widescreenResolution,
+            ultraWidescreenResolution: ultraWidescreenResolution,
+            dualscreenResolution: dualscreenResolution,
+            triplescreenResolution: triplescreenResolution,
+            potraitscreenResolution: potraitscreenResolution,
+            miscResolution: miscResolution,
             source: source,
             tag: tag,
             sortingBy: sortingBy,
@@ -296,6 +379,16 @@ class ContentViewModel: ObservableObject, DropDelegate {
             }
             guard input.source.contains(source) else { return false }
 
+            guard FRResolutionFilter.matches(
+                wallpaper: wallpaper,
+                widescreen: input.widescreenResolution,
+                ultraWidescreen: input.ultraWidescreenResolution,
+                dualscreen: input.dualscreenResolution,
+                triplescreen: input.triplescreenResolution,
+                portrait: input.potraitscreenResolution,
+                misc: input.miscResolution
+            ) else { return false }
+
             if input.tag != FRTag.all {
                 let wallpaperTags = FRTag.bits(from: wallpaper.project.tags ?? [])
                 if wallpaperTags.isEmpty {
@@ -348,8 +441,9 @@ class ContentViewModel: ObservableObject, DropDelegate {
         self.importAlertPresented = true
     }
     
-    func warningUnsafeWallpaperModal(which wallpaper: WEWallpaper) {
-        self.isUnsafeWallpaperWarningPresented = true
+    func warningUnsafeWallpaperModal(which wallpaper: WEWallpaper,
+                                     action: PendingTrustRequest.Action = .applyToCurrent) {
+        self.pendingTrustRequest = PendingTrustRequest(wallpaper: wallpaper, action: action)
     }
     
     func dropUpdated(info: DropInfo) -> DropProposal? {
@@ -390,6 +484,7 @@ class ContentViewModel: ObservableObject, DropDelegate {
             return
         }
         refreshInFlight = true
+        isRefreshing = true
         let shouldPrewarmSizes = sortingBy == .fileSize
         DispatchQueue.global(qos: .userInitiated).async {
             let loaded = WallpaperLibrary.shared.loadAll()
@@ -402,6 +497,8 @@ class ContentViewModel: ObservableObject, DropDelegate {
                 if self.refreshAgain {
                     self.refreshAgain = false
                     self.refresh()
+                } else {
+                    self.isRefreshing = false
                 }
             }
         }

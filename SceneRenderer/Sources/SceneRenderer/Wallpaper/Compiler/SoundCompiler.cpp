@@ -53,10 +53,15 @@ public:
             return rstd::Err(rstd::io::error::Error::from_kind(
                 rstd::io::error::ErrorKind { rstd::io::error::ErrorKind::Other }));
         }
-        // sr::fs::IBinaryStream doesn't expose post-seek absolute offset
-        // directly, so report 0 — wavsen's stream_decoder ignores the
-        // returned position (only checks is_err).
-        return rstd::Ok(rstd::u64 { 0 });
+        const auto absolute = inner->Tell();
+        if (absolute < 0) {
+            return rstd::Err(rstd::io::error::Error::from_kind(
+                rstd::io::error::ErrorKind { rstd::io::error::ErrorKind::Other }));
+        }
+        // FFmpeg uses the callback's return value as the new absolute stream
+        // position. Returning a success sentinel instead corrupts its probe
+        // cursor after the first seek (notably for RIFF/WAV inputs).
+        return rstd::Ok(static_cast<rstd::u64>(absolute));
     }
 
 private:
@@ -246,7 +251,7 @@ std::shared_ptr<SceneSoundControl> WPSoundParser::Parse(const wpscene::SoundObje
 
     auto* audio_average = scene ? &scene->audioAverage : nullptr;
     auto  state         = std::make_shared<WPSoundState>();
-    state->playing.store(! obj.startsilent, std::memory_order_release);
+    state->playing.store(obj.visible && ! obj.startsilent, std::memory_order_release);
     state->volume.store(config.volume, std::memory_order_release);
     auto control = std::make_shared<WPSoundControl>(state);
     auto ss      = std::make_unique<WPSoundStream>(obj.sound, vfs, config, state, audio_average);

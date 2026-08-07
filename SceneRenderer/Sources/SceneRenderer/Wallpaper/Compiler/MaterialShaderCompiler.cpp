@@ -192,9 +192,13 @@ static constexpr const char* pre_shader_code = R"(// auto-generated WE→HLSL pr
 
 #define mix(a,b,t) lerp((a),(b),(t))
 #define fract frac
-#define atan(a,b) atan2((a),(b))
 #define dFdx ddx
 #define dFdy(x) (-ddy(x))
+
+float  atan(float  y, float  x) { return atan2(y, x); }
+float2 atan(float2 y, float2 x) { return atan2(y, x); }
+float3 atan(float3 y, float3 x) { return atan2(y, x); }
+float4 atan(float4 y, float4 x) { return atan2(y, x); }
 
 // GLSL `mod(a, b)` is `a - b * floor(a / b)` and isn't an HLSL builtin
 // (HLSL has `fmod`, but it uses trunc for the quotient — different sign
@@ -276,24 +280,68 @@ float    _ww_mul(float4 a, float4 b) { return dot(a, b); }
 #define texture(t, uv)             texSample2D((t), (uv))
 #define textureLod(t, uv, lod)     texSample2DLod((t), (uv), (lod))
 
-// PerformLighting_V1 is referenced by WE's generic4/genericparticle PBR
-// shaders but its body is normally injected by WE's HLSL toolchain based
-// on `LIGHTS_*` combos. We don't have that injection step; stub here so
-// compilation succeeds. The stub is "albedo × view-aligned shading" —
-// darker than WE but visible.
-float3 PerformLighting_V1(float3 worldPos, float3 albedo, float3 normal, float3 viewVector,
-                          float3 specularTint, float3 f0, float roughness, float metallic) {
-    return albedo * max(dot(normalize(normal), normalize(viewVector)), 0.0);
-}
-float3 PerformLighting_V1(float3 worldPos, float3 albedo, float3 normal, float3 viewVector,
-                          float3 specularTint, float3 f0, float roughness, float metallic,
-                          float ao) {
-    return albedo * ao * max(dot(normalize(normal), normalize(viewVector)), 0.0);
-}
-
 __SHADER_TAIL__
 __SHADER_PLACEHOLD__
 
+)";
+
+// Wallpaper Engine expands `#require LightingV1` into its active-light
+// implementation. Keep this separate from the common prologue so shaders
+// that do not include common_pbr_2.h are not forced to resolve the PBR helper
+// functions referenced below.
+static constexpr const char* lighting_v1_source = R"(
+uniform vec3 g_LightsPosition[4];
+uniform vec4 g_LightsColorRadius[4];
+uniform vec4 g_LightsDirectionType[4];
+uniform vec4 g_LightsConeExponent[4];
+uniform float g_LightsCastShadow[4];
+
+float3 PerformLighting_V1(float3 worldPos, float3 albedo, float3 normal, float3 viewVector,
+                          float3 specularTint, float3 f0, float roughness, float metallic) {
+    float3 light = float3(0.0, 0.0, 0.0);
+    for (int i = 0; i < 4; ++i) {
+        float type = g_LightsDirectionType[i].w;
+        float3 color = g_LightsColorRadius[i].rgb;
+        float shadowFactor = 1.0;
+#if OWE_IMAGE_LAYER && SCENE_ORTHO
+        // A shadow atlas is not available in this renderer yet. Suppress
+        // shadow-casting lights on orthographic image layers instead of
+        // incorrectly applying their unshadowed light over the whole quad.
+        shadowFactor = 1.0 - step(0.5, g_LightsCastShadow[i]);
+#endif
+        if (type < -0.5 || dot(color, color) <= 0.0)
+            continue;
+
+        if (type > 1.5) {
+            light += ComputePBRLightShadowInfinite(
+                normal, g_LightsDirectionType[i].xyz, viewVector, albedo, color,
+                specularTint, f0, roughness, metallic, shadowFactor);
+            continue;
+        }
+
+        float3 toLight = g_LightsPosition[i] - worldPos;
+        if (type > 0.5) {
+            float3 lightToSurface = -normalize(toLight);
+            float cone = smoothstep(g_LightsConeExponent[i].y,
+                                    g_LightsConeExponent[i].x,
+                                    dot(lightToSurface, g_LightsDirectionType[i].xyz));
+            color *= cone;
+        }
+        light += ComputePBRLightShadow(
+            normal, toLight, viewVector, albedo, color,
+            max(g_LightsColorRadius[i].w, 0.0001),
+            max(g_LightsConeExponent[i].z, 0.0), specularTint, f0,
+            roughness, metallic, shadowFactor);
+    }
+    return light;
+}
+
+float3 PerformLighting_V1(float3 worldPos, float3 albedo, float3 normal, float3 viewVector,
+                          float3 specularTint, float3 f0, float roughness, float metallic,
+                          float ao) {
+    return PerformLighting_V1(worldPos, albedo, normal, viewVector, specularTint, f0,
+                              roughness, metallic) * ao;
+}
 )";
 
 // VS/FS tail: stage I/O is plumbed by the Finalprocessor synthesizer. It
@@ -362,9 +410,13 @@ static constexpr const char* pre_shader_code_gs_hlsl = R"(// auto-generated WE�
 #define CAST3X3(x) ((float3x3)(x))
 #define mix(a,b,t) lerp((a),(b),(t))
 #define fract      frac
-#define atan(a,b)  atan2((a),(b))
 #define dFdx       ddx
 #define dFdy(x)    (-ddy(x))
+
+float  atan(float  y, float  x) { return atan2(y, x); }
+float2 atan(float2 y, float2 x) { return atan2(y, x); }
+float3 atan(float3 y, float3 x) { return atan2(y, x); }
+float4 atan(float4 y, float4 x) { return atan2(y, x); }
 
 // glslang's HLSL frontend always tags cbuffer matrices `RowMajor` in SPIR-V
 // regardless of `#pragma pack_matrix` or `column_major` qualifiers (verified
@@ -652,6 +704,14 @@ inline std::string UndefBeforeUserMacroDefines(std::string_view src, std::string
     return changed ? out : std::string { src };
 }
 
+inline std::string UndefBeforeConflictingMacroDefines(std::string_view src) {
+    std::string out(src);
+    for (std::string_view macro_name : { "M_PI_2", "dFdx", "dFdy" }) {
+        out = UndefBeforeUserMacroDefines(out, macro_name);
+    }
+    return out;
+}
+
 inline std::vector<std::string> CollectBuildTangentSpaceVars(std::string_view src) {
     std::vector<std::string> vars;
     shader_lex::Lexer        lx(src);
@@ -897,7 +957,7 @@ inline std::string Preprocessor(const std::string& in_src, ShaderType type, cons
     std::string with_prologue = sr::WPShaderParser::PreShaderHeader(in_src, combos, type);
 
     // `#require` is a WE-specific marker, not a real preprocessor directive.
-    // Prefix `//` to neutralize it. Allowed leading horizontal whitespace.
+    // Expand the lighting requirement and neutralize unknown requirements.
     {
         std::string out;
         out.reserve(with_prologue.size());
@@ -905,11 +965,16 @@ inline std::string Preprocessor(const std::string& in_src, ShaderType type, cons
         for (; ! w.Done(); w.Step()) {
             shader_lex::Cursor c(with_prologue);
             c.SeekTo(w.LineStart());
-            auto saved = c.Save();
             if (c.MatchHashDirective("require")) {
+                c.SkipHSpace();
+                auto requirement = c.ReadIdent();
+                if (requirement && *requirement == "LightingV1") {
+                    out.append(lighting_v1_source);
+                    if (w.LineEnd() < with_prologue.size()) out.push_back('\n');
+                    continue;
+                }
                 out.append("//");
             }
-            c.Restore(saved);
             out.append(with_prologue, w.LineStart(), w.LineEnd() - w.LineStart());
             if (w.LineEnd() < with_prologue.size()) out.push_back('\n');
         }
@@ -1100,47 +1165,23 @@ inline std::optional<IODecl> ParseIODecl(const std::string& line) {
                     std::string(m->array) };
 }
 
-// (base, components) for a scalar / vector type. Recognizes HLSL (floatN /
-// intN / uintN / boolN) and GLSL (vecN / ivecN / uvecN / bvecN) spellings, plus
-// the scalar forms. components==0 means "don't widen" (matrices, unknown).
-struct ScalarVec {
-    std::string_view base;
-    unsigned         comps { 0 };
+enum class IODeclPrecedence
+{
+    KeepExisting,
+    PreferIncoming,
 };
-inline ScalarVec DecomposeVecType(std::string_view t) {
-    if (t.find('x') != std::string_view::npos) return {}; // floatRxC matrix
-    auto suffixed = [&](std::string_view base) -> ScalarVec {
-        if (t == base) return { base, 1 };
-        if (t.size() == base.size() + 1 && t.substr(0, base.size()) == base) {
-            char c = t.back();
-            if (c >= '2' && c <= '4') return { base, unsigned(c - '0') };
-        }
-        return {};
-    };
-    for (std::string_view base : { std::string_view("float"),
-                                   std::string_view("int"),
-                                   std::string_view("uint"),
-                                   std::string_view("bool") }) {
-        if (auto r = suffixed(base); r.comps) return r;
-    }
-    // GLSL vector spellings normalize to the matching HLSL base kind.
-    if (t == "vec2" || t == "vec3" || t == "vec4") return { "float", unsigned(t.back() - '0') };
-    if (t == "ivec2" || t == "ivec3" || t == "ivec4") return { "int", unsigned(t.back() - '0') };
-    if (t == "uvec2" || t == "uvec3" || t == "uvec4") return { "uint", unsigned(t.back() - '0') };
-    if (t == "bvec2" || t == "bvec3" || t == "bvec4") return { "bool", unsigned(t.back() - '0') };
-    return {};
-}
 
-// WE links a varying by name across stages; when the same name is declared with
-// different widths (e.g. VS `vec4 v_TexCoord` but FS `vec2 v_TexCoord` that
-// still reads `.zw`), the producing stage's wider type is the real interface and
-// the narrow consumer just swizzles a subset. fxc tolerates this; glslang
-// rejects the out-of-range swizzle. Pick the wider type (same base kind) so both
-// stages agree. Falls back to `a` when the types aren't comparable vectors.
-inline std::string WiderType(const std::string& a, const std::string& b) {
-    ScalarVec da = DecomposeVecType(a), db = DecomposeVecType(b);
-    if (da.comps == 0 || db.comps == 0 || da.base != db.base) return a;
-    return db.comps > da.comps ? b : a;
+inline void AddIODecl(std::vector<IODecl>& decls, const IODecl& decl,
+                      IODeclPrecedence precedence) {
+    for (auto& existing : decls) {
+        if (existing.name != decl.name) continue;
+        if (precedence == IODeclPrecedence::PreferIncoming) {
+            existing.type  = decl.type;
+            existing.array = decl.array;
+        }
+        return;
+    }
+    decls.push_back(decl);
 }
 
 // Pull all `attribute|varying|in|out TYPE NAME;` decls out, return them
@@ -1436,6 +1477,52 @@ inline void MergeUniform(Map<std::string, std::string>& uniforms_union, std::str
     }
 }
 
+Map<std::string, std::string> BuildUniformUnion(std::span<const WPShaderUnit> units) {
+    Map<std::string, std::string> uniforms;
+    for (const auto& unit : units) {
+        for (const auto& [name, ty] : unit.preprocess_info.uniforms) {
+            MergeUniform(uniforms, name, ty);
+        }
+    }
+    return uniforms;
+}
+
+usize LinearUniformElementCount(std::string_view ty) {
+    const auto [base_ty, array] = SplitUniformType(ty);
+    if (! array.empty()) return 0;
+
+    const auto hlsl_ty = ToHLSLType(base_ty);
+    if (hlsl_ty == "float" || hlsl_ty == "int" || hlsl_ty == "uint" || hlsl_ty == "bool") {
+        return 1;
+    }
+    for (std::string_view prefix : { "float", "int", "uint", "bool" }) {
+        if (! hlsl_ty.starts_with(prefix) || hlsl_ty.size() != prefix.size() + 1) continue;
+        const char width = hlsl_ty.back();
+        if (width >= '2' && width <= '4') return static_cast<usize>(width - '0');
+    }
+    return 0;
+}
+
+void ShapeShaderValues(ShaderValues& values, const Map<std::string, std::string>& uniforms) {
+    for (auto& [name, value] : values) {
+        if (value.size() != 1) continue;
+        const auto uniform = uniforms.find(name);
+        if (uniform == uniforms.end()) continue;
+        const usize elements = LinearUniformElementCount(uniform->second);
+        if (elements <= 1 || elements > 4) continue;
+
+        std::array<float, 4> shaped;
+        shaped.fill(value[0]);
+        value = ShaderValue(shaped.data(), elements);
+    }
+}
+
+void ShapeShaderDefaults(std::span<const WPShaderUnit> units, WPShaderInfo& info) {
+    const auto uniforms = BuildUniformUnion(units);
+    ShapeShaderValues(info.svs, uniforms);
+    ShapeShaderValues(info.baseConstSvs, uniforms);
+}
+
 // Emit `cbuffer ww_Uniforms { ... };` body with explicit std140 `:packoffset`
 // per member. glslang's HLSL frontend hard-codes HLSL cbuffer packing on
 // HLSL sources (see ShaderLang.cpp `setHlslOffsets` when EShSourceHlsl);
@@ -1487,8 +1574,7 @@ inline std::string EmitCBufferStd140(const Map<std::string, std::string>& unifor
 inline std::string
 Finalprocessor(const WPShaderUnit& unit, const WPPreprocessorInfo* pre,
                const WPPreprocessorInfo*            next,
-               const Map<std::string, std::string>* uniforms_union_in = nullptr,
-               const std::vector<IODecl>*           varying_union_in  = nullptr) {
+               const Map<std::string, std::string>* uniforms_union_in = nullptr) {
     // GS: feed glslang's HLSL frontend. Strip GLSL-style top-level `in`/`out`
     // decls, emit HLSL structs (WW_VSOut/WW_PSIn) + ww_Uniforms cbuffer, and
     // rewrite `void main()` to the entry signature `point WW_VSOut IN[1],
@@ -1498,14 +1584,10 @@ Finalprocessor(const WPShaderUnit& unit, const WPPreprocessorInfo* pre,
         std::string body          = StripUniforms(stripped);
 
         std::vector<IODecl> in_decls, out_decls;
-        auto                add_to = [](std::vector<IODecl>& v, const IODecl& d) {
-            for (auto& e : v) {
-                if (e.name == d.name) {
-                    e.type = WiderType(e.type, d.type);
-                    return;
-                }
-            }
-            v.push_back(d);
+        auto add_to = [](std::vector<IODecl>& v,
+                         const IODecl&        d,
+                         IODeclPrecedence     precedence = IODeclPrecedence::KeepExisting) {
+            AddIODecl(v, d, precedence);
         };
         auto add_in = [&](const IODecl& d) {
             add_to(in_decls, d);
@@ -1521,7 +1603,8 @@ Finalprocessor(const WPShaderUnit& unit, const WPPreprocessorInfo* pre,
         }
         if (pre)
             for (auto& [k, v] : pre->output) {
-                if (auto d = ParseIODecl(v); d) add_in(*d);
+                if (auto d = ParseIODecl(v); d)
+                    add_to(in_decls, *d, IODeclPrecedence::PreferIncoming);
             }
         if (next)
             for (auto& [k, v] : next->input) {
@@ -1568,34 +1651,25 @@ Finalprocessor(const WPShaderUnit& unit, const WPPreprocessorInfo* pre,
     // members of a cross-stage UBO `ww_Uniforms` at (set=0, binding=0).
     std::string stage3 = StripUniforms(stage2);
 
-    // Partition IO decls into VS-attributes (`a` storage) and varyings
-    // (everything else). The cross-stage union ensures vert and frag pick
-    // identical location indices alphabetically.
-    std::vector<IODecl> attrs;
-    std::vector<IODecl> varyings = varying_union_in ? *varying_union_in : std::vector<IODecl> {};
-    auto                add_to   = [](std::vector<IODecl>& v, const IODecl& d) {
-        for (auto& e : v) {
-            if (e.name == d.name) {
-                e.type = WiderType(e.type, d.type);
-                return;
-            }
-        }
-        v.push_back(d);
-    };
-    auto add = [&](const IODecl& d) {
-        if (d.storage == 'a')
-            add_to(attrs, d);
-        else
-            add_to(varyings, d);
+    // Partition IO declarations into attributes and varyings. The producing
+    // stage owns each cross-stage type; consumers only add missing names.
+    std::vector<IODecl> attrs, varyings;
+    auto add = [&](const IODecl& d,
+                   IODeclPrecedence precedence = IODeclPrecedence::KeepExisting) {
+        std::vector<IODecl>& declarations = d.storage == 'a' ? attrs : varyings;
+        AddIODecl(declarations, d, precedence);
     };
     for (const auto& d : io_decls) add(d);
-    auto add_from_line = [&](const std::string& line) {
-        if (auto d = ParseIODecl(line); d) add(*d);
+    auto add_from_line = [&](const std::string& line, IODeclPrecedence precedence) {
+        if (auto d = ParseIODecl(line); d) add(*d, precedence);
     };
-    if (! varying_union_in && pre)
-        for (auto& [k, v] : pre->output) add_from_line(v);
-    if (! varying_union_in && next)
-        for (auto& [k, v] : next->input) add_from_line(v);
+    if (unit.stage == ShaderType::VERTEX && next) {
+        for (auto& [k, v] : next->input)
+            add_from_line(v, IODeclPrecedence::KeepExisting);
+    } else if (unit.stage == ShaderType::FRAGMENT && pre) {
+        for (auto& [k, v] : pre->output)
+            add_from_line(v, IODeclPrecedence::PreferIncoming);
+    }
 
     // Synthesize the HLSL entry point: static globals for every attr /
     // varying, WW_VSIn/WW_VSOut/WW_PSIn structs, and a main_vs / main_ps
@@ -1747,8 +1821,13 @@ std::string WPShaderParser::PreShaderSrc(fs::VFS& vfs, const std::string& src,
 
 std::string WPShaderParser::PreShaderHeader(const std::string& src, const Combos& combos,
                                             ShaderType type) {
-    const std::string user_src = NormalizeLocalMatrixMul(
-        NormalizePackedAudioSpectrumAccess(UndefBeforeUserMacroDefines(src, "M_PI_2")));
+    std::string compatible = src;
+    for (std::size_t pos = 0; (pos = compatible.find("\xEF\xBC\x9B", pos)) != std::string::npos;) {
+        compatible.replace(pos, 3, ";");
+        ++pos;
+    }
+    const std::string user_src = NormalizeLocalMatrixMul(NormalizePackedAudioSpectrumAccess(
+        UndefBeforeConflictingMacroDefines(compatible)));
 
     // All stages route through glslang's HLSL frontend.
     std::string pre;
@@ -1953,11 +2032,15 @@ bool WPShaderParser::CompileToSpv(std::string_view scene_id, std::span<WPShaderU
     MaybeRecordCompile(scene_id, units, shader_info, texs);
 
     auto process_cache_key = ProcessShaderCacheKey(units, shader_info, texs);
-    if (LoadProcessShaderCache(process_cache_key, units, codes)) return true;
+    if (LoadProcessShaderCache(process_cache_key, units, codes)) {
+        ShapeShaderDefaults(units, *shader_info);
+        return true;
+    }
 
     std::for_each(units.begin(), units.end(), [shader_info](auto& unit) {
         unit.src = Preprocessor(unit.src, unit.stage, shader_info->combos, unit.preprocess_info);
     });
+    ShapeShaderDefaults(units, *shader_info);
 
     auto compile = [](std::span<WPShaderUnit> units, std::vector<ShaderCode>& codes) {
         // Build the cross-stage uniform union UP FRONT over ALL stages. Doing
@@ -1966,39 +2049,7 @@ bool WPShaderParser::CompileToSpv(std::string_view scene_id, std::span<WPShaderU
         // by VS in a 3-stage VS→GS→FS chain), which results in different UBO
         // sizes per stage and the runtime allocating a buffer too small for
         // the longest stage.
-        Map<std::string, std::string> uniforms_union;
-        for (auto& unit : units) {
-            for (const auto& [name, ty] : unit.preprocess_info.uniforms) {
-                MergeUniform(uniforms_union, name, ty);
-            }
-        }
-
-        std::vector<IODecl> varying_union;
-        auto add_varying = [&](const IODecl& d) {
-            if (d.storage == 'a') return;
-            for (auto& e : varying_union) {
-                if (e.name == d.name) {
-                    e.type = WiderType(e.type, d.type);
-                    return;
-                }
-            }
-            varying_union.push_back(d);
-        };
-        auto add_varying_from_line = [&](const std::string& line) {
-            if (auto d = ParseIODecl(line); d) add_varying(*d);
-        };
-        for (const auto& unit : units) {
-            for (const auto& [name, line] : unit.preprocess_info.output) {
-                (void)name;
-                add_varying_from_line(line);
-            }
-            if (unit.stage != ShaderType::VERTEX) {
-                for (const auto& [name, line] : unit.preprocess_info.input) {
-                    (void)name;
-                    add_varying_from_line(line);
-                }
-            }
-        }
+        auto uniforms_union = BuildUniformUnion(units);
 
         std::vector<vulkan::ShaderCompUnit> vunits(units.size());
         for (usize i = 0; i < units.size(); i++) {
@@ -2008,7 +2059,7 @@ bool WPShaderParser::CompileToSpv(std::string_view scene_id, std::span<WPShaderU
             WPPreprocessorInfo* post_info =
                 i + 1 < units.size() ? &units[i + 1].preprocess_info : nullptr;
 
-            unit.src = Finalprocessor(unit, pre_info, post_info, &uniforms_union, &varying_union);
+            unit.src = Finalprocessor(unit, pre_info, post_info, &uniforms_union);
 
             vunit.src   = unit.src;
             vunit.stage = unit.stage;
@@ -2278,6 +2329,7 @@ WPShaderParser::CompileSceneShaderVariant(const SceneShaderVariantDesc& desc, fs
         result.error = "CompileToSpv failed";
         return result;
     }
+    result.variant.default_uniforms = result.info.svs;
     WPShaderParser::UpdateSceneShaderVariantDescFromCompiledUnits(result.variant, units, spvs);
 
     auto shader              = std::make_shared<SceneShader>();
@@ -2321,13 +2373,13 @@ CompileMaterialShaderResult WPShaderParser::CompileMaterialShader(const Json&   
     }
 
     // Texture info: enabled flag from non-empty material.textures.
-    // composEnabled[3] would normally come from each .tex header
+    // composEnabled[] would normally come from each .tex header
     // (extraHeader.compoN). Skipping the header parse keeps this entry
     // path lightweight; sprite-sheet / packed-channel materials may
     // accordingly compile a different variant than the production path.
     r.tex_info.reserve(mat.textures.size());
     for (const auto& t : mat.textures) {
-        r.tex_info.push_back({ ! t.empty(), { false, false, false } });
+        r.tex_info.push_back({ ! t.empty(), { false, false, false, false } });
     }
 
     // Combos: material's int combos -> string, then override wins.

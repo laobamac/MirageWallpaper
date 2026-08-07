@@ -100,6 +100,22 @@ enum class FrameKind {
     VulkanShared   = 1, // call next_vk_frame(VkFrameView&)
     VaapiDrm       = 2, // call next_drm_frame(DrmFrameView&)
     VideoToolboxSw = 3, // call next_frame(Nv12Frame&); hw decode, sw transfer
+    VideoToolboxVk = 4, // call next_metal_frame(MetalFrameView&); hw decode, zero-copy
+};
+
+// View onto a VideoToolbox-decoded frame kept on the GPU. `pixel_buffer`
+// is the CVPixelBufferRef (type-erased) backing the decoded surface; it
+// aliases the decoder's src_frame and stays valid until the next
+// next_metal_frame call. The consumer bridges its planes to VkImages via
+// VK_EXT_metal_objects.
+struct MetalFrameView {
+    void*         pixel_buffer { nullptr }; // CVPixelBufferRef
+    std::uint32_t width        { 0 };
+    std::uint32_t height        { 0 };
+    double        pts_seconds  { -1.0 };
+    std::uint32_t colorspace   { 0 };
+    std::uint32_t color_range  { 0 };
+    std::uint32_t bit_depth    { 8 };
 };
 
 // Mirror of one AVDRMPlaneDescriptor entry — which `object_index` of
@@ -202,6 +218,9 @@ public:
 
     auto next_vk_frame(VkFrameView& out) -> rstd::Result<NextFrame, Error>;
     auto next_drm_frame(DrmFrameView& out) -> rstd::Result<NextFrame, Error>;
+    auto next_metal_frame(MetalFrameView& out) -> rstd::Result<NextFrame, Error>;
+    auto seek(double seconds) -> rstd::Result<rstd::empty, Error>;
+    auto duration() const -> std::optional<double>;
 
     std::uint32_t width() const  { return target_w_; }
     std::uint32_t height() const { return target_h_; }
@@ -237,6 +256,7 @@ private:
     int discard_frame_(double& pts_seconds, Error* err);
     int next_vk_frame_(VkFrameView& out, Error* err);
     int next_drm_frame_(DrmFrameView& out, Error* err);
+    int next_metal_frame_(MetalFrameView& out, Error* err);
 
     std::unique_ptr<State> st_;
     std::uint32_t target_w_ { 0 };

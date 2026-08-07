@@ -9,7 +9,11 @@ export namespace sr
 
 class ThreadTimer : NoCopy, NoMove {
 public:
-    ThreadTimer(std::function<void()> callback);
+    // Callback returns true when it actually ran the frame, false when it
+    // declined (e.g. the previous frame is still in flight). A false return
+    // lets the timer retry soon instead of waiting a full grid interval,
+    // which otherwise halves the effective rate on a slight budget overrun.
+    ThreadTimer(std::function<bool()> callback);
     ~ThreadTimer();
 
     void Start();
@@ -20,7 +24,7 @@ public:
     void SetInterval(std::chrono::microseconds);
 
 private:
-    std::function<void()> m_callback;
+    std::function<bool()> m_callback;
 
     std::mutex m_op_mutex;
 

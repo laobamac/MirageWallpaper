@@ -8,25 +8,27 @@ import SwiftUI
 
 struct UnsafeWallpaper: View {
     @Environment(\.dismiss) var dismiss
-    
-    var wallpaper: WEWallpaper
-    
+
+    let request: ContentViewModel.PendingTrustRequest
+
+    private var wallpaper: WEWallpaper { request.wallpaper }
+
     @State var seconds: Int = 5
     @State var isIgnored = false
-    
+
     var typeStringDict: [String : String] =
     [
         "web": "网页",
         "application": "应用程序"
     ]
 
-    init(wallpaper: WEWallpaper) {
-        self.wallpaper = wallpaper
+    init(request: ContentViewModel.PendingTrustRequest) {
+        self.request = request
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            Text("正在打开\(typeStringDict[wallpaper.project.type.lowercased()] ?? "未知")类壁纸")
+            Text(L("正在打开%@类壁纸", L(typeStringDict[wallpaper.project.type.lowercased()] ?? "未知")))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding()
                 .font(.title2)
@@ -40,7 +42,7 @@ struct UnsafeWallpaper: View {
                     .shadow(radius: 6)
                     .frame(maxWidth: 100)
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("你即将把以下\(typeStringDict[wallpaper.project.type.lowercased()] ?? "未知来源")类文件作为壁纸运行：")
+                    Text(L("你即将把以下%@类文件作为壁纸运行：", L(typeStringDict[wallpaper.project.type.lowercased()] ?? "未知来源")))
                     Text(wallpaper.resolvedEntryURL.path(percentEncoded: false)).bold()
                     Text("Mirage 无法控制该文件的行为，网页壁纸可能包含可执行脚本。请确认它来自可信来源后再继续。")
                     Text(seconds > 0 ? "请等待 \(seconds) 秒。" : "请注意潜在的恶意代码风险。")
@@ -53,18 +55,30 @@ struct UnsafeWallpaper: View {
             Divider()
             HStack {
                 Button {
-                    AppDelegate.shared.wallpaperViewModel.currentWallpaper =
-                    AppDelegate.shared.wallpaperViewModel.nextCurrentWallpaper
-                    
+                    let vm = AppDelegate.shared.wallpaperViewModel
+
+                    // Trust MUST be recorded before the wallpaper is applied.
+                    // Applying assigns `currentWallpaper`, whose `didSet` walks
+                    // straight through to `RendererController.render`, which
+                    // vetoes any web wallpaper that is not trusted *at that
+                    // moment*. Recording consent afterwards meant the launch the
+                    // user just authorized was silently blocked by Mirage's own
+                    // backstop — the wallpaper appeared to do nothing on click.
                     if isIgnored {
-                        var trustedWallpapers =
-                        UserDefaults.standard.array(forKey: "TrustedWallpapers") as? [String] ?? [String]()
-                        
-                        trustedWallpapers.append(AppDelegate.shared.wallpaperViewModel.nextCurrentWallpaper.wallpaperDirectory.path(percentEncoded: false))
-                        
-                        UserDefaults.standard.set(trustedWallpapers, forKey: "TrustedWallpapers")
+                        vm.trust(wallpaper)
+                    } else {
+                        WallpaperViewModel.trustForSession(wallpaper)
                     }
-                    
+
+                    switch request.action {
+                    case .applyToCurrent:
+                        vm.currentWallpaper = wallpaper
+                    case .applyOnDisplay(let displayID):
+                        vm.applyOnDisplay(wallpaper, displayID: displayID)
+                    case .applyToAllDisplays:
+                        vm.applyToAllDisplays(wallpaper)
+                    }
+
                     dismiss()
                 } label: {
                     Text("继续")

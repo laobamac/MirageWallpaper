@@ -9,12 +9,14 @@ import SwiftUI
 struct WallpaperPreview: SubviewOfContentView {
     @ObservedObject var viewModel: ContentViewModel
     @ObservedObject var wallpaperViewModel: WallpaperViewModel
+    @ObservedObject var workshopViewModel: WorkshopViewModel
     
     @Environment(\.undoManager) var undoManager
     
     @State var isEditingId = ""
     @State var title = ""
     @State var newTag = ""
+    @FocusState private var titleFieldFocused: Bool
     
     @State var hoveredTag: String?
     @State var isTagsHovered = false
@@ -22,9 +24,12 @@ struct WallpaperPreview: SubviewOfContentView {
     // 目录大小异步计算并缓存，避免每次重绘在主线程遍历整个壁纸目录造成卡顿。
     @State private var sizeText: String = "…"
 
-    init(contentViewModel viewModel: ContentViewModel, wallpaperViewModel: WallpaperViewModel) {
+    init(contentViewModel viewModel: ContentViewModel,
+         wallpaperViewModel: WallpaperViewModel,
+         workshopViewModel: WorkshopViewModel = AppDelegate.shared.workshopViewModel) {
         self.viewModel = viewModel
         self.wallpaperViewModel = wallpaperViewModel
+        self.workshopViewModel = workshopViewModel
     }
 
     private func recomputeSize(for wallpaper: WEWallpaper) {
@@ -36,11 +41,41 @@ struct WallpaperPreview: SubviewOfContentView {
             await MainActor.run { self.sizeText = text }
         }
     }
+
+    private func beginTitleEditing() {
+        title = wallpaperViewModel.currentWallpaper.project.title
+        isEditingId = "title"
+        titleFieldFocused = true
+    }
+
+    private func saveTitle() {
+        let value = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty,
+              wallpaperViewModel.updateStoredMetadata(title: value) != nil else { return }
+        isEditingId = ""
+        titleFieldFocused = false
+        viewModel.refresh()
+    }
+
+    private func saveTags(_ tags: [String]) {
+        guard wallpaperViewModel.updateStoredMetadata(tags: tags) != nil else { return }
+        viewModel.refresh()
+    }
     
     var body: some View {
         VStack {
             ScrollView {
                 VStack(spacing: 16) {
+                    HStack {
+                        Image(systemName: "display")
+                            .foregroundStyle(.secondary)
+                        Text("正在为 \(wallpaperViewModel.selectedDisplayName) 设置")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                    .padding(.horizontal)
+
                     VStack(spacing: 10) {
                         GifImage(contentsOf: wallpaperViewModel.currentWallpaper.project.preview.isEmpty
                             ? Bundle.main.url(forResource: "WallpaperNotFound", withExtension: "mp4")!
@@ -54,35 +89,32 @@ struct WallpaperPreview: SubviewOfContentView {
                         HStack {
                             if isEditingId == "title" {
                                 TextField("壁纸名称", text: $title)
+                                    .focused($titleFieldFocused)
                                     .onSubmit {
-                                        guard let wallpaper = wallpaperViewModel.currentWallpaper
-                                            .updateStoredMetadata(title: title) else { return }
-                                        wallpaperViewModel.currentWallpaper = wallpaper
-                                        
+                                        saveTitle()
+                                    }
+                                    .onExitCommand {
                                         isEditingId = ""
+                                        titleFieldFocused = false
                                     }
                             } else {
-                                Text(wallpaperViewModel.currentWallpaper.project.title.isEmpty ? "未命名" : wallpaperViewModel.currentWallpaper.project.title)
+                                Text(wallpaperViewModel.currentWallpaper.project.title.isEmpty ? L("未命名") : wallpaperViewModel.currentWallpaper.project.title)
                                     .frame(minWidth: 50)
                                     .id("title")
                                     .lineLimit(1)
                                     .onTapGesture(count: 2) {
-                                        title = wallpaperViewModel.currentWallpaper.project.title
-                                        isEditingId = "title"
+                                        beginTitleEditing()
                                     }
-                                Image(systemName: "square.and.pencil")
+                                Button(action: beginTitleEditing) {
+                                    Image(systemName: "square.and.pencil")
+                                }
+                                .buttonStyle(.plain)
+                                .help("编辑壁纸名称")
                             }
                             
                         }
                     }
-                    HStack {
-                        Image(systemName: "person.crop.circle.fill")
-                            .resizable()
-                            .frame(width: 32, height: 32)
-                            .foregroundStyle(.secondary)
-                        Text(wallpaperViewModel.currentWallpaper.project.resolvedAuthor ?? "佚名作者")
-                            .lineLimit(1)
-                    }
+                    authorSection
                     HStack {
                         HStack(spacing: 5) {
                             Image(systemName: "star")
@@ -102,9 +134,9 @@ struct WallpaperPreview: SubviewOfContentView {
                     }
                     HStack {
                         Text(wallpaperViewModel.currentWallpaper.isPreset
-                            ? (wallpaperViewModel.currentWallpaper.presetStatusDescription.map { "预设 · \($0)" }
-                                ?? "预设 · \(wallpaperViewModel.currentWallpaper.kind.displayName)")
-                            : wallpaperViewModel.currentWallpaper.project.type)
+                            ? (wallpaperViewModel.currentWallpaper.presetStatusDescription.map { L("预设 · %@", $0) }
+                                ?? L("预设 · %@", wallpaperViewModel.currentWallpaper.kind.displayName))
+                            : wallpaperViewModel.currentWallpaper.kind.displayName)
                         Text(sizeText)
                     }
                     .font(.footnote)
@@ -151,8 +183,7 @@ struct WallpaperPreview: SubviewOfContentView {
                                     
                                     tags = Array(Set(tags))
                                     
-                                    guard let wallpaper = current.updateStoredMetadata(tags: tags.sorted()) else { return }
-                                    wallpaperViewModel.currentWallpaper = wallpaper
+                                    saveTags(tags.sorted())
                                 }
                         }
                     }
@@ -183,15 +214,22 @@ struct WallpaperPreview: SubviewOfContentView {
                         HStack {
                             Label("音量", systemImage: "speaker.wave.3.fill")
                             Spacer()
-                            MirageSlider(value: $wallpaperViewModel.playVolume, in: 0...1).frame(width: 100)
+                            MirageSlider(value: Binding(
+                                get: { wallpaperViewModel.playVolume },
+                                set: { wallpaperViewModel.playVolume = $0 }), in: 0...1)
+                                .frame(width: 100)
                             Text(String(format: "%.0f", wallpaperViewModel.playVolume * 100) + "%")
                                 .frame(width: 35)
                         }
-                        if wallpaperViewModel.currentWallpaper.kind == .scene {
+                        if wallpaperViewModel.currentWallpaper.kind == .scene ||
+                            wallpaperViewModel.currentWallpaper.kind == .video {
                             HStack {
                                 Label("速度", systemImage: "gauge.with.dots.needle.67percent")
                                 Spacer()
-                                MirageSlider(value: $wallpaperViewModel.playRate, in: 0...2, step: 0.1).frame(width: 100)
+                                MirageSlider(value: Binding(
+                                    get: { wallpaperViewModel.playRate },
+                                    set: { wallpaperViewModel.playRate = $0 }), in: 0...2, step: 0.1)
+                                    .frame(width: 100)
                                 Text(String(format: "%.01fx", wallpaperViewModel.playRate))
                                 .frame(width: 35)
                             }
@@ -226,7 +264,13 @@ struct WallpaperPreview: SubviewOfContentView {
                         Button {
                             wallpaperViewModel.stopWallpaper()
                         } label: {
-                            Label("停止壁纸", systemImage: "stop.fill")
+                            Label("停止此显示器", systemImage: "stop.fill")
+                                .frame(maxWidth: .infinity)
+                        }
+                        Button {
+                            wallpaperViewModel.stopAllWallpapers()
+                        } label: {
+                            Label("全部停止", systemImage: "stop.circle.fill")
                                 .frame(maxWidth: .infinity)
                         }
                     }
@@ -290,9 +334,52 @@ struct WallpaperPreview: SubviewOfContentView {
             }
             .padding()
         }
+        .onAppear {
+            workshopViewModel.loadInstalledMetadata(for: wallpaperViewModel.currentWallpaper)
+            recomputeSize(for: wallpaperViewModel.currentWallpaper)
+        }
+        .onChange(of: wallpaperViewModel.currentWallpaper.id) { _, _ in
+            workshopViewModel.loadInstalledMetadata(for: wallpaperViewModel.currentWallpaper)
+            recomputeSize(for: wallpaperViewModel.currentWallpaper)
+        }
+    }
+
+    private var authorSection: some View {
+        let wallpaper = wallpaperViewModel.currentWallpaper
+        let creator = workshopViewModel.installedCreator(for: wallpaper)
+        let name = workshopViewModel.installedAuthorName(for: wallpaper) ?? L("佚名作者")
+        return Button {
+            if let creator {
+                workshopViewModel.openCreatorProfile(creator)
+            }
+        } label: {
+            HStack(spacing: 8) {
+                AsyncImage(url: creator?.avatarURL) { phase in
+                    if case .success(let image) = phase {
+                        image.resizable().scaledToFill()
+                    } else {
+                        Image(systemName: "person.crop.circle.fill")
+                            .resizable()
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(width: 32, height: 32)
+                .clipShape(Circle())
+                Text(name)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                if creator != nil {
+                    Image(systemName: "arrow.up.right")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(creator == nil)
     }
     
-    func sectionHeader(_ title: String) -> some View {
+    func sectionHeader(_ title: LocalizedStringKey) -> some View {
         HStack(spacing: 3) {
             Text(title)
             VStack {
@@ -326,8 +413,7 @@ struct WallpaperPreview: SubviewOfContentView {
                                     
                                     tags.remove(at: index)
                                     
-                                    guard let wallpaper = current.updateStoredMetadata(tags: tags) else { return }
-                                    wallpaperViewModel.currentWallpaper = wallpaper
+                                    saveTags(tags)
                                 } label: {
                                     Image(systemName: "xmark.circle.fill")
                                 }

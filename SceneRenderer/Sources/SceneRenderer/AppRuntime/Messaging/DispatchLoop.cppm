@@ -23,8 +23,13 @@ public:
 
     ~MessageLoop() { stop(); }
 
-    /// Returns a fresh Sender clone. Cheap; safe to call before/after start().
-    Sender sender() const { return Sender(*m_tx); }
+    /// Returns a fresh Sender clone. Cheap; safe to call before/after
+    /// start() and — since m_tx is swapped, never emptied — after stop(),
+    /// where the clone's channel is closed and send() returns Err.
+    Sender sender() const {
+        std::scoped_lock lock(m_tx_mutex);
+        return Sender(*m_tx);
+    }
 
     const std::string& name() const noexcept { return m_name; }
 
@@ -47,8 +52,20 @@ public:
     /// Drops the engine-side Sender and joins. Any external Sender clones
     /// must already be released for recv() to actually return Err. If called
     /// from inside the worker thread we detach instead of self-joining.
+    ///
+    /// The live Sender is REPLACED (not reset) with one whose channel is
+    /// already closed: another loop's worker may still be mid-handler and
+    /// call sender()/send() on this loop during teardown (e.g. the main
+    /// loop publishing a prepared scene while the render loop shuts down).
+    /// Those late sends now return Err instead of dereferencing an empty
+    /// optional and aborting.
     void stop() {
-        m_tx.reset();
+        {
+            std::scoped_lock lock(m_tx_mutex);
+            auto [dead_tx, dead_rx] = rstd::sync::mpsc::channel<T>();
+            m_tx.emplace(std::move(dead_tx));
+            // dead_rx drops here → the replacement channel is closed.
+        }
         if (! m_thread.joinable()) return;
         if (std::this_thread::get_id() == m_thread.get_id()) {
             m_thread.detach();
@@ -59,6 +76,7 @@ public:
 
 private:
     std::string             m_name;
+    mutable std::mutex      m_tx_mutex;
     std::optional<Sender>   m_tx;
     std::optional<Receiver> m_rx;
     std::thread             m_thread;

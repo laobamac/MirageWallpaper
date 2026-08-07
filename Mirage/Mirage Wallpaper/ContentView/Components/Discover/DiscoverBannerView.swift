@@ -89,7 +89,7 @@ struct BannerCard: View {
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .bottomLeading) {
-                WorkshopImage(url: item.previewImageURL, contentMode: .fill)
+                WorkshopImage(url: item.previewImageURL, contentMode: .fit)
                     .frame(width: geo.size.width, height: geo.size.height)
                     .clipped()
 

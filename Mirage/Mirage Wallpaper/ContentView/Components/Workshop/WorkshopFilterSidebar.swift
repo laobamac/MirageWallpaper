@@ -12,7 +12,7 @@ struct WorkshopFilterSidebar: View {
     var body: some View {
         VStack {
             ScrollView {
-                VStack(spacing: 24) {
+                VStack(spacing: 30) {
                     Button {
                         workshopViewModel.clearFilters()
                     } label: {
@@ -22,8 +22,8 @@ struct WorkshopFilterSidebar: View {
                     }
                     .buttonStyle(.borderedProminent)
 
-                    FilterSection("类型", alignment: .leading) {
-                        VStack(alignment: .leading, spacing: 4) {
+                    FilterSection("类型", id: "workshop.type", alignment: .leading) {
+                        VStack(alignment: .leading, spacing: 8) {
                             ForEach(WorkshopTypeFilter.allCases) { filter in
                                 Toggle(filter.label, isOn: Binding(
                                     get: { workshopViewModel.typeFilter == filter },
@@ -38,8 +38,27 @@ struct WorkshopFilterSidebar: View {
                         }
                     }
 
-                    FilterSection("标签", alignment: .leading) {
-                        VStack(alignment: .leading, spacing: 6) {
+                    FilterSection("分级", id: "workshop.ageRating", alignment: .leading) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach(WorkshopAgeRating.allCases) { rating in
+                                Toggle(rating.displayName, isOn: Binding(
+                                    get: { workshopViewModel.ageRatingFilter.contains(rating) },
+                                    set: { workshopViewModel.applyAgeRatingFilter(rating, isOn: $0) }
+                                ))
+                                .toggleStyle(.checkbox)
+                            }
+
+                            if workshopViewModel.ageRatingFilter.isEmpty {
+                                Text("未选择任何分级，当前显示全部分级")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+
+                    FilterSection("标签", id: "workshop.tags", alignment: .leading) {
+                        VStack(alignment: .leading, spacing: 8) {
                             HStack {
                                 Button("全选") {
                                     workshopViewModel.selectedTags = Set(WorkshopTag.allCases.map { $0.rawValue })
@@ -54,7 +73,7 @@ struct WorkshopFilterSidebar: View {
                             }
                             .buttonStyle(.link)
 
-                            VStack(alignment: .leading, spacing: 4) {
+                            VStack(alignment: .leading, spacing: 8) {
                                 ForEach(WorkshopTag.allCases) { tag in
                                     Toggle(tag.displayName, isOn: Binding(
                                         get: { workshopViewModel.selectedTags.contains(tag.rawValue) },
@@ -66,8 +85,7 @@ struct WorkshopFilterSidebar: View {
                         }
                     }
                 }
-                .padding(.horizontal, 10)
-                .padding(.top, 10)
+                .padding(.trailing)
             }
             Divider()
         }

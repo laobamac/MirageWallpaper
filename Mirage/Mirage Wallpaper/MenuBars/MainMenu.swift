@@ -101,6 +101,9 @@ extension AppDelegate {
 
     @objc func resetTrustedWallpapers() {
         UserDefaults.standard.set([String](), forKey: "TrustedWallpapers")
+        // Also drop consent given via "继续" without the checkbox, otherwise
+        // those wallpapers stay launchable and the reset is only partial.
+        WallpaperViewModel.clearSessionTrust()
     }
 }
 

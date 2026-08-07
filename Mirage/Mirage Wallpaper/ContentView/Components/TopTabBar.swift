@@ -8,9 +8,11 @@ import SwiftUI
 
 struct TopTabBar: SubviewOfContentView {
     @ObservedObject var viewModel: ContentViewModel
+    @ObservedObject var wallpaperViewModel: WallpaperViewModel
 
-    init(contentViewModel viewModel: ContentViewModel) {
+    init(contentViewModel viewModel: ContentViewModel, wallpaperViewModel: WallpaperViewModel) {
         self.viewModel = viewModel
+        self.wallpaperViewModel = wallpaperViewModel
     }
 
     private var downloadCount: Int {
@@ -26,20 +28,20 @@ struct TopTabBar: SubviewOfContentView {
                 tab(index: 3, title: "小组件", systemImage: "square.grid.2x2.fill")
             }
             .padding(4)
-            .background(.quaternary.opacity(0.6), in: Capsule())
+            .mirageGlass(in: Capsule(), fallback: AnyShapeStyle(.quaternary.opacity(0.6)), interactive: false)
             .fixedSize()
 
             Spacer(minLength: 10)
 
             HStack(spacing: 2) {
                 chromeButton(title: "移动端", systemImage: "platter.filled.bottom.iphone") { }
-                chromeButton(title: "显示器", systemImage: "display") {
-                    viewModel.isDisplaySettingsReveal = true
-                }
+                DisplayPicker(wallpaperViewModel: wallpaperViewModel)
                 chromeButton(title: "设置", systemImage: "gearshape.fill") {
                     AppDelegate.shared.openSettingsWindow()
                 }
             }
+            .padding(3)
+            .mirageGlass(in: Capsule(), fallback: AnyShapeStyle(.quaternary.opacity(0.32)), interactive: false)
             .fixedSize()
         }
         .padding(.vertical, 2)
@@ -48,7 +50,7 @@ struct TopTabBar: SubviewOfContentView {
     // A single segmented pill. The selected segment gets an accent-filled
     // capsule; hover gets a soft translucent capsule. No hard rectangles.
     @ViewBuilder
-    private func tab(index: Int, title: String, systemImage: String, badge: Int = 0) -> some View {
+    private func tab(index: Int, title: LocalizedStringKey, systemImage: String, badge: Int = 0) -> some View {
         let isSelected = viewModel.topTabBarSelection == index
         let isHovering = viewModel.topTabBarHoverSelection == index
 
@@ -82,12 +84,10 @@ struct TopTabBar: SubviewOfContentView {
         }
         .buttonStyle(.plain)
         .onHover { viewModel.topTabBarHoverSelection = $0 ? index : -1 }
-        .animation(.easeOut(duration: 0.15), value: isSelected)
-        .animation(.easeOut(duration: 0.15), value: isHovering)
     }
 
     @ViewBuilder
-    private func chromeButton(title: String, systemImage: String, action: @escaping () -> Void) -> some View {
+    private func chromeButton(title: LocalizedStringKey, systemImage: String, action: @escaping () -> Void) -> some View {
         ChromeButton(title: title, systemImage: systemImage, action: action)
     }
 }
@@ -95,7 +95,7 @@ struct TopTabBar: SubviewOfContentView {
 // A borderless chrome button with a subtle rounded hover highlight, replacing
 // the old hard `Divider`-separated plain buttons.
 private struct ChromeButton: View {
-    let title: String
+    let title: LocalizedStringKey
     let systemImage: String
     let action: () -> Void
 
@@ -114,6 +114,5 @@ private struct ChromeButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .animation(.easeOut(duration: 0.15), value: hovering)
     }
 }

@@ -140,11 +140,19 @@ bool RenderBufferResolver::updateDynamicDrawBuffers(const DrawBufferRequest& req
     if (request.mesh == nullptr) return false;
     SceneMesh& mesh          = *request.mesh;
     const auto submesh_index = request.submesh_index;
-    if ((mesh.DirtyFlags() & SceneMeshDirtyData) == 0) return true;
     if (submesh_index >= mesh.Submeshes().size()) return true;
 
-    const auto& submesh           = mesh.Submeshes()[submesh_index];
-    auto        require_reprepare = [&mesh] {
+    const auto& submesh = mesh.Submeshes()[submesh_index];
+    if (! submesh.index_arrays.empty()) {
+        buffers.draw_count = static_cast<u32>(submesh.index_arrays[0].RenderDataCount());
+    } else if (! submesh.vertex_arrays.empty()) {
+        buffers.draw_count = static_cast<u32>(submesh.vertex_arrays[0].VertexCount());
+    } else {
+        buffers.draw_count = 0;
+    }
+    if ((mesh.DirtyFlags() & SceneMeshDirtyData) == 0) return true;
+
+    auto require_reprepare = [&mesh] {
         mesh.SetLayoutDirty();
         return false;
     };
@@ -176,8 +184,7 @@ bool RenderBufferResolver::updateDynamicDrawBuffers(const DrawBufferRequest& req
     }
 
     if (! submesh.index_arrays.empty()) {
-        const auto& index  = submesh.index_arrays[0];
-        buffers.draw_count = static_cast<u32>(index.RenderDataCount());
+        const auto& index = submesh.index_arrays[0];
         buffers.instance_count = mesh.ParticleInstanced() ? mesh.ParticleInstanceCount() : 1;
         if (buffers.index_key) buffers.index_key->data_generation = index.DataGeneration();
         if (! index.StaticTopology()) {
@@ -188,11 +195,9 @@ bool RenderBufferResolver::updateDynamicDrawBuffers(const DrawBufferRequest& req
                 return false;
         }
     } else if (! submesh.vertex_arrays.empty()) {
-        buffers.draw_count = static_cast<u32>(submesh.vertex_arrays[0].VertexCount());
         buffers.instance_count = 1;
     }
 
-    (void)mesh.ConsumeDirtyFlags(SceneMeshDirtyData);
     return true;
 }
 

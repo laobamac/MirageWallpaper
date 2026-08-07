@@ -9,6 +9,7 @@ import eigen;
 import rstd;
 import rstd.log;
 import rstd.cppstd;
+import sr.types;
 import sr.scene;
 
 namespace sr::script
@@ -50,6 +51,7 @@ const char* KindName(FieldKind k) {
     case FieldKind::Bool: return "bool";
     case FieldKind::Vec2: return "vec2";
     case FieldKind::Vec3: return "vec3";
+    case FieldKind::Vec4: return "vec4";
     case FieldKind::Color: return "color";
     case FieldKind::String: return "string";
     }
@@ -70,13 +72,34 @@ JSValue MakeVecValue(JSContext* ctx, double x, double y, double z, int n) {
     return obj;
 }
 
+JSValue MakeVec4Value(JSContext* ctx, double x, double y, double z, double w) {
+    JSValue global  = JS_GetGlobalObject(ctx);
+    JSValue ctor    = JS_GetPropertyStr(ctx, global, "Vec4");
+    JSValue argv[4] = {
+        JS_NewFloat64(ctx, x), JS_NewFloat64(ctx, y), JS_NewFloat64(ctx, z), JS_NewFloat64(ctx, w)
+    };
+    JSValue obj = JS_CallConstructor(ctx, ctor, 4, argv);
+    for (auto& arg : argv) JS_FreeValue(ctx, arg);
+    JS_FreeValue(ctx, ctor);
+    JS_FreeValue(ctx, global);
+    return obj;
+}
+
 // JSValue→ScriptValue coercion. Mirrors the table in the API doc; never
 // throws, returns monostate for unrecognised shapes.
 ScriptValue CoerceReturn(JSContext* ctx, JSValue ret, FieldKind kind) {
     if (JS_IsUndefined(ret) || JS_IsNull(ret)) return {};
 
+    auto clear_exception = [&] {
+        JSValue exception = JS_GetException(ctx);
+        JS_FreeValue(ctx, exception);
+    };
     auto read_field = [&](JSValue obj, const char* name, double& out) -> bool {
         JSValue v = JS_GetPropertyStr(ctx, obj, name);
+        if (JS_IsException(v)) {
+            clear_exception();
+            return false;
+        }
         if (JS_IsUndefined(v)) {
             JS_FreeValue(ctx, v);
             return false;
@@ -84,12 +107,20 @@ ScriptValue CoerceReturn(JSContext* ctx, JSValue ret, FieldKind kind) {
         double d  = 0.0;
         int    rc = JS_ToFloat64(ctx, &d, v);
         JS_FreeValue(ctx, v);
-        if (rc < 0 || ! IsFinite(d)) return false;
+        if (rc < 0) {
+            clear_exception();
+            return false;
+        }
+        if (! IsFinite(d)) return false;
         out = d;
         return true;
     };
     auto read_index = [&](JSValue arr, uint32_t i, double& out) -> bool {
         JSValue v = JS_GetPropertyUint32(ctx, arr, i);
+        if (JS_IsException(v)) {
+            clear_exception();
+            return false;
+        }
         if (JS_IsUndefined(v)) {
             JS_FreeValue(ctx, v);
             return false;
@@ -97,7 +128,11 @@ ScriptValue CoerceReturn(JSContext* ctx, JSValue ret, FieldKind kind) {
         double d  = 0.0;
         int    rc = JS_ToFloat64(ctx, &d, v);
         JS_FreeValue(ctx, v);
-        if (rc < 0 || ! IsFinite(d)) return false;
+        if (rc < 0) {
+            clear_exception();
+            return false;
+        }
+        if (! IsFinite(d)) return false;
         out = d;
         return true;
     };
@@ -119,11 +154,9 @@ ScriptValue CoerceReturn(JSContext* ctx, JSValue ret, FieldKind kind) {
     case FieldKind::Vec2: {
         Vec2Value v;
         if (JS_IsArray(ret)) {
-            read_index(ret, 0, v.x);
-            read_index(ret, 1, v.y);
+            if (! read_index(ret, 0, v.x) || ! read_index(ret, 1, v.y)) return {};
         } else if (JS_IsObject(ret)) {
-            read_field(ret, "x", v.x);
-            read_field(ret, "y", v.y);
+            if (! read_field(ret, "x", v.x) || ! read_field(ret, "y", v.y)) return {};
         } else {
             return {};
         }
@@ -132,20 +165,46 @@ ScriptValue CoerceReturn(JSContext* ctx, JSValue ret, FieldKind kind) {
     case FieldKind::Vec3: {
         Vec3Value v;
         if (JS_IsArray(ret)) {
-            read_index(ret, 0, v.x);
-            read_index(ret, 1, v.y);
-            read_index(ret, 2, v.z);
+            if (! read_index(ret, 0, v.x) || ! read_index(ret, 1, v.y) ||
+                ! read_index(ret, 2, v.z))
+                return {};
         } else if (JS_IsObject(ret)) {
-            read_field(ret, "x", v.x);
-            read_field(ret, "y", v.y);
-            read_field(ret, "z", v.z);
+            if (! read_field(ret, "x", v.x) || ! read_field(ret, "y", v.y) ||
+                ! read_field(ret, "z", v.z))
+                return {};
         } else if (JS_IsNumber(ret)) {
             // Many audio-response scripts return a *scalar* even when bound
             // to scale (vec3). Splat into all three components.
             double d = 0.0;
-            JS_ToFloat64(ctx, &d, ret);
+            if (JS_ToFloat64(ctx, &d, ret) < 0) {
+                clear_exception();
+                return {};
+            }
             if (! IsFinite(d)) return {};
             return Vec3Value { d, d, d };
+        } else {
+            return {};
+        }
+        return v;
+    }
+    case FieldKind::Vec4: {
+        Vec4Value v;
+        if (JS_IsArray(ret)) {
+            if (! read_index(ret, 0, v.x) || ! read_index(ret, 1, v.y) ||
+                ! read_index(ret, 2, v.z) || ! read_index(ret, 3, v.w))
+                return {};
+        } else if (JS_IsObject(ret)) {
+            if (! read_field(ret, "x", v.x) || ! read_field(ret, "y", v.y) ||
+                ! read_field(ret, "z", v.z) || ! read_field(ret, "w", v.w))
+                return {};
+        } else if (JS_IsNumber(ret)) {
+            double d = 0.0;
+            if (JS_ToFloat64(ctx, &d, ret) < 0) {
+                clear_exception();
+                return {};
+            }
+            if (! IsFinite(d)) return {};
+            return Vec4Value { d, d, d, d };
         } else {
             return {};
         }
@@ -183,6 +242,8 @@ JSValue ScriptValueToJs(JSContext* ctx, const ScriptValue& value) {
     if (auto* p = std::get_if<BoolValue>(&value)) return JS_NewBool(ctx, p->v);
     if (auto* p = std::get_if<Vec2Value>(&value)) return MakeVecValue(ctx, p->x, p->y, 0.0, 2);
     if (auto* p = std::get_if<Vec3Value>(&value)) return MakeVecValue(ctx, p->x, p->y, p->z, 3);
+    if (auto* p = std::get_if<Vec4Value>(&value))
+        return MakeVec4Value(ctx, p->x, p->y, p->z, p->w);
     if (auto* p = std::get_if<ColorValue>(&value)) {
         JSValue arr = JS_NewArray(ctx);
         JS_DefinePropertyValueUint32(ctx, arr, 0, JS_NewFloat64(ctx, p->r), JS_PROP_C_W_E);
@@ -314,6 +375,30 @@ JSValue CoerceInitialValue(JSContext* ctx, const Json& v, FieldKind kind) {
         }
         break;
     }
+    case FieldKind::Vec4: {
+        if (v.is_string()) {
+            auto   source = rstd::cppstd::to_string(*v.as_str());
+            auto   fs     = parse_floats(source);
+            double x      = fs.size() > 0 ? fs[0] : 0.0;
+            double y      = fs.size() > 1 ? fs[1] : x;
+            double z      = fs.size() > 2 ? fs[2] : x;
+            double w      = fs.size() > 3 ? fs[3] : x;
+            return MakeVec4Value(ctx, x, y, z, w);
+        }
+        if (auto values = v.as_array(); values.is_some() && (*values)->len() >= 4) {
+            auto x = (**values)[0].as_f64();
+            auto y = (**values)[1].as_f64();
+            auto z = (**values)[2].as_f64();
+            auto w = (**values)[3].as_f64();
+            if (x.is_some() && y.is_some() && z.is_some() && w.is_some())
+                return MakeVec4Value(ctx, *x, *y, *z, *w);
+        }
+        if (v.is_number()) {
+            auto number = v.as_f64();
+            if (number.is_some()) return MakeVec4Value(ctx, *number, *number, *number, *number);
+        }
+        break;
+    }
     case FieldKind::Color: {
         if (v.is_string()) {
             auto    source = rstd::cppstd::to_string(*v.as_str());
@@ -358,6 +443,10 @@ struct EngineHostState {
     bool        media_initialized { false };
     sr::Scene* scene { nullptr };
     JSValue     audio_buffer { JS_UNDEFINED };
+    JSValue     audio_left_arr { JS_UNDEFINED };
+    JSValue     audio_right_arr { JS_UNDEFINED };
+    JSValue     audio_avg_arr { JS_UNDEFINED };
+    JSValue     audio_buf_arr { JS_UNDEFINED };
     uint32_t    audio_buffer_resolution { 64 };
     bool        audio_buffer_built { false };
     // Cached `globalThis.Vec3` ctor, populated lazily on first node access.
@@ -369,6 +458,24 @@ struct EngineHostState {
     // backing SceneNode.
     JSValue default_layer { JS_UNDEFINED };
     JSValue default_scene { JS_UNDEFINED };
+    // Retained global object + interned atoms for per-frame thisLayer/
+    // thisObject/thisScene rebinding without string hashing.
+    JSValue global_obj { JS_UNDEFINED };
+    JSAtom  atom_this_layer { JS_ATOM_NULL };
+    JSAtom  atom_this_object { JS_ATOM_NULL };
+    JSAtom  atom_this_scene { JS_ATOM_NULL };
+    // Snapshot of the exact fields UpdateInputObject writes to globalThis.input.
+    // The per-frame write is skipped when unchanged.
+    struct InputSnapshot {
+        float    cursor_x { 0.0f }, cursor_y { 0.0f };
+        float    screen_w { 0.0f }, screen_h { 0.0f };
+        float    canvas_w { 0.0f }, canvas_h { 0.0f };
+        uint32_t buttons_down { 0 }, buttons_pressed { 0 }, buttons_released { 0 };
+        bool     in_window { false };
+        bool     valid { false };
+        bool operator==(const InputSnapshot&) const = default;
+    };
+    InputSnapshot input_snapshot;
     // engine.setTimeout / setInterval queue. Swept once per frame in
     // JsRuntime::TickAll before the script update loop runs.
     std::vector<DeferredCb> deferred;
@@ -378,9 +485,21 @@ struct EngineHostState {
     // Empty `ls_path` means in-memory only (the legacy bootstrap shape).
     std::unordered_map<std::string, std::string> ls_data;
     std::string                                  ls_path;
+    // SR-SEC-16: quota + write debounce. `ls_bytes` is the running key+value
+    // byte total so the cap check stays O(1) per set(); `ls_dirty` defers the
+    // full re-serialise + blocking write off the per-frame path (a script
+    // calling localStorage.set() from update() otherwise wrote the whole
+    // store to disk every frame). See MaybeFlushLocalStorage.
+    std::size_t                           ls_bytes { 0 };
+    bool                                  ls_dirty { false };
+    bool                                  ls_quota_logged { false };
+    std::chrono::steady_clock::time_point ls_last_flush {};
     // The script currently running. createLayer pops clones from this
     // FieldScript's clone_queue. Set around every init/update/cursor invoke.
     FieldScript* active_field_script { nullptr };
+    std::vector<std::string> pending_registered_assets;
+    JsRuntime::LayerFactory layer_factory;
+    JsRuntime::LayerConfigFactory layer_config_factory;
     // SceneNode -> text-content setter. Populated by text layers in the
     // parser; consulted by NodeSetText so `thisLayer.text = "..."` reaches
     // TextLayouter::SetText. Missing entry means the layer is not text-
@@ -396,6 +515,12 @@ struct EngineHostState {
         std::function<void(double)>           set_point_size;
     };
     std::unordered_map<sr::SceneNode*, TextAlignHooks> text_align_hooks;
+    struct ImageAlignmentHook {
+        std::string                                  alignment;
+        std::function<void(std::string_view)> setter;
+    };
+    std::unordered_map<sr::SceneNode*, ImageAlignmentHook> image_alignment_hooks;
+    std::unordered_map<sr::SceneNode*, Json> initial_layer_configs;
     // SceneNode -> text-layer origin getter/setter. Text compose nodes derive
     // their world translate from a logical `origin` plus alignment offsets, and
     // rebuild that translate every frame when dynamic text re-lays out. A naked
@@ -412,6 +537,107 @@ struct EngineHostState {
     JsRuntime::BoneIndexResolver                        bone_index_resolver;
     JsRuntime::BoneTransformResolver                    bone_transform_resolver;
     sr::SceneNode*                                     scene_root { nullptr };
+    // --- untrusted-script sandbox state ------------------------------------
+    // Workshop packages ship arbitrary JS, so every host->script call runs
+    // under a wall-clock deadline enforced by ScriptInterruptHandler.
+    // ScriptDeadlineGuard arms it at each entry point; when it expires the
+    // handler latches `scripts_halted` and QuickJS unwinds the script with an
+    // uncatchable error. `js_rt` is only used to re-anchor the stack limit to
+    // the calling thread (see ScriptDeadlineGuard).
+    JSRuntime*                            js_rt { nullptr };
+    std::chrono::steady_clock::time_point script_deadline {};
+    bool                                  watchdog_armed { false };
+    bool                                  scripts_halted { false };
+    bool                                  scripts_halt_logged { false };
+};
+
+// --- untrusted-script sandbox ------------------------------------------------
+// Without these limits one Workshop package can SIGSEGV the render thread
+// (unbounded native recursion), hang it forever (`while(true){}`) or exhaust
+// the process heap.
+
+// Hard heap cap for the whole JS runtime. Corpus scripts are small state
+// machines; 64 MiB is far more than anything observed and still small enough
+// that a runaway allocator fails fast with an OOM exception instead of
+// dragging the compositor down with it.
+constexpr std::size_t kScriptMemoryLimitBytes = 64ull * 1024 * 1024;
+// Initial GC threshold. QuickJS starts at 256 KiB and grows it adaptively
+// after every collection (Vendor/quickjs/quickjs.c:1957 and :1577). Raising
+// the starting point keeps scene init from GC-thrashing; it is a pacing knob,
+// not a security one, and stays two orders of magnitude below the hard cap.
+constexpr std::size_t kScriptGcThresholdBytes = 2ull * 1024 * 1024;
+// JS stack budget, measured from the stack top ScriptDeadlineGuard records at
+// the current entry point. This was previously 0 — "no limit"
+// (Vendor/quickjs/quickjs.c:2732) — which removed the guard entirely, so
+// `function f(){f()}; f()` overflowed the native thread stack and SIGSEGVd
+// instead of throwing a catchable RangeError. The original reason for zeroing
+// it was real but misdiagnosed: QuickJS records `stack_top` inside
+// JS_NewRuntime, i.e. on the parse thread, while update()/cursor callbacks run
+// on the render thread, so the limit was being measured against an unrelated
+// stack and even `new Date()` could trip it. ScriptDeadlineGuard fixes that by
+// calling JS_UpdateStackTop at each entry point, re-anchoring the budget to the
+// thread and depth actually in use. Both loops are plain std::thread (512 KiB
+// stacks on macOS), so a "generous" multi-MiB budget would never fire; 256 KiB
+// is QuickJS's own default and leaves roughly half the thread stack for the
+// native frames above and below the interpreter.
+constexpr std::size_t kScriptStackLimitBytes = 256ull * 1024;
+// Wall-clock budgets, per host->script entry. Whole-script evaluation and
+// init() legitimately do heavy one-shot work (lookup tables, particle seeding),
+// so they get 2 s. Everything on the per-frame path (timer sweep, cursor
+// callbacks, update()) gets 100 ms, which is already ~6 dropped frames at
+// 60 Hz — a per-frame callback slower than that is broken by definition.
+constexpr std::chrono::milliseconds kScriptEvalBudget { 2000 };
+constexpr std::chrono::milliseconds kScriptFrameBudget { 100 };
+
+// QuickJS interrupt callback. Called from js_poll_interrupts every
+// JS_INTERRUPT_COUNTER_INIT (10k) bytecode ops and directly from
+// lre_check_timeout during regexp execution, so it must stay a predicate plus
+// one clock read. A non-zero return raises an *uncatchable* error
+// (Vendor/quickjs/quickjs.c:8165), so script `try`/`catch` cannot swallow it.
+int ScriptInterruptHandler(JSRuntime*, void* opaque) {
+    auto* host = static_cast<EngineHostState*>(opaque);
+    if (host == nullptr || ! host->watchdog_armed) return 0;
+    if (std::chrono::steady_clock::now() < host->script_deadline) return 0;
+    // Latch here rather than in the unwind path: the interrupted exception
+    // surfaces at half a dozen different call sites and timer callbacks have
+    // no owning FieldScript to attribute it to.
+    host->scripts_halted = true;
+    return 1;
+}
+
+// Arms the watchdog for the duration of one host->script call. Nested
+// construction (a host binding that re-enters JS) is a no-op, so the outermost
+// budget bounds the whole entry and only the outermost guard re-anchors the
+// stack limit. The opaque handed to JS_SetInterruptHandler is the same
+// EngineHostState, which lives in JsRuntime::Impl and therefore outlives the
+// JSRuntime it is registered on.
+class ScriptDeadlineGuard {
+public:
+    ScriptDeadlineGuard(EngineHostState* host, std::chrono::milliseconds budget)
+        : m_host(host), m_outermost(host != nullptr && ! host->watchdog_armed) {
+        if (! m_outermost) return;
+        // Re-anchor the stack-overflow check to *this* thread at *this* depth;
+        // JS_NewRuntime captured the parse thread's stack top.
+        if (m_host->js_rt != nullptr) JS_UpdateStackTop(m_host->js_rt);
+        m_host->script_deadline = std::chrono::steady_clock::now() + budget;
+        m_host->watchdog_armed  = true;
+    }
+    ~ScriptDeadlineGuard() {
+        if (! m_outermost) return;
+        m_host->watchdog_armed = false;
+        if (m_host->scripts_halted && ! m_host->scripts_halt_logged) {
+            m_host->scripts_halt_logged = true;
+            rstd_error("script watchdog: script exceeded its time budget and was "
+                       "interrupted; scripting disabled for this wallpaper "
+                       "(rendering continues without it)");
+        }
+    }
+    ScriptDeadlineGuard(const ScriptDeadlineGuard&)            = delete;
+    ScriptDeadlineGuard& operator=(const ScriptDeadlineGuard&) = delete;
+
+private:
+    EngineHostState* m_host { nullptr };
+    bool             m_outermost { false };
 };
 
 uint32_t NormalizeAudioResolution(int32_t requested) {
@@ -446,6 +672,7 @@ struct FieldScript::Impl {
     JSValue          update_fn { JS_UNDEFINED };
     bool             update_takes_arg { false };
     bool             init_done { false };
+    std::uint64_t    initialization_order { 0 };
     JSValue          current_value {
         JS_UNDEFINED
     }; // last `value` returned, kept as JSValue for the (value)-arg form
@@ -471,6 +698,7 @@ struct FieldScript::Impl {
     std::vector<sr::SceneNode*>                                  clone_queue;
     std::unordered_map<std::string, std::vector<sr::SceneNode*>> asset_clone_queues;
     std::unordered_map<sr::SceneNode*, std::string>              clone_asset_keys;
+    std::vector<std::string>                                     registered_assets;
 };
 
 FieldScript::FieldScript(): m_impl(std::make_unique<Impl>()) {}
@@ -479,6 +707,9 @@ FieldKind          FieldScript::field_kind() const noexcept { return m_impl->kin
 const ScriptValue& FieldScript::last_value() const noexcept { return m_impl->last_value; }
 bool               FieldScript::alive() const noexcept { return m_impl->alive; }
 std::string_view   FieldScript::script_sha() const noexcept { return m_impl->sha; }
+std::span<const std::string> FieldScript::RegisteredAssets() const noexcept {
+    return m_impl->registered_assets;
+}
 void FieldScript::AddAssetCloneQueue(std::string asset, std::vector<sr::SceneNode*> nodes) {
     if (asset.empty() || nodes.empty()) return;
     auto& queue = m_impl->asset_clone_queues[asset];
@@ -510,9 +741,14 @@ struct JsRuntime::Impl {
     JSValue         wrapped_scene { JS_UNDEFINED };
 
     void LogError(JSContext* c, std::string_view sha, const char* what) {
-        if (errored.contains(std::string(sha))) return;
-        errored.insert(std::string(sha));
-        JSValue     exc = JS_GetException(c);
+        // Drain unconditionally, even for an already-reported sha: leaving the
+        // exception pending poisons the next JS_Call, and the watchdog's
+        // "interrupted" error is uncatchable so it would never clear itself.
+        JSValue exc = JS_GetException(c);
+        if (! errored.insert(std::string(sha)).second) {
+            JS_FreeValue(c, exc);
+            return;
+        }
         const char* msg = JS_ToCString(c, exc);
         rstd_error("script[{}] {}: {}",
                    sha,
@@ -578,8 +814,12 @@ JSValue EngineGetterScreenRes(JSContext* ctx, JSValueConst, int, JSValueConst*) 
     return MakeVec2Value(ctx, host->inputs.screen_w, host->inputs.screen_h);
 }
 
-void SetAudioArrayValue(JSContext* ctx, JSValueConst arr, uint32_t index, float value) {
+void DefineAudioArrayValue(JSContext* ctx, JSValueConst arr, uint32_t index, float value) {
     JS_DefinePropertyValueUint32(ctx, arr, index, JS_NewFloat64(ctx, value), JS_PROP_C_W_E);
+}
+
+void SetAudioArrayValue(JSContext* ctx, JSValueConst arr, uint32_t index, float value) {
+    JS_SetPropertyUint32(ctx, arr, index, JS_NewFloat64(ctx, value));
 }
 
 // engine.registerAudioBuffers(resolution) → { left, right, average, buffer }
@@ -607,16 +847,20 @@ JSValue EngineRegisterAudioBuffers(JSContext* ctx, JSValueConst /*this_val*/, in
                 AudioBufferValue(host->inputs.audio_right, host->audio_buffer_resolution, i);
             const float a =
                 AudioBufferValue(host->inputs.audio_average, host->audio_buffer_resolution, i);
-            SetAudioArrayValue(ctx, left, i, l);
-            SetAudioArrayValue(ctx, right, i, r);
-            SetAudioArrayValue(ctx, avg, i, a);
-            SetAudioArrayValue(ctx, buf, i, a);
+            DefineAudioArrayValue(ctx, left, i, l);
+            DefineAudioArrayValue(ctx, right, i, r);
+            DefineAudioArrayValue(ctx, avg, i, a);
+            DefineAudioArrayValue(ctx, buf, i, a);
         }
-        JS_DefinePropertyValueStr(ctx, obj, "left", left, JS_PROP_C_W_E);
-        JS_DefinePropertyValueStr(ctx, obj, "right", right, JS_PROP_C_W_E);
-        JS_DefinePropertyValueStr(ctx, obj, "average", avg, JS_PROP_C_W_E);
-        JS_DefinePropertyValueStr(ctx, obj, "buffer", buf, JS_PROP_C_W_E);
+        JS_DefinePropertyValueStr(ctx, obj, "left", JS_DupValue(ctx, left), JS_PROP_C_W_E);
+        JS_DefinePropertyValueStr(ctx, obj, "right", JS_DupValue(ctx, right), JS_PROP_C_W_E);
+        JS_DefinePropertyValueStr(ctx, obj, "average", JS_DupValue(ctx, avg), JS_PROP_C_W_E);
+        JS_DefinePropertyValueStr(ctx, obj, "buffer", JS_DupValue(ctx, buf), JS_PROP_C_W_E);
         host->audio_buffer       = obj;
+        host->audio_left_arr     = left;
+        host->audio_right_arr    = right;
+        host->audio_avg_arr      = avg;
+        host->audio_buf_arr      = buf;
         host->audio_buffer_built = true;
     }
     return JS_DupValue(ctx, host->audio_buffer);
@@ -629,25 +873,17 @@ JSValue EngineRegisterAudioBuffers(JSContext* ctx, JSValueConst /*this_val*/, in
 void RefreshAudioBuffer(JSContext* ctx) {
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
     if (! host->audio_buffer_built) return;
-    JSValue left  = JS_GetPropertyStr(ctx, host->audio_buffer, "left");
-    JSValue right = JS_GetPropertyStr(ctx, host->audio_buffer, "right");
-    JSValue avg   = JS_GetPropertyStr(ctx, host->audio_buffer, "average");
-    JSValue buf   = JS_GetPropertyStr(ctx, host->audio_buffer, "buffer");
     for (uint32_t i = 0; i < host->audio_buffer_resolution; ++i) {
         const float l = AudioBufferValue(host->inputs.audio_left, host->audio_buffer_resolution, i);
         const float r =
             AudioBufferValue(host->inputs.audio_right, host->audio_buffer_resolution, i);
         const float a =
             AudioBufferValue(host->inputs.audio_average, host->audio_buffer_resolution, i);
-        SetAudioArrayValue(ctx, left, i, l);
-        SetAudioArrayValue(ctx, right, i, r);
-        SetAudioArrayValue(ctx, avg, i, a);
-        SetAudioArrayValue(ctx, buf, i, a);
+        SetAudioArrayValue(ctx, host->audio_left_arr, i, l);
+        SetAudioArrayValue(ctx, host->audio_right_arr, i, r);
+        SetAudioArrayValue(ctx, host->audio_avg_arr, i, a);
+        SetAudioArrayValue(ctx, host->audio_buf_arr, i, a);
     }
-    JS_FreeValue(ctx, left);
-    JS_FreeValue(ctx, right);
-    JS_FreeValue(ctx, avg);
-    JS_FreeValue(ctx, buf);
 }
 
 // Cancel CFunction returned by setTimeout / setInterval. data[0] holds the
@@ -724,7 +960,13 @@ JSValue EngineClearDeferred(JSContext* ctx, JSValueConst, int argc, JSValueConst
 // that round-trip Vec3 through localStorage must re-wrap; none observed
 // in the surveyed corpus.
 //
-// Writes flush to disk synchronously when a persistence path is set.
+// SR-SEC-16: the store is quota-capped (key count + total bytes) and writes
+// are debounced. Untrusted scripts call set() from update(), so a synchronous
+// full re-serialise per call meant a blocking disk write on the render thread
+// every frame, and an unbounded store meant a script could fill the user's
+// disk. Writes now only mark the store dirty; MaybeFlushLocalStorage lands
+// them at most once per kLocalStorageFlushInterval (driven from TickAll) and
+// ~JsRuntime performs a guaranteed final flush so nothing is lost on exit.
 // The file format is a flat JSON object: {"k1": "json string", ...}.
 
 namespace
@@ -732,7 +974,18 @@ namespace
 struct PersistedLocalStorage {};
 } // namespace
 
+// Room for the ~dozens of keys real wallpapers persist, with a wide margin,
+// while keeping the worst-case file the flush has to rewrite bounded.
+constexpr std::size_t kLocalStorageMaxKeys  = 1024;
+constexpr std::size_t kLocalStorageMaxBytes = 1ull * 1024 * 1024;
+constexpr std::size_t kLocalStorageMaxValue = 64ull * 1024;
+// Long enough that a per-frame writer costs at most one write every two
+// seconds, short enough that a crash loses very little.
+constexpr std::chrono::milliseconds kLocalStorageFlushInterval { 2000 };
+
 void FlushLocalStorage(EngineHostState* host) {
+    host->ls_dirty      = false;
+    host->ls_last_flush = std::chrono::steady_clock::now();
     if (host->ls_path.empty()) return;
     auto object = rstd::json::Map::make();
     for (const auto& [k, v] : host->ls_data)
@@ -747,8 +1000,22 @@ void FlushLocalStorage(EngineHostState* host) {
     f << Dump(out);
 }
 
+// Cheap enough to call once per frame: one bool plus one steady_clock read.
+void MaybeFlushLocalStorage(EngineHostState* host) {
+    if (! host->ls_dirty) return;
+    if (std::chrono::steady_clock::now() - host->ls_last_flush < kLocalStorageFlushInterval) return;
+    FlushLocalStorage(host);
+}
+
+void RecomputeLocalStorageBytes(EngineHostState* host) {
+    std::size_t total = 0;
+    for (const auto& [k, v] : host->ls_data) total += k.size() + v.size();
+    host->ls_bytes = total;
+}
+
 void LoadLocalStorage(EngineHostState* host) {
     host->ls_data.clear();
+    host->ls_bytes = 0;
     if (host->ls_path.empty()) return;
     std::ifstream f(host->ls_path);
     if (! f) return;
@@ -768,6 +1035,7 @@ void LoadLocalStorage(EngineHostState* host) {
         if (auto stored = value.as_str(); stored.is_some())
             host->ls_data[std::string(key)] = rstd::cppstd::to_string(*stored);
     });
+    RecomputeLocalStorageBytes(host);
 }
 
 JSValue LocalStorageGet(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
@@ -794,11 +1062,45 @@ JSValue LocalStorageSet(JSContext* ctx, JSValueConst, int argc, JSValueConst* ar
     }
     const char* s    = JS_ToCString(ctx, jv);
     auto*       host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
-    if (s) host->ls_data[key] = s;
+    if (s) {
+        // SR-SEC-16 quota. An over-quota write is a logged no-op (logged once,
+        // so a script calling set() from update() cannot spam the log) rather
+        // than a thrown error — the other localStorage entry points also
+        // report failure by returning undefined. Writes that do not grow the
+        // store stay allowed so a script can always shrink or delete its way
+        // back under the cap.
+        const std::string key_str(key);
+        const std::string value(s);
+        auto              it        = host->ls_data.find(key_str);
+        const bool        has       = it != host->ls_data.end();
+        const std::size_t old_size  = has ? key_str.size() + it->second.size() : 0;
+        const std::size_t new_total = host->ls_bytes - old_size + key_str.size() + value.size();
+        const bool        over_quota =
+            value.size() > kLocalStorageMaxValue ||
+            (! has && host->ls_data.size() >= kLocalStorageMaxKeys) ||
+            (new_total > kLocalStorageMaxBytes && new_total > host->ls_bytes);
+        if (over_quota) {
+            if (! host->ls_quota_logged) {
+                host->ls_quota_logged = true;
+                rstd_warn("localStorage quota exceeded ({} keys, {} bytes); write to '{}' "
+                          "ignored, further over-quota writes will be silent",
+                          host->ls_data.size(),
+                          host->ls_bytes,
+                          key_str);
+            }
+        } else {
+            if (has)
+                it->second = value;
+            else
+                host->ls_data.emplace(key_str, value);
+            host->ls_bytes = new_total;
+            host->ls_dirty = true;
+        }
+    }
     if (s) JS_FreeCString(ctx, s);
     JS_FreeValue(ctx, jv);
     JS_FreeCString(ctx, key);
-    FlushLocalStorage(host);
+    MaybeFlushLocalStorage(host);
     return JS_UNDEFINED;
 }
 
@@ -807,9 +1109,13 @@ JSValue LocalStorageRemove(JSContext* ctx, JSValueConst, int argc, JSValueConst*
     const char* key = JS_ToCString(ctx, argv[0]);
     if (! key) return JS_UNDEFINED;
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
-    host->ls_data.erase(key);
+    if (auto it = host->ls_data.find(key); it != host->ls_data.end()) {
+        host->ls_bytes -= it->first.size() + it->second.size();
+        host->ls_data.erase(it);
+        host->ls_dirty = true;
+    }
     JS_FreeCString(ctx, key);
-    FlushLocalStorage(host);
+    MaybeFlushLocalStorage(host);
     return JS_UNDEFINED;
 }
 
@@ -859,6 +1165,23 @@ void SetVec3Fields(JSContext* ctx, JSValueConst obj, double x, double y, double 
 void UpdateInputObject(JSContext* ctx) {
     auto*       host  = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
     const auto& fi    = host->inputs;
+
+    EngineHostState::InputSnapshot snap {
+        .cursor_x         = fi.cursor_x,
+        .cursor_y         = fi.cursor_y,
+        .screen_w         = fi.screen_w,
+        .screen_h         = fi.screen_h,
+        .canvas_w         = fi.canvas_w,
+        .canvas_h         = fi.canvas_h,
+        .buttons_down     = fi.mouse_buttons_down,
+        .buttons_pressed  = fi.mouse_buttons_pressed,
+        .buttons_released = fi.mouse_buttons_released,
+        .in_window        = fi.cursor_in_window,
+        .valid            = true,
+    };
+    if (host->input_snapshot == snap) return;
+    host->input_snapshot = snap;
+
     JSValue     g     = JS_GetGlobalObject(ctx);
     JSValue     input = JS_GetPropertyStr(ctx, g, "input");
     if (! JS_IsObject(input)) {
@@ -901,7 +1224,7 @@ void UpdateInputObject(JSContext* ctx) {
 bool HitTestNode(sr::SceneNode* n, const CursorWorld& c) {
     if (! n) return false;
     n->UpdateTrans();
-    Eigen::Matrix4d m  = n->ModelTrans();
+    Eigen::Matrix4d m  = n->ModelTrans() * n->GeometryTransform();
     Eigen::Vector2f sz = n->Size();
     if (sz.x() == 0.0f && sz.y() == 0.0f) sz = Eigen::Vector2f { 100.0f, 100.0f };
     double          hx = sz.x() * 0.5, hy = sz.y() * 0.5;
@@ -1012,11 +1335,22 @@ void SweepDeferred(JSContext* ctx, EngineHostState* host) {
                          host->deferred.end());
 }
 
-// engine.registerAsset(...) — return the first arg unchanged so chained
-// `.something` works without throwing (even if the result isn't useful).
 JSValue EngineRegisterAsset(JSContext* ctx, JSValueConst /*this_val*/, int argc,
                             JSValueConst* argv) {
-    if (argc > 0) return JS_DupValue(ctx, argv[0]);
+    if (argc > 0) {
+        const char* value = JS_ToCString(ctx, argv[0]);
+        if (value != nullptr) {
+            auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+            auto& assets = host->active_field_script
+                               ? host->active_field_script->m_impl->registered_assets
+                               : host->pending_registered_assets;
+            std::string asset(value);
+            if (std::find(assets.begin(), assets.end(), asset) == assets.end())
+                assets.push_back(std::move(asset));
+            JS_FreeCString(ctx, value);
+        }
+        return JS_DupValue(ctx, argv[0]);
+    }
     return JS_NewObject(ctx);
 }
 
@@ -1157,6 +1491,17 @@ globalThis.createScriptProperties = function () {
       }
       return applyHostScale(h, h.value);
     };
+    const coerceDescriptorValue = (descriptor, value) => {
+      if (!descriptor || descriptor.kind !== 'Color') return value;
+      if (typeof value === 'string') {
+        const components = value.trim().split(/\s+/).map(Number);
+        return new globalThis.Vec3(components[0] ?? 0, components[1] ?? 0, components[2] ?? 0);
+      }
+      if (Array.isArray(value)) {
+        return new globalThis.Vec3(value[0] ?? 0, value[1] ?? 0, value[2] ?? 0);
+      }
+      return value;
+    };
     // WE substitutes user-prop values verbatim, even when the user's
     // slider range is wider than the script's declared range — corpus
     // wallpapers (e.g. workshop 3327063360) wire `min:-1,max:1` sliders
@@ -1169,7 +1514,7 @@ globalThis.createScriptProperties = function () {
           configurable: true,
           get() {
             if (Object.prototype.hasOwnProperty.call(_hostValues, d.name))
-              return unwrapUserProp(_hostValues[d.name]);
+              return coerceDescriptorValue(d, unwrapUserProp(_hostValues[d.name]));
             return d.value;
           },
         });
@@ -1202,6 +1547,7 @@ if (! globalThis.engine) globalThis.engine = {};
 globalThis.engine.userProperties = {};
 globalThis.engine.AUDIO_RESOLUTION_16 = 16;
 globalThis.engine.AUDIO_RESOLUTION_32 = 32;
+globalThis.engine.AUDIO_RESOLUTION_64 = 64;
 // WE exposes these as zero-arg query functions; some scripts call them
 // (`engine.isRunningInEditor()`), others read as boolean. Provide a
 // callable that also coerces to false when accessed as a value (the
@@ -1211,7 +1557,7 @@ globalThis.engine.AUDIO_RESOLUTION_32 = 32;
 globalThis.engine.isRunningInEditor = function() { return false; };
 globalThis.engine.isScreensaver     = function() { return false; };
 
-// --- Vec2 / Vec3 ---
+// --- Vec2 / Vec3 / Vec4 ---
 // Pure-JS implementations of WE's vector types. The corpus relies on
 // .multiply / .add / .subtract / .divide as Vec3 instance methods (used
 // by every audio-response script binding scale), so a simple class with
@@ -1238,6 +1584,7 @@ class Vec2 {
   }
   copy()      { return new Vec2(this.x, this.y); }
   clone()     { return new Vec2(this.x, this.y); }
+  toString()  { return `${this.x} ${this.y}`; }
   length()    { return Math.sqrt(this.x*this.x + this.y*this.y); }
   lengthSqr() { return this.x*this.x + this.y*this.y; }
   normalize() {
@@ -1271,6 +1618,7 @@ class Vec3 {
   }
   copy()      { return new Vec3(this.x, this.y, this.z); }
   clone()     { return new Vec3(this.x, this.y, this.z); }
+  toString()  { return `${this.x} ${this.y} ${this.z}`; }
   length()    { return Math.sqrt(this.x*this.x + this.y*this.y + this.z*this.z); }
   lengthSqr() { return this.x*this.x + this.y*this.y + this.z*this.z; }
   normalize() {
@@ -1278,8 +1626,50 @@ class Vec3 {
     return len > 0 ? this.divide(len) : new Vec3(0, 0, 0);
   }
 }
+class Vec4 {
+  constructor(x, y, z, w) {
+    if (typeof x === 'object' && x !== null) {
+      this.x = x.x ?? 0; this.y = x.y ?? 0; this.z = x.z ?? 0; this.w = x.w ?? 0;
+    } else if (typeof x === 'number' && y === undefined && z === undefined && w === undefined) {
+      this.x = x; this.y = x; this.z = x; this.w = x;
+    } else {
+      this.x = (typeof x === 'number') ? x : 0;
+      this.y = (typeof y === 'number') ? y : 0;
+      this.z = (typeof z === 'number') ? z : 0;
+      this.w = (typeof w === 'number') ? w : 0;
+    }
+  }
+  add(o)      { return new Vec4(this.x + (o.x ?? o), this.y + (o.y ?? o), this.z + (o.z ?? o), this.w + (o.w ?? o)); }
+  subtract(o) { return new Vec4(this.x - (o.x ?? o), this.y - (o.y ?? o), this.z - (o.z ?? o), this.w - (o.w ?? o)); }
+  multiply(o) { return new Vec4(this.x * (o.x ?? o), this.y * (o.y ?? o), this.z * (o.z ?? o), this.w * (o.w ?? o)); }
+  divide(o)   { return new Vec4(this.x / (o.x ?? o), this.y / (o.y ?? o), this.z / (o.z ?? o), this.w / (o.w ?? o)); }
+  mix(o, t)   {
+    return new Vec4(
+      this.x + ((o.x ?? o) - this.x) * t,
+      this.y + ((o.y ?? o) - this.y) * t,
+      this.z + ((o.z ?? o) - this.z) * t,
+      this.w + ((o.w ?? o) - this.w) * t);
+  }
+  copy()      { return new Vec4(this.x, this.y, this.z, this.w); }
+  clone()     { return new Vec4(this.x, this.y, this.z, this.w); }
+  toString()  { return `${this.x} ${this.y} ${this.z} ${this.w}`; }
+  length()    { return Math.sqrt(this.x*this.x + this.y*this.y + this.z*this.z + this.w*this.w); }
+  lengthSqr() { return this.x*this.x + this.y*this.y + this.z*this.z + this.w*this.w; }
+  normalize() {
+    const len = this.length();
+    return len > 0 ? this.divide(len) : new Vec4(0, 0, 0, 0);
+  }
+}
 globalThis.Vec2 = Vec2;
 globalThis.Vec3 = Vec3;
+globalThis.Vec4 = Vec4;
+globalThis.__wwSerializeLayerConfig = function(config) {
+  return JSON.stringify(config, function(_key, value) {
+    if (value instanceof Vec2 || value instanceof Vec3 || value instanceof Vec4)
+      return value.toString();
+    return value;
+  });
+};
 
 // --- thisLayer / thisScene stub ---------------------------------------------
 // Stand-in for the per-script SceneNode binding. Property reads return
@@ -1305,12 +1695,15 @@ function __wwCreateNodeStub() {
     const identity = [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1];
     const handler = {
         get(target, key) {
-            if (key === 'getParent')           return () => __wwCreateNodeStub();
+            if (key === 'getParent')           return () => undefined;
             if (key === 'getTransformMatrix')  return () => ({ m: identity.slice() });
             if (key === 'getChildren')         return () => [];
             if (key === 'getName')             return () => '';
             if (key === 'getLayer')            return (_n) => __wwCreateNodeStub();
             if (key === 'getEffect')           return (_n) => __wwCreateEffectStub();
+            if (key === 'getEffectCount')      return () => 0;
+            if (key === 'getCameraTransforms') return () => ({ eye: new Vec3(), center: new Vec3(0, 0, -1), up: new Vec3(0, 1, 0) });
+            if (key === 'setCameraTransforms') return (_v) => undefined;
             if (key === 'getTextureAnimation') return () => __wwCreateTexAnimStub();
             if (key === 'getVideoTexture')     return () => __wwCreateVideoTextureStub();
             if (key === 'getAnimation')        return ()   => __wwCreateAnimationStub();
@@ -1326,7 +1719,7 @@ function __wwCreateNodeStub() {
 }
 
 function __wwCreateEffectStub() {
-    return { visible: true };
+    return { visible: true, name: '', getMaterial() { return {}; } };
 }
 
 function __wwCreateTexAnimStub() {
@@ -1365,9 +1758,12 @@ function __wwCreateAnimationStub() {
     let frame = 0, playing = false;
     const o = {
         rate: 1,
+        fps: 30,
         frameCount: 1,
+        duration: 0,
+        name: '',
         play()     { playing = true;  },
-        stop()     { playing = false; },
+        stop()     { playing = false; frame = 0; },
         pause()    { playing = false; },
         setFrame(n){ frame = Math.max(0, n | 0); },
         getFrame() { return frame;    },
@@ -1417,6 +1813,11 @@ if (! globalThis.shared) globalThis.shared = {};
 
 void InstallEngineGlobal(JSContext* ctx) {
     // Run the bootstrap to create createScriptProperties + skeleton engine.
+    // Trusted source, but it is still a host->script entry: arm the watchdog so
+    // every JS_Eval / JS_Call in this file is covered by the same rule.
+    ScriptDeadlineGuard guard(static_cast<EngineHostState*>(JS_GetContextOpaque(ctx)),
+                              kScriptEvalBudget);
+
     JSValue r = JS_Eval(
         ctx, kBootstrapJs, std::strlen(kBootstrapJs), "<sr-bootstrap>", JS_EVAL_TYPE_GLOBAL);
     if (JS_IsException(r)) {
@@ -1506,18 +1907,19 @@ export function sign(x) { return Math.sign(x); }
 export function fract(x) { return x - Math.floor(x); }
 export function deg2rad(d) { return d * (Math.PI / 180); }
 export function rad2deg(r) { return r * (180 / Math.PI); }
+deg2rad.valueOf = () => Math.PI / 180;
+rad2deg.valueOf = () => 180 / Math.PI;
 )JS";
 
-// WE's `WEVector` module. Corpus only exercises `angleVector2` (degrees ->
-// unit Vec2, the circular audio-bar layout in workshop 3365654061); the script
-// recomputes the same layout manually as (cos(deg), sin(deg))*radius, which
-// pins the units/axes. Other helpers are unambiguous vector math, added so
-// future scripts don't trip the loader. Extend once corpus needs more.
+// WE's `WEVector` module uses degrees for both direction helpers.
 static constexpr const char* kWEVectorSrc = R"JS(
 function v2(x, y) { return new globalThis.Vec2(x, y); }
 export function angleVector2(angle) {
     const r = angle * Math.PI / 180;
     return v2(Math.cos(r), Math.sin(r));
+}
+export function vectorAngle2(v) {
+    return Math.atan2(v.y, v.x) * 180 / Math.PI;
 }
 export function magnitude(v) { return Math.sqrt(v.x*v.x + v.y*v.y); }
 export function normalize(v) {
@@ -1538,6 +1940,12 @@ function c(v, k, i) {
     return Number(v ?? 0);
 }
 function clamp01(x) { return Math.max(0, Math.min(1, x)); }
+export function normalizeColor(rgb) {
+    return v3(c(rgb, 'x', 0) / 255, c(rgb, 'y', 1) / 255, c(rgb, 'z', 2) / 255);
+}
+export function expandColor(rgb) {
+    return v3(c(rgb, 'x', 0) * 255, c(rgb, 'y', 1) * 255, c(rgb, 'z', 2) * 255);
+}
 export function rgb2hsv(rgb) {
     const r = clamp01(c(rgb, 'x', 0));
     const g = clamp01(c(rgb, 'y', 1));
@@ -1608,8 +2016,10 @@ JSModuleDef* BuiltinModuleLoader(JSContext* ctx, const char* module_name, void*)
 // the SceneNode pointer in JS_GetOpaque; lifetime is owned by Scene, the
 // finalizer is a no-op (we don't dereference on free, just drop the ref).
 
-static JSClassID s_layer_class_id  = 0;
-static JSClassID s_effect_class_id = 0;
+static JSClassID s_layer_class_id             = 0;
+static JSClassID s_effect_class_id            = 0;
+static JSClassID s_material_class_id          = 0;
+static JSClassID s_particle_instance_class_id = 0;
 
 struct LayerHandle {
     EngineHostState* host { nullptr };
@@ -1639,6 +2049,18 @@ struct EffectHandle {
     bool                                    fallback_visible { true };
 };
 
+struct MaterialHandle {
+    EngineHostState*   host { nullptr };
+    sr::SceneMaterial* material { nullptr };
+};
+
+int MaterialSetProperty(JSContext* ctx, JSValueConst obj, JSAtom atom, JSValueConst value,
+                        JSValueConst receiver, int flags);
+
+JSClassExoticMethods s_material_exotic {
+    .set_property = MaterialSetProperty,
+};
+
 void EffectFinalizer(JSRuntime*, JSValue v) {
     delete static_cast<EffectHandle*>(JS_GetOpaque(v, s_effect_class_id));
 }
@@ -1646,6 +2068,20 @@ void EffectFinalizer(JSRuntime*, JSValue v) {
 JSClassDef s_effect_class_def {
     .class_name = "WWEffect",
     .finalizer  = EffectFinalizer,
+};
+
+void MaterialFinalizer(JSRuntime*, JSValue v) {
+    delete static_cast<MaterialHandle*>(JS_GetOpaque(v, s_material_class_id));
+}
+
+JSClassDef s_material_class_def {
+    .class_name = "WWMaterial",
+    .finalizer  = MaterialFinalizer,
+    .exotic     = &s_material_exotic,
+};
+
+JSClassDef s_particle_instance_class_def {
+    .class_name = "WWParticleInstance",
 };
 
 inline sr::SceneNode* GetLayerNode(JSValueConst v) {
@@ -1668,6 +2104,13 @@ JSValue WrapLayerName(JSContext* ctx, std::string name) {
     return obj;
 }
 
+JSValue WrapParticleInstance(JSContext* ctx, sr::SceneNode* node) {
+    JSValue obj = JS_NewObjectClass(ctx, s_particle_instance_class_id);
+    if (JS_IsException(obj)) return obj;
+    JS_SetOpaque(obj, node);
+    return obj;
+}
+
 EffectHandle* GetEffectHandle(JSValueConst v) {
     return static_cast<EffectHandle*>(JS_GetOpaque(v, s_effect_class_id));
 }
@@ -1676,16 +2119,27 @@ JSValue WrapEffect(JSContext* ctx, std::optional<sr::SceneImageEffectRef> ref) {
     JSValue obj = JS_NewObjectClass(ctx, s_effect_class_id);
     if (JS_IsException(obj)) return obj;
     auto* host    = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
-    bool  visible = ref && ref->effect ? ref->effect->runtime_visible : true;
+    bool  visible = host && host->scene && ref
+                        ? host->scene->ImageEffectRuntimeVisible(*ref)
+                        : true;
     JS_SetOpaque(
         obj, new EffectHandle { .host = host, .ref = std::move(ref), .fallback_visible = visible });
+    return obj;
+}
+
+JSValue WrapMaterial(JSContext* ctx, sr::SceneMaterial* material) {
+    JSValue obj = JS_NewObjectClass(ctx, s_material_class_id);
+    if (JS_IsException(obj)) return obj;
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    JS_SetOpaque(obj, new MaterialHandle { .host = host, .material = material });
     return obj;
 }
 
 JSValue EffectGetVisible(JSContext* ctx, JSValueConst this_val) {
     auto* h = GetEffectHandle(this_val);
     if (! h) return JS_NewBool(ctx, true);
-    if (h->ref && h->ref->effect) return JS_NewBool(ctx, h->ref->effect->runtime_visible);
+    if (h->host && h->host->scene && h->ref)
+        return JS_NewBool(ctx, h->host->scene->ImageEffectRuntimeVisible(*h->ref));
     return JS_NewBool(ctx, h->fallback_visible);
 }
 
@@ -1730,6 +2184,51 @@ inline bool ReadXYZ(JSContext* ctx, JSValueConst v, double& x, double& y, double
     JS_FreeValue(ctx, jy);
     JS_FreeValue(ctx, jz);
     return ok;
+}
+
+std::optional<sr::ShaderValue> ReadShaderValue(JSContext* ctx, JSValueConst value) {
+    if (JS_IsNumber(value)) {
+        double number {};
+        if (JS_ToFloat64(ctx, &number, value) != 0) return std::nullopt;
+        return sr::ShaderValue(static_cast<float>(number));
+    }
+    if (JS_IsBool(value))
+        return sr::ShaderValue(JS_ToBool(ctx, value) != 0 ? 1.0f : 0.0f);
+    if (! JS_IsObject(value)) return std::nullopt;
+
+    constexpr std::array<const char*, 4> fields { "x", "y", "z", "w" };
+    std::array<float, 4>                 values {};
+    std::size_t                          count = 0;
+    for (const char* field : fields) {
+        JSValue component = JS_GetPropertyStr(ctx, value, field);
+        if (JS_IsUndefined(component)) {
+            JS_FreeValue(ctx, component);
+            break;
+        }
+        double     number {};
+        const bool ok = JS_ToFloat64(ctx, &number, component) == 0;
+        JS_FreeValue(ctx, component);
+        if (! ok) return std::nullopt;
+        values[count++] = static_cast<float>(number);
+    }
+    if (count == 0) return std::nullopt;
+    return sr::ShaderValue(values.data(), count);
+}
+
+int MaterialSetProperty(JSContext* ctx, JSValueConst obj, JSAtom atom, JSValueConst value,
+                        JSValueConst, int) {
+    auto* handle = static_cast<MaterialHandle*>(JS_GetOpaque(obj, s_material_class_id));
+    if (! handle || ! handle->host || ! handle->host->scene || ! handle->material) return 1;
+
+    const char* key = JS_AtomToCString(ctx, atom);
+    if (! key) return -1;
+    auto shader_value = ReadShaderValue(ctx, value);
+    if (shader_value) {
+        handle->host->scene->SetMaterialShaderValueByKey(
+            *handle->material, key, *shader_value);
+    }
+    JS_FreeCString(ctx, key);
+    return 1;
 }
 
 // --- property accessors -----------------------------------------------------
@@ -1867,6 +2366,78 @@ JSValue NodeSetColor(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
     n->SetColor({ float(x), float(y), float(z) });
     return JS_UNDEFINED;
 }
+
+JSValue NodeGetVolume(JSContext* ctx, JSValueConst this_val) {
+    auto* n = GetLayerNode(this_val);
+    return JS_NewFloat64(ctx, n ? n->Volume() : 1.0);
+}
+JSValue NodeSetVolume(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+    auto* n = GetLayerNode(this_val);
+    if (! n) return JS_UNDEFINED;
+    double volume { 1.0 };
+    if (JS_ToFloat64(ctx, &volume, val) == 0) n->SetVolume(static_cast<float>(volume));
+    return JS_UNDEFINED;
+}
+
+JSValue ParticleGet(JSContext* ctx, JSValueConst this_val, std::string_view field, bool vector) {
+    auto* node =
+        static_cast<sr::SceneNode*>(JS_GetOpaque(this_val, s_particle_instance_class_id));
+    if (! node) return JS_UNDEFINED;
+    auto value = node->ControlledProperty(field);
+    if (! value.has_value()) return JS_UNDEFINED;
+    if (vector) {
+        if (value->size() < 3) return JS_UNDEFINED;
+        return MakeVec3(ctx, (*value)[0], (*value)[1], (*value)[2]);
+    }
+    return value->empty() ? JS_UNDEFINED : JS_NewFloat64(ctx, (*value)[0]);
+}
+
+JSValue ParticleSet(JSContext* ctx, JSValueConst this_val, JSValueConst value,
+                    std::string_view field, bool vector) {
+    auto* node =
+        static_cast<sr::SceneNode*>(JS_GetOpaque(this_val, s_particle_instance_class_id));
+    if (! node) return JS_UNDEFINED;
+    std::array<float, 3> values {};
+    usize                count = 1;
+    if (vector) {
+        double x {}, y {}, z {};
+        if (! ReadXYZ(ctx, value, x, y, z)) return JS_UNDEFINED;
+        values = { static_cast<float>(x), static_cast<float>(y), static_cast<float>(z) };
+        count  = 3;
+    } else {
+        double scalar {};
+        if (JS_ToFloat64(ctx, &scalar, value) != 0) return JS_UNDEFINED;
+        values[0] = static_cast<float>(scalar);
+    }
+    node->ApplyControlledProperty(field, std::span<const float>(values.data(), count));
+    return JS_UNDEFINED;
+}
+
+#define SR_PARTICLE_PROPERTY(Name, Field, Vector)                                          \
+    JSValue ParticleGet##Name(JSContext* ctx, JSValueConst this_val) {                      \
+        return ParticleGet(ctx, this_val, Field, Vector);                                  \
+    }                                                                                       \
+    JSValue ParticleSet##Name(JSContext* ctx, JSValueConst this_val, JSValueConst value) {  \
+        return ParticleSet(ctx, this_val, value, Field, Vector);                            \
+    }
+
+SR_PARTICLE_PROPERTY(Alpha, "alpha", false)
+SR_PARTICLE_PROPERTY(Size, "size", false)
+SR_PARTICLE_PROPERTY(Lifetime, "lifetime", false)
+SR_PARTICLE_PROPERTY(Rate, "rate", false)
+SR_PARTICLE_PROPERTY(Speed, "speed", false)
+SR_PARTICLE_PROPERTY(Count, "count", false)
+SR_PARTICLE_PROPERTY(Brightness, "brightness", false)
+SR_PARTICLE_PROPERTY(Color, "color", true)
+SR_PARTICLE_PROPERTY(Colorn, "colorn", true)
+
+#undef SR_PARTICLE_PROPERTY
+
+JSValue NodeGetParticleInstance(JSContext* ctx, JSValueConst this_val) {
+    auto* node = GetLayerNode(this_val);
+    if (! node || ! node->ControlledProperty("alpha").has_value()) return JS_UNDEFINED;
+    return WrapParticleInstance(ctx, node);
+}
 JSValue NodeGetPerspective(JSContext* ctx, JSValueConst this_val) {
     auto* n = GetLayerNode(this_val);
     return JS_NewBool(ctx, n ? n->Perspective() : false);
@@ -1874,6 +2445,27 @@ JSValue NodeGetPerspective(JSContext* ctx, JSValueConst this_val) {
 JSValue NodeSetPerspective(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
     auto* n = GetLayerNode(this_val);
     if (n) n->SetPerspective(JS_ToBool(ctx, val) != 0);
+    return JS_UNDEFINED;
+}
+JSValue NodeGetAlignment(JSContext* ctx, JSValueConst this_val) {
+    auto* n = GetLayerNode(this_val);
+    if (! n) return JS_NewString(ctx, "center");
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    auto  hook = host->image_alignment_hooks.find(n);
+    if (hook == host->image_alignment_hooks.end()) return JS_NewString(ctx, "center");
+    return JS_NewStringLen(ctx, hook->second.alignment.data(), hook->second.alignment.size());
+}
+JSValue NodeSetAlignment(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+    auto* n = GetLayerNode(this_val);
+    if (! n) return JS_UNDEFINED;
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    auto  hook = host->image_alignment_hooks.find(n);
+    if (hook == host->image_alignment_hooks.end()) return JS_UNDEFINED;
+    const char* value = JS_ToCString(ctx, val);
+    if (value == nullptr) return JS_UNDEFINED;
+    hook->second.alignment = value;
+    if (hook->second.setter) hook->second.setter(hook->second.alignment);
+    JS_FreeCString(ctx, value);
     return JS_UNDEFINED;
 }
 JSValue NodeGetVAlign(JSContext* ctx, JSValueConst this_val) {
@@ -1963,15 +2555,10 @@ JSValue NodeSetPointSize(JSContext* ctx, JSValueConst this_val, JSValueConst val
 
 // --- methods ----------------------------------------------------------------
 
-// Always return SOMETHING — many scripts cache `parent = thisLayer.getParent()`
-// at init time and dereference it later without a null check. When there's
-// no real parent (root layer or unbound node), hand back the default JS
-// stub so `parent.origin` etc. silently no-op instead of TypeError'ing.
 JSValue NodeGetParent(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
     auto* n = GetLayerNode(this_val);
     if (n && n->Parent()) return WrapLayerNode(ctx, n->Parent());
-    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
-    return JS_DupValue(ctx, host->default_layer);
+    return JS_UNDEFINED;
 }
 
 JSValue NodeGetTransformMatrix(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
@@ -1993,6 +2580,16 @@ JSValue NodeGetTransformMatrix(JSContext* ctx, JSValueConst this_val, int, JSVal
     }
     JS_DefinePropertyValueStr(ctx, obj, "m", m, JS_PROP_C_W_E);
     return obj;
+}
+
+JSValue NodeRotateObjectSpace(JSContext* ctx, JSValueConst this_val, int argc,
+                              JSValueConst* argv) {
+    auto* n = GetLayerNode(this_val);
+    if (! n || argc < 1) return JS_UNDEFINED;
+    double x = 0, y = 0, z = 0;
+    if (! ReadXYZ(ctx, argv[0], x, y, z)) return JS_UNDEFINED;
+    n->RotateObjectSpace({ float(x), float(y), float(z) });
+    return JS_UNDEFINED;
 }
 
 JSValue BoneTransformTranslation(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
@@ -2083,11 +2680,48 @@ JSValue NodeGetEffect(JSContext* ctx, JSValueConst this_val, int argc, JSValueCo
     auto* n    = GetLayerNode(this_val);
     if (! host || ! host->scene || ! n || argc < 1) return WrapEffect(ctx, std::nullopt);
 
+    if (JS_IsNumber(argv[0])) {
+        int64_t index {};
+        if (JS_ToInt64(ctx, &index, argv[0]) != 0 || index < 0)
+            return WrapEffect(ctx, std::nullopt);
+        return WrapEffect(
+            ctx, host->scene->FindNodeImageEffect(*n, static_cast<std::size_t>(index)));
+    }
+
     const char* name = JS_ToCString(ctx, argv[0]);
     if (! name) return WrapEffect(ctx, std::nullopt);
     auto effect = host->scene->FindNodeImageEffect(*n, name);
     JS_FreeCString(ctx, name);
     return WrapEffect(ctx, std::move(effect));
+}
+
+JSValue NodeGetEffectCount(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    auto* node = GetLayerNode(this_val);
+    if (! host || ! host->scene || ! node) return JS_NewInt32(ctx, 0);
+    return JS_NewInt64(ctx,
+                       static_cast<int64_t>(host->scene->NodeImageEffectCount(*node)));
+}
+
+JSValue EffectGetName(JSContext* ctx, JSValueConst this_val) {
+    auto* handle = GetEffectHandle(this_val);
+    if (! handle || ! handle->host || ! handle->host->scene || ! handle->ref)
+        return JS_NewString(ctx, "");
+    auto name = handle->host->scene->ImageEffectName(*handle->ref);
+    return JS_NewStringLen(ctx, name.data(), name.size());
+}
+
+JSValue EffectGetMaterial(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* handle = GetEffectHandle(this_val);
+    if (! handle || ! handle->host || ! handle->host->scene || ! handle->ref || argc < 1)
+        return WrapMaterial(ctx, nullptr);
+    int64_t index {};
+    if (JS_ToInt64(ctx, &index, argv[0]) != 0 || index < 0)
+        return WrapMaterial(ctx, nullptr);
+    return WrapMaterial(
+        ctx,
+        handle->host->scene->ImageEffectMaterial(*handle->ref,
+                                                 static_cast<std::size_t>(index)));
 }
 
 bool TreeContains(sr::SceneNode* root, sr::SceneNode* needle) {
@@ -2135,8 +2769,81 @@ JSValue NodeSceneEnumerateLayers(JSContext* ctx, JSValueConst this_val, int, JSV
     return arr;
 }
 
-JSValue NodeSceneGetInitialLayerConfig(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+JSValue NodeSceneGetInitialLayerConfig(JSContext* ctx, JSValueConst, int argc,
+                                       JSValueConst* argv) {
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    if (! host || argc < 1) return JS_NewObject(ctx);
+    auto* node = GetLayerNode(argv[0]);
+    if (! node) return JS_NewObject(ctx);
+    if (auto it = host->initial_layer_configs.find(node); it != host->initial_layer_configs.end())
+        return JsonToJs(ctx, it->second);
     return JS_NewObject(ctx);
+}
+
+JSValue NodeSceneGetCameraTransforms(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    if (! host || ! host->scene) return JS_ThrowTypeError(ctx, "scene camera is not available");
+    auto transforms = host->scene->ActiveCameraTransforms();
+    if (! transforms) return JS_ThrowTypeError(ctx, "active scene camera is not available");
+
+    JSValue out = JS_NewObject(ctx);
+    JS_DefinePropertyValueStr(ctx,
+                              out,
+                              "eye",
+                              MakeVec3(ctx,
+                                       transforms->eye.x(),
+                                       transforms->eye.y(),
+                                       transforms->eye.z()),
+                              JS_PROP_C_W_E);
+    JS_DefinePropertyValueStr(ctx,
+                              out,
+                              "center",
+                              MakeVec3(ctx,
+                                       transforms->center.x(),
+                                       transforms->center.y(),
+                                       transforms->center.z()),
+                              JS_PROP_C_W_E);
+    JS_DefinePropertyValueStr(ctx,
+                              out,
+                              "up",
+                              MakeVec3(ctx,
+                                       transforms->up.x(),
+                                       transforms->up.y(),
+                                       transforms->up.z()),
+                              JS_PROP_C_W_E);
+    return out;
+}
+
+bool ReadOptionalCameraVector(JSContext* ctx, JSValueConst object, const char* name,
+                              Eigen::Vector3d& out) {
+    JSValue value = JS_GetPropertyStr(ctx, object, name);
+    if (JS_IsUndefined(value)) {
+        JS_FreeValue(ctx, value);
+        return true;
+    }
+    double     x {}, y {}, z {};
+    const bool ok = ReadXYZ(ctx, value, x, y, z);
+    JS_FreeValue(ctx, value);
+    if (! ok) return false;
+    out = Eigen::Vector3d { x, y, z };
+    return true;
+}
+
+JSValue NodeSceneSetCameraTransforms(JSContext* ctx, JSValueConst, int argc,
+                                     JSValueConst* argv) {
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    if (! host || ! host->scene) return JS_ThrowTypeError(ctx, "scene camera is not available");
+    if (argc < 1 || ! JS_IsObject(argv[0]))
+        return JS_ThrowTypeError(ctx, "camera transforms must be an object");
+    auto transforms = host->scene->ActiveCameraTransforms();
+    if (! transforms) return JS_ThrowTypeError(ctx, "active scene camera is not available");
+    if (! ReadOptionalCameraVector(ctx, argv[0], "eye", transforms->eye) ||
+        ! ReadOptionalCameraVector(ctx, argv[0], "center", transforms->center) ||
+        ! ReadOptionalCameraVector(ctx, argv[0], "up", transforms->up))
+        return JS_ThrowTypeError(ctx, "camera transform vectors require x, y and z");
+    if (! host->scene->SetActiveCameraTransforms(*transforms))
+        return JS_ThrowRangeError(ctx, "camera transforms are degenerate");
+    return JS_UNDEFINED;
 }
 
 // thisScene.createLayer(model_path) — WE-style runtime layer spawn. The
@@ -2150,8 +2857,9 @@ JSValue NodeSceneCreateLayer(JSContext* ctx, JSValueConst /*this_val*/, int argc
     auto* fs   = host->active_field_script;
     if (! fs) return JS_DupValue(ctx, host->default_layer);
 
-    sr::SceneNode* node = nullptr;
-    if (argc > 0 && ! JS_IsObject(argv[0])) {
+    const bool     configuration_request = argc > 0 && JS_IsObject(argv[0]);
+    sr::SceneNode* node                  = nullptr;
+    if (argc > 0 && ! configuration_request) {
         const char* asset = JS_ToCString(ctx, argv[0]);
         if (asset) {
             auto it = fs->m_impl->asset_clone_queues.find(asset);
@@ -2159,16 +2867,62 @@ JSValue NodeSceneCreateLayer(JSContext* ctx, JSValueConst /*this_val*/, int argc
                 node = it->second.front();
                 it->second.erase(it->second.begin());
             }
+            const bool registered =
+                std::find(fs->m_impl->registered_assets.begin(),
+                          fs->m_impl->registered_assets.end(),
+                          std::string(asset)) != fs->m_impl->registered_assets.end();
+            if (! node && registered && host->layer_factory) {
+                auto created = host->layer_factory(fs->m_impl->node, asset);
+                if (created) {
+                    node                               = (*created).as_ptr();
+                    fs->m_impl->clone_asset_keys[node] = asset;
+                }
+            }
             JS_FreeCString(ctx, asset);
+        }
+    } else if (configuration_request && host->layer_config_factory) {
+        std::optional<Json> config;
+        if (auto* source_node = GetLayerNode(argv[0]); source_node != nullptr) {
+            if (auto it = host->initial_layer_configs.find(source_node);
+                it != host->initial_layer_configs.end())
+                config = it->second.clone();
+        } else {
+            JSValue global    = JS_GetGlobalObject(ctx);
+            JSValue serialize = JS_GetPropertyStr(ctx, global, "__wwSerializeLayerConfig");
+            JSValue encoded   = JS_Call(ctx, serialize, global, 1, argv);
+            JS_FreeValue(ctx, serialize);
+            JS_FreeValue(ctx, global);
+            if (JS_IsException(encoded)) {
+                JS_FreeValue(ctx, encoded);
+                return JS_EXCEPTION;
+            }
+            const char* source = JS_ToCString(ctx, encoded);
+            if (source != nullptr) {
+                auto parsed = ParseJson(source);
+                JS_FreeCString(ctx, source);
+                if (parsed.is_ok()) config = std::move(parsed).unwrap_unchecked();
+            }
+            JS_FreeValue(ctx, encoded);
+            if (! config)
+                return JS_ThrowTypeError(ctx, "createLayer configuration is not serializable");
+        }
+        if (config) {
+            auto initial = config->clone();
+            auto created = host->layer_config_factory(fs->m_impl->node, std::move(*config));
+            if (created) {
+                node = (*created).as_ptr();
+                host->initial_layer_configs.emplace(node, std::move(initial));
+            }
         }
     }
     if (! node && ! fs->m_impl->clone_queue.empty()) {
         node = fs->m_impl->clone_queue.front();
         fs->m_impl->clone_queue.erase(fs->m_impl->clone_queue.begin());
     }
-    if (! node) return JS_DupValue(ctx, host->default_layer);
-    node->SetVisible(true);
-    if (argc > 0 && JS_IsObject(argv[0])) {
+    if (! node) return JS_ThrowReferenceError(ctx, "createLayer asset is unavailable");
+    if (! configuration_request) node->SetVisible(true);
+    if (! configuration_request || node->Visible()) node->Play();
+    if (configuration_request) {
         JSValue perspective = JS_GetPropertyStr(ctx, argv[0], "perspective");
         if (! JS_IsUndefined(perspective)) node->SetPerspective(JS_ToBool(ctx, perspective) != 0);
         JS_FreeValue(ctx, perspective);
@@ -2180,6 +2934,7 @@ JSValue NodeSceneDestroyLayer(JSContext* ctx, JSValueConst, int argc, JSValueCon
     if (argc < 1) return JS_UNDEFINED;
     if (auto* n = GetLayerNode(argv[0])) {
         n->SetVisible(false);
+        n->Stop();
         auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
         auto* fs   = host ? host->active_field_script : nullptr;
         if (fs) {
@@ -2307,10 +3062,6 @@ JSValue NodeGetTextureAnimation(JSContext* ctx, JSValueConst this_val, int, JSVa
     return obj;
 }
 
-// Sprite-image .getAnimation() and puppet-bone .getAnimationLayer(name).
-// Renderer doesn't yet expose either through the C-class, so route both
-// through the JS-side __wwCreateAnimationStub which gives scripts a
-// no-op handle with `rate` / play / stop / isPlaying.
 JSValue NodeGetAnimationStub(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     JSValue g = JS_GetGlobalObject(ctx);
     JSValue f = JS_GetPropertyStr(ctx, g, "__wwCreateAnimationStub");
@@ -2320,13 +3071,252 @@ JSValue NodeGetAnimationStub(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     return r;
 }
 
-JSValue NodeGetVideoTextureStub(JSContext* ctx, JSValueConst, int, JSValueConst*) {
-    JSValue g = JS_GetGlobalObject(ctx);
-    JSValue f = JS_GetPropertyStr(ctx, g, "__wwCreateVideoTextureStub");
-    JSValue r = JS_Call(ctx, f, JS_UNDEFINED, 0, nullptr);
-    JS_FreeValue(ctx, f);
-    JS_FreeValue(ctx, g);
-    return r;
+static JSClassID s_animation_class_id = 0;
+
+struct AnimationHandle {
+    std::shared_ptr<sr::SceneAnimationPlayback> playback;
+};
+
+void AnimationFinalizer(JSRuntime*, JSValue value) {
+    delete static_cast<AnimationHandle*>(JS_GetOpaque(value, s_animation_class_id));
+}
+
+JSClassDef s_animation_class_def {
+    .class_name = "WWAnimation",
+    .finalizer  = AnimationFinalizer,
+};
+
+sr::SceneAnimationPlayback* GetAnimationPlayback(JSValueConst value) {
+    auto* handle = static_cast<AnimationHandle*>(JS_GetOpaque(value, s_animation_class_id));
+    return handle != nullptr ? handle->playback.get() : nullptr;
+}
+
+JSValue AnimationGetFps(JSContext* ctx, JSValueConst this_val) {
+    auto* playback = GetAnimationPlayback(this_val);
+    return JS_NewFloat64(ctx, playback != nullptr ? playback->Fps() : 30.0);
+}
+
+JSValue AnimationGetFrameCount(JSContext* ctx, JSValueConst this_val) {
+    auto* playback = GetAnimationPlayback(this_val);
+    return JS_NewInt32(ctx, playback != nullptr ? playback->FrameCount() : 1);
+}
+
+JSValue AnimationGetDuration(JSContext* ctx, JSValueConst this_val) {
+    auto* playback = GetAnimationPlayback(this_val);
+    return JS_NewFloat64(ctx, playback != nullptr ? playback->Duration() : 0.0);
+}
+
+JSValue AnimationGetName(JSContext* ctx, JSValueConst this_val) {
+    auto* playback = GetAnimationPlayback(this_val);
+    if (playback == nullptr) return JS_NewString(ctx, "");
+    return JS_NewStringLen(ctx, playback->Name().data(), playback->Name().size());
+}
+
+JSValue AnimationGetRate(JSContext* ctx, JSValueConst this_val) {
+    auto* playback = GetAnimationPlayback(this_val);
+    return JS_NewFloat64(ctx, playback != nullptr ? playback->Rate() : 1.0);
+}
+
+JSValue AnimationSetRate(JSContext* ctx, JSValueConst this_val, JSValueConst value) {
+    double rate = 1.0;
+    if (JS_ToFloat64(ctx, &rate, value) == 0 && std::isfinite(rate)) {
+        if (auto* playback = GetAnimationPlayback(this_val)) playback->SetRate(rate);
+    }
+    return JS_UNDEFINED;
+}
+
+JSValue AnimationPlay(JSContext*, JSValueConst this_val, int, JSValueConst*) {
+    if (auto* playback = GetAnimationPlayback(this_val)) playback->Play();
+    return JS_UNDEFINED;
+}
+
+JSValue AnimationStop(JSContext*, JSValueConst this_val, int, JSValueConst*) {
+    if (auto* playback = GetAnimationPlayback(this_val)) playback->Stop();
+    return JS_UNDEFINED;
+}
+
+JSValue AnimationPause(JSContext*, JSValueConst this_val, int, JSValueConst*) {
+    if (auto* playback = GetAnimationPlayback(this_val)) playback->Pause();
+    return JS_UNDEFINED;
+}
+
+JSValue AnimationSetFrame(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_UNDEFINED;
+    double frame = 0.0;
+    if (JS_ToFloat64(ctx, &frame, argv[0]) == 0) {
+        if (auto* playback = GetAnimationPlayback(this_val)) playback->SetFrame(frame);
+    }
+    return JS_UNDEFINED;
+}
+
+JSValue AnimationGetFrame(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* playback = GetAnimationPlayback(this_val);
+    return JS_NewFloat64(ctx, playback != nullptr ? playback->Frame() : 0.0);
+}
+
+JSValue AnimationIsPlaying(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* playback = GetAnimationPlayback(this_val);
+    return JS_NewBool(ctx, playback != nullptr && playback->IsPlaying());
+}
+
+const JSCFunctionListEntry s_animation_proto_funcs[] = {
+    JS_CGETSET_DEF("fps", AnimationGetFps, NodeSetIgnore),
+    JS_CGETSET_DEF("frameCount", AnimationGetFrameCount, NodeSetIgnore),
+    JS_CGETSET_DEF("duration", AnimationGetDuration, NodeSetIgnore),
+    JS_CGETSET_DEF("name", AnimationGetName, NodeSetIgnore),
+    JS_CGETSET_DEF("rate", AnimationGetRate, AnimationSetRate),
+    JS_CFUNC_DEF("play", 0, AnimationPlay),
+    JS_CFUNC_DEF("stop", 0, AnimationStop),
+    JS_CFUNC_DEF("pause", 0, AnimationPause),
+    JS_CFUNC_DEF("setFrame", 1, AnimationSetFrame),
+    JS_CFUNC_DEF("getFrame", 0, AnimationGetFrame),
+    JS_CFUNC_DEF("isPlaying", 0, AnimationIsPlaying),
+};
+
+void InitAnimationClass(JSContext* ctx, JSRuntime* rt) {
+    if (s_animation_class_id == 0) JS_NewClassID(rt, &s_animation_class_id);
+    JS_NewClass(rt, s_animation_class_id, &s_animation_class_def);
+    JSValue proto = JS_NewObject(ctx);
+    JS_SetPropertyFunctionList(ctx,
+                               proto,
+                               s_animation_proto_funcs,
+                               sizeof(s_animation_proto_funcs) /
+                                   sizeof(s_animation_proto_funcs[0]));
+    JS_SetClassProto(ctx, s_animation_class_id, proto);
+}
+
+JSValue NodeGetAnimation(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* node = GetLayerNode(this_val);
+    if (node == nullptr || argc < 1) return NodeGetAnimationStub(ctx, this_val, argc, argv);
+    const char* name = JS_ToCString(ctx, argv[0]);
+    if (name == nullptr) return NodeGetAnimationStub(ctx, this_val, argc, argv);
+    auto playback = node->FindAnimation(name);
+    JS_FreeCString(ctx, name);
+    if (! playback) return NodeGetAnimationStub(ctx, this_val, argc, argv);
+    JSValue object = JS_NewObjectClass(ctx, s_animation_class_id);
+    if (JS_IsException(object)) return object;
+    JS_SetOpaque(object, new AnimationHandle { .playback = std::move(playback) });
+    return object;
+}
+
+static JSClassID s_video_texture_class_id = 0;
+
+struct VideoTextureHandle {
+    std::shared_ptr<VideoPlaybackState> playback;
+};
+
+void VideoTextureFinalizer(JSRuntime*, JSValue value) {
+    delete static_cast<VideoTextureHandle*>(JS_GetOpaque(value, s_video_texture_class_id));
+}
+
+JSClassDef s_video_texture_class_def {
+    .class_name = "WWVideoTexture",
+    .finalizer  = VideoTextureFinalizer,
+};
+
+VideoPlaybackState* GetVideoPlayback(JSValueConst value) {
+    auto* handle = static_cast<VideoTextureHandle*>(JS_GetOpaque(value, s_video_texture_class_id));
+    return handle != nullptr ? handle->playback.get() : nullptr;
+}
+
+JSValue VideoTextureGetDuration(JSContext* ctx, JSValueConst this_val) {
+    auto* playback = GetVideoPlayback(this_val);
+    auto  duration = playback != nullptr ? playback->Duration() : std::nullopt;
+    return JS_NewFloat64(ctx, duration.value_or(0.0));
+}
+
+JSValue VideoTextureGetRate(JSContext* ctx, JSValueConst this_val) {
+    auto* playback = GetVideoPlayback(this_val);
+    return JS_NewFloat64(ctx, playback != nullptr ? playback->Snapshot().rate : 1.0);
+}
+
+JSValue VideoTextureSetRate(JSContext* ctx, JSValueConst this_val, JSValueConst value) {
+    double rate = 1.0;
+    if (JS_ToFloat64(ctx, &rate, value) != 0) return JS_UNDEFINED;
+    if (std::isfinite(rate) && rate > 0.0) {
+        if (auto* playback = GetVideoPlayback(this_val)) playback->SetRate(rate);
+    }
+    return JS_UNDEFINED;
+}
+
+JSValue VideoTextureGetVolume(JSContext* ctx, JSValueConst) { return JS_NewFloat64(ctx, 1.0); }
+JSValue VideoTextureSetVolume(JSContext*, JSValueConst, JSValueConst) { return JS_UNDEFINED; }
+
+JSValue VideoTexturePlay(JSContext*, JSValueConst this_val, int, JSValueConst*) {
+    if (auto* playback = GetVideoPlayback(this_val)) playback->Play();
+    return JS_UNDEFINED;
+}
+
+JSValue VideoTextureStop(JSContext*, JSValueConst this_val, int, JSValueConst*) {
+    if (auto* playback = GetVideoPlayback(this_val)) playback->Stop();
+    return JS_UNDEFINED;
+}
+
+JSValue VideoTexturePause(JSContext*, JSValueConst this_val, int, JSValueConst*) {
+    if (auto* playback = GetVideoPlayback(this_val)) playback->Pause();
+    return JS_UNDEFINED;
+}
+
+JSValue VideoTextureSetCurrentTime(JSContext* ctx, JSValueConst this_val, int argc,
+                                   JSValueConst* argv) {
+    if (argc < 1) return JS_UNDEFINED;
+    double seconds = 0.0;
+    if (JS_ToFloat64(ctx, &seconds, argv[0]) != 0) return JS_UNDEFINED;
+    if (std::isfinite(seconds) && seconds >= 0.0) {
+        if (auto* playback = GetVideoPlayback(this_val)) playback->Seek(seconds);
+    }
+    return JS_UNDEFINED;
+}
+
+JSValue VideoTextureGetCurrentTime(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* playback = GetVideoPlayback(this_val);
+    return JS_NewFloat64(ctx, playback != nullptr ? playback->CurrentTime() : 0.0);
+}
+
+JSValue VideoTextureIsPlaying(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* playback = GetVideoPlayback(this_val);
+    return JS_NewBool(ctx, playback != nullptr && playback->Snapshot().playing);
+}
+
+const JSCFunctionListEntry s_video_texture_proto_funcs[] = {
+    JS_CGETSET_DEF("duration", VideoTextureGetDuration, NodeSetIgnore),
+    JS_CGETSET_DEF("rate", VideoTextureGetRate, VideoTextureSetRate),
+    JS_CGETSET_DEF("volume", VideoTextureGetVolume, VideoTextureSetVolume),
+    JS_CFUNC_DEF("play", 0, VideoTexturePlay),
+    JS_CFUNC_DEF("stop", 0, VideoTextureStop),
+    JS_CFUNC_DEF("pause", 0, VideoTexturePause),
+    JS_CFUNC_DEF("setCurrentTime", 1, VideoTextureSetCurrentTime),
+    JS_CFUNC_DEF("getCurrentTime", 0, VideoTextureGetCurrentTime),
+    JS_CFUNC_DEF("isPlaying", 0, VideoTextureIsPlaying),
+};
+
+void InitVideoTextureClass(JSContext* ctx, JSRuntime* rt) {
+    if (s_video_texture_class_id == 0) JS_NewClassID(rt, &s_video_texture_class_id);
+    JS_NewClass(rt, s_video_texture_class_id, &s_video_texture_class_def);
+    JSValue proto = JS_NewObject(ctx);
+    JS_SetPropertyFunctionList(ctx,
+                               proto,
+                               s_video_texture_proto_funcs,
+                               sizeof(s_video_texture_proto_funcs) /
+                                   sizeof(s_video_texture_proto_funcs[0]));
+    JS_SetClassProto(ctx, s_video_texture_class_id, proto);
+}
+
+JSValue NodeGetVideoTexture(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* node     = GetLayerNode(this_val);
+    auto  playback = node != nullptr ? node->VideoControlHandle() : nullptr;
+    if (! playback) {
+        JSValue g = JS_GetGlobalObject(ctx);
+        JSValue f = JS_GetPropertyStr(ctx, g, "__wwCreateVideoTextureStub");
+        JSValue r = JS_Call(ctx, f, JS_UNDEFINED, 0, nullptr);
+        JS_FreeValue(ctx, f);
+        JS_FreeValue(ctx, g);
+        return r;
+    }
+    JSValue object = JS_NewObjectClass(ctx, s_video_texture_class_id);
+    if (JS_IsException(object)) return object;
+    JS_SetOpaque(object, new VideoTextureHandle { .playback = std::move(playback) });
+    return object;
 }
 
 const JSCFunctionListEntry s_layer_proto_funcs[] = {
@@ -2338,7 +3328,10 @@ const JSCFunctionListEntry s_layer_proto_funcs[] = {
     JS_CGETSET_DEF("alpha", NodeGetAlpha, NodeSetAlpha),
     JS_CGETSET_DEF("brightness", NodeGetBrightness, NodeSetBrightness),
     JS_CGETSET_DEF("color", NodeGetColor, NodeSetColor),
+    JS_CGETSET_DEF("volume", NodeGetVolume, NodeSetVolume),
+    JS_CGETSET_DEF("instance", NodeGetParticleInstance, NodeSetIgnore),
     JS_CGETSET_DEF("perspective", NodeGetPerspective, NodeSetPerspective),
+    JS_CGETSET_DEF("alignment", NodeGetAlignment, NodeSetAlignment),
     JS_CGETSET_DEF("text", NodeGetText, NodeSetText),
     JS_CGETSET_DEF("name", NodeGetNameValue, NodeSetIgnore),
     JS_CGETSET_DEF("verticalalign", NodeGetVAlign, NodeSetVAlign),
@@ -2346,17 +3339,21 @@ const JSCFunctionListEntry s_layer_proto_funcs[] = {
     JS_CGETSET_DEF("pointsize", NodeGetPointSize, NodeSetPointSize),
     JS_CFUNC_DEF("getParent", 0, NodeGetParent),
     JS_CFUNC_DEF("getTransformMatrix", 0, NodeGetTransformMatrix),
+    JS_CFUNC_DEF("rotateObjectSpace", 1, NodeRotateObjectSpace),
     JS_CFUNC_DEF("getChildren", 0, NodeGetChildren),
     JS_CFUNC_DEF("getName", 0, NodeGetName),
     JS_CFUNC_DEF("getLayer", 1, NodeGetLayer),
     JS_CFUNC_DEF("getEffect", 1, NodeGetEffect),
+    JS_CFUNC_DEF("getEffectCount", 0, NodeGetEffectCount),
     JS_CFUNC_DEF("enumerateLayers", 0, NodeSceneEnumerateLayers),
     JS_CFUNC_DEF("getInitialLayerConfig", 1, NodeSceneGetInitialLayerConfig),
+    JS_CFUNC_DEF("getCameraTransforms", 0, NodeSceneGetCameraTransforms),
+    JS_CFUNC_DEF("setCameraTransforms", 1, NodeSceneSetCameraTransforms),
     JS_CFUNC_DEF("getBoneIndex", 1, NodeGetBoneIndex),
     JS_CFUNC_DEF("getBoneTransform", 1, NodeGetBoneTransform),
     JS_CFUNC_DEF("getTextureAnimation", 0, NodeGetTextureAnimation),
-    JS_CFUNC_DEF("getVideoTexture", 0, NodeGetVideoTextureStub),
-    JS_CFUNC_DEF("getAnimation", 0, NodeGetAnimationStub),
+    JS_CFUNC_DEF("getVideoTexture", 0, NodeGetVideoTexture),
+    JS_CFUNC_DEF("getAnimation", 1, NodeGetAnimation),
     JS_CFUNC_DEF("getAnimationLayer", 1, NodeGetAnimationStub),
     JS_CFUNC_DEF("createLayer", 1, NodeSceneCreateLayer),
     JS_CFUNC_DEF("destroyLayer", 1, NodeSceneDestroyLayer),
@@ -2379,8 +3376,34 @@ void InitLayerClass(JSContext* ctx, JSRuntime* rt) {
     JS_SetClassProto(ctx, s_layer_class_id, proto);
 }
 
+const JSCFunctionListEntry s_particle_instance_proto_funcs[] = {
+    JS_CGETSET_DEF("alpha", ParticleGetAlpha, ParticleSetAlpha),
+    JS_CGETSET_DEF("size", ParticleGetSize, ParticleSetSize),
+    JS_CGETSET_DEF("lifetime", ParticleGetLifetime, ParticleSetLifetime),
+    JS_CGETSET_DEF("rate", ParticleGetRate, ParticleSetRate),
+    JS_CGETSET_DEF("speed", ParticleGetSpeed, ParticleSetSpeed),
+    JS_CGETSET_DEF("count", ParticleGetCount, ParticleSetCount),
+    JS_CGETSET_DEF("brightness", ParticleGetBrightness, ParticleSetBrightness),
+    JS_CGETSET_DEF("color", ParticleGetColor, ParticleSetColor),
+    JS_CGETSET_DEF("colorn", ParticleGetColorn, ParticleSetColorn),
+};
+
+void InitParticleInstanceClass(JSContext* ctx, JSRuntime* rt) {
+    if (s_particle_instance_class_id == 0) JS_NewClassID(rt, &s_particle_instance_class_id);
+    JS_NewClass(rt, s_particle_instance_class_id, &s_particle_instance_class_def);
+    JSValue proto = JS_NewObject(ctx);
+    JS_SetPropertyFunctionList(ctx,
+                               proto,
+                               s_particle_instance_proto_funcs,
+                               sizeof(s_particle_instance_proto_funcs) /
+                                   sizeof(s_particle_instance_proto_funcs[0]));
+    JS_SetClassProto(ctx, s_particle_instance_class_id, proto);
+}
+
 const JSCFunctionListEntry s_effect_proto_funcs[] = {
     JS_CGETSET_DEF("visible", EffectGetVisible, EffectSetVisible),
+    JS_CGETSET_DEF("name", EffectGetName, NodeSetIgnore),
+    JS_CFUNC_DEF("getMaterial", 1, EffectGetMaterial),
 };
 
 void InitEffectClass(JSContext* ctx, JSRuntime* rt) {
@@ -2394,27 +3417,34 @@ void InitEffectClass(JSContext* ctx, JSRuntime* rt) {
     JS_SetClassProto(ctx, s_effect_class_id, proto);
 }
 
+void InitMaterialClass(JSContext* ctx, JSRuntime* rt) {
+    if (s_material_class_id == 0) JS_NewClassID(rt, &s_material_class_id);
+    JS_NewClass(rt, s_material_class_id, &s_material_class_def);
+    JS_SetClassProto(ctx, s_material_class_id, JS_NewObject(ctx));
+}
+
 // Stash the bootstrap's `thisLayer` / `thisScene` stubs for restore.
 void CaptureDefaultBindings(JSContext* ctx) {
     auto*   host        = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
     JSValue g           = JS_GetGlobalObject(ctx);
     host->default_layer = JS_GetPropertyStr(ctx, g, "thisLayer");
     host->default_scene = JS_GetPropertyStr(ctx, g, "thisScene");
-    JS_FreeValue(ctx, g);
+    host->global_obj        = g; // retained for lifetime; freed in dtor
+    host->atom_this_layer   = JS_NewAtom(ctx, "thisLayer");
+    host->atom_this_object  = JS_NewAtom(ctx, "thisObject");
+    host->atom_this_scene   = JS_NewAtom(ctx, "thisScene");
 }
 
 // Write `globalThis.thisLayer = val`. `val` is duplicated; ownership of
 // the original ref stays with the caller.
 void BindThisLayer(JSContext* ctx, JSValueConst val) {
-    JSValue g = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, g, "thisLayer", JS_DupValue(ctx, val));
-    JS_SetPropertyStr(ctx, g, "thisObject", JS_DupValue(ctx, val));
-    JS_FreeValue(ctx, g);
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    JS_SetProperty(ctx, host->global_obj, host->atom_this_layer, JS_DupValue(ctx, val));
+    JS_SetProperty(ctx, host->global_obj, host->atom_this_object, JS_DupValue(ctx, val));
 }
 void BindThisScene(JSContext* ctx, JSValueConst val) {
-    JSValue g = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, g, "thisScene", JS_DupValue(ctx, val));
-    JS_FreeValue(ctx, g);
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    JS_SetProperty(ctx, host->global_obj, host->atom_this_scene, JS_DupValue(ctx, val));
 }
 
 JSValue MakeMediaPlaybackEvent(JSContext* ctx, const MediaStatus& status) {
@@ -2438,6 +3468,11 @@ JSValue MakeMediaPropertiesEvent(JSContext* ctx, const MediaStatus& status) {
     JS_DefinePropertyValueStr(ctx,
                               ev,
                               "album",
+                              JS_NewStringLen(ctx, status.album.data(), status.album.size()),
+                              JS_PROP_C_W_E);
+    JS_DefinePropertyValueStr(ctx,
+                              ev,
+                              "albumTitle",
                               JS_NewStringLen(ctx, status.album.data(), status.album.size()),
                               JS_PROP_C_W_E);
     JS_DefinePropertyValueStr(
@@ -2471,6 +3506,9 @@ JSValue MakeMediaThumbnailEvent(JSContext* ctx, const MediaStatus& status) {
         JS_PROP_C_W_E);
     JS_DefinePropertyValueStr(ctx, ev, "primaryColor", MakeVec3(ctx, 1, 1, 1), JS_PROP_C_W_E);
     JS_DefinePropertyValueStr(ctx, ev, "secondaryColor", MakeVec3(ctx, 0, 0, 0), JS_PROP_C_W_E);
+    JS_DefinePropertyValueStr(ctx, ev, "tertiaryColor", MakeVec3(ctx, 0, 0, 0), JS_PROP_C_W_E);
+    JS_DefinePropertyValueStr(ctx, ev, "textColor", MakeVec3(ctx, 0, 0, 0), JS_PROP_C_W_E);
+    JS_DefinePropertyValueStr(ctx, ev, "highContrastColor", MakeVec3(ctx, 0, 0, 0), JS_PROP_C_W_E);
     return ev;
 }
 
@@ -2485,23 +3523,33 @@ JsRuntime::JsRuntime(): m_impl(std::make_unique<Impl>()) {
         rstd_error("script: JS_NewRuntime/JS_NewContext failed");
         return;
     }
-    // QuickJS's default stack-overflow check is conservative (relative to
-    // the OS thread stack at runtime init). When the wallpaper renderer
-    // runs scripts from a deep call site (Vulkan render thread, post-
-    // particle emission), `new Date()` and similar built-ins hit the
-    // stack-frame guard and throw "Maximum call stack size exceeded".
-    // Disable the soft check; the OS stack is plenty for clock/audio-
-    // response style scripts in the corpus.
-    JS_SetMaxStackSize(m_impl->rt, 0);
+    // Sandbox for untrusted Workshop JS: bounded native stack, bounded heap,
+    // and a wall-clock watchdog. See the kScript* constants for the rationale
+    // behind each value — in particular why the stack check used to be
+    // disabled here and why re-enabling it needs the JS_UpdateStackTop that
+    // ScriptDeadlineGuard performs at every entry point.
+    JS_SetMaxStackSize(m_impl->rt, kScriptStackLimitBytes);
+    JS_SetMemoryLimit(m_impl->rt, kScriptMemoryLimitBytes);
+    JS_SetGCThreshold(m_impl->rt, kScriptGcThresholdBytes);
     JS_SetContextOpaque(m_impl->ctx, &m_impl->host);
+    // The opaque is EngineHostState, a member of Impl, so it outlives the
+    // JSRuntime it is registered on (the runtime is freed in ~JsRuntime's body,
+    // Impl is destroyed afterwards). The handler is also unregistered before
+    // teardown so it cannot fire during JS_FreeContext / JS_FreeRuntime.
+    m_impl->host.js_rt = m_impl->rt;
+    JS_SetInterruptHandler(m_impl->rt, ScriptInterruptHandler, &m_impl->host);
     // Built-in ES modules (WEMath, …). Resolves bare `import 'WEMath'`
     // against the kBuiltinModules table; unknown names raise
     // ReferenceError via the loader.
     JS_SetModuleLoaderFunc(
         m_impl->rt, /*normalize=*/nullptr, BuiltinModuleLoader, /*opaque=*/nullptr);
     InitLayerClass(m_impl->ctx, m_impl->rt);
+    InitParticleInstanceClass(m_impl->ctx, m_impl->rt);
     InitEffectClass(m_impl->ctx, m_impl->rt);
+    InitMaterialClass(m_impl->ctx, m_impl->rt);
     InitTexAnimClass(m_impl->ctx, m_impl->rt);
+    InitAnimationClass(m_impl->ctx, m_impl->rt);
+    InitVideoTextureClass(m_impl->ctx, m_impl->rt);
     InstallEngineGlobal(m_impl->ctx);
     // Bootstrap created stub `thisLayer` / `thisScene` on globalThis.
     // Capture them now so per-script binding can fall back to the stub
@@ -2511,6 +3559,13 @@ JsRuntime::JsRuntime(): m_impl(std::make_unique<Impl>()) {
 
 JsRuntime::~JsRuntime() {
     if (! m_impl) return;
+    // SR-SEC-16: localStorage writes are debounced, so land any pending one
+    // before teardown. Normal exit must not lose a script's saved state.
+    if (m_impl->host.ls_dirty) FlushLocalStorage(&m_impl->host);
+    // No script may run from here on: unregister the watchdog so it cannot
+    // fire from anything JS_FreeContext / JS_FreeRuntime triggers.
+    if (m_impl->rt) JS_SetInterruptHandler(m_impl->rt, nullptr, nullptr);
+    m_impl->host.watchdog_armed = false;
     // Drop FieldScripts before tearing down the runtime so their JSValues
     // go through JS_FreeValue while the context is still alive.
     for (auto& fs : m_impl->scripts) {
@@ -2532,8 +3587,20 @@ JsRuntime::~JsRuntime() {
         JS_FreeValue(m_impl->ctx, m_impl->host.default_layer);
     if (! JS_IsUndefined(m_impl->host.default_scene))
         JS_FreeValue(m_impl->ctx, m_impl->host.default_scene);
+    if (m_impl->host.atom_this_layer != JS_ATOM_NULL)
+        JS_FreeAtom(m_impl->ctx, m_impl->host.atom_this_layer);
+    if (m_impl->host.atom_this_object != JS_ATOM_NULL)
+        JS_FreeAtom(m_impl->ctx, m_impl->host.atom_this_object);
+    if (m_impl->host.atom_this_scene != JS_ATOM_NULL)
+        JS_FreeAtom(m_impl->ctx, m_impl->host.atom_this_scene);
+    if (! JS_IsUndefined(m_impl->host.global_obj))
+        JS_FreeValue(m_impl->ctx, m_impl->host.global_obj);
     if (m_impl->host.audio_buffer_built) {
         JS_FreeValue(m_impl->ctx, m_impl->host.audio_buffer);
+        JS_FreeValue(m_impl->ctx, m_impl->host.audio_left_arr);
+        JS_FreeValue(m_impl->ctx, m_impl->host.audio_right_arr);
+        JS_FreeValue(m_impl->ctx, m_impl->host.audio_avg_arr);
+        JS_FreeValue(m_impl->ctx, m_impl->host.audio_buf_arr);
         m_impl->host.audio_buffer_built = false;
     }
     for (auto& d : m_impl->host.deferred) {
@@ -2545,13 +3612,22 @@ JsRuntime::~JsRuntime() {
 }
 
 void JsRuntime::SetFrameInputs(const FrameInputs& fi) {
+    // The FrameInputs snapshot itself is read by C++ (hit testing, engine.*
+    // getters), so keep storing it even after the watchdog disabled scripting.
     m_impl->host.inputs = fi;
+    if (m_impl->host.scripts_halted) return;
+    // Writing globalThis.input can run script code (a script is free to swap
+    // `input` for a Proxy or install setters), so this is a real entry point.
+    ScriptDeadlineGuard guard(&m_impl->host, kScriptFrameBudget);
     UpdateInputObject(m_impl->ctx);
     if (m_impl->host.audio_buffer_built) RefreshAudioBuffer(m_impl->ctx);
 }
 
 void JsRuntime::SetUserProperty(std::string_view key, const Json& property) {
     if (! m_impl || ! m_impl->ctx) return;
+    if (m_impl->host.scripts_halted) return;
+    ScriptDeadlineGuard guard(&m_impl->host, kScriptFrameBudget);
+
     std::string key_str { key };
     JSContext*  ctx    = m_impl->ctx;
     JSValue     global = JS_GetGlobalObject(ctx);
@@ -2595,6 +3671,9 @@ void JsRuntime::SetUserProperty(std::string_view key, const Json& property) {
 
 void JsRuntime::SetMediaStatus(const MediaStatus& status) {
     if (! m_impl || ! m_impl->ctx) return;
+    if (m_impl->host.scripts_halted) return;
+    ScriptDeadlineGuard guard(&m_impl->host, kScriptFrameBudget);
+
     JSContext* ctx         = m_impl->ctx;
     auto&      host        = m_impl->host;
     const bool first       = ! host.media_initialized;
@@ -2659,20 +3738,54 @@ void JsRuntime::SetScene(sr::Scene* scene) {
     m_impl->host.scene = scene;
 }
 
+void JsRuntime::SetInitializationOrder(FieldScript& script, std::uint64_t order) {
+    if (! script.m_impl || script.m_impl->rt != m_impl.get() || script.m_impl->init_done) return;
+    script.m_impl->initialization_order = order;
+}
+
+void JsRuntime::RegisterInitialLayerConfig(sr::SceneNode* node, Json config) {
+    if (! m_impl || node == nullptr) return;
+    m_impl->host.initial_layer_configs.insert_or_assign(node, std::move(config));
+}
+
 void JsRuntime::SetSceneRoot(sr::SceneNode* root) {
     if (! m_impl || ! m_impl->ctx) return;
+    if (m_impl->host.scripts_halted) return;
+    // Covers BindThisScene (a globalThis write a script can intercept) and the
+    // deferred init() pass below; the budget is shared by every script's init
+    // so a whole scene cannot stall the loader for more than one eval budget.
+    ScriptDeadlineGuard guard(&m_impl->host, kScriptEvalBudget);
     if (! JS_IsUndefined(m_impl->wrapped_scene)) JS_FreeValue(m_impl->ctx, m_impl->wrapped_scene);
     m_impl->scene_root      = root;
     m_impl->host.scene_root = root;
     m_impl->wrapped_scene   = root ? WrapLayerNode(m_impl->ctx, root) : JS_UNDEFINED;
     if (! JS_IsUndefined(m_impl->wrapped_scene)) BindThisScene(m_impl->ctx, m_impl->wrapped_scene);
+    std::vector<FieldScript*> pending;
+    pending.reserve(m_impl->scripts.size());
     for (auto& fs : m_impl->scripts) {
-        RunFieldScriptInit(m_impl->ctx, m_impl.get(), fs.get());
+        if (fs && fs->m_impl && ! fs->m_impl->init_done) pending.push_back(fs.get());
     }
+    std::stable_sort(pending.begin(), pending.end(), [](const auto* left, const auto* right) {
+        return left->m_impl->initialization_order < right->m_impl->initialization_order;
+    });
+    for (auto* fs : pending) RunFieldScriptInit(m_impl->ctx, m_impl.get(), fs);
 }
 
 void JsRuntime::TickAll() {
     JSContext* ctx = m_impl->ctx;
+    // SR-SEC-16: the once-per-frame hook that lands debounced localStorage
+    // writes. Runs before the halt check so a store dirtied by the script that
+    // was just disabled still reaches disk.
+    MaybeFlushLocalStorage(&m_impl->host);
+    // A script the watchdog interrupted is never called again: without this the
+    // engine would re-enter the same runaway loop and burn the whole budget
+    // every frame, for the life of the wallpaper. Actuators keep applying each
+    // script's last_value, so the scene renders on with its final state.
+    if (m_impl->host.scripts_halted) return;
+    // One budget for the whole tick — timer sweep, cursor callbacks and every
+    // update() together — because what matters is the frame the render thread
+    // owes the compositor, not any single callback.
+    ScriptDeadlineGuard guard(&m_impl->host, kScriptFrameBudget);
     SweepDeferred(ctx, &m_impl->host);
 
     // Cursor event dispatch. For every script bound to a SceneNode, hit-
@@ -2719,8 +3832,6 @@ void JsRuntime::TickAll() {
                     I->captured_buttons |= (1u << b);
                     InvokeEventCallback(
                         ctx, I->module_ns, "cursorDown", ensure_ev(b), m_impl.get(), I->sha);
-                    InvokeEventCallback(
-                        ctx, I->module_ns, "cursorClick", ensure_ev(b), m_impl.get(), I->sha);
                 }
             }
         }
@@ -2733,6 +3844,10 @@ void JsRuntime::TickAll() {
                 if (ending & (1u << b)) {
                     InvokeEventCallback(
                         ctx, I->module_ns, "cursorUp", ensure_ev(b), m_impl.get(), I->sha);
+                    if (over_node) {
+                        InvokeEventCallback(
+                            ctx, I->module_ns, "cursorClick", ensure_ev(b), m_impl.get(), I->sha);
+                    }
                 }
             }
             I->captured_buttons &= ~btn_release;
@@ -2813,6 +3928,27 @@ void JsRuntime::RegisterTextAlignSetters(sr::SceneNode* node, std::string horizo
     };
 }
 
+void JsRuntime::RegisterImageAlignmentSetter(sr::SceneNode* node, std::string alignment,
+                                             std::function<void(std::string_view)> setter) {
+    if (node == nullptr) return;
+    m_impl->host.image_alignment_hooks[node] = {
+        .alignment = std::move(alignment),
+        .setter    = std::move(setter),
+    };
+}
+
+void JsRuntime::SetLayerFactory(LayerFactory factory) {
+    m_impl->host.layer_factory = std::move(factory);
+}
+
+void JsRuntime::SetLayerConfigFactory(LayerConfigFactory factory) {
+    m_impl->host.layer_config_factory = std::move(factory);
+}
+
+void JsRuntime::ClearLayerFactory() { m_impl->host.layer_factory = {}; }
+
+void JsRuntime::ClearLayerConfigFactory() { m_impl->host.layer_config_factory = {}; }
+
 // --- Module load + FieldScript construction ---------------------------------
 
 namespace
@@ -2830,12 +3966,16 @@ bool FunctionTakesArg(JSContext* ctx, JSValue fn) {
 
 void RunFieldScriptInit(JSContext* ctx, JsRuntime::Impl* rt, FieldScript* fs) {
     if (! fs || ! fs->m_impl || fs->m_impl->init_done) return;
+    if (rt->host.scripts_halted) return;
     auto* I = fs->m_impl.get();
     if (! JS_IsFunction(ctx, I->init_fn)) {
         I->init_done = true;
         return;
     }
 
+    // init() legitimately does heavy one-shot work, so it gets the eval budget
+    // rather than the per-frame one.
+    ScriptDeadlineGuard guard(&rt->host, kScriptEvalBudget);
     BindThisLayer(ctx,
                   JS_IsUndefined(I->wrapped_layer) ? rt->host.default_layer : I->wrapped_layer);
     if (! JS_IsUndefined(rt->wrapped_scene)) BindThisScene(ctx, rt->wrapped_scene);
@@ -2849,6 +3989,34 @@ void RunFieldScriptInit(JSContext* ctx, JsRuntime::Impl* rt, FieldScript* fs) {
     I->init_done                 = true;
 }
 
+JSValue AwaitModuleEvaluation(JSContext* ctx, JSValue value) {
+    for (;;) {
+        switch (JS_PromiseState(ctx, value)) {
+        case JS_PROMISE_FULFILLED: {
+            JSValue result = JS_PromiseResult(ctx, value);
+            JS_FreeValue(ctx, value);
+            return result;
+        }
+        case JS_PROMISE_REJECTED: {
+            JSValue reason = JS_PromiseResult(ctx, value);
+            JS_FreeValue(ctx, value);
+            return JS_Throw(ctx, reason);
+        }
+        case JS_PROMISE_PENDING: {
+            JSContext* job_ctx = nullptr;
+            int        status  = JS_ExecutePendingJob(JS_GetRuntime(ctx), &job_ctx);
+            if (status > 0) continue;
+            JS_FreeValue(ctx, value);
+            if (status == 0)
+                return JS_ThrowInternalError(ctx, "module evaluation is pending without a job");
+            JSContext* exception_ctx = job_ctx != nullptr ? job_ctx : ctx;
+            return JS_Throw(ctx, JS_GetException(exception_ctx));
+        }
+        case JS_PROMISE_NOT_A_PROMISE: return value;
+        }
+    }
+}
+
 } // namespace
 
 FieldScript* JsRuntime::MakeFieldScript(
@@ -2858,6 +4026,13 @@ FieldScript* JsRuntime::MakeFieldScript(
     std::unordered_map<std::string, std::vector<sr::SceneNode*>> asset_clones) {
     JSContext* ctx = m_impl->ctx;
     if (! ctx) return nullptr;
+    m_impl->host.pending_registered_assets.clear();
+    // Once the watchdog has fired for this wallpaper, stop compiling and
+    // evaluating the rest of its scripts as well.
+    if (m_impl->host.scripts_halted) return nullptr;
+    // Covers the compile, the module body (untrusted top-level code) and the
+    // init() that RunFieldScriptInit may run at the end of this function.
+    ScriptDeadlineGuard guard(&m_impl->host, kScriptEvalBudget);
 
     // Wrap `node` (if any) up front. Bind it as `thisLayer` for the
     // duration of module eval + init so module-body top-level statements
@@ -2888,7 +4063,7 @@ FieldScript* JsRuntime::MakeFieldScript(
             return nullptr;
         }
         JSModuleDef* m  = static_cast<JSModuleDef*>(JS_VALUE_GET_PTR(compiled));
-        JSValue      ev = JS_EvalFunction(ctx, compiled);
+        JSValue      ev = AwaitModuleEvaluation(ctx, JS_EvalFunction(ctx, compiled));
         if (JS_IsException(ev)) {
             m_impl->LogError(ctx, script_sha, "module eval failed");
             JS_FreeValue(ctx, ev);
@@ -2910,6 +4085,7 @@ FieldScript* JsRuntime::MakeFieldScript(
     I->node          = node;
     I->wrapped_layer = wrapped; // takes ownership; freed in JsRuntime dtor
     I->clone_queue   = std::move(clones);
+    I->registered_assets = std::move(m_impl->host.pending_registered_assets);
     for (auto& [asset, nodes] : asset_clones) {
         fs->AddAssetCloneQueue(std::move(asset), std::move(nodes));
     }
@@ -3064,6 +4240,47 @@ std::function<void(const ScriptValue&)> MakeNodeAlphaApply(rstd::sync::Arc<sr::S
         } else if (auto* p = std::get_if<Vec3Value>(&v)) {
             node->SetUserAlpha(static_cast<float>(p->x));
         }
+    };
+}
+
+std::function<void(const ScriptValue&)> MakeNodeColorApply(rstd::sync::Arc<sr::SceneNode> node) {
+    return [hold = SceneNodeArcCapture(std::move(node))](const ScriptValue& value) {
+        const auto& current = hold.node->Color();
+        if (auto* color = std::get_if<Vec3Value>(&value)) {
+            hold.node->SetColor({ static_cast<float>(color->x),
+                                  static_cast<float>(color->y),
+                                  static_cast<float>(color->z) });
+        } else if (auto* color = std::get_if<Vec2Value>(&value)) {
+            hold.node->SetColor(
+                { static_cast<float>(color->x), static_cast<float>(color->y), current.z() });
+        } else if (auto* color = std::get_if<ScalarValue>(&value)) {
+            const auto component = static_cast<float>(color->v);
+            hold.node->SetColor({ component, component, component });
+        }
+    };
+}
+
+std::function<void(const ScriptValue&)> MakeNodeVolumeApply(rstd::sync::Arc<sr::SceneNode> node) {
+    return [hold = SceneNodeArcCapture(rstd::move(node))](const ScriptValue& value) {
+        if (auto* volume = std::get_if<ScalarValue>(&value)) {
+            hold.node->SetVolume(static_cast<float>(volume->v));
+        } else if (auto* volume = std::get_if<BoolValue>(&value)) {
+            hold.node->SetVolume(volume->v ? 1.0f : 0.0f);
+        } else if (auto* volume = std::get_if<Vec2Value>(&value)) {
+            hold.node->SetVolume(static_cast<float>(volume->x));
+        } else if (auto* volume = std::get_if<Vec3Value>(&value)) {
+            hold.node->SetVolume(static_cast<float>(volume->x));
+        }
+    };
+}
+
+std::function<void(const ScriptValue&)> MakeNodeVisibleApply(rstd::sync::Arc<sr::SceneNode> node,
+                                                             sr::Scene*                     scene) {
+    return [hold = SceneNodeArcCapture(rstd::move(node)), scene](const ScriptValue& v) {
+        if (scene == nullptr) return;
+        auto* p = std::get_if<BoolValue>(&v);
+        if (p == nullptr) return;
+        scene->SetNodeVisible(*hold.node.as_ptr(), p->v);
     };
 }
 

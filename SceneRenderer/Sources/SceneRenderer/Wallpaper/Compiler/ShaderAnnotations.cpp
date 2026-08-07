@@ -24,6 +24,14 @@ namespace
 using shader_lex::Cursor;
 using shader_lex::LineWalker;
 
+// Highest addressable `g_TextureN` sampler slot. Mirrors WE_GLTEX_NAMES in
+// sr.spec_texs (g_Texture0..g_Texture12); duplicated as a file-local constant
+// so this translation unit needs no extra import. A slot beyond this range can
+// never be bound by the renderer, but the parsed index is used downstream to
+// size the material's texture vector (SceneCompiler's defTexs loop), so a
+// hostile `uniform sampler2D g_Texture999999999;` must be rejected here.
+constexpr i32 kMaxShaderTextureSlots = 13;
+
 bool TryParseAnnotationJson(std::string_view source, Json& result) {
     auto parsed = rstd::json::from_str(rstd::cppstd::as_str(source));
     if (parsed.is_err()) return false;
@@ -149,14 +157,28 @@ void HandleUniformLine(WPShaderInfo* info, std::span<const WPShaderTexInfo> texi
         wput.FromJson(sv_json);
         i32 index { 0 };
         STRTONUM(name.substr(9), index);
-        if (! wput.default_.empty()) {
+        // `index` is parsed out of the uniform's own name, i.e. out of
+        // shader text that ships inside the wallpaper package. Reject
+        // out-of-range slots before the value escapes into defTexs, where it
+        // is used to size vectors, or indexes `texinfos`. Only the
+        // slot-dependent work is skipped: shaders declare a high-numbered
+        // sampler purely to gate a `#define`, so dropping the uniform (and
+        // with it its combo) would fail the compile instead of hardening it.
+        const bool slot_ok = index >= 0 && index < kMaxShaderTextureSlots;
+        if (! slot_ok) {
+            rstd_error("shader texture uniform '{}' slot {} out of range [0,{})",
+                       std::string(name),
+                       index,
+                       kMaxShaderTextureSlots);
+        }
+        if (slot_ok && ! wput.default_.empty()) {
             info->defTexs.push_back({ index, wput.default_ });
         }
+        const bool tex_enabled = slot_ok && index < texcount && texinfos[(usize)index].enabled;
         if (! wput.combo.empty()) {
-            const bool enabled       = index < texcount && texinfos[(usize)index].enabled;
-            info->combos[wput.combo] = enabled ? "1" : "0";
+            info->combos[wput.combo] = tex_enabled ? "1" : "0";
         }
-        if (index < texcount && texinfos[(usize)index].enabled) {
+        if (tex_enabled) {
             auto& compos = texinfos[(usize)index].composEnabled;
             usize num    = std::min(std::size(compos), std::size(wput.components));
             for (usize i = 0; i < num; i++) {

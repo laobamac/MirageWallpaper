@@ -162,6 +162,14 @@ struct GeneralPage: SettingsPage {
                     Text("深色").tag(GSAppearance.dark)
                     Text("跟随系统").tag(GSAppearance.followSystem)
                 }
+
+                Toggle("覆盖壁纸", isOn: Binding(
+                    get: { viewModel.settings.shouldOverrideWallpaper },
+                    set: { viewModel.settings.overrideWallpaper = $0 }
+                ))
+                Text("Mirage 会用当前壁纸的画面替换系统桌面图片，让菜单栏与程序坞的取色与壁纸一致。开启后将持续覆盖，退出 Mirage 后依然保留；关闭时仅在 Mirage 运行期间覆盖，退出会自动还原你原本的桌面图片。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             } header: {
                 Label("外观", systemImage: "paintpalette.fill")
             }
@@ -230,7 +238,7 @@ struct GeneralPage: SettingsPage {
                                 .font(.title2)
                                 .foregroundStyle(.orange)
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(apiKeyIsEmpty ? "请设置您自己的 Steam Web API Key" : "Steam Web API Key 格式无效")
+                                Text(LocalizedStringKey(apiKeyIsEmpty ? "请设置您自己的 Steam Web API Key" : "Steam Web API Key 格式无效"))
                                     .font(.callout)
                                     .bold()
                                 Text(apiKeyIsEmpty

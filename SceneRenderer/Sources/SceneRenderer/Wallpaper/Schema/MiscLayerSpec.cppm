@@ -81,6 +81,7 @@ struct TextObject {
     int32_t                  colorBlendMode { 0 };
     std::array<float, 2>     size { 0.0f, 0.0f };
     bool                     perspective { false };
+    bool                     reflected { true };
     bool                     copybackground { false };
     bool                     solid { false };
     bool                     opaquebackground { false };
@@ -136,6 +137,7 @@ struct TextObject {
         sr::GetJsonValue(json, "colorBlendMode", colorBlendMode, false);
         sr::GetJsonValue(json, "size", size, false);
         sr::GetJsonValue(json, "perspective", perspective, false);
+        sr::GetJsonValue(json, "reflected", reflected, false);
         sr::GetJsonValue(json, "copybackground", copybackground, false);
         sr::GetJsonValue(json, "solid", solid, false);
         sr::GetJsonValue(json, "opaquebackground", opaquebackground, false);
@@ -177,9 +179,11 @@ struct ModelObject {
     sr::Json                 instance;
     FieldBindings             field_bindings;
 
-    std::string model;
-    std::string attachment;
-    bool        perspective { false };
+    std::string   model;
+    std::string   attachment;
+    std::uint32_t skin { 0 };
+    bool          perspective { false };
+    bool          reflected { true };
 
     std::vector<WPPuppetLayer::AnimationLayer> puppet_layers;
     VisibleUserBinding                         visible_user;
@@ -206,7 +210,9 @@ struct ModelObject {
 
         sr::GetJsonValue(json, "model", model, false);
         sr::GetJsonValue(json, "attachment", attachment, false);
+        sr::GetJsonValue(json, "skin", skin, false);
         sr::GetJsonValue(json, "perspective", perspective, false);
+        sr::GetJsonValue(json, "reflected", reflected, false);
         ReadPuppetAnimationLayers(json, puppet_layers);
         AbsorbAllFieldBindings(json, field_bindings);
         return true;

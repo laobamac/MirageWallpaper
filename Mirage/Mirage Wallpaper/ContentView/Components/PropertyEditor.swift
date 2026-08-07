@@ -65,11 +65,16 @@ final class ConditionStore: ObservableObject {
     private let evaluator = WEConditionEvaluator()
     @Published private(set) var generation = 0
 
+    // Order matters: updateContext also drops the evaluator's cached verdicts,
+    // so the generation bump that follows re-renders against fresh results.
     func update(properties: [String: WEProjectProperty], overrides: [String: WEPropertyValue]) {
         evaluator.updateContext(properties: properties, overrides: overrides)
         generation &+= 1
     }
 
+    // Called once per row and once per combo option on every body pass; within
+    // one generation the evaluator answers repeats from its cache instead of
+    // re-entering JavaScriptCore.
     func isVisible(_ condition: String?) -> Bool {
         _ = generation // establish dependency
         return evaluator.evaluate(condition)
@@ -221,7 +226,7 @@ struct PropertyRow: View {
         VStack(alignment: .leading, spacing: 4) {
             labelView(lineLimit: 2)
             HStack {
-                Text(displayPath.isEmpty ? "未选择" : displayPath)
+                Text(displayPath.isEmpty ? L("未选择") : displayPath)
                     .font(.caption)
                     .foregroundStyle(displayPath.isEmpty ? .secondary : .primary)
                     .lineLimit(1)

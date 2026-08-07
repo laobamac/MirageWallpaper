@@ -1,5 +1,14 @@
 #import "ControlChannel.h"
 
+#include <errno.h>
+#include <string.h>
+#include <unistd.h>
+
+// A control line is a single JSON command; anything approaching this is either
+// a bug or an attempt to make the renderer allocate until it dies. Without a
+// cap a newline-free stream grows the buffer without bound.
+static const NSUInteger kMirageMaxLineLength = 1024 * 1024; // 1 MiB
+
 @implementation MirageControlChannel {
     void (^_handler)(NSDictionary *);
     void (^_onEOF)(void);
@@ -27,26 +36,60 @@
 - (void)readLoop {
     @autoreleasepool {
         NSMutableData *buffer = [NSMutableData data];
+        NSUInteger searchOffset = 0;  // bytes of `buffer` already scanned for '\n'
+        BOOL discarding = NO;         // dropping an over-long line until the next '\n'
+        BOOL warnedOverflow = NO;
         char chunk[4096];
         for (;;) {
             ssize_t n = read(STDIN_FILENO, chunk, sizeof(chunk));
+            if (n < 0 && errno == EINTR) continue;
             if (n <= 0) break; // EOF or error
-            [buffer appendBytes:chunk length:(NSUInteger)n];
+
+            if (discarding) {
+                // Resync: throw away everything up to and including the next
+                // newline, then resume parsing from the remainder.
+                const char *nl = (const char *)memchr(chunk, '\n', (size_t)n);
+                if (nl == NULL) continue;
+                NSUInteger consumed = (NSUInteger)(nl - chunk) + 1;
+                discarding = NO;
+                searchOffset = 0;
+                [buffer setLength:0];
+                if (consumed < (NSUInteger)n) {
+                    [buffer appendBytes:chunk + consumed length:(NSUInteger)n - consumed];
+                }
+            } else {
+                [buffer appendBytes:chunk length:(NSUInteger)n];
+            }
 
             // Split on newlines; process each complete line, keep the remainder.
+            // searchOffset keeps this linear: without it every 4 KiB chunk
+            // rescanned the whole buffer from the start.
             for (;;) {
                 const char *bytes = (const char *)buffer.bytes;
                 NSUInteger len = buffer.length;
-                NSUInteger nl = NSNotFound;
-                for (NSUInteger i = 0; i < len; i++) {
-                    if (bytes[i] == '\n') { nl = i; break; }
-                }
-                if (nl == NSNotFound) break;
+                if (searchOffset >= len) break;
+                const char *nl = (const char *)memchr(bytes + searchOffset, '\n', len - searchOffset);
+                if (nl == NULL) { searchOffset = len; break; }
+                NSUInteger index = (NSUInteger)(nl - bytes);
                 @autoreleasepool {
-                    NSData *lineData = [buffer subdataWithRange:NSMakeRange(0, nl)];
-                    [buffer replaceBytesInRange:NSMakeRange(0, nl + 1) withBytes:NULL length:0];
+                    NSData *lineData = [buffer subdataWithRange:NSMakeRange(0, index)];
+                    [buffer replaceBytesInRange:NSMakeRange(0, index + 1) withBytes:NULL length:0];
+                    searchOffset = 0;
                     [self handleLineData:lineData];
                 }
+            }
+
+            if (buffer.length > kMirageMaxLineLength) {
+                if (!warnedOverflow) {
+                    warnedOverflow = YES;
+                    fprintf(stderr,
+                            "MirageControlChannel: control line exceeds %lu bytes; "
+                            "discarding until the next newline\n",
+                            (unsigned long)kMirageMaxLineLength);
+                }
+                [buffer setLength:0];
+                searchOffset = 0;
+                discarding = YES;
             }
         }
         [self signalEOF];

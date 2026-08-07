@@ -303,11 +303,15 @@ VkResult Instance::Create(Instance& inst, const VkApplicationInfo& app_info,
 }
 
 std::vector<PhysicalDevice> Instance::EnumeratePhysicalDevices() const noexcept {
-    uint32_t num;
-    VVK_CHECK(dld->vkEnumeratePhysicalDevices(handle, &num, nullptr));
+    // `num` must stay defined on failure: VVK_CHECK no longer aborts, so a
+    // failing enumeration has to yield an empty list rather than size the
+    // vectors from an indeterminate count.
+    uint32_t num { 0 };
+    VVK_CHECK_ACT(return {}, dld->vkEnumeratePhysicalDevices(handle, &num, nullptr));
     std::vector<VkPhysicalDevice> vkphysical_devices(num);
     std::vector<PhysicalDevice>   physical_devices(num);
-    VVK_CHECK(dld->vkEnumeratePhysicalDevices(handle, &num, vkphysical_devices.data()));
+    VVK_CHECK_ACT(return {},
+                  dld->vkEnumeratePhysicalDevices(handle, &num, vkphysical_devices.data()));
     std::transform(vkphysical_devices.begin(),
                    vkphysical_devices.end(),
                    physical_devices.begin(),
@@ -319,8 +323,9 @@ std::vector<PhysicalDevice> Instance::EnumeratePhysicalDevices() const noexcept 
 
 DebugUtilsMessenger Instance::CreateDebugUtilsMessenger(
     const VkDebugUtilsMessengerCreateInfoEXT& create_info) const noexcept {
-    VkDebugUtilsMessengerEXT object;
-    VVK_CHECK(dld->vkCreateDebugUtilsMessengerEXT(handle, &create_info, nullptr, &object));
+    VkDebugUtilsMessengerEXT object { VK_NULL_HANDLE };
+    VVK_CHECK_ACT(return {},
+                  dld->vkCreateDebugUtilsMessengerEXT(handle, &create_info, nullptr, &object));
     return DebugUtilsMessenger(object, handle, *dld);
 }
 VkResult Device::Create(Device& device, VkPhysicalDevice physical_device,

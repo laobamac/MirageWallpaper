@@ -8,19 +8,19 @@ import Cocoa
 
 extension AppDelegate {
     @objc func mute() {
-        wallpaperViewModel.playVolume = 0
+        wallpaperViewModel.muteAll()
     }
 
     @objc func unmute() {
-        wallpaperViewModel.playVolume = wallpaperViewModel.lastPlayVolume == 0 ? 1 : wallpaperViewModel.lastPlayVolume
+        wallpaperViewModel.unmuteAll()
     }
 
     @objc func pause() {
-        wallpaperViewModel.playRate = 0
+        wallpaperViewModel.pauseAll()
     }
 
     @objc func resume() {
-        wallpaperViewModel.playRate = wallpaperViewModel.lastPlayRate == 0 ? 1 : wallpaperViewModel.lastPlayRate
+        wallpaperViewModel.resumeAll()
     }
 
     @objc func coverAllScreens() {
@@ -28,7 +28,7 @@ extension AppDelegate {
     }
 
     @objc func stopWallpaperMenu() {
-        wallpaperViewModel.stopWallpaper()
+        wallpaperViewModel.stopAllWallpapers()
     }
 
     @objc func openProjectPage() {

@@ -181,6 +181,14 @@ std::vector<VkDeviceQueueCreateInfo> Device::ChooseDeviceQueue(VkSurfaceKHR surf
         if (prop.queueFlags & VK_QUEUE_GRAPHICS_BIT) graphic_indexs.push_back(index);
         index++;
     }
+    if (graphic_indexs.empty()) {
+        // CheckGPU rejects such a GPU, but --uuid selection can hand us one
+        // anyway. Bail out with no queue create infos: Device::Create's
+        // vkCreateDevice then fails cleanly instead of reading front() of an
+        // empty vector.
+        rstd_error("no graphics queue family on selected gpu");
+        return queues;
+    }
     m_graphics_queue.family_index           = graphic_indexs.front();
     const static float defaultQueuePriority = 0.0f;
     m_present_queue.family_index            = graphic_indexs.front();
@@ -283,9 +291,17 @@ bool Device::Create(Instance& inst, std::span<const Extension> exts, VkExtent2D 
     };
     if (enable_sync2) enabled_timeline.pNext = &enabled_sync2;
 
+    // Empty means the selected GPU exposes no usable queue family. That is
+    // normally filtered by CheckGPU, but an explicit --uuid selection can
+    // still land here; vkCreateDevice requires at least one queue create info.
+    const auto queue_infos = device.ChooseDeviceQueue(*inst.surface());
+    if (queue_infos.empty()) {
+        rstd_error("selected gpu exposes no usable queue family");
+        return false;
+    }
     VVK_CHECK_BOOL_RE(vvk::Device::Create(device.m_device,
                                           *device.m_gpu,
-                                          device.ChooseDeviceQueue(*inst.surface()),
+                                          queue_infos,
                                           tested_exts_c,
                                           &enabled_timeline,
                                           device.dld,
@@ -322,6 +338,22 @@ bool Device::Create(Instance& inst, std::span<const Extension> exts, VkExtent2D 
         rstd_error("MeshCache init failed");
         return false;
     }
+    return true;
+}
+
+bool Device::recreateSwapchain(VkSurfaceKHR surface) {
+    if (surface == VK_NULL_HANDLE || ! m_device) return false;
+    // Everything that reads the swapchain images (the in-flight frame's
+    // command buffer, the presentation engine) must be done before the old
+    // image views and the old swapchain go away.
+    VVK_CHECK_BOOL_RE(m_device.WaitIdle());
+    if (! Swapchain::Recreate(*this, surface, m_extent, m_swapchain)) {
+        rstd_warn("swapchain recreation deferred");
+        return false;
+    }
+    rstd_info("swapchain recreated: {}x{}",
+              m_swapchain.extent().width,
+              m_swapchain.extent().height);
     return true;
 }
 

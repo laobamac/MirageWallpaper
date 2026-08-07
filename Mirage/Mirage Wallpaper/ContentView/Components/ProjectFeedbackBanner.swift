@@ -50,7 +50,7 @@ struct ProjectFeedbackBanner: View {
                     NSPasteboard.general.setString(groupNumber, forType: .string)
                     copied = true
                 } label: {
-                    Label(copied ? "群号已复制" : "复制群号", systemImage: copied ? "checkmark" : "doc.on.doc")
+                    Label(LocalizedStringKey(copied ? "群号已复制" : "复制群号"), systemImage: copied ? "checkmark" : "doc.on.doc")
                 }
                 .buttonStyle(.borderedProminent)
             }

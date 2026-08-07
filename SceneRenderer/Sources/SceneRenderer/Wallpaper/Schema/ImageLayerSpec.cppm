@@ -40,6 +40,7 @@ public:
 class ObjectInstance {
 public:
     bool                                          FromJson(const sr::Json&);
+    void                                          ApplyTo(Material&) const;
     bool                                          present { false };
     std::uint32_t                                 id { 0 };
     std::unordered_map<std::string, std::int32_t> combos;
@@ -75,6 +76,8 @@ public:
     };
     bool                     FromJson(const sr::Json&, fs::VFS&);               // legacy
     bool                     FromJson(const sr::Json&, fs::VFS&, SceneVersion); // canonical
+    bool FromAsset(std::string_view asset, std::array<float, 2> asset_size, fs::VFS&,
+                   SceneVersion);
     int32_t                  id { 0 };
     std::string              name;
     std::array<float, 3>     origin { 0.0f, 0.0f, 0.0f };
@@ -91,6 +94,7 @@ public:
     bool                     nopadding { false };
     bool                     visible { true };
     std::string              image;
+    std::string              material_path;
     std::string              alignment { "center" };
     Material                 material;
     std::vector<ImageEffect> effects;
@@ -106,6 +110,7 @@ public:
 
     // Image-kind specifics (gates listed for reference; reads are unconditional via _NOWARN).
     bool                 perspective { false };    // PKGV0002+
+    bool                 reflected { true };
     bool                 copybackground { false }; // PKGV0001+
     bool                 solid { false };          // PKGV0002+
     bool                 solid_layer { false };
@@ -138,6 +143,37 @@ public:
     std::string        color_user_key;
     UserValueBinding   alpha_user;
     std::string        alpha_user_key;
+};
+
+// Direct-draw scene layer. Wallpaper Engine represents authored vector shapes
+// as an effect stack rather than an image asset; the compiler converts this
+// schema object into an ImageObject with a custom final quad.
+class ShapeObject {
+public:
+    bool FromJson(const sr::Json&, fs::VFS&, SceneVersion);
+
+    int32_t                  id { 0 };
+    std::string              name;
+    std::string              shape;
+    std::array<float, 3>     origin { 0.0f, 0.0f, 0.0f };
+    std::array<float, 3>     scale { 1.0f, 1.0f, 1.0f };
+    std::array<float, 3>     angles { 0.0f, 0.0f, 0.0f };
+    bool                     visible { true };
+    std::vector<ImageEffect> effects;
+
+    bool                      locktransforms { false };
+    bool                      muteineditor { false };
+    bool                      nointerpolation { false };
+    bool                      reflected { true };
+    bool                      castshadow { false };
+    bool                      disablepropagation { false };
+    std::uint32_t             parent { 0 };
+    std::string               attachment;
+    std::vector<std::int32_t> dependencies;
+    FieldBindings             field_bindings;
+
+    VisibleUserBinding visible_user;
+    std::string        visible_user_key;
 };
 
 class ImageAssetInfo {

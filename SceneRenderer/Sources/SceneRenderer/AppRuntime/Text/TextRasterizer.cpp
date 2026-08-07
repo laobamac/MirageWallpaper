@@ -23,6 +23,12 @@ namespace
 
 constexpr std::uint32_t kMinAtlasDim { 1024 };
 
+// WE text layers are frequently rendered at a small point size and enlarged
+// by their own transform or a parent text layer. Rasterising glyphs at 2x
+// while keeping layout in logical pixels preserves the edge samples needed by
+// that later transform.
+constexpr std::uint32_t kGlyphRasterScale { 2 };
+
 // 4×4 white cell at (0,0) so a single-channel atlas can also serve solid-fill
 // quads (e.g. opaquebackground rectangle) and as a tofu fallback when the
 // atlas overflows.
@@ -60,9 +66,10 @@ bool IsLayoutWhitespace(std::uint32_t cp) {
 }
 
 std::uint32_t AtlasDimForPixelSize(std::uint32_t pixel_size) {
-    if (pixel_size > 512) return 4096;
-    if (pixel_size > 256) return 2048;
-    return kMinAtlasDim;
+    std::uint32_t dim      = kMinAtlasDim;
+    std::uint32_t required = pixel_size * 12;
+    while (dim < required && dim < 4096) dim *= 2;
+    return dim;
 }
 
 class FtLibrary {
@@ -170,7 +177,8 @@ struct FontFace::Impl {
 
     std::shared_ptr<std::vector<std::byte>> blob;
     FT_Face                                 face { nullptr };
-    std::uint32_t                           pixel_size { 0 };
+    std::uint32_t                           pixel_size { 0 };        // logical layout pixels
+    std::uint32_t                           raster_pixel_size { 0 }; // FreeType/atlas pixels
 
     std::uint32_t             atlas_w { kMinAtlasDim };
     std::uint32_t             atlas_h { kMinAtlasDim };
@@ -271,7 +279,7 @@ struct FontFace::Impl {
                                    static_cast<FT_Long>(bytes->size()),
                                    0,
                                    &fallback->face) != 0 ||
-                FT_Set_Pixel_Sizes(fallback->face, 0, pixel_size) != 0) {
+                FT_Set_Pixel_Sizes(fallback->face, 0, raster_pixel_size) != 0) {
                 fallback_misses.insert(codepoint);
                 return nullptr;
             }
@@ -305,9 +313,10 @@ FontMetrics FontFace::Metrics() const {
     FontMetrics m {};
     if (m_impl->face != nullptr && m_impl->face->size != nullptr) {
         const auto& sm = m_impl->face->size->metrics;
-        m.ascender     = static_cast<float>(sm.ascender) / 64.0f;
-        m.descender    = static_cast<float>(sm.descender) / 64.0f;
-        m.line_height  = static_cast<float>(sm.height) / 64.0f;
+        constexpr float kMetricScale = 64.0f * static_cast<float>(kGlyphRasterScale);
+        m.ascender     = static_cast<float>(sm.ascender) / kMetricScale;
+        m.descender    = static_cast<float>(sm.descender) / kMetricScale;
+        m.line_height  = static_cast<float>(sm.height) / kMetricScale;
         m.pixel_size   = m_impl->pixel_size;
     }
     m.atlas_w = m_impl->atlas_w;
@@ -339,6 +348,14 @@ void FontFace::Populate(std::span<const std::uint32_t> codepoints) {
     for (std::uint32_t codepoint : codepoints) {
         if (impl.glyphs.find(codepoint) != impl.glyphs.end()) continue;
 
+        // WE ignores horizontal tabs completely. FreeType otherwise resolves
+        // the control code through glyph 0 and produces a visible tofu box or
+        // an unintended advance, depending on the selected font.
+        if (codepoint == '\t') {
+            impl.glyphs.emplace(codepoint, GlyphInfo {});
+            continue;
+        }
+
         FT_Face render_face = impl.face;
         FT_UInt glyph_index = FT_Get_Char_Index(render_face, codepoint);
         if (glyph_index == 0 && ! IsLayoutWhitespace(codepoint)) {
@@ -353,7 +370,8 @@ void FontFace::Populate(std::span<const std::uint32_t> codepoints) {
             // rasterize a tofu box for it.
             GlyphInfo gi {};
             if (FT_Load_Glyph(impl.face, 0, FT_LOAD_DEFAULT) == 0) {
-                gi.advance_x = static_cast<float>(impl.face->glyph->advance.x) / 64.0f;
+                gi.advance_x = static_cast<float>(impl.face->glyph->advance.x) /
+                               (64.0f * static_cast<float>(kGlyphRasterScale));
             }
             impl.glyphs.emplace(codepoint, gi);
             continue;
@@ -366,9 +384,13 @@ void FontFace::Populate(std::span<const std::uint32_t> codepoints) {
         GlyphInfo    gi {};
         gi.pixel_w   = g->bitmap.width;
         gi.pixel_h   = g->bitmap.rows;
-        gi.bearing_x = static_cast<float>(g->bitmap_left);
-        gi.bearing_y = static_cast<float>(g->bitmap_top);
-        gi.advance_x = static_cast<float>(g->advance.x) / 64.0f;
+        constexpr float kInvRasterScale = 1.0f / static_cast<float>(kGlyphRasterScale);
+        gi.layout_w  = static_cast<float>(gi.pixel_w) * kInvRasterScale;
+        gi.layout_h  = static_cast<float>(gi.pixel_h) * kInvRasterScale;
+        gi.bearing_x = static_cast<float>(g->bitmap_left) * kInvRasterScale;
+        gi.bearing_y = static_cast<float>(g->bitmap_top) * kInvRasterScale;
+        gi.advance_x =
+            static_cast<float>(g->advance.x) * (kInvRasterScale / 64.0f);
 
         if (gi.pixel_w == 0 || gi.pixel_h == 0) {
             gi.atlas_x = 0;
@@ -378,12 +400,10 @@ void FontFace::Populate(std::span<const std::uint32_t> codepoints) {
         }
 
         if (! impl.ReserveSlot(gi.pixel_w, gi.pixel_h, gi.atlas_x, gi.atlas_y)) {
-            // Atlas full → tofu mapped to the white cell. Cache the fallback so
-            // we don't FT_Load the same codepoint every frame.
             gi.atlas_x = 0;
             gi.atlas_y = 0;
-            gi.pixel_w = kWhiteCellSize;
-            gi.pixel_h = kWhiteCellSize;
+            gi.pixel_w = 0;
+            gi.pixel_h = 0;
             impl.glyphs.emplace(codepoint, gi);
             continue;
         }
@@ -444,15 +464,17 @@ FontFace* FontCache::GetFace(std::shared_ptr<std::vector<std::byte>> blob,
         rstd_error("FT_New_Memory_Face failed");
         return nullptr;
     }
-    if (FT_Set_Pixel_Sizes(face->m_impl->face, 0, pixel_size) != 0) {
+    const std::uint32_t raster_pixel_size = pixel_size * kGlyphRasterScale;
+    if (FT_Set_Pixel_Sizes(face->m_impl->face, 0, raster_pixel_size) != 0) {
         rstd_error("FT_Set_Pixel_Sizes failed (px={})", pixel_size);
         return nullptr;
     }
     // Keep the bytes alive for the face's lifetime: FT_Face holds raw
     // pointers into this buffer and dereferences them on every glyph load.
-    face->m_impl->blob       = std::move(blob);
-    face->m_impl->pixel_size = pixel_size;
-    face->m_impl->ResetAtlas(AtlasDimForPixelSize(pixel_size));
+    face->m_impl->blob              = std::move(blob);
+    face->m_impl->pixel_size        = pixel_size;
+    face->m_impl->raster_pixel_size = raster_pixel_size;
+    face->m_impl->ResetAtlas(AtlasDimForPixelSize(raster_pixel_size));
     face->m_impl->atlas_url =
         "_text_atlas_" + std::to_string(blob_hash) + "_" + std::to_string(pixel_size);
 
@@ -788,6 +810,23 @@ bool ContainsSubstring(std::string_view s, std::string_view what) noexcept {
 
 } // namespace
 
+std::array<float, 2> ResolveTextAnchorPosition(std::string_view horizontal,
+                                               std::string_view vertical,
+                                               float            origin_x,
+                                               float            origin_y,
+                                               float            frame_width,
+                                               float            frame_height,
+                                               float            scale_x,
+                                               float            scale_y) {
+    float x = origin_x;
+    float y = origin_y;
+    if (ContainsSubstring(horizontal, "left")) x += frame_width * scale_x * 0.5f;
+    if (ContainsSubstring(horizontal, "right")) x -= frame_width * scale_x * 0.5f;
+    if (ContainsSubstring(vertical, "top")) y -= frame_height * scale_y * 0.5f;
+    if (ContainsSubstring(vertical, "bottom")) y += frame_height * scale_y * 0.5f;
+    return { x, y };
+}
+
 struct TextLayouter::Impl {
     FontFace*                       face { nullptr };
     std::shared_ptr<sr::SceneMesh> mesh;
@@ -845,6 +884,7 @@ TextLayoutMetrics TextLayouter::Metrics() const noexcept {
         .source_center_x = m_impl->last_source_center_x,
         .source_center_y = m_impl->last_source_center_y,
         .padding         = m_impl->style.padding,
+        .source_centered = m_impl->style.center_source,
     };
 }
 
@@ -890,8 +930,15 @@ TextGeometry ResolveTextGeometry(const TextGeometryPolicy& policy,
 
     const float text_bbox_w = text_w + 2.0f * pad;
     const float text_bbox_h = text_h + 2.0f * pad;
-    const float src_bbox_w  = src_w + 2.0f * pad;
-    const float src_bbox_h  = src_h + 2.0f * pad;
+    // A source that retains its font-baseline coordinates may be asymmetric
+    // around the layer origin. Its RT must cover both sides without moving the
+    // glyphs; a tightly centred source only needs its ink dimensions.
+    const float src_bbox_w =
+        metrics.source_centered ? src_w + 2.0f * pad
+                                : 2.0f * (std::abs(src_cx) + src_w * 0.5f + pad);
+    const float src_bbox_h =
+        metrics.source_centered ? src_h + 2.0f * pad
+                                : 2.0f * (std::abs(src_cy) + src_h * 0.5f + pad);
 
     const float dynamic_w      = std::max({ src_bbox_w, text_bbox_w, frame_w * 3.0f, 1024.0f });
     const float dynamic_h      = std::max({ src_bbox_h, text_bbox_h, frame_h * 2.0f, 256.0f });
@@ -903,8 +950,8 @@ TextGeometry ResolveTextGeometry(const TextGeometryPolicy& policy,
                                           : (policy.has_effect ? frame_h : src_bbox_h);
 
     TextGeometry out;
-    out.rt_width            = std::max(src_bbox_w, rt_max_w);
-    out.rt_height           = std::max(src_bbox_h, rt_max_h);
+    out.rt_width            = std::max({ src_bbox_w, text_bbox_w, rt_max_w });
+    out.rt_height           = std::max({ src_bbox_h, text_bbox_h, rt_max_h });
     out.effect_frame_width  = frame_w;
     out.effect_frame_height = frame_h;
 
@@ -914,8 +961,8 @@ TextGeometry ResolveTextGeometry(const TextGeometryPolicy& policy,
         out.draw_height       = tight_bbox ? src_h : text_bbox_h;
         out.draw_offset_x     = tight_bbox ? src_cx : 0.0f;
         out.draw_offset_y     = tight_bbox ? src_cy : 0.0f;
-        out.uv_source_width   = tight_bbox ? src_w : src_bbox_w;
-        out.uv_source_height  = tight_bbox ? src_h : src_bbox_h;
+        out.uv_source_width   = tight_bbox ? src_w : text_bbox_w;
+        out.uv_source_height  = tight_bbox ? src_h : text_bbox_h;
         return out;
     }
 
@@ -965,7 +1012,7 @@ void TextLayouter::SetText(std::string_view utf8) {
         }
         lines.back().glyphs.push_back(gi);
         lines.back().width += gi->advance_x;
-        ++total_glyph_quads;
+        if (gi->pixel_w != 0 && gi->pixel_h != 0) ++total_glyph_quads;
     }
 
     bool        has_bg      = im.style.opaquebackground;
@@ -1080,9 +1127,9 @@ void TextLayouter::SetText(std::string_view utf8) {
     }
 
     std::array<float, 4> text_rgba {
-        im.style.color[0],
-        im.style.color[1],
-        im.style.color[2],
+        im.style.color[0] * im.style.brightness,
+        im.style.color[1] * im.style.brightness,
+        im.style.color[2] * im.style.brightness,
         im.style.alpha,
     };
 
@@ -1123,13 +1170,12 @@ void TextLayouter::SetText(std::string_view utf8) {
             if (q >= im.peak_quads) break;
             if (gi->pixel_w == 0 || gi->pixel_h == 0) {
                 pen_x += gi->advance_x;
-                ++emitted_glyphs;
                 continue;
             }
             float left   = pen_x + gi->bearing_x;
-            float right  = left + static_cast<float>(gi->pixel_w);
+            float right  = left + gi->layout_w;
             float top    = baseline_y + gi->bearing_y;
-            float bottom = top - static_cast<float>(gi->pixel_h);
+            float bottom = top - gi->layout_h;
             float u_l    = static_cast<float>(gi->atlas_x) / static_cast<float>(fm.atlas_w);
             float u_r =
                 static_cast<float>(gi->atlas_x + gi->pixel_w) / static_cast<float>(fm.atlas_w);
@@ -1150,12 +1196,14 @@ void TextLayouter::SetText(std::string_view utf8) {
         im.last_source_h               = std::max(1.0f, glyph_max_y - glyph_min_y);
         im.last_source_center_x        = 0.5f * (glyph_min_x + glyph_max_x);
         im.last_source_center_y        = 0.5f * (glyph_min_y + glyph_max_y);
-        const float       shift_x      = -im.last_source_center_x;
-        const float       shift_y      = -im.last_source_center_y;
-        const std::size_t vertex_count = q * 4;
-        for (std::size_t i = 0; i < vertex_count; ++i) {
-            im.positions[i * 3 + 0] += shift_x;
-            im.positions[i * 3 + 1] += shift_y;
+        if (im.style.center_source) {
+            const float       shift_x      = -im.last_source_center_x;
+            const float       shift_y      = -im.last_source_center_y;
+            const std::size_t vertex_count = q * 4;
+            for (std::size_t i = 0; i < vertex_count; ++i) {
+                im.positions[i * 3 + 0] += shift_x;
+                im.positions[i * 3 + 1] += shift_y;
+            }
         }
     }
 

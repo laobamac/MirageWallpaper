@@ -8,7 +8,7 @@ import rstd.cppstd;
 using namespace sr;
 using micros = std::chrono::microseconds;
 
-ThreadTimer::ThreadTimer(std::function<void()> cb)
+ThreadTimer::ThreadTimer(std::function<bool()> cb)
     : m_callback(cb),
       m_interval(std::chrono::microseconds(1'000'000 / 15)),
       m_running(false),
@@ -51,12 +51,22 @@ void ThreadTimer::Start() {
                 deadline = clock::now() + interval;
                 continue;
             }
-            if (m_callback) m_callback();
+            const bool fired = m_callback ? m_callback() : true;
             interval = m_interval.load();
             const auto now = clock::now();
-            do {
-                deadline += interval;
-            } while (deadline <= now);
+            if (! fired) {
+                // Previous frame still in flight: don't skip a whole grid slot
+                // (that halves effective FPS on a frame that only slightly
+                // overran budget). Re-probe soon to catch the release, capped
+                // so a genuinely stuck frame doesn't busy-spin.
+                auto retry = interval / 8;
+                if (retry < micros(1000)) retry = micros(1000);
+                deadline = now + retry;
+            } else {
+                do {
+                    deadline += interval;
+                } while (deadline <= now);
+            }
         }
     });
 }

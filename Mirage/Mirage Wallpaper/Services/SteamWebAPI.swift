@@ -27,6 +27,7 @@ final class SteamWebAPI {
     }()
     private let decoder = JSONDecoder()
     private let imageCache = NSCache<NSString, CacheEntry>()
+    private let creatorCache = NSCache<NSString, CreatorCacheEntry>()
     private let requestThrottle = SteamRequestThrottle(interval: 0.35)
 
     private static let officialBase = "https://api.steampowered.com/"
@@ -55,6 +56,16 @@ final class SteamWebAPI {
         }
     }
 
+    final class CreatorCacheEntry {
+        let creator: WorkshopCreator
+        let date: Date
+
+        init(creator: WorkshopCreator) {
+            self.creator = creator
+            self.date = Date()
+        }
+    }
+
     // MARK: - Query Workshop Files
 
     func queryFiles(
@@ -62,38 +73,79 @@ final class SteamWebAPI {
         tags: [String] = [],
         sortOrder: WorkshopSortOrder = .trending,
         typeFilter: WorkshopTypeFilter = .all,
+        ageRating: WorkshopAgeRatingFilter = .all,
         page: Int = 1,
-        perPage: Int = 30
+        perPage: Int = 30,
+        trendDays: Int? = nil,
+        enrichCreatorProfiles: Bool = true
     ) async throws -> (items: [WorkshopItem], total: Int) {
-        await throttle()
+        try await throttle()
+
+        let normalizedSearchText = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let effectiveSortOrder: WorkshopSortOrder = normalizedSearchText.isEmpty
+            ? sortOrder
+            : .textRelevance
 
         var params: [String: String] = [
             "key": apiKey,
-            "query_type": "\(sortOrder.apiValue)",
+            "query_type": "\(effectiveSortOrder.apiValue)",
             "page": "\(page)",
             "numperpage": "\(perPage)",
             "appid": appId,
+            "filetype": "18",
             "return_tags": "true",
             "return_previews": "true",
             "return_metadata": "true",
             "strip_description_bbcode": "true",
         ]
 
-        if sortOrder == .trending {
-            params["days"] = "7"
-            params["include_recent_votes_only"] = "true"
+        if effectiveSortOrder.usesTrendPeriod {
+            let days = min(7, max(1, trendDays ?? WorkshopTrendPeriod.week.rawValue))
+            params["days"] = "\(days)"
         }
 
-        if !searchText.isEmpty {
-            params["search_text"] = searchText
+        if !normalizedSearchText.isEmpty {
+            params["search_text"] = normalizedSearchText
         }
 
-        var allTags = tags
+        let selectableTags = Set(WorkshopTag.allCases.map(\.rawValue))
+        let requestedTags = Set(tags)
+        var allTags = selectableTags.isSubset(of: requestedTags)
+            ? tags.filter { !selectableTags.contains($0) }
+            : tags
         if typeFilter != .all {
             allTags.append(typeFilter.rawValue.capitalized)
         }
+        // Age rating filtering. Rating tags are mutually exclusive (each wallpaper has only one rating), 
+        // so requiredtags AND combination cannot be used when multiple options are selected.
+        // Strategy:
+        //   - Only Questionable / Mature selected: use requiredtags for strict matching to exclude untagged wallpapers
+        //   - Questionable + Mature selected (Everyone not selected) with no other type tags: use requiredtags +
+        //     match_all_tags=false (OR semantics) to precisely return either Q or M
+        //   - Other cases (including Everyone selected): use excludedtags to filter out unselected ratings,
+        //     allowing untagged wallpapers to fall under "Everyone"
+        let selectedRatings = ageRating.selectedRatings
+        let hasEveryone = selectedRatings.contains(WorkshopAgeRating.everyone)
+        var useOrForTags = false
+
+        if selectedRatings.count == 1 && !hasEveryone {
+            allTags.append(selectedRatings[0].steamTag)
+        } else if selectedRatings.count == 2 && !hasEveryone && allTags.isEmpty {
+            allTags.append(WorkshopAgeRating.questionable.steamTag)
+            allTags.append(WorkshopAgeRating.mature.steamTag)
+            useOrForTags = true
+        } else {
+            let excluded = ageRating.excludedRatings
+            for (index, rating) in excluded.enumerated() {
+                params["excludedtags[\(index)]"] = rating.steamTag
+            }
+        }
+
         for (index, tag) in allTags.enumerated() {
             params["requiredtags[\(index)]"] = tag
+        }
+        if useOrForTags {
+            params["match_all_tags"] = "false"
         }
 
         var components = URLComponents(string: baseURL + "IPublishedFileService/QueryFiles/v1/")!
@@ -114,8 +166,10 @@ final class SteamWebAPI {
         }
 
         let apiResponse = try decoder.decode(SteamAPIResponse.self, from: data)
-        let items = apiResponse.response.publishedfiledetails?.map { $0.toWorkshopItem() } ?? []
-        let total = apiResponse.response.total ?? 0
+        let decodedItems = apiResponse.response.publishedfiledetails?.map { $0.toWorkshopItem() } ?? []
+        let visibleItems = decodedItems.filter { $0.fileSize > 0 }
+        let items = enrichCreatorProfiles ? await enrichCreators(in: visibleItems) : visibleItems
+        let total = apiResponse.response.total ?? items.count
 
         return (items, total)
     }
@@ -123,7 +177,7 @@ final class SteamWebAPI {
     // MARK: - Get File Details
 
     func getFileDetails(workshopIds: [String]) async throws -> [WorkshopItem] {
-        await throttle()
+        try await throttle()
 
         let components = URLComponents(string: baseURL + "ISteamRemoteStorage/GetPublishedFileDetails/v1/")!
 
@@ -151,33 +205,96 @@ final class SteamWebAPI {
         }
 
         let apiResponse = try decoder.decode(SteamAPIResponse.self, from: data)
-        return apiResponse.response.publishedfiledetails?.map { $0.toWorkshopItem() } ?? []
+        let items = (apiResponse.response.publishedfiledetails ?? [])
+            .map { $0.toWorkshopItem() }
+            .filter { $0.fileSize > 0 }
+        return await enrichCreators(in: items)
+    }
+
+    func getUserFiles(steamId: String, page: Int = 1, perPage: Int = 30) async throws -> (items: [WorkshopItem], total: Int) {
+        try await throttle()
+        var components = URLComponents(string: baseURL + "IPublishedFileService/GetUserFiles/v1/")!
+        components.queryItems = [
+            URLQueryItem(name: "key", value: apiKey),
+            URLQueryItem(name: "steamid", value: steamId),
+            URLQueryItem(name: "appid", value: appId),
+            URLQueryItem(name: "numperpage", value: "\(perPage)"),
+            URLQueryItem(name: "page", value: "\(page)"),
+            URLQueryItem(name: "return_tags", value: "true"),
+            URLQueryItem(name: "return_previews", value: "true"),
+            URLQueryItem(name: "return_metadata", value: "true"),
+            URLQueryItem(name: "strip_description_bbcode", value: "true"),
+        ]
+        guard let url = components.url else { throw SteamAPIError.invalidURL }
+        let (data, response) = try await session.data(from: url)
+        guard let httpResponse = response as? HTTPURLResponse else { throw SteamAPIError.invalidResponse }
+        guard httpResponse.statusCode == 200 else { throw SteamAPIError.httpError(httpResponse.statusCode) }
+        let apiResponse = try decoder.decode(SteamAPIResponse.self, from: data)
+        let decodedItems = apiResponse.response.publishedfiledetails?.map { $0.toWorkshopItem() } ?? []
+        let visibleItems = decodedItems.filter { $0.fileSize > 0 }
+        let items = await enrichCreators(in: visibleItems)
+        let total = apiResponse.response.total ?? items.count
+        return (items, total)
+    }
+
+    func creatorProfile(steamId: String) async -> WorkshopCreator? {
+        let normalized = steamId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return nil }
+        if let cached = cachedCreator(steamId: normalized) {
+            return cached
+        }
+        let profiles = try? await fetchCreatorProfiles(steamIds: [normalized])
+        return profiles?[normalized]
     }
 
     // MARK: - Trending / Featured
 
-    func fetchTrending(count: Int = 10) async throws -> [WorkshopItem] {
-        let result = try await queryFiles(sortOrder: .trending, page: 1, perPage: count)
+    func fetchDiscover(
+        category: WorkshopDiscoverCategory,
+        period: WorkshopTrendPeriod,
+        count: Int = 12,
+        ageRating: WorkshopAgeRatingFilter = .all
+    ) async throws -> [WorkshopItem] {
+        let sortOrder = category.sortOrder ?? .trending
+        let result = try await queryFiles(
+            tags: category.tag.map { [$0] } ?? [],
+            sortOrder: sortOrder,
+            ageRating: ageRating,
+            page: 1,
+            perPage: count,
+            trendDays: category.usesTrendPeriod ? period.rawValue : nil,
+            enrichCreatorProfiles: false
+        )
         return result.items
     }
 
-    func fetchMostRecent(count: Int = 10) async throws -> [WorkshopItem] {
-        let result = try await queryFiles(sortOrder: .mostRecent, page: 1, perPage: count)
+    func enrichCreatorDetails(in items: [WorkshopItem]) async -> [WorkshopItem] {
+        await enrichCreators(in: items)
+    }
+
+    func fetchTrending(count: Int = 10, ageRating: WorkshopAgeRatingFilter = .all) async throws -> [WorkshopItem] {
+        let result = try await queryFiles(sortOrder: .trending, ageRating: ageRating, page: 1, perPage: count)
         return result.items
     }
 
-    func fetchMostSubscribed(count: Int = 10) async throws -> [WorkshopItem] {
-        let result = try await queryFiles(sortOrder: .mostSubscribed, page: 1, perPage: count)
+    func fetchMostSubscribed(count: Int = 10, ageRating: WorkshopAgeRatingFilter = .all) async throws -> [WorkshopItem] {
+        let result = try await queryFiles(sortOrder: .mostSubscribed, ageRating: ageRating, page: 1, perPage: count)
         return result.items
     }
 
-    func fetchTopRated(count: Int = 10) async throws -> [WorkshopItem] {
-        let result = try await queryFiles(sortOrder: .topRated, page: 1, perPage: count)
+    func fetchTopRated(count: Int = 10, ageRating: WorkshopAgeRatingFilter = .all) async throws -> [WorkshopItem] {
+        let result = try await queryFiles(sortOrder: .topRated, ageRating: ageRating, page: 1, perPage: count)
         return result.items
     }
 
-    func fetchByTag(_ tag: String, sortOrder: WorkshopSortOrder = .trending, count: Int = 10) async throws -> [WorkshopItem] {
-        let result = try await queryFiles(tags: [tag], sortOrder: sortOrder, page: 1, perPage: count)
+    func fetchByTag(
+        _ tag: String,
+        sortOrder: WorkshopSortOrder = .trending,
+        count: Int = 10,
+        ageRating: WorkshopAgeRatingFilter = .all
+    ) async throws -> [WorkshopItem] {
+        let result = try await queryFiles(
+            tags: [tag], sortOrder: sortOrder, ageRating: ageRating, page: 1, perPage: count)
         return result.items
     }
 
@@ -226,8 +343,87 @@ final class SteamWebAPI {
 
     // MARK: - Throttle
 
-    private func throttle() async {
-        await requestThrottle.wait()
+    private func throttle() async throws {
+        try await requestThrottle.wait()
+    }
+
+    private func enrichCreators(in items: [WorkshopItem]) async -> [WorkshopItem] {
+        let steamIds = Set(items.map(\.creatorSteamId).filter { !$0.isEmpty })
+        guard !steamIds.isEmpty else { return items }
+
+        var creators: [String: WorkshopCreator] = [:]
+        var missingIds: [String] = []
+        for steamId in steamIds {
+            if let creator = cachedCreator(steamId: steamId) {
+                creators[steamId] = creator
+            } else {
+                missingIds.append(steamId)
+            }
+        }
+
+        if !missingIds.isEmpty,
+           let fetched = try? await fetchCreatorProfiles(steamIds: missingIds) {
+            creators.merge(fetched) { _, new in new }
+        }
+
+        return items.map { item in
+            guard let creator = creators[item.creatorSteamId] else { return item }
+            var enriched = item
+            enriched.creatorName = creator.name
+            enriched.creatorAvatarURL = creator.avatarURL
+            enriched.creatorProfileURL = creator.profileURL
+            return enriched
+        }
+    }
+
+    private func cachedCreator(steamId: String) -> WorkshopCreator? {
+        let key = NSString(string: steamId)
+        guard let entry = creatorCache.object(forKey: key) else { return nil }
+        if Date().timeIntervalSince(entry.date) > 3_600 {
+            creatorCache.removeObject(forKey: key)
+            return nil
+        }
+        return entry.creator
+    }
+
+    private func fetchCreatorProfiles(steamIds: [String]) async throws -> [String: WorkshopCreator] {
+        guard !apiKey.isEmpty else { return [:] }
+        var result: [String: WorkshopCreator] = [:]
+
+        for start in stride(from: 0, to: steamIds.count, by: 100) {
+            let end = min(start + 100, steamIds.count)
+            let batch = Array(steamIds[start..<end])
+            try await throttle()
+
+            var components = URLComponents(string: baseURL + "ISteamUser/GetPlayerSummaries/v2/")!
+            components.queryItems = [
+                URLQueryItem(name: "key", value: apiKey),
+                URLQueryItem(name: "steamids", value: batch.joined(separator: ","))
+            ]
+            guard let url = components.url else { throw SteamAPIError.invalidURL }
+
+            let (data, response) = try await session.data(from: url)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw SteamAPIError.invalidResponse
+            }
+            guard httpResponse.statusCode == 200 else {
+                throw SteamAPIError.httpError(httpResponse.statusCode)
+            }
+
+            let apiResponse = try decoder.decode(SteamPlayerSummariesResponse.self, from: data)
+            for player in apiResponse.response.players {
+                let creator = WorkshopCreator(
+                    steamId: player.steamid,
+                    name: player.personaname,
+                    avatarURL: player.avatarmedium.flatMap(URL.init(string:)),
+                    profileURL: player.profileurl.flatMap(URL.init(string:))
+                )
+                result[player.steamid] = creator
+                creatorCache.setObject(CreatorCacheEntry(creator: creator), forKey: NSString(string: player.steamid))
+            }
+        }
+
+        return result
     }
 }
 
@@ -239,14 +435,16 @@ private actor SteamRequestThrottle {
         self.interval = interval
     }
 
-    func wait() async {
+    func wait() async throws {
+        try Task.checkCancellation()
         let now = Date()
         let scheduled = max(now, nextAllowed)
         nextAllowed = scheduled.addingTimeInterval(interval)
         let delay = scheduled.timeIntervalSince(now)
         if delay > 0 {
-            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
         }
+        try Task.checkCancellation()
     }
 }
 
