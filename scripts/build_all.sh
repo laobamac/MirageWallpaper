@@ -6,7 +6,8 @@
 #   1. SceneRenderer  → SceneWallpaper   (Homebrew Clang + MoltenVK)
 #   2. WebRenderer    → WebWallpaper     (system frameworks)
 #   3. VideoRenderer  → VideoWallpaper   (system frameworks)
-#   4. Mirage         → Mirage.app       (xcodebuild), embedding the three renderers
+#   4. RmskinRenderer → RmskinWallpaper  (system frameworks)
+#   5. Mirage         → Mirage.app       (xcodebuild), embedding the four renderers
 #
 # Each sub-project already has its own scripts/build.sh; this script
 # orchestrates them, passing through arguments and environment variables
@@ -15,9 +16,9 @@
 # Usage:
 #   scripts/build_all.sh                 full build (release, default): renderers + App
 #   scripts/build_all.sh debug           debug build
-#   scripts/build_all.sh renderers       build only the three renderers (skip App)
+#   scripts/build_all.sh renderers       build only the four renderers (skip App)
 #   scripts/build_all.sh app             build only Mirage App (assumes renderers are ready)
-#   scripts/build_all.sh scene|web|video build a single named renderer
+#   scripts/build_all.sh scene|web|video|rmskin build a single named renderer
 #   scripts/build_all.sh clean           remove all sub-project build directories
 #   scripts/build_all.sh -h|--help
 #
@@ -50,11 +51,12 @@ MirageWallpaper one-shot build script for macOS.
 Usage:
   scripts/build_all.sh                 full build (release, default): renderers + App
   scripts/build_all.sh debug           debug build
-  scripts/build_all.sh renderers       build only the three renderers (skip App)
+  scripts/build_all.sh renderers       build only the four renderers (skip App)
   scripts/build_all.sh app             build only Mirage App (assumes renderers are ready)
   scripts/build_all.sh scene           build SceneRenderer only
   scripts/build_all.sh web             build WebRenderer only
   scripts/build_all.sh video           build VideoRenderer only
+  scripts/build_all.sh rmskin          build RmskinRenderer only
   scripts/build_all.sh clean           remove all sub-project build directories
   scripts/build_all.sh -h|--help       show this help
 
@@ -71,7 +73,7 @@ CONFIG="release"      # lowercase preset name passed to renderers (release|debug
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help) usage; exit 0 ;;
-        all|renderers|app|scene|web|video|clean) TARGET="$1"; shift ;;
+        all|renderers|app|scene|web|video|rmskin|clean) TARGET="$1"; shift ;;
         release|debug) CONFIG="$1"; shift ;;
         *) die "unknown argument: $1 (try --help)" ;;
     esac
@@ -90,9 +92,10 @@ fi
 SCENE_SH="$ROOT_DIR/SceneRenderer/scripts/build.sh"
 WEB_SH="$ROOT_DIR/WebRenderer/scripts/build.sh"
 VIDEO_SH="$ROOT_DIR/VideoRenderer/scripts/build.sh"
+RMSKIN_SH="$ROOT_DIR/RmskinRenderer/scripts/build.sh"
 MIRAGE_SH="$ROOT_DIR/Mirage/scripts/build.sh"
 
-for s in "$SCENE_SH" "$WEB_SH" "$VIDEO_SH" "$MIRAGE_SH"; do
+for s in "$SCENE_SH" "$WEB_SH" "$VIDEO_SH" "$RMSKIN_SH" "$MIRAGE_SH"; do
     [[ -f "$s" ]] || die "missing sub-script: $s"
 done
 
@@ -109,10 +112,15 @@ build_video() {
     step "Building VideoRenderer ($CONFIG)"
     bash "$VIDEO_SH" "$CONFIG"
 }
+build_rmskin() {
+    step "Building RmskinRenderer ($CONFIG)"
+    bash "$RMSKIN_SH" "$CONFIG"
+}
 build_renderers() {
     build_scene
     build_web
     build_video
+    build_rmskin
 }
 build_app() {
     step "Building Mirage App ($XCODE_CONFIG)"
@@ -125,6 +133,7 @@ clean_all() {
     bash "$SCENE_SH" clean "$CONFIG" || true
     bash "$WEB_SH"   clean "$CONFIG" || true
     bash "$VIDEO_SH" clean "$CONFIG" || true
+    bash "$RMSKIN_SH" clean "$CONFIG" || true
     if [[ -d "$ROOT_DIR/Mirage/build" ]]; then
         info "Removing Mirage/build"
         rm -rf "$ROOT_DIR/Mirage/build"
@@ -140,6 +149,7 @@ case "$TARGET" in
     scene)     build_scene ;;
     web)       build_web ;;
     video)     build_video ;;
+    rmskin)    build_rmskin ;;
     renderers) build_renderers ;;
     app)       build_app ;;
     clean)     clean_all ;;

@@ -47,6 +47,7 @@ Mirage 会继续免费开放开发。如果它为你的桌面带来了价值，�
 ## 主要功能
 
 - 支持 `scene`、`web`、`video` 三类动态壁纸。
+- 支持雨滴（Rainmeter）`.rmskin` 桌面小组件：在“小组件”标签页安装、按加载类型 / 版本筛选，并作为可拖动浮动组件渲染到桌面。
 - 浏览已安装壁纸，支持搜索、排序、类型/来源/标签/内容分级筛选和收藏。
 - 直接导入包含 `project.json` 的目录，或把 `.mp4`、`.mov`、`.m4v` 视频转换为本地壁纸包。
 - 浏览 Steam 创意工坊的趋势、最新、热门、评分和标签分类内容。
@@ -69,6 +70,7 @@ Mirage 会继续免费开放开发。如果它为你的桌面带来了价值，�
 | SceneWallpaper | C++20、Vulkan、MoltenVK | `scene.pkg` / `scene.json`、材质、粒子、LUT、文字和用户属性 |
 | WebWallpaper | Objective-C++、WKWebView | HTML 壁纸、JavaScript、媒体、鼠标事件和用户属性 |
 | VideoWallpaper | Objective-C++、AVFoundation | 视频循环、音量、速度和填充模式 |
+| RmskinWallpaper | Objective-C++、CoreGraphics/CoreText | 雨滴（Rainmeter/`.rmskin`）皮肤解析与渲染，桌面浮动可拖动小组件 |
 | MirageScreenSaver | Swift、WebKit、AVFoundation、Metal | 独立安装的动态屏保宿主 |
 
 渲染器作为独立进程运行。Mirage 通过标准输入发送逐行 JSON 控制消息，因此单个渲染器异常不会直接破坏主应用状态。
@@ -154,6 +156,7 @@ cd MirageWallpaper
 ./SceneRenderer/scripts/build.sh release
 ./WebRenderer/scripts/build.sh release
 ./VideoRenderer/scripts/build.sh release
+./RmskinRenderer/scripts/build.sh release
 ./Mirage/scripts/build.sh Release
 
 open "Mirage/dist/Mirage.app"
@@ -250,6 +253,7 @@ Mirage 会同时发现系统 Steam、Mirage SteamCMD 和自定义目录中的有
 ├── SceneRenderer/          # C++20 + Vulkan/MoltenVK 场景渲染器
 ├── WebRenderer/            # WKWebView 网页渲染器
 ├── VideoRenderer/          # AVFoundation 视频渲染器
+├── RmskinRenderer/         # CoreGraphics/CoreText 雨滴皮肤渲染器
 ├── assets/                 # 场景运行时资源、材质、着色器、字体和 LUT
 ├── .github/workflows/      # macOS 自动构建与打包
 └── LICENSE
@@ -261,9 +265,10 @@ Mirage 会同时发现系统 Steam、Mirage SteamCMD 和自定义目录中的有
 SceneRenderer/build/macos-clang-release/Tools/SceneViewer/SceneViewer <scene.pkg>
 WebRenderer/build/release/Tools/WebViewer/WebViewer <web-wallpaper-directory>
 VideoRenderer/build/release/Tools/VideoViewer/VideoViewer <video-wallpaper-directory>
+RmskinRenderer/build/release/Tools/RmskinViewer/RmskinViewer <rmskin-theme-directory>
 ```
 
-桌面 Host 分别输出到各项目构建目录下的 `Tools/SceneWallpaper`、`Tools/WebWallpaper` 和 `Tools/VideoWallpaper`。
+桌面 Host 分别输出到各项目构建目录下的 `Tools/SceneWallpaper`、`Tools/WebWallpaper`、`Tools/VideoWallpaper` 和 `Tools/RmskinWallpaper`。
 
 ## 贡献
 

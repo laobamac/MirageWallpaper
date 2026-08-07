@@ -49,13 +49,15 @@ struct ContentView: View {
     @ObservedObject var viewModel: ContentViewModel
     @ObservedObject var wallpaperViewModel: WallpaperViewModel
     @ObservedObject var workshopViewModel: WorkshopViewModel
+    @ObservedObject var rmskinViewModel: RmskinViewModel
     @ObservedObject private var shortcutManager = WallpaperShortcutManager.shared
     @StateObject private var steamSetupViewModel = SteamSetupViewModel()
 
-    init(viewModel: ContentViewModel, wallpaperViewModel: WallpaperViewModel, workshopViewModel: WorkshopViewModel = AppDelegate.shared.workshopViewModel) {
+    init(viewModel: ContentViewModel, wallpaperViewModel: WallpaperViewModel, workshopViewModel: WorkshopViewModel = AppDelegate.shared.workshopViewModel, rmskinViewModel: RmskinViewModel = AppDelegate.shared.rmskinViewModel) {
         self.viewModel = viewModel
         self.wallpaperViewModel = wallpaperViewModel
         self.workshopViewModel = workshopViewModel
+        self.rmskinViewModel = rmskinViewModel
     }
 
     var body: some View {
@@ -87,6 +89,32 @@ struct ContentView: View {
                                 viewModel: viewModel,
                                 wallpaperViewModel: wallpaperViewModel
                             )
+                        case 3:
+                            HStack(spacing: 0) {
+                                HStack(alignment: .center) {
+                                    Button {
+                                        viewModel.toggleFilter()
+                                    } label: {
+                                        Label("筛选", systemImage: "line.3.horizontal.decrease.circle")
+                                    }
+                                    .buttonStyle(.plain)
+                                    TextField("搜索小组件", text: $rmskinViewModel.searchText)
+                                        .textFieldStyle(.roundedBorder)
+                                    Spacer()
+                                }
+                                .padding(.bottom, 4)
+                            }
+                            HStack(spacing: 0) {
+                                HStack(spacing: 0) {
+                                    WidgetFilterSidebar(viewModel: rmskinViewModel)
+                                }
+                                .frame(width: viewModel.isFilterReveal ? 225 : 0)
+                                .opacity(viewModel.isFilterReveal ? 1 : 0)
+
+                                WidgetExplorer(viewModel: rmskinViewModel)
+                                    .padding(.leading, viewModel.isFilterReveal ? 10 : 0)
+                            }
+                            .animation(.default, value: viewModel.isFilterReveal)
                         case 2:
                             FilterSidebarLayout(isPresented: viewModel.isFilterReveal, sidebar: {
                                 WorkshopFilterSidebar(workshopViewModel: workshopViewModel)
@@ -105,7 +133,8 @@ struct ContentView: View {
                                               wallpaperViewModel: wallpaperViewModel)
                         }
                     }
-                    .padding()
+                }
+                .padding()
 
                     if workshopViewModel.showCreatorProfile,
                        let creator = workshopViewModel.selectedCreator {
@@ -119,6 +148,9 @@ struct ContentView: View {
                                         wallpaperViewModel: wallpaperViewModel,
                                         workshopViewModel: workshopViewModel)
                             .frame(maxWidth: 320)
+                    } else if viewModel.topTabBarSelection == 3 {
+                        WidgetPreview(viewModel: rmskinViewModel)
+                            .frame(maxWidth: 320)
                     } else if workshopViewModel.showCustomization {
                         WallpaperPreview(contentViewModel: viewModel,
                                         wallpaperViewModel: wallpaperViewModel,
@@ -131,7 +163,6 @@ struct ContentView: View {
                         )
                         .frame(maxWidth: 320)
                     }
-                }
             }
             .opacity(viewModel.isStaging ? 1 : 0)
             .blur(radius: viewModel.isStaging ? 0 : 2.0)

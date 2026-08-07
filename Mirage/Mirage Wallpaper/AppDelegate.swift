@@ -17,6 +17,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var wallpaperViewModel = WallpaperViewModel()
     var globalSettingsViewModel = GlobalSettingsViewModel()
     var workshopViewModel = WorkshopViewModel()
+    var rmskinViewModel = RmskinViewModel()
 
     var importOpenPanel: NSOpenPanel!
     private var localizationObserver: NSObjectProtocol?
@@ -24,6 +25,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     static var shared = AppDelegate()
 
     func applicationWillFinishLaunching(_ notification: Notification) {
+        // 禁用窗口状态恢复，防止 restoreWindowWithIdentifier 错误
+        UserDefaults.standard.set(false, forKey: "NSQuitAlwaysKeepsWindows")
         setMainMenu()
         setStatusMenu()
         self.mainWindowController = MainWindowController()
@@ -120,6 +123,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // renderer would outlive the app as an orphan still drawing on the
         // desktop. Bounded to roughly two seconds in total.
         wallpaperViewModel.renderer.stopAllAndWait()
+        rmskinViewModel.stopAll()
 
         // Same constraint: a transient override is one Mirage only took for
         // tint consistency, so the user's own picture goes back synchronously

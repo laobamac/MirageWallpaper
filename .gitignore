@@ -32,3 +32,5 @@ cmake-build-debug
 .secrets/
 xcuserdata
 .reasonix
+.codebuddy
+default.profraw
