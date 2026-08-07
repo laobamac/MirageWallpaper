@@ -69,6 +69,10 @@ final class DesktopOverrideService {
     private static let captureAttempts = 7
     private static let captureRetryDelays: [TimeInterval] = [1.0, 2.0, 4.0, 6.0, 8.0, 10.0]
 
+    private static let desktopRefreshCommitCheckDelays: [TimeInterval] = [0.25, 0.5, 1.0, 2.0]
+    private static let desktopRefreshSettleDelay: TimeInterval = 0.75
+    private static let desktopRefreshCleanupDelay: TimeInterval = 2.0
+
     private init() {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appending(path: "Mirage/DesktopOverride")
@@ -309,7 +313,71 @@ final class DesktopOverrideService {
         setDesktopImage(url, for: screen)
         installedByScreen[displayID] = url
         captureRequests[displayID] = nil
+        scheduleDesktopRefresh(forDisplay: displayID, screen: screen, url: url)
         pruneAllExcept(Set(installedByScreen.values.map { $0.resolvingSymlinksInPath() }))
+    }
+
+    private func scheduleDesktopRefresh(forDisplay displayID: CGDirectDisplayID,
+                                        screen: NSScreen, url: URL,
+                                        attempt: Int = 0) {
+        let delay = Self.desktopRefreshCommitCheckDelays[
+            min(attempt, Self.desktopRefreshCommitCheckDelays.count - 1)]
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self,
+                  self.captureRequests[displayID] == nil,
+                  self.installedByScreen[displayID]?.resolvingSymlinksInPath() ==
+                      url.resolvingSymlinksInPath() else { return }
+
+            let committed = NSWorkspace.shared.desktopImageURL(for: screen)?
+                .resolvingSymlinksInPath() == url.resolvingSymlinksInPath()
+            if !committed, attempt + 1 < Self.desktopRefreshCommitCheckDelays.count {
+                self.scheduleDesktopRefresh(
+                    forDisplay: displayID, screen: screen,
+                    url: url, attempt: attempt + 1)
+                return
+            }
+
+            let refreshURL = self.directory.appending(
+                path: "override-\(UUID().uuidString).heic")
+            self.ioQueue.asyncAfter(
+                deadline: .now() + Self.desktopRefreshSettleDelay
+            ) { [weak self] in
+                guard let self else { return }
+                guard (try? FileManager.default.copyItem(
+                    at: url, to: refreshURL)) != nil else { return }
+
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else {
+                        try? FileManager.default.removeItem(at: refreshURL)
+                        return
+                    }
+                    guard self.captureRequests[displayID] == nil,
+                          self.installedByScreen[displayID]?.resolvingSymlinksInPath() ==
+                              url.resolvingSymlinksInPath() else {
+                        try? FileManager.default.removeItem(at: refreshURL)
+                        return
+                    }
+
+                    self.setDesktopImage(refreshURL, for: screen)
+                    self.installedByScreen[displayID] = refreshURL
+                    DispatchQueue.main.asyncAfter(
+                        deadline: .now() + Self.desktopRefreshCleanupDelay
+                    ) { [weak self] in
+                        guard let self,
+                              self.installedByScreen[displayID]?.resolvingSymlinksInPath() ==
+                                  refreshURL.resolvingSymlinksInPath() else { return }
+                        var keep = Set(self.installedByScreen.values.map {
+                            $0.resolvingSymlinksInPath()
+                        })
+                        if NSWorkspace.shared.desktopImageURL(for: screen)?
+                            .resolvingSymlinksInPath() != refreshURL.resolvingSymlinksInPath() {
+                            keep.insert(url.resolvingSymlinksInPath())
+                        }
+                        self.pruneAllExcept(keep)
+                    }
+                }
+            }
+        }
     }
 
     /// Records the picture the user chose, so it can be put back. Only ever
