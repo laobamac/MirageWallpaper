@@ -103,6 +103,22 @@ final class WorkshopImageLoader {
             guard let self else { return }
             self.ioLimiter.wait()
             defer { self.ioLimiter.signal() }
+            if url.isFileURL {
+                guard let data = try? Data(contentsOf: url, options: .mappedIfSafe),
+                      !data.isEmpty,
+                      let image = Self.downsample(data, maxPixel: px) else {
+                    DispatchQueue.main.async { completion(nil, nil) }
+                    return
+                }
+                let animated = Self.isAnimated(data)
+                self.setAnimatedFlag(animated, for: url)
+                self.store(data: data, image: image, dataKey: dataKey,
+                           imageKey: key, animated: animated)
+                DispatchQueue.main.async {
+                    completion(image, animated ? data : nil)
+                }
+                return
+            }
             let disk = self.diskURL(for: url)
             if let data = try? Data(contentsOf: disk), !data.isEmpty,
                let image = Self.downsample(data, maxPixel: px) {

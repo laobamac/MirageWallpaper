@@ -19,14 +19,17 @@ struct ExplorerItem: View {
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            GifImage(contentsOf: wallpaper.project.preview.isEmpty
-                     ? Bundle.main.url(forResource: "WallpaperNotFound", withExtension: "mp4")!
-                     : wallpaper.previewURL,
-                     // Only the hovered cell or the active wallpaper animates its
-                     // preview; every other cell stays a cheap static thumbnail.
-                     animates: isActive && (hovering || isSelected ||
-                        animatedPreviewMode == .visible))
-            .resizable()
+            WorkshopImage(
+                url: wallpaper.project.preview.isEmpty
+                    ? Bundle.main.url(forResource: "WallpaperNotFound", withExtension: "mp4")
+                    : wallpaper.previewURL,
+                contentMode: .fit,
+                // Only the hovered cell or the active wallpaper animates its
+                // preview; every other cell stays a cheap static thumbnail.
+                isAnimating: isActive && (hovering || isSelected ||
+                    animatedPreviewMode == .visible),
+                isLoadingEnabled: isActive
+            )
             .scaleEffect(hovering ? 1.03 : 1.0)
             .aspectRatio(1.0, contentMode: .fit)
             .clipped()
