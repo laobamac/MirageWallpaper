@@ -84,6 +84,46 @@ struct SubscribedWorkshopView: View {
     }
 
     private var toolbar: some View {
+        ViewThatFits(in: .horizontal) {
+            fullToolbar
+            compactToolbar
+        }
+    }
+
+    private var fullToolbar: some View {
+        HStack(spacing: 10) {
+            toolbarLeading
+            subscriptionSearchField(maxWidth: 260)
+
+            Spacer(minLength: 8)
+
+            downloadAllButton
+            refreshButton
+            WallpaperGridViewMenu(viewModel: viewModel, showsPageSize: true)
+            accountStatus
+        }
+    }
+
+    private var compactToolbar: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                toolbarLeading
+
+                Spacer(minLength: 8)
+
+                accountStatus
+            }
+
+            HStack(spacing: 8) {
+                subscriptionSearchField(maxWidth: .infinity)
+                refreshButton
+                WallpaperGridViewMenu(viewModel: viewModel, showsPageSize: true)
+                downloadAllButton
+            }
+        }
+    }
+
+    private var toolbarLeading: some View {
         HStack(spacing: 10) {
             Button {
                 viewModel.isFilterReveal.toggle()
@@ -100,89 +140,97 @@ struct SubscribedWorkshopView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+        }
+    }
 
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
-                TextField("搜索已订阅壁纸...", text: $workshopViewModel.subscriptionSearchText)
-                    .textFieldStyle(.plain)
-                    .onSubmit {
-                        workshopViewModel.refreshSubscriptionFilters()
-                    }
-                if !workshopViewModel.subscriptionSearchText.isEmpty {
-                    Button {
-                        workshopViewModel.subscriptionSearchText = ""
-                        workshopViewModel.refreshSubscriptionFilters()
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
+    private func subscriptionSearchField(maxWidth: CGFloat) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+            TextField("搜索已订阅壁纸...", text: $workshopViewModel.subscriptionSearchText)
+                .textFieldStyle(.plain)
+                .onSubmit {
+                    workshopViewModel.refreshSubscriptionFilters()
                 }
-            }
-            .padding(6)
-            .frame(minWidth: 150, idealWidth: 220, maxWidth: 260)
-            .background(Color(nsColor: NSColor.controlBackgroundColor))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
-            )
-
-            Spacer()
-
-            Button {
-                workshopViewModel.downloadAllSubscriptions()
-            } label: {
-                if workshopViewModel.isPreparingSubscriptionDownloads {
-                    HStack(spacing: 7) {
-                        ProgressView()
-                            .controlSize(.small)
-                        Text("正在准备下载…")
-                    }
-                } else {
-                    Label("下载全部", systemImage: "arrow.down.circle.fill")
-                }
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(
-                !steamService.isLoggedIn ||
-                workshopViewModel.isPreparingSubscriptionDownloads ||
-                workshopViewModel.subscriptionCatalogItems.isEmpty
-            )
-
-            Button {
-                workshopViewModel.refreshSubscriptions()
-            } label: {
-                Image(systemName: "arrow.triangle.2.circlepath")
-                    .frame(width: 16, height: 16)
-            }
-            .disabled(!steamService.isLoggedIn || workshopViewModel.isLoadingSubscriptions)
-            .help(L("刷新已订阅壁纸"))
-
-            WallpaperGridViewMenu(viewModel: viewModel, showsPageSize: true)
-
-            if workshopViewModel.steamSetupState == .checking {
-                HStack(spacing: 6) {
-                    ProgressView()
-                        .controlSize(.small)
-                    Text(workshopViewModel.steamCheckingMessage)
-                        .font(.caption)
+            if !workshopViewModel.subscriptionSearchText.isEmpty {
+                Button {
+                    workshopViewModel.subscriptionSearchText = ""
+                    workshopViewModel.refreshSubscriptionFilters()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
                         .foregroundStyle(.secondary)
                 }
-            } else if steamService.isLoggedIn {
-                Label(steamService.accountName, systemImage: "person.crop.circle.fill")
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(6)
+        .frame(minWidth: 150, idealWidth: 220, maxWidth: maxWidth)
+        .background(Color(nsColor: NSColor.controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+        )
+    }
+
+    private var downloadAllButton: some View {
+        Button {
+            workshopViewModel.downloadAllSubscriptions()
+        } label: {
+            if workshopViewModel.isPreparingSubscriptionDownloads {
+                HStack(spacing: 7) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("正在准备下载…")
+                }
+            } else {
+                Label("下载全部", systemImage: "arrow.down.circle.fill")
+            }
+        }
+        .buttonStyle(.borderedProminent)
+        .disabled(
+            !steamService.isLoggedIn ||
+            workshopViewModel.isPreparingSubscriptionDownloads ||
+            workshopViewModel.subscriptionCatalogItems.isEmpty
+        )
+    }
+
+    private var refreshButton: some View {
+        Button {
+            workshopViewModel.refreshSubscriptions()
+        } label: {
+            Image(systemName: "arrow.triangle.2.circlepath")
+                .frame(width: 16, height: 16)
+        }
+        .disabled(!steamService.isLoggedIn || workshopViewModel.isLoadingSubscriptions)
+        .help(L("刷新已订阅壁纸"))
+    }
+
+    @ViewBuilder
+    private var accountStatus: some View {
+        if workshopViewModel.steamSetupState == .checking {
+            HStack(spacing: 6) {
+                ProgressView()
+                    .controlSize(.small)
+                Text(workshopViewModel.steamCheckingMessage)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-            } else {
-                Button {
-                    AppDelegate.shared.openSteamSetup()
-                } label: {
-                    Label("登录 Steam", systemImage: "person.crop.circle.badge.exclamationmark")
-                }
-                .buttonStyle(.borderedProminent)
+                    .frame(maxWidth: 120)
             }
+        } else if steamService.isLoggedIn {
+            Label(steamService.accountName, systemImage: "person.crop.circle.fill")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .frame(maxWidth: 120)
+        } else {
+            Button {
+                AppDelegate.shared.openSteamSetup()
+            } label: {
+                Label("登录 Steam", systemImage: "person.crop.circle.badge.exclamationmark")
+            }
+            .buttonStyle(.borderedProminent)
         }
     }
 
