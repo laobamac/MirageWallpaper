@@ -215,34 +215,47 @@ struct ShowOnlyFilterSection: View {
     let onChange: (FRShowOnly, Bool) -> Void
 
     var body: some View {
-        FilterSection("仅显示", id: id, alignment: .leading) {
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(FRShowOnly.allOptions.indices, id: \.self) { index in
-                    let option = FRShowOnly(rawValue: 1 << index)
-                    let metadata = FRShowOnly.allOptions[index]
-                    Toggle(isOn: Binding(
-                        get: { selection.contains(option) },
-                        set: { onChange(option, $0) }
-                    )) {
-                        Label {
-                            Text(LocalizedStringKey(metadata.0))
-                        } icon: {
-                            Image(systemName: metadata.1)
-                                .foregroundStyle(color(at: index))
-                        }
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(FRShowOnly.allOptions.indices, id: \.self) { index in
+                let metadata = FRShowOnly.allOptions[index]
+                Toggle(isOn: Binding(
+                    get: { selection.contains(metadata.0) },
+                    set: { onChange(metadata.0, $0) }
+                )) {
+                    Label {
+                        Text(LocalizedStringKey(metadata.1))
+                    } icon: {
+                        Image(systemName: metadata.2)
+                            .foregroundStyle(metadata.3)
                     }
-                    .toggleStyle(.checkbox)
                 }
+                .toggleStyle(.checkbox)
             }
         }
-    }
+        .padding()
+        .padding(.top)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay {
+            ZStack {
+                Rectangle()
+                    .stroke(
+                        Color(nsColor: NSColor.unemphasizedSelectedTextBackgroundColor),
+                        lineWidth: 1
+                    )
+                    .padding(.top, 8)
 
-    private func color(at index: Int) -> Color {
-        switch index {
-        case 0: return .green
-        case 1: return .pink
-        case 2: return .orange
-        default: return .accentColor
+                VStack {
+                    HStack {
+                        Text("仅显示：")
+                            .background(Color(nsColor: NSColor.windowBackgroundColor))
+                            .padding(.leading, 5)
+                        Spacer()
+                    }
+                    Spacer()
+                }
+            }
+            .allowsHitTesting(false)
         }
+        .accessibilityIdentifier(id)
     }
 }

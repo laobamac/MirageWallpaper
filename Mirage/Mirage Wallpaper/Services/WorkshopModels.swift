@@ -34,6 +34,10 @@ struct WorkshopItem: Identifiable, Codable, Equatable, Hashable {
     var isAudioResponsive: Bool = false
     var isCustomizable: Bool = false
 
+    var isMobileCompatible: Bool {
+        tags.contains { $0.localizedCaseInsensitiveContains(FRShowOnly.mobileCompatibleSteamTag) }
+    }
+
     var id: String { publishedFileId }
 
     var creatorDisplayName: String {

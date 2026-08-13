@@ -62,27 +62,31 @@ struct FRShowOnly: OptionSet {
     let rawValue: Int
     
     static let allOptions = [
-        ("广受好评", "trophy.fill"),
-        ("我的收藏", "heart.fill"),
-        ("音频响应", "waveform.path.ecg"),
-        ("可自定义", "slider.horizontal.3")
+        (approved, "广受好评", "trophy.fill", Color.green),
+        (myFavourites, "我的收藏", "heart.fill", Color.pink),
+        (mobileCompatible, "移动端兼容", "iphone.gen3", Color.orange),
+        (audioResponsive, "音频响应", "waveform.path.ecg", Color.blue),
+        (customizable, "可自定义", "slider.horizontal.3", Color.accentColor)
     ]
     
     static let approved             = FRShowOnly(rawValue: 1 << 0)
     static let myFavourites         = FRShowOnly(rawValue: 1 << 1)
     static let audioResponsive      = FRShowOnly(rawValue: 1 << 2)
     static let customizable         = FRShowOnly(rawValue: 1 << 3)
+    static let mobileCompatible     = FRShowOnly(rawValue: 1 << 4)
     
-    static let all: FRShowOnly = [.approved, myFavourites, .audioResponsive, .customizable]
+    static let all: FRShowOnly = [.approved, myFavourites, .audioResponsive, .customizable, .mobileCompatible]
     static let none: FRShowOnly = []
 
     static let approvedSteamTag = "Approved"
+    static let mobileCompatibleSteamTag = "Mobile"
     static let audioResponsiveSteamTag = "Audio responsive"
     static let customizableSteamTag = "Customizable"
 
     var requiredSteamTags: [String] {
         var tags: [String] = []
         if contains(.approved) { tags.append(Self.approvedSteamTag) }
+        if contains(.mobileCompatible) { tags.append(Self.mobileCompatibleSteamTag) }
         if contains(.audioResponsive) { tags.append(Self.audioResponsiveSteamTag) }
         if contains(.customizable) { tags.append(Self.customizableSteamTag) }
         return tags
@@ -101,6 +105,7 @@ struct FRShowOnly: OptionSet {
     func matches(workshopItem: WorkshopItem, favoriteIDs: Set<String>) -> Bool {
         if contains(.approved), !workshopItem.isApproved { return false }
         if contains(.myFavourites), !favoriteIDs.contains(workshopItem.publishedFileId) { return false }
+        if contains(.mobileCompatible), !workshopItem.isMobileCompatible { return false }
         if contains(.audioResponsive), !workshopItem.isAudioResponsive { return false }
         if contains(.customizable), !workshopItem.isCustomizable { return false }
         return true
@@ -121,6 +126,12 @@ struct FRShowOnly: OptionSet {
             } else if !localFavoriteIDs.contains(wallpaper.id) {
                 return false
             }
+        }
+        if contains(.mobileCompatible) {
+            let matches = (wallpaper.project.tags ?? []).contains {
+                $0.localizedCaseInsensitiveContains(Self.mobileCompatibleSteamTag)
+            }
+            if !matches { return false }
         }
         if contains(.audioResponsive) {
             let matches = (wallpaper.project.tags ?? []).contains {
