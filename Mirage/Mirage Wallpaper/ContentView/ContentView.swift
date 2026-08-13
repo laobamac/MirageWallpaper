@@ -28,6 +28,7 @@ enum MainSection: String, CaseIterable, Hashable {
 
 final class MainNavigationModel: ObservableObject {
     @Published var selection: MainSection
+    @Published var isMobileDevicesPresented = false
 
     init(selection: MainSection = .installed) {
         self.selection = selection
@@ -315,6 +316,9 @@ struct ContentView: View {
             FirstLaunchView()
                 .environment(globalSettingsViewModel)
         }
+        .sheet(isPresented: $navigationModel.isMobileDevicesPresented) {
+            MobileDevicesView(viewModel: AppDelegate.shared.mobileDevicesViewModel)
+        }
         .sheet(item: $shortcutManager.recordingWallpaper, onDismiss: {
             shortcutManager.cancelRecording()
         }) { wallpaper in
@@ -347,6 +351,9 @@ struct ContentView: View {
         .overlay(alignment: .bottomTrailing) {
             VideoTranscodeOverlay()
                 .allowsHitTesting(false)
+        }
+        .overlay(alignment: .bottom) {
+            MobileTransferOverlay()
         }
         .environment(\.locale, localization.locale)
         .environment(\.mirageContentActive, interfaceActive)

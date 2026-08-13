@@ -93,17 +93,20 @@ struct DiscoverSectionView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     LazyHStack(spacing: 8) {
                         ForEach(row.items) { item in
-                            DiscoverCard(
-                                item: item,
-
-                                isSelected: workshopViewModel.discoverSelectedItemID == item.id,
-                                isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
-                                presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
-                                downloadTask: workshopViewModel.downloadTask(for: item.publishedFileId),
-                                cardWidth: cardWidth,
-                                isActive: isActive,
-                                animatedPreviewMode: animatedPreviewMode
-                            )
+                            WorkshopItemDownloadStatus(workshopID: item.publishedFileId,
+                                                       downloadStore: workshopViewModel.downloadStore) { downloadState in
+                                DiscoverCard(
+                                    item: item,
+                                    isSelected: workshopViewModel.discoverSelectedItemID == item.id,
+                                    isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
+                                    presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
+                                    downloadTask: workshopViewModel.downloadTask(for: item.publishedFileId),
+                                    liveDownloadState: downloadState,
+                                    cardWidth: cardWidth,
+                                    isActive: isActive,
+                                    animatedPreviewMode: animatedPreviewMode
+                                )
+                            }
                             .id(item.id)
                             .onTapGesture {
                                 workshopViewModel.selectDiscoverItem(item)
@@ -188,8 +191,9 @@ struct DiscoverCard: View {
     var isDownloaded: Bool
     var presetNeedsDependency: Bool
     var downloadTask: DownloadTask?
+    var liveDownloadState: DownloadState? = nil
 
-    private var downloadState: DownloadState? { isActive ? downloadTask?.state : nil }
+    private var downloadState: DownloadState? { isActive ? (liveDownloadState ?? downloadTask?.state) : nil }
     var cardWidth: CGFloat
     var isActive: Bool
     var animatedPreviewMode: GSAnimatedPreviewPlayback
