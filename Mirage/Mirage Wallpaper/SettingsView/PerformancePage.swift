@@ -134,6 +134,8 @@ struct PerformancePage: SettingsPage {
                     } else if viewModel.settings.fps > 30 {
                         Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
                             .help("较高的帧率会增加耗电。")
+                    } else {
+                        Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
                     }
                 }
 
