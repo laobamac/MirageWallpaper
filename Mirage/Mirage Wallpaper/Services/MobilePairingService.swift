@@ -24,6 +24,14 @@ final class MobilePairingService: @unchecked Sendable {
         let iv: Data
     }
 
+    private struct PendingTransfer {
+        let fileURL: URL
+        let title: String
+        let progress: ((UInt64, UInt64) -> Void)?
+        let completion: (Result<Void, Error>) -> Void
+        let deadline: DispatchTime
+    }
+
     private struct IdentityMetadata: Codable {
         let guid: String
         var pin: String?
@@ -61,6 +69,7 @@ final class MobilePairingService: @unchecked Sendable {
     private var activeDeviceSockets: [String: Int32] = [:]
     private var transferSessions: [String: TransferSession] = [:]
     private var transferringDevices = Set<String>()
+    private var pendingTransfers: [String: PendingTransfer] = [:]
     private var pairedPins: [String: String] = [:]
     private var knownPairedDeviceIdentifiers = Set<String>()
     private var identity: Identity?
@@ -117,36 +126,64 @@ final class MobilePairingService: @unchecked Sendable {
         progress: ((UInt64, UInt64) -> Void)? = nil,
         completion: @escaping (Result<Void, Error>) -> Void
     ) {
-        let prepared: Result<TransferSession, Error> = queue.sync {
-            guard let session = transferSessions[identifier],
-                  activeDeviceSockets[identifier] == session.socket else {
-                return .failure(MobilePairingError.deviceNotConnected)
+        let deadline = DispatchTime.now() + .seconds(120)
+        queue.async { [weak self] in
+            guard let self else { return }
+            guard !self.transferringDevices.contains(identifier),
+                  self.pendingTransfers[identifier] == nil else {
+                DispatchQueue.main.async {
+                    completion(.failure(MobilePairingError.transferAlreadyRunning))
+                }
+                return
             }
-            guard transferringDevices.insert(identifier).inserted else {
-                return .failure(MobilePairingError.transferAlreadyRunning)
+            self.pendingTransfers[identifier] = PendingTransfer(
+                fileURL: fileURL,
+                title: title,
+                progress: progress,
+                completion: completion,
+                deadline: deadline
+            )
+            self.startPendingTransferIfPossible(identifier)
+            self.queue.asyncAfter(deadline: deadline) { [weak self] in
+                self?.timeoutPendingTransfer(identifier, deadline: deadline)
             }
-            return .success(session)
         }
+    }
 
-        switch prepared {
-        case .failure(let error):
-            DispatchQueue.main.async { completion(.failure(error)) }
-        case .success(let session):
-            clientQueue.async { [weak self] in
-                guard let self else { return }
-                let result = Result {
-                    try self.sendMPKGOnClientQueue(
-                        fileURL,
-                        title: title,
-                        session: session,
-                        progress: progress
-                    )
-                }
-                self.queue.async {
-                    self.transferringDevices.remove(identifier)
-                    DispatchQueue.main.async { completion(result) }
-                }
+    private func startPendingTransferIfPossible(_ identifier: String) {
+        guard let pending = pendingTransfers[identifier],
+              let session = transferSessions[identifier],
+              activeDeviceSockets[identifier] == session.socket else { return }
+        pendingTransfers.removeValue(forKey: identifier)
+        guard transferringDevices.insert(identifier).inserted else {
+            DispatchQueue.main.async {
+                pending.completion(.failure(MobilePairingError.transferAlreadyRunning))
             }
+            return
+        }
+        clientQueue.async { [weak self] in
+            guard let self else { return }
+            let result = Result {
+                try self.sendMPKGOnClientQueue(
+                    pending.fileURL,
+                    title: pending.title,
+                    session: session,
+                    progress: pending.progress
+                )
+            }
+            self.queue.async {
+                self.transferringDevices.remove(identifier)
+                DispatchQueue.main.async { pending.completion(result) }
+            }
+        }
+    }
+
+    private func timeoutPendingTransfer(_ identifier: String, deadline: DispatchTime) {
+        guard let pending = pendingTransfers[identifier],
+              pending.deadline.uptimeNanoseconds == deadline.uptimeNanoseconds else { return }
+        pendingTransfers.removeValue(forKey: identifier)
+        DispatchQueue.main.async {
+            pending.completion(.failure(MobilePairingError.deviceNotConnected))
         }
     }
 
@@ -163,6 +200,7 @@ final class MobilePairingService: @unchecked Sendable {
     func removePairing(identifier: String) {
         queue.async { [weak self] in
             guard let self else { return }
+            let pending = self.pendingTransfers.removeValue(forKey: identifier)
             self.knownPairedDeviceIdentifiers.remove(identifier)
             self.pairedPins.removeValue(forKey: identifier)
             self.transferSessions.removeValue(forKey: identifier)
@@ -171,6 +209,11 @@ final class MobilePairingService: @unchecked Sendable {
                 Darwin.shutdown(socket, SHUT_RDWR)
             }
             self.persistMetadataOnQueue()
+            if let pending {
+                DispatchQueue.main.async {
+                    pending.completion(.failure(MobilePairingError.deviceNotConnected))
+                }
+            }
         }
     }
 
@@ -236,6 +279,14 @@ final class MobilePairingService: @unchecked Sendable {
         }
         running = false
         pairingSessionActive = false
+
+        let pending = pendingTransfers.values
+        pendingTransfers.removeAll()
+        for transfer in pending {
+            DispatchQueue.main.async {
+                transfer.completion(.failure(MobilePairingError.deviceNotConnected))
+            }
+        }
 
         discoveryTimer?.cancel()
         discoveryTimer = nil
@@ -467,6 +518,9 @@ final class MobilePairingService: @unchecked Sendable {
                     isConnected: true
                 )
                 notifyOnMain { $0.mobilePairingService(self, didPair: device) }
+                queue.async { [weak self] in
+                    self?.startPendingTransferIfPossible(identifier)
+                }
                 break
             }
 

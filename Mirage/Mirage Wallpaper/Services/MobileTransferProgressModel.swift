@@ -10,8 +10,15 @@ import Foundation
 final class MobileTransferProgressModel: ObservableObject {
     static let shared = MobileTransferProgressModel()
 
+    enum Destination: Equatable {
+        case device(String)
+        case file
+    }
+
     enum Phase: Equatable {
         case preparing
+        case converting
+        case waitingForDevice
         case uploading
         case completed
         case failed(String)
@@ -20,7 +27,7 @@ final class MobileTransferProgressModel: ObservableObject {
     struct Job: Identifiable, Equatable {
         let id: UUID
         let wallpaperTitle: String
-        let deviceName: String
+        let destination: Destination
         var phase: Phase
         var progress: Double
     }
@@ -32,7 +39,35 @@ final class MobileTransferProgressModel: ObservableObject {
     private init() {}
 
     @discardableResult
-    func start(wallpaperTitle: String, deviceName: String) -> UUID {
+    func start(
+        wallpaperTitle: String,
+        deviceName: String,
+        initialPhase: Phase = .preparing
+    ) -> UUID {
+        start(
+            wallpaperTitle: wallpaperTitle,
+            destination: .device(deviceName),
+            initialPhase: initialPhase
+        )
+    }
+
+    @discardableResult
+    func startExport(
+        wallpaperTitle: String,
+        initialPhase: Phase
+    ) -> UUID {
+        start(
+            wallpaperTitle: wallpaperTitle,
+            destination: .file,
+            initialPhase: initialPhase
+        )
+    }
+
+    private func start(
+        wallpaperTitle: String,
+        destination: Destination,
+        initialPhase: Phase
+    ) -> UUID {
         let id = UUID()
         let append: () -> Void = { [weak self] in
             guard let self else { return }
@@ -41,8 +76,8 @@ final class MobileTransferProgressModel: ObservableObject {
                 Job(
                     id: id,
                     wallpaperTitle: wallpaperTitle,
-                    deviceName: deviceName,
-                    phase: .preparing,
+                    destination: destination,
+                    phase: initialPhase,
                     progress: 0
                 )
             )
@@ -57,11 +92,15 @@ final class MobileTransferProgressModel: ObservableObject {
 
     func updatePreparation(id: UUID, completedBytes: UInt64, totalBytes: UInt64) {
         let fraction = Self.fraction(completedBytes: completedBytes, totalBytes: totalBytes)
-        update(id: id, phase: .preparing, progress: fraction * 0.5)
+        updateInitialProgress(id: id, phase: .preparing, fraction: fraction)
     }
 
-    func beginUploading(id: UUID) {
-        update(id: id, phase: .uploading, progress: 0.5)
+    func updateConversion(id: UUID, fraction: Double) {
+        updateInitialProgress(id: id, phase: .converting, fraction: fraction)
+    }
+
+    func waitForDevice(id: UUID) {
+        update(id: id, phase: .waitingForDevice, progress: 0.5)
     }
 
     func updateUpload(id: UUID, completedBytes: UInt64, totalBytes: UInt64) {
@@ -75,7 +114,7 @@ final class MobileTransferProgressModel: ObservableObject {
                   let index = self.jobs.firstIndex(where: { $0.id == id }) else { return }
             self.jobs[index].phase = .completed
             self.jobs[index].progress = 1
-            self.scheduleRemoval(id: id, after: 4)
+            self.scheduleRemoval(id: id, after: 3)
         }
     }
 
@@ -106,6 +145,30 @@ final class MobileTransferProgressModel: ObservableObject {
         }
     }
 
+    private func updateInitialProgress(id: UUID, phase: Phase, fraction: Double) {
+        let clamped = min(max(fraction, 0), 1)
+        updateOnMain { [weak self] in
+            guard let self,
+                  let index = self.jobs.firstIndex(where: { $0.id == id }) else { return }
+            guard Self.phaseRank(phase) >= Self.phaseRank(self.jobs[index].phase) else { return }
+            let share: Double
+            switch self.jobs[index].destination {
+            case .device:
+                share = 0.5
+            case .file:
+                share = 1
+            }
+            self.jobs[index].phase = phase
+            self.jobs[index].progress = max(self.jobs[index].progress, clamped * share)
+        }
+    }
+
+    private func remove(id: UUID) {
+        removalTasks[id]?.cancel()
+        removalTasks[id] = nil
+        jobs.removeAll { $0.id == id }
+    }
+
     private func scheduleRemoval(id: UUID, after delay: TimeInterval) {
         removalTasks[id]?.cancel()
         let task = DispatchWorkItem { [weak self] in
@@ -113,12 +176,6 @@ final class MobileTransferProgressModel: ObservableObject {
         }
         removalTasks[id] = task
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: task)
-    }
-
-    private func remove(id: UUID) {
-        removalTasks[id]?.cancel()
-        removalTasks[id] = nil
-        jobs.removeAll { $0.id == id }
     }
 
     private func updateOnMain(_ action: @escaping () -> Void) {
@@ -136,9 +193,10 @@ final class MobileTransferProgressModel: ObservableObject {
 
     private static func phaseRank(_ phase: Phase) -> Int {
         switch phase {
-        case .preparing: return 0
-        case .uploading: return 1
-        case .completed, .failed: return 2
+        case .preparing, .converting: return 0
+        case .waitingForDevice: return 1
+        case .uploading: return 2
+        case .completed, .failed: return 3
         }
     }
 }

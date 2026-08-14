@@ -122,7 +122,8 @@ final class MobileDevicesViewModel: ObservableObject, MobilePairingServiceDelega
         let progressModel = MobileTransferProgressModel.shared
         let progressID = progressModel.start(
             wallpaperTitle: wallpaper.project.title,
-            deviceName: device.name
+            deviceName: device.name,
+            initialPhase: wallpaper.kind == .scene ? .converting : .preparing
         )
         guard device.isConnected else {
             progressModel.fail(
@@ -143,14 +144,23 @@ final class MobileDevicesViewModel: ObservableObject, MobilePairingServiceDelega
                     at: directory,
                     withIntermediateDirectories: true
                 )
-                try MobileMPKGExporter.export(wallpaper, to: output) { completed, total in
-                    progressModel.updatePreparation(
-                        id: progressID,
-                        completedBytes: completed,
-                        totalBytes: total
-                    )
+                switch wallpaper.kind {
+                case .video:
+                    try MobileMPKGExporter.export(wallpaper, to: output) { completed, total in
+                        progressModel.updatePreparation(
+                            id: progressID,
+                            completedBytes: completed,
+                            totalBytes: total
+                        )
+                    }
+                case .scene:
+                    try SceneMobileMPKGExporter.export(wallpaper, to: output) { fraction in
+                        progressModel.updateConversion(id: progressID, fraction: fraction)
+                    }
+                case .web, .unsupported:
+                    throw MobileMPKGExportError.unsupportedWallpaperType(wallpaper.kind)
                 }
-                progressModel.beginUploading(id: progressID)
+                progressModel.waitForDevice(id: progressID)
                 pairingService.sendMPKG(
                     at: output,
                     title: wallpaper.project.title,
@@ -394,7 +404,7 @@ struct MobileDevicesView: View {
                 .font(.system(size: 64, weight: .light, design: .default))
                 .monospacedDigit()
                 .tracking(8)
-                .accessibilityLabel("配对 PIN \(pin)")
+                .accessibilityLabel(L("配对 PIN %@", pin))
 
             Spacer(minLength: 52)
 
