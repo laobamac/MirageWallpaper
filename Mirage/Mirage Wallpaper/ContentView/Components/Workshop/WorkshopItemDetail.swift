@@ -147,7 +147,12 @@ struct WorkshopItemDetail: View {
                 sectionHeader("操作")
                 favoriteSection(for: item)
                 subscriptionSection(for: item)
-                downloadSection(for: item)
+                WorkshopItemDownloadStatus(
+                    workshopID: item.publishedFileId,
+                    downloadStore: workshopViewModel.downloadStore
+                ) { downloadState in
+                    downloadSection(for: item, downloadState: downloadState)
+                }
 
                 Button {
                     let urlStr = "https://steamcommunity.com/sharedfiles/filedetails/?id=\(item.publishedFileId)"
@@ -513,8 +518,8 @@ struct WorkshopItemDetail: View {
     }
 
     @ViewBuilder
-    func downloadSection(for item: WorkshopItem) -> some View {
-        let hasDownloadTask = workshopViewModel.downloadState(for: item.publishedFileId) != nil
+    func downloadSection(for item: WorkshopItem, downloadState: DownloadState?) -> some View {
+        let hasDownloadTask = downloadState != nil
         let installed = workshopViewModel.installedItem(workshopId: item.publishedFileId)
         if let installed, installed.needsPresetDependency {
             VStack(spacing: 6) {
@@ -573,7 +578,7 @@ struct WorkshopItemDetail: View {
                 }
                 .buttonStyle(.borderedProminent)
             }
-        } else if let state = workshopViewModel.downloadState(for: item.publishedFileId) {
+        } else if let state = downloadState {
             switch state {
             case .downloading(let progress):
                 VStack(spacing: 4) {
@@ -899,17 +904,22 @@ struct CreatorProfileView: View {
 
                 LazyVGrid(columns: gridColumns, spacing: 10) {
                     ForEach(workshopViewModel.creatorItems) { item in
-                        WorkshopItemCard(
-                            item: item,
-                            isHovered: hoveredItemID == item.id,
-                            isSelected: false,
-                            isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
-                            presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
-                            downloadState: workshopViewModel.downloadState(for: item.publishedFileId),
-                            isFavorite: workshopViewModel.isWorkshopFavorite(item.publishedFileId),
-                            isActive: selectedDetailItem == nil,
-                            animatedPreviewMode: animatedPreviewMode
-                        )
+                        WorkshopItemDownloadStatus(
+                            workshopID: item.publishedFileId,
+                            downloadStore: workshopViewModel.downloadStore
+                        ) { downloadState in
+                            WorkshopItemCard(
+                                item: item,
+                                isHovered: hoveredItemID == item.id,
+                                isSelected: false,
+                                isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
+                                presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
+                                downloadState: downloadState,
+                                isFavorite: workshopViewModel.isWorkshopFavorite(item.publishedFileId),
+                                isActive: selectedDetailItem == nil,
+                                animatedPreviewMode: animatedPreviewMode
+                            )
+                        }
                         .onHover { hovering in
                             hoveredItemID = hovering ? item.id : nil
                         }

@@ -7,8 +7,14 @@
 import SwiftUI
 
 struct DownloadPopover: View {
-    @ObservedObject var workshopViewModel: WorkshopViewModel
+    let workshopViewModel: WorkshopViewModel
+    @ObservedObject private var downloadStore: WorkshopDownloadStore
     @State private var revealError: String?
+
+    init(workshopViewModel: WorkshopViewModel) {
+        self.workshopViewModel = workshopViewModel
+        self.downloadStore = workshopViewModel.downloadStore
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -32,7 +38,7 @@ struct DownloadPopover: View {
 
             Divider()
 
-            if workshopViewModel.downloadQueue.isEmpty {
+            if downloadStore.queue.isEmpty {
                 VStack(spacing: 10) {
                     Image(systemName: "arrow.down.doc")
                         .font(.system(size: 36))
@@ -49,7 +55,7 @@ struct DownloadPopover: View {
             } else {
                 ScrollView {
                     VStack(spacing: 1) {
-                        ForEach(workshopViewModel.downloadQueue) { task in
+                        ForEach(downloadStore.queue) { task in
                             DownloadRow(
                                 task: task,
                                 onCancel: { workshopViewModel.cancelDownload(task.workshopItem) },
@@ -65,18 +71,12 @@ struct DownloadPopover: View {
             Divider()
 
             HStack {
-                let active = workshopViewModel.downloadQueue.filter {
-                    if case .downloading = $0.state { return true }
-                    if case .resolving = $0.state { return true }
-                    if case .validating = $0.state { return true }
-                    return false
-                }.count
-                let completed = workshopViewModel.downloadQueue.filter {
+                let completed = downloadStore.queue.filter {
                     if case .completed = $0.state { return true }
                     return false
                 }.count
 
-                Label("\(active) 下载中", systemImage: "arrow.down.circle.fill")
+                Label("\(downloadStore.activeCount) 下载中", systemImage: "arrow.down.circle.fill")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
@@ -101,7 +101,7 @@ struct DownloadPopover: View {
     }
 
     private var hasCompleted: Bool {
-        workshopViewModel.downloadQueue.contains {
+        downloadStore.queue.contains {
             if case .completed = $0.state { return true }
             if case .failed = $0.state { return true }
             return false

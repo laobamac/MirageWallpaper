@@ -4,6 +4,7 @@
 //  Copyright © 2026 王孝慈. All rights reserved.
 //
 
+import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 import Combine
@@ -13,6 +14,17 @@ struct ScreenSaverFeedback: Identifiable {
     let id = UUID()
     let title: String
     let message: String
+}
+
+enum SceneMobileExportDestination {
+    case device(MobileDevice)
+    case file
+}
+
+struct SceneMobileExportRequest: Identifiable {
+    let id = UUID()
+    let wallpaper: WEWallpaper
+    let destination: SceneMobileExportDestination
 }
 
 class ContentViewModel: ObservableObject, DropDelegate {
@@ -73,6 +85,62 @@ class ContentViewModel: ObservableObject, DropDelegate {
     @Published var isUnsubscribeConfirming = false
 
     @Published var screenSaverFeedback: ScreenSaverFeedback?
+
+    @Published var pendingSceneMobileExport: SceneMobileExportRequest?
+
+    func exportMobileMPKG(_ wallpaper: WEWallpaper, to outputURL: URL) {
+        let progressModel = MobileTransferProgressModel.shared
+        let progressID = progressModel.startExport(
+            wallpaperTitle: wallpaper.project.title,
+            initialPhase: wallpaper.kind == .scene ? .converting : .preparing
+        )
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            do {
+                switch wallpaper.kind {
+                case .video:
+                    try MobileMPKGExporter.export(wallpaper, to: outputURL) { completed, total in
+                        progressModel.updatePreparation(
+                            id: progressID,
+                            completedBytes: completed,
+                            totalBytes: total
+                        )
+                    }
+                case .scene:
+                    try SceneMobileMPKGExporter.export(wallpaper, to: outputURL) { fraction in
+                        progressModel.updateConversion(id: progressID, fraction: fraction)
+                    }
+                case .web, .unsupported:
+                    throw MobileMPKGExportError.unsupportedWallpaperType(wallpaper.kind)
+                }
+                progressModel.complete(id: progressID)
+            } catch {
+                progressModel.fail(id: progressID, message: error.localizedDescription)
+                DispatchQueue.main.async {
+                    self?.screenSaverFeedback = ScreenSaverFeedback(
+                        title: L("导出 .mpkg 失败"),
+                        message: error.localizedDescription
+                    )
+                }
+            }
+        }
+    }
+
+    func presentMobileMPKGSavePanel(for wallpaper: WEWallpaper) {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [UTType(filenameExtension: "mpkg") ?? .data]
+        panel.nameFieldStringValue = MobileMPKGExporter.suggestedFilename(for: wallpaper)
+        panel.prompt = L("导出")
+
+        let completion: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+            guard response == .OK, let url = panel.url else { return }
+            self?.exportMobileMPKG(wallpaper, to: url)
+        }
+        // Keep the save panel independent from the main window. Attaching an
+        // NSSavePanel as a sheet can make SwiftUI/AppKit renegotiate the host
+        // window's fitting size when the sheet is removed, which visibly
+        // resizes the adaptive wallpaper grid.
+        panel.begin(completionHandler: completion)
+    }
 
     // Debounced: every keystroke used to kick off a full search + filter + sort
     // over the whole library. The pipeline already runs off the main thread, but

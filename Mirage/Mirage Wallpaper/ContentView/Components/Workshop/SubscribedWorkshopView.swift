@@ -329,17 +329,22 @@ struct SubscribedWorkshopView: View {
                         spacing: 14
                     ) {
                         ForEach(workshopViewModel.subscriptionItems) { item in
-                            WorkshopItemCard(
-                                item: item,
-                                isHovered: hoveredItemID == item.id,
-                                isSelected: workshopViewModel.selectedItem?.id == item.id,
-                                isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
-                                presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
-                                downloadState: workshopViewModel.downloadState(for: item.publishedFileId),
-                                isFavorite: workshopViewModel.isWorkshopFavorite(item.publishedFileId),
-                                isActive: isActive,
-                                animatedPreviewMode: globalSettingsViewModel.settings.animatedPreviewPlaybackMode
-                            )
+                            WorkshopItemDownloadStatus(
+                                workshopID: item.publishedFileId,
+                                downloadStore: workshopViewModel.downloadStore
+                            ) { downloadState in
+                                WorkshopItemCard(
+                                    item: item,
+                                    isHovered: hoveredItemID == item.id,
+                                    isSelected: workshopViewModel.selectedItem?.id == item.id,
+                                    isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
+                                    presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
+                                    downloadState: downloadState,
+                                    isFavorite: workshopViewModel.isWorkshopFavorite(item.publishedFileId),
+                                    isActive: isActive,
+                                    animatedPreviewMode: globalSettingsViewModel.settings.animatedPreviewPlaybackMode
+                                )
+                            }
                             .onHover { hovering in
                                 hoveredItemID = hovering ? item.id : nil
                             }

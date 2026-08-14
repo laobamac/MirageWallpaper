@@ -11,17 +11,24 @@ struct ExplorerItemMenu: SubviewOfContentView {
     
     @ObservedObject var viewModel: ContentViewModel
     @ObservedObject var wallpaperViewModel: WallpaperViewModel
-    @ObservedObject var workshopViewModel: WorkshopViewModel
+    // Context menus are hosted by native AppKit menus.  Do not subscribe the
+    // menu itself to the workshop/download objects: download progress is
+    // published several times per second and would make AppKit tear down and
+    // rebuild an already-open menu.
+    let workshopViewModel: WorkshopViewModel
+    @ObservedObject var mobileDevicesViewModel: MobileDevicesViewModel
     
     var hoveredWallpaper: WEWallpaper
     
     init(contentViewModel viewModel: ContentViewModel,
          wallpaperViewModel: WallpaperViewModel,
          workshopViewModel: WorkshopViewModel = AppDelegate.shared.workshopViewModel,
+         mobileDevicesViewModel: MobileDevicesViewModel = AppDelegate.shared.mobileDevicesViewModel,
          current hoveredWallpaper: WEWallpaper) {
         self.wallpaperViewModel = wallpaperViewModel
         self.viewModel = viewModel
         self.workshopViewModel = workshopViewModel
+        self.mobileDevicesViewModel = mobileDevicesViewModel
         self.hoveredWallpaper = hoveredWallpaper
     }
     
@@ -135,6 +142,8 @@ struct ExplorerItemMenu: SubviewOfContentView {
                         Label("管理屏蔽列表", systemImage: "hand.raised.fill")
                     }
                 }.disabled(true)
+
+                mobileTransferMenu
             }
             
             Section {
@@ -189,6 +198,64 @@ struct ExplorerItemMenu: SubviewOfContentView {
 
     private var hasShortcut: Bool {
         WallpaperShortcutManager.shared.shortcut(for: hoveredWallpaper) != nil
+    }
+
+    private var mobileTransferMenu: some View {
+        Menu {
+            let connectedDevices = mobileDevicesViewModel.devices.filter(\.isConnected)
+            ForEach(connectedDevices) { device in
+                Button {
+                    sendToMobileDevice(device)
+                } label: {
+                    Label(L("发送至 %@", device.name), systemImage: "iphone")
+                }
+                .disabled(!canExportToMobile)
+            }
+            if !connectedDevices.isEmpty {
+                Divider()
+            }
+
+            Button {
+                exportMPKG()
+            } label: {
+                Label("导出 .mpkg 文件", systemImage: "arrow.down.doc")
+            }
+            .disabled(!canExportToMobile)
+
+            Button {
+                AppDelegate.shared.navigationModel.isMobileDevicesPresented = true
+            } label: {
+                Label("连接新的移动设备", systemImage: "iphone.badge.plus")
+            }
+        } label: {
+            Label("发送到移动设备", systemImage: "iphone.radiowaves.left.and.right")
+        }
+    }
+
+    private var canExportToMobile: Bool {
+        hoveredWallpaper.isValid && [.video, .scene].contains(hoveredWallpaper.kind)
+    }
+
+    private func sendToMobileDevice(_ device: MobileDevice) {
+        if hoveredWallpaper.kind == .scene {
+            viewModel.pendingSceneMobileExport = SceneMobileExportRequest(
+                wallpaper: hoveredWallpaper,
+                destination: .device(device)
+            )
+            return
+        }
+        mobileDevicesViewModel.send(wallpaper: hoveredWallpaper, to: device) { _ in }
+    }
+
+    private func exportMPKG() {
+        if hoveredWallpaper.kind == .scene {
+            viewModel.pendingSceneMobileExport = SceneMobileExportRequest(
+                wallpaper: hoveredWallpaper,
+                destination: .file
+            )
+            return
+        }
+        viewModel.presentMobileMPKGSavePanel(for: hoveredWallpaper)
     }
 
     private func displayTitle(_ info: DisplayInfo) -> String {
@@ -280,74 +347,116 @@ struct ExplorerItemMenu: SubviewOfContentView {
 
 struct WorkshopCardContextMenu: View {
     let item: WorkshopItem
-    @ObservedObject var workshopViewModel: WorkshopViewModel
+    private let isSubscribed: Bool
+    private let isSubscribeDisabled: Bool
+    private let isUnsubscribeDisabled: Bool
+    private let isDownloadInProgress: Bool
+    private let isChangingFavorite: Bool
+    private let isFavorite: Bool
+    private let onUnsubscribe: () -> Void
+    private let onSubscribe: () -> Void
+    private let onDownload: () -> Void
+    private let onToggleFavorite: () -> Void
+    private let onSelect: () -> Void
+    private let onOpenSteam: () -> Void
+    private let creator: WorkshopCreator?
+    private let onOpenCreator: (() -> Void)?
+
+    init(item: WorkshopItem, workshopViewModel: WorkshopViewModel) {
+        self.item = item
+
+        // Read all menu state once, while SwiftUI is constructing the menu.
+        // The resulting native menu is intentionally a snapshot; live progress
+        // belongs in the card/download popover, not in the context menu.
+        let workshopID = item.publishedFileId
+        let subscriptionState = workshopViewModel.subscriptionState(for: workshopID)
+        let isChangingSubscription = workshopViewModel.changingSubscriptionIDs.contains(workshopID)
+        self.isSubscribed = subscriptionState == .subscribed
+        self.isSubscribeDisabled = subscriptionState == .unknown
+            || workshopViewModel.checkingSubscriptionIDs.contains(workshopID)
+            || isChangingSubscription
+        self.isUnsubscribeDisabled = isChangingSubscription
+        self.isDownloadInProgress = workshopViewModel.downloadState(for: workshopID) != nil
+        self.isChangingFavorite = workshopViewModel.changingFavoriteIDs.contains(workshopID)
+        self.isFavorite = workshopViewModel.isWorkshopFavorite(workshopID)
+        self.onUnsubscribe = { workshopViewModel.unsubscribe(item) }
+        self.onSubscribe = { workshopViewModel.subscribe(item) }
+        self.onDownload = { workshopViewModel.downloadItem(item) }
+        self.onToggleFavorite = { workshopViewModel.toggleFavorite(item) }
+        self.onSelect = { workshopViewModel.selectWorkshopItem(item) }
+        self.onOpenSteam = {
+            guard let url = URL(
+                string: "https://steamcommunity.com/sharedfiles/filedetails/?id=\(item.publishedFileId)"
+            ) else { return }
+            NSWorkspace.shared.open(url)
+        }
+        self.creator = WorkshopCreator(item: item)
+        if let creator = self.creator {
+            self.onOpenCreator = { workshopViewModel.openCreatorProfile(creator) }
+        } else {
+            self.onOpenCreator = nil
+        }
+    }
 
     var body: some View {
         Group {
             Section {
-                if workshopViewModel.subscriptionState(for: item.publishedFileId) == .subscribed {
+                if isSubscribed {
                     Button(role: .destructive) {
-                        workshopViewModel.unsubscribe(item)
+                        onUnsubscribe()
                     } label: {
                         Label("取消订阅", systemImage: "xmark.circle.fill")
                     }
-                    .disabled(workshopViewModel.changingSubscriptionIDs.contains(item.publishedFileId))
+                    .disabled(isUnsubscribeDisabled)
                 } else {
                     Button {
-                        workshopViewModel.subscribe(item)
+                        onSubscribe()
                     } label: {
                         Label("订阅并下载", systemImage: "plus.circle.fill")
                     }
-                    .disabled(
-                        workshopViewModel.subscriptionState(for: item.publishedFileId) == .unknown ||
-                        workshopViewModel.checkingSubscriptionIDs.contains(item.publishedFileId) ||
-                        workshopViewModel.changingSubscriptionIDs.contains(item.publishedFileId)
-                    )
+                    .disabled(isSubscribeDisabled)
                 }
 
                 Button {
-                    workshopViewModel.downloadItem(item)
+                    onDownload()
                 } label: {
                     Label(
                         LocalizedStringKey(item.isPreset ? "下载预设" : "下载壁纸"),
                         systemImage: "arrow.down.circle.fill"
                     )
                 }
-                .disabled(workshopViewModel.downloadState(for: item.publishedFileId) != nil)
+                .disabled(isDownloadInProgress)
 
                 Button {
-                    workshopViewModel.selectWorkshopItem(item)
+                    onSelect()
                 } label: {
                     Label(LocalizedStringKey("查看壁纸详情"), systemImage: "info.circle")
                 }
             }
 
             Section {
-                if workshopViewModel.changingFavoriteIDs.contains(item.publishedFileId) {
+                if isChangingFavorite {
                     Label("正在同步收藏状态…", systemImage: "arrow.triangle.2.circlepath")
                 } else {
                     Button {
-                        workshopViewModel.toggleFavorite(item)
+                        onToggleFavorite()
                     } label: {
                         Label(
-                            LocalizedStringKey(workshopViewModel.isWorkshopFavorite(item.publishedFileId) ? "取消收藏" : "加入收藏"),
-                            systemImage: workshopViewModel.isWorkshopFavorite(item.publishedFileId) ? "heart.slash.fill" : "heart.fill"
+                            LocalizedStringKey(isFavorite ? "取消收藏" : "加入收藏"),
+                            systemImage: isFavorite ? "heart.slash.fill" : "heart.fill"
                         )
                     }
                 }
 
                 Button {
-                    guard let url = URL(
-                        string: "https://steamcommunity.com/sharedfiles/filedetails/?id=\(item.publishedFileId)"
-                    ) else { return }
-                    NSWorkspace.shared.open(url)
+                    onOpenSteam()
                 } label: {
                     Label(LocalizedStringKey("在 Steam 中查看"), systemImage: "safari")
                 }
 
-                if let creator = WorkshopCreator(item: item) {
+                if let creator, let onOpenCreator {
                     Button {
-                        workshopViewModel.openCreatorProfile(creator)
+                        onOpenCreator()
                     } label: {
                         Label(LocalizedStringKey("查看作者主页和作品"), systemImage: "person.crop.circle")
                     }

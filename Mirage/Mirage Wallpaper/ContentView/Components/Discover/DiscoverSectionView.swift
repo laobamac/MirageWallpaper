@@ -49,18 +49,23 @@ struct DiscoverSectionView: View {
                     ScrollView(.horizontal, showsIndicators: false) {
                         LazyHStack(spacing: 14) {
                             ForEach(items) { item in
-                                DiscoverCard(
-                                    item: item,
-                                    isHovered: hoveredId == item.id,
-                                    isSelected: workshopViewModel.selectedItem?.id == item.id,
-                                    isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
-                                    presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
-                                    downloadState: workshopViewModel.downloadState(for: item.publishedFileId),
-                                    isFavorite: workshopViewModel.isWorkshopFavorite(item.publishedFileId),
-                                    cardWidth: contentViewModel.explorerIconSize,
-                                    isActive: isActive,
-                                    animatedPreviewMode: animatedPreviewMode
-                                )
+                                WorkshopItemDownloadStatus(
+                                    workshopID: item.publishedFileId,
+                                    downloadStore: workshopViewModel.downloadStore
+                                ) { downloadState in
+                                    DiscoverCard(
+                                        item: item,
+                                        isHovered: hoveredId == item.id,
+                                        isSelected: workshopViewModel.selectedItem?.id == item.id,
+                                        isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
+                                        presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
+                                        downloadState: downloadState,
+                                        isFavorite: workshopViewModel.isWorkshopFavorite(item.publishedFileId),
+                                        cardWidth: contentViewModel.explorerIconSize,
+                                        isActive: isActive,
+                                        animatedPreviewMode: animatedPreviewMode
+                                    )
+                                }
                                 .id(item.id)
                                 .onHover { hovered in
                                     hoveredId = hovered ? item.id : nil

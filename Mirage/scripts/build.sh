@@ -85,6 +85,9 @@ APP="$BUILD_DIR/DD/Build/Products/$CONFIG/Mirage Wallpaper.app"
 echo "[build] 内嵌渲染器与依赖..."
 bash "$HERE/bundle_renderers.sh" "$APP" "$ROOT" "$SIGN_IDENTITY"
 
+echo "[build] 内嵌场景移动端转换组件..."
+bash "$HERE/bundle_scene_mobile_tools.sh" "$APP" "$ROOT" "$TARGET_ARCH" "$SIGN_IDENTITY"
+
 OUT="$PROJ_DIR/dist"
 mkdir -p "$OUT"
 rm -rf "$OUT/Mirage.app"

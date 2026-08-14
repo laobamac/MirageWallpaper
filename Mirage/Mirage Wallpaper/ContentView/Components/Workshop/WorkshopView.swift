@@ -56,18 +56,20 @@ struct WorkshopView: View {
                 Button {
                     isDownloadPopoverPresented.toggle()
                 } label: {
-                    ZStack(alignment: .topTrailing) {
-                        Image(systemName: "arrow.down.circle")
-                            .font(.title3)
-                        if workshopViewModel.activeDownloadCount > 0 {
-                            Text("\(workshopViewModel.activeDownloadCount)")
-                                .font(.system(size: 9))
-                                .bold()
-                                .foregroundStyle(.white)
-                                .padding(3)
-                                .background(Color.red)
-                                .clipShape(Circle())
-                                .offset(x: 6, y: -4)
+                    WorkshopActiveDownloadCount(downloadStore: workshopViewModel.downloadStore) { count in
+                        ZStack(alignment: .topTrailing) {
+                            Image(systemName: "arrow.down.circle")
+                                .font(.title3)
+                            if count > 0 {
+                                Text("\(count)")
+                                    .font(.system(size: 9))
+                                    .bold()
+                                    .foregroundStyle(.white)
+                                    .padding(3)
+                                    .background(Color.red)
+                                    .clipShape(Circle())
+                                    .offset(x: 6, y: -4)
+                            }
                         }
                     }
                 }
@@ -176,17 +178,22 @@ struct WorkshopView: View {
                                 spacing: 14
                             ) {
                                 ForEach(workshopViewModel.items) { item in
-                                    WorkshopItemCard(
-                                        item: item,
-                                        isHovered: hoveredId == item.id,
-                                        isSelected: workshopViewModel.selectedItem?.id == item.id,
-                                        isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
-                                        presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
-                                        downloadState: workshopViewModel.downloadState(for: item.publishedFileId),
-                                        isFavorite: workshopViewModel.isWorkshopFavorite(item.publishedFileId),
-                                        isActive: isActive,
-                                        animatedPreviewMode: globalSettingsViewModel.settings.animatedPreviewPlaybackMode
-                                    )
+                                    WorkshopItemDownloadStatus(
+                                        workshopID: item.publishedFileId,
+                                        downloadStore: workshopViewModel.downloadStore
+                                    ) { downloadState in
+                                        WorkshopItemCard(
+                                            item: item,
+                                            isHovered: hoveredId == item.id,
+                                            isSelected: workshopViewModel.selectedItem?.id == item.id,
+                                            isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
+                                            presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
+                                            downloadState: downloadState,
+                                            isFavorite: workshopViewModel.isWorkshopFavorite(item.publishedFileId),
+                                            isActive: isActive,
+                                            animatedPreviewMode: globalSettingsViewModel.settings.animatedPreviewPlaybackMode
+                                        )
+                                    }
                                     .onHover { hovered in
                                         hoveredId = hovered ? item.id : nil
                                     }

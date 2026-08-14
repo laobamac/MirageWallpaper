@@ -8,6 +8,23 @@ import SwiftUI
 import Combine
 import AppKit
 
+final class WorkshopDownloadStore: ObservableObject {
+    @Published var queue: [DownloadTask] = []
+
+    func state(for workshopID: String) -> DownloadState? {
+        queue.first(where: { $0.id == workshopID })?.state
+    }
+
+    var activeCount: Int {
+        queue.filter {
+            if case .downloading = $0.state { return true }
+            if case .resolving = $0.state { return true }
+            if case .validating = $0.state { return true }
+            return false
+        }.count
+    }
+}
+
 class WorkshopViewModel: ObservableObject {
     struct SubscriptionDownloadPlan {
         let subscriptionCount: Int
@@ -99,7 +116,14 @@ class WorkshopViewModel: ObservableObject {
 
     // MARK: - Download State
 
-    @Published var downloadQueue: [DownloadTask] = []
+    /// Download progress has its own observable channel. Publishing byte-level
+    /// progress through the main workshop view model invalidated every browse
+    /// grid and any native context menu currently attached to a card.
+    let downloadStore = WorkshopDownloadStore()
+    var downloadQueue: [DownloadTask] {
+        get { downloadStore.queue }
+        set { downloadStore.queue = newValue }
+    }
     @Published var downloadHistory: [DownloadTask] = []
     @Published var presetDependencyPrompt: PresetDependencyPrompt?
 
@@ -169,12 +193,7 @@ class WorkshopViewModel: ObservableObject {
     }
 
     var activeDownloadCount: Int {
-        downloadQueue.filter {
-            if case .downloading = $0.state { return true }
-            if case .resolving = $0.state { return true }
-            if case .validating = $0.state { return true }
-            return false
-        }.count
+        downloadStore.activeCount
     }
 
     var canLoadPreviousSubscriptions: Bool {
@@ -1672,7 +1691,7 @@ class WorkshopViewModel: ObservableObject {
     }
 
     func downloadState(for workshopId: String) -> DownloadState? {
-        downloadQueue.first(where: { $0.id == workshopId })?.state
+        downloadStore.state(for: workshopId)
     }
 
     func selectWorkshopItem(_ item: WorkshopItem) {
