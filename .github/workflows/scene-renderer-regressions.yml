@@ -1,0 +1,67 @@
+name: SceneRenderer regressions
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scene-regressions-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scene-regressions:
+    name: SceneRenderer regressions (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+            preset: macos-arm64-clang-release
+          - arch: x86_64
+            runner: macos-15-intel
+            preset: macos-clang-release
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    env:
+      BUILD_PRESET: ${{ matrix.preset }}
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Select a stable Xcode
+        shell: bash
+        run: |
+          stable_xcode="/Applications/Xcode.app"
+          if [[ ! -d "$stable_xcode" ]]; then
+            stable_xcode="$(find /Applications -maxdepth 1 -type d -name 'Xcode*.app' \
+              ! -iname '*beta*' ! -iname '*rc*' | sort | tail -1)"
+          fi
+          if [[ -z "$stable_xcode" ]]; then
+            echo "::error::No stable Xcode installation found."
+            exit 1
+          fi
+          export DEVELOPER_DIR="$stable_xcode/Contents/Developer"
+          echo "DEVELOPER_DIR=$DEVELOPER_DIR" >> "$GITHUB_ENV"
+          xcodebuild -version
+          xcrun --sdk macosx --show-sdk-path
+
+      - name: Install SceneRenderer test dependencies
+        shell: bash
+        run: |
+          brew install cmake ninja pkg-config llvm molten-vk vulkan-loader \
+            vulkan-headers glslang freetype fontconfig lz4 ffmpeg
+
+      - name: Run SceneRenderer regression suite
+        shell: bash
+        run: ./SceneRenderer/scripts/test.sh
