@@ -1,0 +1,40 @@
+name: SteamService contract
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: steam-service-contract-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  steam-service-contract:
+    name: SteamService IPC contract
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+          cache: true
+          cache-dependency-path: SteamService/packages.lock.json
+
+      - name: Package the service and exercise its IPC contract
+        shell: bash
+        run: ./SteamService/scripts/test.sh

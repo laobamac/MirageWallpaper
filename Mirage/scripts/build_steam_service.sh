@@ -13,15 +13,33 @@ ARCHITECTURES="${3:-$(uname -m)}"
 PROJECT="$ROOT/SteamService/MirageSteamService.csproj"
 OUTPUT="$ROOT/Mirage/build/SteamService"
 DESTINATION="$APP/Contents/Resources/SteamService"
-DOTNET_EXECUTABLE="$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$(command -v dotnet)")"
-DOTNET_ROOT="$(dirname "$DOTNET_EXECUTABLE")"
-RUNTIME_VERSION="$(dotnet --list-runtimes | awk '$1 == "Microsoft.NETCore.App" && $2 ~ /^10\./ { print $2 }' | sort -V | tail -1)"
+RUNTIME_ENTRY="$(
+    dotnet --list-runtimes \
+        | awk '$1 == "Microsoft.NETCore.App" && $2 ~ /^10\./ { gsub(/^\[|\]$/, "", $3); print $2, $3 }' \
+        | sort -V \
+        | tail -1
+)"
+[ -n "$RUNTIME_ENTRY" ] || { echo "[steam-service] Microsoft.NETCore.App 10 runtime is unavailable" >&2; exit 1; }
+read -r RUNTIME_VERSION RUNTIME_SHARED_PATH <<< "$RUNTIME_ENTRY"
+[ -d "$RUNTIME_SHARED_PATH" ] || { echo "[steam-service] runtime directory is unavailable at $RUNTIME_SHARED_PATH" >&2; exit 1; }
+DOTNET_ROOT="$(cd "$RUNTIME_SHARED_PATH/../.." 2>/dev/null && pwd -P)"
+DOTNET_EXECUTABLE="$DOTNET_ROOT/dotnet"
+DOTNET_LICENSE="$DOTNET_ROOT/LICENSE.txt"
+DOTNET_NOTICES="$DOTNET_ROOT/ThirdPartyNotices.txt"
 
-[ -n "$RUNTIME_VERSION" ] || { echo "[steam-service] Microsoft.NETCore.App 10 runtime is unavailable" >&2; exit 1; }
+# The official installer keeps notices at DOTNET_ROOT, while Homebrew places
+# them under the formula prefix's share/doc/dotnet directory.
+if [ ! -f "$DOTNET_LICENSE" ] || [ ! -f "$DOTNET_NOTICES" ]; then
+    DOTNET_DOCUMENTATION_ROOT="$DOTNET_ROOT/../share/doc/dotnet"
+    DOTNET_LICENSE="$DOTNET_DOCUMENTATION_ROOT/LICENSE.txt"
+    DOTNET_NOTICES="$DOTNET_DOCUMENTATION_ROOT/ThirdPartyNotices.txt"
+fi
+
+[ -x "$DOTNET_EXECUTABLE" ] || { echo "[steam-service] dotnet host is unavailable at $DOTNET_EXECUTABLE" >&2; exit 1; }
 [ -d "$DOTNET_ROOT/host/fxr/$RUNTIME_VERSION" ] || { echo "[steam-service] hostfxr $RUNTIME_VERSION is unavailable" >&2; exit 1; }
 [ -d "$DOTNET_ROOT/shared/Microsoft.NETCore.App/$RUNTIME_VERSION" ] || { echo "[steam-service] runtime $RUNTIME_VERSION is unavailable" >&2; exit 1; }
-[ -f "$DOTNET_ROOT/LICENSE.txt" ] || { echo "[steam-service] .NET license is unavailable" >&2; exit 1; }
-[ -f "$DOTNET_ROOT/ThirdPartyNotices.txt" ] || { echo "[steam-service] .NET third-party notices are unavailable" >&2; exit 1; }
+[ -f "$DOTNET_LICENSE" ] || { echo "[steam-service] .NET license is unavailable" >&2; exit 1; }
+[ -f "$DOTNET_NOTICES" ] || { echo "[steam-service] .NET third-party notices are unavailable" >&2; exit 1; }
 
 rm -rf "$DESTINATION"
 mkdir -p "$DESTINATION/Licenses"
@@ -46,7 +64,7 @@ publish_architecture() {
         -p:PublishTrimmed=false \
         -p:DebugType=None \
         -p:DebugSymbols=false \
-        "${restore_options[@]}" \
+        ${restore_options[@]+"${restore_options[@]}"} \
         -o "$OUTPUT/$runtime"
     mkdir -p "$application_destination" "$runtime_destination/host/fxr" "$runtime_destination/shared/Microsoft.NETCore.App"
     cp -R "$OUTPUT/$runtime/." "$application_destination/"
@@ -86,5 +104,5 @@ fi
 cp -f "$ROOT/SteamService/Licenses/LGPL-2.1.txt" "$DESTINATION/Licenses/LGPL-2.1.txt"
 cp -f "$ROOT/SteamService/Licenses/SteamKit2-NOTICE.txt" "$DESTINATION/Licenses/SteamKit2-NOTICE.txt"
 cp -f "$ROOT/SteamService/Licenses/DepotDownloader-NOTICE.txt" "$DESTINATION/Licenses/DepotDownloader-NOTICE.txt"
-cp -f "$DOTNET_ROOT/LICENSE.txt" "$DESTINATION/Licenses/dotnet-LICENSE.txt"
-cp -f "$DOTNET_ROOT/ThirdPartyNotices.txt" "$DESTINATION/Licenses/dotnet-ThirdPartyNotices.txt"
+cp -f "$DOTNET_LICENSE" "$DESTINATION/Licenses/dotnet-LICENSE.txt"
+cp -f "$DOTNET_NOTICES" "$DESTINATION/Licenses/dotnet-ThirdPartyNotices.txt"
