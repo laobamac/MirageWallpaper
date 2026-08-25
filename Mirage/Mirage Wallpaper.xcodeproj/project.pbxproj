@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		E100000E0000000000000000 /* PathContainment.swift in Sources */ = {isa = PBXBuildFile; fileRef = E100000C0000000000000000 /* PathContainment.swift */; };
 		A100000B0000000000000000 /* MirageScreenSaver.saver in Copy Screen Savers */ = {isa = PBXBuildFile; fileRef = A10000010000000000000000 /* MirageScreenSaver.saver */; };
 		A10000100000000000000000 /* Mirage Screen Saver/thumbnail.png in Resources */ = {isa = PBXBuildFile; fileRef = A10000120000000000000000 /* Mirage Screen Saver/thumbnail.png */; };
 		B100000B0000000000000000 /* Mirage Login Item.app in Embed Login Items */ = {isa = PBXBuildFile; fileRef = B10000010000000000000000 /* Mirage Login Item.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
@@ -76,6 +77,8 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		E10000010000000000000000 /* Mirage WallpaperTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Mirage WallpaperTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+		E100000C0000000000000000 /* PathContainment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Mirage Wallpaper/Services/PathContainment.swift"; sourceTree = "<group>"; };
 		5EC47E762A2DB2E600120CCC /* Mirage Wallpaper.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Mirage Wallpaper.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		A10000010000000000000000 /* MirageScreenSaver.saver */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MirageScreenSaver.saver; sourceTree = BUILT_PRODUCTS_DIR; };
 		A10000120000000000000000 /* Mirage Screen Saver/thumbnail.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "Mirage Screen Saver/thumbnail.png"; sourceTree = "<group>"; };
@@ -102,6 +105,11 @@
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		E10000020000000000000000 /* Mirage WallpaperTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "Mirage WallpaperTests";
+			sourceTree = "<group>";
+		};
 		A10000020000000000000000 /* Mirage Screen Saver */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
@@ -131,6 +139,13 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		E10000030000000000000000 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		5EC47E732A2DB2E600120CCC /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -167,6 +182,7 @@
 			isa = PBXGroup;
 			children = (
 				BB52C0202FFC254D00C34DE3 /* Mirage Wallpaper */,
+				E10000020000000000000000 /* Mirage WallpaperTests */,
 				A10000020000000000000000 /* Mirage Screen Saver */,
 				B10000020000000000000000 /* Mirage Login Item */,
 				D10000020000000000000000 /* Mirage Wallpaper Extension */,
@@ -179,6 +195,7 @@
 			isa = PBXGroup;
 			children = (
 				5EC47E762A2DB2E600120CCC /* Mirage Wallpaper.app */,
+				E10000010000000000000000 /* Mirage WallpaperTests.xctest */,
 				A10000010000000000000000 /* MirageScreenSaver.saver */,
 				B10000010000000000000000 /* Mirage Login Item.app */,
 				D10000010000000000000000 /* MirageWallpaperExtension.appex */,
@@ -198,6 +215,26 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		E10000080000000000000000 /* Mirage WallpaperTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E100000B0000000000000000 /* Build configuration list for PBXNativeTarget "Mirage WallpaperTests" */;
+			buildPhases = (
+				E10000050000000000000000 /* Sources */,
+				E10000030000000000000000 /* Frameworks */,
+				E10000040000000000000000 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				E10000020000000000000000 /* Mirage WallpaperTests */,
+			);
+			name = "Mirage WallpaperTests";
+			productName = "Mirage WallpaperTests";
+			productReference = E10000010000000000000000 /* Mirage WallpaperTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 		5EC47E752A2DB2E600120CCC /* Mirage Wallpaper */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 5EC47EA02A2DB2E700120CCC /* Build configuration list for PBXNativeTarget "Mirage Wallpaper" */;
@@ -302,6 +339,10 @@
 					5EC47E752A2DB2E600120CCC = {
 						CreatedOnToolsVersion = 14.3.1;
 					};
+					E10000080000000000000000 = {
+						CreatedOnToolsVersion = 16.4;
+						TestTargetID = 5EC47E752A2DB2E600120CCC;
+					};
 					B10000060000000000000000 = {
 						CreatedOnToolsVersion = 16.0;
 					};
@@ -329,6 +370,7 @@
 			projectRoot = "";
 			targets = (
 				5EC47E752A2DB2E600120CCC /* Mirage Wallpaper */,
+				E10000080000000000000000 /* Mirage WallpaperTests */,
 				A10000060000000000000000 /* MirageScreenSaver */,
 				B10000060000000000000000 /* Mirage Login Item */,
 				D10000060000000000000000 /* MirageWallpaperExtension */,
@@ -337,6 +379,13 @@
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		E10000040000000000000000 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		5EC47E742A2DB2E600120CCC /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -392,6 +441,14 @@
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		E10000050000000000000000 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E100000E0000000000000000 /* PathContainment.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		5EC47E722A2DB2E600120CCC /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -441,6 +498,42 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		E10000090000000000000000 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.2;
+				PRODUCT_BUNDLE_IDENTIFIER = cn.laobamac.MirageTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		E100000A0000000000000000 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.2;
+				PRODUCT_BUNDLE_IDENTIFIER = cn.laobamac.MirageTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
 		5EC47E9E2A2DB2E700120CCC /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -834,6 +927,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		E100000B0000000000000000 /* Build configuration list for PBXNativeTarget "Mirage WallpaperTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E10000090000000000000000 /* Debug */,
+				E100000A0000000000000000 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		5EC47E712A2DB2E600120CCC /* Build configuration list for PBXProject "Mirage Wallpaper" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

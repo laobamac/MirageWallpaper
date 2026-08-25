@@ -58,13 +58,36 @@ enum PathContainment {
         guard !relativePath.isEmpty else {
             return (root.standardizedFileURL.resolvingSymlinksInPath(), root)
         }
-        let normalizedRoot = root.standardizedFileURL.resolvingSymlinksInPath()
-        let candidate = normalizedRoot.appending(path: relativePath)
-            .standardizedFileURL.resolvingSymlinksInPath()
+        let normalizedRoot = resolvingSymlinksInExistingPrefix(root)
+        let candidate = resolvingSymlinksInExistingPrefix(
+            normalizedRoot.appending(path: relativePath)
+        )
         // The trailing "/" matters: without it "/a/bc" would count as inside "/a/b".
         let isInside = candidate.path == normalizedRoot.path
             || candidate.path.hasPrefix(normalizedRoot.path + "/")
         guard isInside else { return nil }
         return (candidate, root.appending(path: relativePath).standardizedFileURL)
+    }
+
+    // Foundation only resolves symlinks when the complete path exists. A path
+    // such as `escape/missing.file` would otherwise leave an existing `escape`
+    // symlink unresolved. Resolve the longest existing prefix, then append the
+    // not-yet-created suffix without following it.
+    private static func resolvingSymlinksInExistingPrefix(_ url: URL) -> URL {
+        var existingPrefix = url.standardizedFileURL
+        var missingComponents: [String] = []
+
+        while !FileManager.default.fileExists(atPath: existingPrefix.path) {
+            let parent = existingPrefix.deletingLastPathComponent()
+            guard parent.path != existingPrefix.path else { break }
+            missingComponents.append(existingPrefix.lastPathComponent)
+            existingPrefix = parent
+        }
+
+        var resolved = existingPrefix.resolvingSymlinksInPath()
+        for component in missingComponents.reversed() {
+            resolved.append(path: component)
+        }
+        return resolved.standardizedFileURL
     }
 }

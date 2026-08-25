@@ -7,7 +7,7 @@
       buildImplicitDependencies = "YES">
       <BuildActionEntries>
          <BuildActionEntry
-            buildForTesting = "YES"
+            buildForTesting = "NO"
             buildForRunning = "YES"
             buildForProfiling = "YES"
             buildForArchiving = "YES"
@@ -17,6 +17,20 @@
                BlueprintIdentifier = "5EC47E752A2DB2E600120CCC"
                BuildableName = "Mirage Wallpaper.app"
                BlueprintName = "Mirage Wallpaper"
+               ReferencedContainer = "container:Mirage Wallpaper.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "E10000080000000000000000"
+               BuildableName = "Mirage WallpaperTests.xctest"
+               BlueprintName = "Mirage WallpaperTests"
                ReferencedContainer = "container:Mirage Wallpaper.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
@@ -34,20 +48,9 @@
             parallelizable = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "5EC47E8B2A2DB2E700120CCC"
-               BuildableName = "Open Wallpaper EngineTests.xctest"
-               BlueprintName = "Open Wallpaper EngineTests"
-               ReferencedContainer = "container:Mirage Wallpaper.xcodeproj">
-            </BuildableReference>
-         </TestableReference>
-         <TestableReference
-            skipped = "NO"
-            parallelizable = "YES">
-            <BuildableReference
-               BuildableIdentifier = "primary"
-               BlueprintIdentifier = "5EC47E952A2DB2E700120CCC"
-               BuildableName = "Open Wallpaper EngineUITests.xctest"
-               BlueprintName = "Open Wallpaper EngineUITests"
+               BlueprintIdentifier = "E10000080000000000000000"
+               BuildableName = "Mirage WallpaperTests.xctest"
+               BlueprintName = "Mirage WallpaperTests"
                ReferencedContainer = "container:Mirage Wallpaper.xcodeproj">
             </BuildableReference>
          </TestableReference>
