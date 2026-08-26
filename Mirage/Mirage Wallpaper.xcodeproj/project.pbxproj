@@ -13,6 +13,8 @@
 		C0D3A0010000000000000001 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = C0D3A0020000000000000002 /* Sparkle */; };
 		D100000B0000000000000000 /* MirageWallpaperExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = D10000010000000000000000 /* MirageWallpaperExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		D10000100000000000000000 /* Mirage Screen Saver/thumbnail.png in Resources */ = {isa = PBXBuildFile; fileRef = A10000120000000000000000 /* Mirage Screen Saver/thumbnail.png */; };
+		E10000030000000000000000 /* MirageMemoryVideoAssetLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000010000000000000000 /* MirageMemoryVideoAssetLoader.swift */; };
+		E10000040000000000000000 /* MirageMemoryVideoAssetLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10000010000000000000000 /* MirageMemoryVideoAssetLoader.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -82,6 +84,7 @@
 		A10000130000000000000000 /* Mirage Screen Saver/thumbnail@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "Mirage Screen Saver/thumbnail@2x.png"; sourceTree = "<group>"; };
 		B10000010000000000000000 /* Mirage Login Item.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Mirage Login Item.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		D10000010000000000000000 /* MirageWallpaperExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = MirageWallpaperExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		E10000010000000000000000 /* MirageMemoryVideoAssetLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MirageMemoryVideoAssetLoader.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -167,6 +170,7 @@
 			isa = PBXGroup;
 			children = (
 				BB52C0202FFC254D00C34DE3 /* Mirage Wallpaper */,
+				E10000020000000000000000 /* Shared */,
 				A10000020000000000000000 /* Mirage Screen Saver */,
 				B10000020000000000000000 /* Mirage Login Item */,
 				D10000020000000000000000 /* Mirage Wallpaper Extension */,
@@ -193,6 +197,14 @@
 				A10000130000000000000000 /* Mirage Screen Saver/thumbnail@2x.png */,
 			);
 			name = "Screen Saver Resources";
+			sourceTree = "<group>";
+		};
+		E10000020000000000000000 /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				E10000010000000000000000 /* MirageMemoryVideoAssetLoader.swift */,
+			);
+			path = Shared;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -403,6 +415,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E10000030000000000000000 /* MirageMemoryVideoAssetLoader.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -417,6 +430,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E10000040000000000000000 /* MirageMemoryVideoAssetLoader.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
