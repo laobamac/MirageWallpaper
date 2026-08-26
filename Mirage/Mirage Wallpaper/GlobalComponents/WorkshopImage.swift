@@ -9,8 +9,36 @@ import CryptoKit
 import ImageIO
 import SwiftUI
 
-final class WorkshopImageLoader {
+actor WorkshopImageLoader {
     static let shared = WorkshopImageLoader()
+
+    // Images are fully prepared before publication and are never mutated by the loader.
+    struct LoadedImage: @unchecked Sendable {
+        let image: NSImage
+        let animationData: Data?
+    }
+
+    private struct RequestKey: Hashable, Sendable {
+        let url: URL
+        let maxPixel: Int
+    }
+
+    private struct PreparedImage: @unchecked Sendable {
+        let image: NSImage
+        let animationData: Data?
+        let sourceData: Data
+    }
+
+    private struct PendingLoad {
+        let generationID: UUID
+        let task: Task<Void, Never>
+        var subscribers: [UUID: CheckedContinuation<LoadedImage, Error>]
+    }
+
+    private enum LoadError: Error {
+        case invalidData
+        case invalidResponse
+    }
 
     private let memory: NSCache<NSString, NSImage> = {
         let cache = NSCache<NSString, NSImage>()
@@ -32,26 +60,34 @@ final class WorkshopImageLoader {
         return cache
     }()
 
-    private let ioQueue = DispatchQueue(
-        label: "cn.laobamac.Mirage.workshopImage", qos: .userInitiated, attributes: .concurrent)
-    private let ioLimiter = DispatchSemaphore(value: 4)
+    private let session: URLSession
+    private let diskDirectory: URL
+    private var pendingLoads: [RequestKey: PendingLoad] = [:]
 
-    private let session: URLSession = {
+    private static func makeSession() -> URLSession {
         let configuration = URLSessionConfiguration.default
         configuration.timeoutIntervalForRequest = 20
         configuration.timeoutIntervalForResource = 40
         configuration.httpMaximumConnectionsPerHost = 6
         return URLSession(configuration: configuration)
-    }()
+    }
 
-    private let diskDirectory: URL = {
+    private static func makeDiskDirectory() -> URL {
         let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appending(path: "Mirage/WorkshopImageCache")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
-    }()
+    }
 
-    private func maxPixel(for size: CGSize, scale: CGFloat) -> Int {
+    init(
+        session: URLSession = WorkshopImageLoader.makeSession(),
+        diskDirectory: URL = WorkshopImageLoader.makeDiskDirectory()
+    ) {
+        self.session = session
+        self.diskDirectory = diskDirectory
+    }
+
+    static func maxPixel(for size: CGSize, scale: CGFloat) -> Int {
         let raw = Double(max(size.width, size.height)) * Double(max(scale, 1))
         let bucket = (raw / 64).rounded(.up) * 64
         return max(64, min(Int(bucket), 2048))
@@ -61,7 +97,7 @@ final class WorkshopImageLoader {
         "\(url.absoluteString)#\(px)" as NSString
     }
 
-    private func diskURL(for url: URL) -> URL {
+    private static func diskURL(for url: URL, in diskDirectory: URL) -> URL {
         let digest = SHA256.hash(data: Data(url.absoluteString.utf8))
             .map { String(format: "%02x", $0) }.joined()
         return diskDirectory.appending(path: digest)
@@ -72,10 +108,6 @@ final class WorkshopImageLoader {
         return max(1, rep.pixelsWide * rep.pixelsHigh * 4)
     }
 
-    func cachedImage(url: URL, targetSize: CGSize, scale: CGFloat) -> NSImage? {
-        memory.object(forKey: memoryKey(url, maxPixel(for: targetSize, scale: scale)))
-    }
-
     private func cachedAnimatedFlag(_ url: URL) -> Bool? {
         animatedFlags.object(forKey: url.absoluteString as NSString)?.boolValue
     }
@@ -84,79 +116,174 @@ final class WorkshopImageLoader {
         animatedFlags.setObject(NSNumber(value: value), forKey: url.absoluteString as NSString)
     }
 
-    func load(url: URL, targetSize: CGSize, scale: CGFloat,
-              completion: @escaping (NSImage?, Data?) -> Void) {
-        let px = maxPixel(for: targetSize, scale: scale)
-        let key = memoryKey(url, px)
+    func load(url: URL, targetSize: CGSize, scale: CGFloat) async throws -> LoadedImage {
+        try await load(
+            url: url,
+            maxPixel: Self.maxPixel(for: targetSize, scale: scale)
+        )
+    }
+
+    func load(url: URL, maxPixel: Int) async throws -> LoadedImage {
+        try Task.checkCancellation()
+
+        let requestKey = RequestKey(url: url, maxPixel: maxPixel)
+        let imageKey = memoryKey(url, maxPixel)
         let dataKey = url.absoluteString as NSString
-        if let image = memory.object(forKey: key), let animated = cachedAnimatedFlag(url) {
+        if let image = memory.object(forKey: imageKey),
+           let animated = cachedAnimatedFlag(url) {
             guard animated else {
-                completion(image, nil)
-                return
+                return LoadedImage(image: image, animationData: nil)
             }
             if let cachedData = dataMemory.object(forKey: dataKey) {
-                completion(image, cachedData as Data)
-                return
+                return LoadedImage(image: image, animationData: cachedData as Data)
             }
         }
-        ioQueue.async { [weak self] in
-            guard let self else { return }
-            self.ioLimiter.wait()
-            defer { self.ioLimiter.signal() }
-            if url.isFileURL {
-                guard let data = try? Data(contentsOf: url, options: .mappedIfSafe),
-                      !data.isEmpty,
-                      let image = Self.downsample(data, maxPixel: px) else {
-                    DispatchQueue.main.async { completion(nil, nil) }
-                    return
-                }
-                let animatedData = Self.safeAnimationData(data)
-                let animated = animatedData != nil
-                self.setAnimatedFlag(animated, for: url)
-                self.store(data: data, image: image, dataKey: dataKey,
-                           imageKey: key, animated: animated)
-                DispatchQueue.main.async {
-                    completion(image, animatedData)
-                }
-                return
+
+        let subscriberID = UUID()
+        let loaded = try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            return try await withCheckedThrowingContinuation { continuation in
+                subscribe(
+                    subscriberID: subscriberID,
+                    to: requestKey,
+                    continuation: continuation
+                )
             }
-            let disk = self.diskURL(for: url)
-            if let data = try? Data(contentsOf: disk), !data.isEmpty,
-               let image = Self.downsample(data, maxPixel: px) {
-                let animatedData = Self.safeAnimationData(data)
-                let animated = animatedData != nil
-                self.setAnimatedFlag(animated, for: url)
-                self.store(data: data, image: image, dataKey: dataKey,
-                           imageKey: key, animated: animated)
-                DispatchQueue.main.async {
-                    completion(image, animatedData)
-                }
-                return
+        } onCancel: {
+            Task {
+                await self.cancelSubscriber(subscriberID, from: requestKey)
             }
-            let semaphore = DispatchSemaphore(value: 0)
-            self.session.dataTask(with: URLRequest(url: url)) { [weak self] data, response, _ in
-                defer { semaphore.signal() }
-                guard let self else { return }
-                let ok = (response as? HTTPURLResponse).map { (200..<300).contains($0.statusCode) } ?? true
-                guard ok, let data, !data.isEmpty else {
-                    DispatchQueue.main.async { completion(nil, nil) }
-                    return
-                }
-                try? data.write(to: disk, options: .atomic)
-                let image = Self.downsample(data, maxPixel: px)
-                let animatedData = Self.safeAnimationData(data)
-                let animated = animatedData != nil
-                self.setAnimatedFlag(animated, for: url)
-                if let image {
-                    self.store(data: data, image: image, dataKey: dataKey,
-                               imageKey: key, animated: animated)
-                }
-                DispatchQueue.main.async {
-                    completion(image, animatedData)
-                }
-            }.resume()
-            semaphore.wait()
         }
+        try Task.checkCancellation()
+        return loaded
+    }
+
+    private func subscribe(
+        subscriberID: UUID,
+        to key: RequestKey,
+        continuation: CheckedContinuation<LoadedImage, Error>
+    ) {
+        if var pending = pendingLoads[key] {
+            pending.subscribers[subscriberID] = continuation
+            pendingLoads[key] = pending
+            return
+        }
+
+        let requestID = UUID()
+        let session = session
+        let diskDirectory = diskDirectory
+        let task = Task.detached(priority: .userInitiated) {
+            let result: Result<PreparedImage, Error>
+            do {
+                let prepared = try await Self.fetch(
+                    key: key,
+                    session: session,
+                    diskDirectory: diskDirectory
+                )
+                result = .success(prepared)
+            } catch {
+                result = .failure(error)
+            }
+            await self.finish(key: key, requestID: requestID, result: result)
+        }
+        pendingLoads[key] = PendingLoad(
+            generationID: requestID,
+            task: task,
+            subscribers: [subscriberID: continuation]
+        )
+    }
+
+    private func cancelSubscriber(_ subscriberID: UUID, from key: RequestKey) {
+        guard var pending = pendingLoads[key],
+              let continuation = pending.subscribers.removeValue(forKey: subscriberID) else {
+            return
+        }
+
+        continuation.resume(throwing: CancellationError())
+        if pending.subscribers.isEmpty {
+            pendingLoads.removeValue(forKey: key)
+            pending.task.cancel()
+        } else {
+            pendingLoads[key] = pending
+        }
+    }
+
+    private func finish(
+        key: RequestKey,
+        requestID: UUID,
+        result: Result<PreparedImage, Error>
+    ) {
+        // A fully cancelled generation may have been replaced for the same key.
+        guard let pending = pendingLoads[key],
+              pending.generationID == requestID else { return }
+        pendingLoads.removeValue(forKey: key)
+
+        let subscriberResult: Result<LoadedImage, Error>
+        switch result {
+        case .success(let prepared):
+            let animated = prepared.animationData != nil
+            setAnimatedFlag(animated, for: key.url)
+            store(
+                data: prepared.sourceData,
+                image: prepared.image,
+                dataKey: key.url.absoluteString as NSString,
+                imageKey: memoryKey(key.url, key.maxPixel),
+                animated: animated
+            )
+            subscriberResult = .success(
+                LoadedImage(image: prepared.image, animationData: prepared.animationData)
+            )
+        case .failure(let error):
+            subscriberResult = .failure(error)
+        }
+
+        for continuation in pending.subscribers.values {
+            continuation.resume(with: subscriberResult)
+        }
+    }
+
+    private static func fetch(
+        key: RequestKey,
+        session: URLSession,
+        diskDirectory: URL
+    ) async throws -> PreparedImage {
+        try Task.checkCancellation()
+
+        if key.url.isFileURL {
+            let data = try Data(contentsOf: key.url, options: .mappedIfSafe)
+            try Task.checkCancellation()
+            return try prepare(data: data, maxPixel: key.maxPixel)
+        }
+
+        let disk = diskURL(for: key.url, in: diskDirectory)
+        if let data = try? Data(contentsOf: disk), !data.isEmpty,
+           let prepared = try? prepare(data: data, maxPixel: key.maxPixel) {
+            try Task.checkCancellation()
+            return prepared
+        }
+
+        let (data, response) = try await session.data(for: URLRequest(url: key.url))
+        try Task.checkCancellation()
+        let ok = (response as? HTTPURLResponse).map {
+            (200..<300).contains($0.statusCode)
+        } ?? true
+        guard ok else { throw LoadError.invalidResponse }
+        guard !data.isEmpty else { throw LoadError.invalidData }
+
+        try? data.write(to: disk, options: .atomic)
+        try Task.checkCancellation()
+        return try prepare(data: data, maxPixel: key.maxPixel)
+    }
+
+    private static func prepare(data: Data, maxPixel: Int) throws -> PreparedImage {
+        guard !data.isEmpty, let image = downsample(data, maxPixel: maxPixel) else {
+            throw LoadError.invalidData
+        }
+        return PreparedImage(
+            image: image,
+            animationData: safeAnimationData(data),
+            sourceData: data
+        )
     }
 
     private func store(data: Data, image: NSImage, dataKey: NSString,
@@ -267,6 +394,13 @@ final class WorkshopImageLoader {
 }
 
 struct WorkshopImage: View {
+    private struct RequestIdentity: Hashable {
+        let url: URL?
+        let maxPixel: Int
+        let hasUsableSize: Bool
+        let isLoadingEnabled: Bool
+    }
+
     let url: URL?
     var contentMode: ContentMode = .fill
     var isAnimating = false
@@ -277,8 +411,15 @@ struct WorkshopImage: View {
     @State private var animationData: Data?
     @State private var failed = false
     @State private var boxSize: CGSize = .zero
-    @State private var loadToken: UInt64 = 0
-    @State private var pendingLoad = false
+
+    private var requestIdentity: RequestIdentity {
+        RequestIdentity(
+            url: url,
+            maxPixel: WorkshopImageLoader.maxPixel(for: boxSize, scale: displayScale),
+            hasUsableSize: boxSize.width > 1 && boxSize.height > 1,
+            isLoadingEnabled: isLoadingEnabled
+        )
+    }
 
     var body: some View {
         Rectangle()
@@ -306,21 +447,16 @@ struct WorkshopImage: View {
                 }
             }
             .clipped()
-            .onAppear {
-                load()
-            }
             .background(
                 GeometryReader { proxy in
                     Color.clear
                         .onAppear {
                             boxSize = proxy.size
-                            load()
                         }
                         .onChange(of: proxy.size) { _, newValue in
                             guard abs(newValue.width - boxSize.width) > 1 ||
                                   abs(newValue.height - boxSize.height) > 1 else { return }
                             boxSize = newValue
-                            load()
                         }
                 }
             )
@@ -328,60 +464,40 @@ struct WorkshopImage: View {
                 image = nil
                 animationData = nil
                 failed = false
-                load()
             }
-            .onChange(of: isLoadingEnabled) { _, enabled in
-                if enabled && pendingLoad {
-                    load()
-                }
-            }
-            .onChange(of: isAnimating) { _, animating in
-                if animating {
-                    load()
-                } else {
-                    animationData = nil
-                }
+            .task(id: requestIdentity) {
+                await load(requestIdentity)
             }
             .onDisappear {
-                loadToken &+= 1
                 animationData = nil
-                pendingLoad = isAnimating
             }
     }
 
-    private func load() {
-        guard boxSize.width > 1, boxSize.height > 1 else { return }
-        guard let url else {
+    @MainActor
+    private func load(_ request: RequestIdentity) async {
+        guard request.hasUsableSize, request == requestIdentity else { return }
+        guard let requestedURL = request.url else {
             image = nil
             animationData = nil
             failed = true
-            pendingLoad = false
             return
         }
-        let scale = displayScale
-        if let cached = WorkshopImageLoader.shared.cachedImage(url: url, targetSize: boxSize, scale: scale) {
-            image = cached
+        guard request.isLoadingEnabled else { return }
+
+        do {
+            let loaded = try await WorkshopImageLoader.shared.load(
+                url: requestedURL,
+                maxPixel: request.maxPixel
+            )
+            guard !Task.isCancelled, request == requestIdentity else { return }
+            image = loaded.image
+            animationData = loaded.animationData
             failed = false
-            pendingLoad = false
-            if !isAnimating { return }
-        }
-        guard isLoadingEnabled else {
-            pendingLoad = true
+        } catch is CancellationError {
             return
-        }
-        pendingLoad = false
-        loadToken &+= 1
-        let token = loadToken
-        let requestedURL = url
-        WorkshopImageLoader.shared.load(url: requestedURL, targetSize: boxSize, scale: scale) { loaded, animatedData in
-            guard token == loadToken, requestedURL == url else { return }
-            if let loaded {
-                image = loaded
-                animationData = animatedData
-                failed = false
-            } else {
-                failed = true
-            }
+        } catch {
+            guard !Task.isCancelled, request == requestIdentity else { return }
+            failed = true
         }
     }
 }
