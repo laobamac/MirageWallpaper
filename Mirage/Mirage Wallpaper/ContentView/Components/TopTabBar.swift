@@ -9,15 +9,21 @@ import SwiftUI
 struct TopTabBar: View {
     @ObservedObject var navigationModel: MainNavigationModel
     @ObservedObject var wallpaperViewModel: WallpaperViewModel
+    let downloadStore: WorkshopDownloadStore
     @State private var hoverSelection: MainSection?
 
-    init(navigationModel: MainNavigationModel, wallpaperViewModel: WallpaperViewModel) {
+    init(
+        navigationModel: MainNavigationModel,
+        wallpaperViewModel: WallpaperViewModel,
+        downloadStore: WorkshopDownloadStore
+    ) {
         self.navigationModel = navigationModel
         self.wallpaperViewModel = wallpaperViewModel
+        self.downloadStore = downloadStore
     }
 
     private var downloadCount: Int {
-        AppDelegate.shared.workshopViewModel.activeDownloadCount
+        downloadStore.activeDownloadCount
     }
 
     var body: some View {

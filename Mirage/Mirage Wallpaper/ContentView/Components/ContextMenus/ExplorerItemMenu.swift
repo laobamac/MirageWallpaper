@@ -8,20 +8,28 @@ import SwiftUI
 import AppKit
 
 struct ExplorerItemMenu: SubviewOfContentView {
-    
     @ObservedObject var viewModel: ContentViewModel
     @ObservedObject var wallpaperViewModel: WallpaperViewModel
-    @ObservedObject var workshopViewModel: WorkshopViewModel
-    
+    let creatorStore: WorkshopCreatorStore
+    let interactionStore: WorkshopInteractionStore
+    let libraryStore: WorkshopLibraryStore
+    let selectionCoordinator: WorkshopSelectionCoordinator
+
     var hoveredWallpaper: WEWallpaper
-    
+
     init(contentViewModel viewModel: ContentViewModel,
          wallpaperViewModel: WallpaperViewModel,
-         workshopViewModel: WorkshopViewModel = AppDelegate.shared.workshopViewModel,
+         creatorStore: WorkshopCreatorStore,
+         interactionStore: WorkshopInteractionStore,
+         libraryStore: WorkshopLibraryStore,
+         selectionCoordinator: WorkshopSelectionCoordinator,
          current hoveredWallpaper: WEWallpaper) {
         self.wallpaperViewModel = wallpaperViewModel
         self.viewModel = viewModel
-        self.workshopViewModel = workshopViewModel
+        self.creatorStore = creatorStore
+        self.interactionStore = interactionStore
+        self.libraryStore = libraryStore
+        self.selectionCoordinator = selectionCoordinator
         self.hoveredWallpaper = hoveredWallpaper
     }
     
@@ -103,7 +111,9 @@ struct ExplorerItemMenu: SubviewOfContentView {
                         systemImage: isFavorite ? "heart.slash.fill" : "heart.fill"
                     )
                 }
-                .disabled(workshopID.map { workshopViewModel.changingFavoriteIDs.contains($0) } == true)
+                .disabled(workshopID.map {
+                    interactionStore.changingFavoriteIDs.contains($0)
+                } == true)
             }
             
             Section {
@@ -113,9 +123,11 @@ struct ExplorerItemMenu: SubviewOfContentView {
                     Label("在创意工坊中打开", systemImage: "cloud.fill")
                 }
                 .disabled(workshopURL == nil)
-                if let creator = workshopViewModel.installedCreator(for: hoveredWallpaper) {
+                if let creator = libraryStore.installedCreator(
+                    for: hoveredWallpaper
+                ) {
                     Button {
-                        workshopViewModel.openCreatorProfile(creator)
+                        creatorStore.open(creator)
                     } label: {
                         Label(LocalizedStringKey("查看作者主页和作品"), systemImage: "person.crop.circle")
                     }
@@ -179,7 +191,7 @@ struct ExplorerItemMenu: SubviewOfContentView {
 
     private var isFavorite: Bool {
         if let workshopID {
-            return workshopViewModel.isWorkshopFavorite(workshopID)
+            return interactionStore.isFavorite(workshopID)
         }
         return FavoritesManager.shared.isFavorite(hoveredWallpaper.id)
     }
@@ -211,7 +223,7 @@ struct ExplorerItemMenu: SubviewOfContentView {
         guard let id = hoveredWallpaper.verifiedWorkshopID() else { return }
         Task { @MainActor in
             let fetched = try? await SteamWebAPI.shared.getFileDetails(workshopIds: [id])
-            let item = workshopViewModel.installedWorkshopItems[id]
+            let item = libraryStore.installedWorkshopItems[id]
                 ?? fetched?.first(where: {
                     $0.publishedFileId == id && $0.consumerAppId == 431960
                 })
@@ -221,17 +233,14 @@ struct ExplorerItemMenu: SubviewOfContentView {
                 }
                 return
             }
-            workshopViewModel.selectedItem = item
-            workshopViewModel.showCustomization = false
-            workshopViewModel.showCreatorProfile = false
-            workshopViewModel.prepareWorkshopInteractions(for: item)
+            selectionCoordinator.showDetail(item)
             AppDelegate.shared.navigationModel.selection = .workshop
         }
     }
 
     private func toggleFavorite() {
         if let workshopID {
-            workshopViewModel.toggleWorkshopFavorite(workshopId: workshopID)
+            interactionStore.toggleFavorite(workshopID: workshopID)
         } else {
             FavoritesManager.shared.toggle(hoveredWallpaper.id)
             NotificationCenter.default.post(name: .favoritesChanged, object: nil)
@@ -373,58 +382,67 @@ struct ExplorerItemMenu: SubviewOfContentView {
 
 struct WorkshopCardContextMenu: View {
     let item: WorkshopItem
-    @ObservedObject var workshopViewModel: WorkshopViewModel
+    let creatorStore: WorkshopCreatorStore
+    let downloadStore: WorkshopDownloadStore
+    let interactionStore: WorkshopInteractionStore
+    let selectionCoordinator: WorkshopSelectionCoordinator
+    let subscriptionStore: SubscriptionStore
 
     var body: some View {
+        let subscriptionStatus = subscriptionStore.status(
+            for: item.publishedFileId
+        )
         Group {
             Section {
-                if workshopViewModel.subscriptionState(for: item.publishedFileId) == .subscribed {
+                if subscriptionStatus.state == .subscribed {
                     Button(role: .destructive) {
-                        workshopViewModel.unsubscribe(item)
+                        subscriptionStore.unsubscribe(item)
                     } label: {
                         Label("取消订阅", systemImage: "xmark.circle.fill")
                     }
-                    .disabled(workshopViewModel.changingSubscriptionIDs.contains(item.publishedFileId))
+                    .disabled(subscriptionStatus.isChanging)
                 } else {
                     Button {
-                        workshopViewModel.subscribe(item)
+                        subscriptionStore.subscribe(item)
                     } label: {
                         Label("订阅并下载", systemImage: "plus.circle.fill")
                     }
                     .disabled(
-                        workshopViewModel.subscriptionState(for: item.publishedFileId) == .unknown ||
-                        workshopViewModel.checkingSubscriptionIDs.contains(item.publishedFileId) ||
-                        workshopViewModel.changingSubscriptionIDs.contains(item.publishedFileId)
+                        subscriptionStatus.state == .unknown ||
+                        subscriptionStatus.isChecking ||
+                        subscriptionStatus.isChanging
                     )
                 }
 
                 Button {
-                    workshopViewModel.downloadItem(item)
+                    downloadStore.download(item)
                 } label: {
                     Label(
                         LocalizedStringKey(item.isPreset ? "下载预设" : "下载壁纸"),
                         systemImage: "arrow.down.circle.fill"
                     )
                 }
-                .disabled(workshopViewModel.downloadState(for: item.publishedFileId) != nil)
+                .disabled(downloadStore.state(for: item.publishedFileId) != nil)
 
                 Button {
-                    workshopViewModel.selectWorkshopItem(item)
+                    selectionCoordinator.selectWorkshopItem(item)
                 } label: {
                     Label(LocalizedStringKey("查看壁纸详情"), systemImage: "info.circle")
                 }
             }
 
             Section {
-                if workshopViewModel.changingFavoriteIDs.contains(item.publishedFileId) {
+                if interactionStore.changingFavoriteIDs.contains(
+                    item.publishedFileId
+                ) {
                     Label("正在同步收藏状态…", systemImage: "arrow.triangle.2.circlepath")
                 } else {
                     Button {
-                        workshopViewModel.toggleFavorite(item)
+                        interactionStore.toggleFavorite(item)
                     } label: {
                         Label(
-                            LocalizedStringKey(workshopViewModel.isWorkshopFavorite(item.publishedFileId) ? "取消收藏" : "加入收藏"),
-                            systemImage: workshopViewModel.isWorkshopFavorite(item.publishedFileId) ? "heart.slash.fill" : "heart.fill"
+                            LocalizedStringKey(interactionStore.isFavorite(item.publishedFileId) ? "取消收藏" : "加入收藏"),
+                            systemImage: interactionStore.isFavorite(item.publishedFileId) ? "heart.slash.fill" : "heart.fill"
                         )
                     }
                 }
@@ -440,7 +458,7 @@ struct WorkshopCardContextMenu: View {
 
                 if let creator = WorkshopCreator(item: item) {
                     Button {
-                        workshopViewModel.openCreatorProfile(creator)
+                        creatorStore.open(creator)
                     } label: {
                         Label(LocalizedStringKey("查看作者主页和作品"), systemImage: "person.crop.circle")
                     }

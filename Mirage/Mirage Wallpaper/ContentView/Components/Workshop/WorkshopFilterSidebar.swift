@@ -7,14 +7,14 @@
 import SwiftUI
 
 struct WorkshopFilterSidebar: View {
-    @ObservedObject var workshopViewModel: WorkshopViewModel
+    @Bindable var browseStore: WorkshopBrowseStore
 
     var body: some View {
         VStack {
             ScrollView {
                 VStack(spacing: 30) {
                     Button {
-                        workshopViewModel.clearFilters()
+                        browseStore.clearFilters()
                     } label: {
                         Label("重置筛选", systemImage: "arrow.triangle.2.circlepath")
                             .frame(maxWidth: .infinity)
@@ -24,16 +24,16 @@ struct WorkshopFilterSidebar: View {
 
                     ShowOnlyFilterSection(
                         id: "workshop.showOnly",
-                        selection: workshopViewModel.workshopShowOnly,
-                        onChange: workshopViewModel.setWorkshopShowOnly
+                        selection: browseStore.showOnly,
+                        onChange: browseStore.setShowOnly
                     )
 
                     FilterSection("类型", id: "workshop.type", alignment: .leading) {
                         VStack(alignment: .leading, spacing: 8) {
                             ForEach(WorkshopTypeFilter.allCases) { filter in
                                 Toggle(filter.label, isOn: Binding(
-                                    get: { workshopViewModel.selectedTypeFilters.contains(filter) },
-                                    set: { workshopViewModel.setWorkshopTypeFilter(filter, isOn: $0) }
+                                    get: { browseStore.selectedTypeFilters.contains(filter) },
+                                    set: { browseStore.setTypeFilter(filter, isOn: $0) }
                                 ))
                                 .toggleStyle(.checkbox)
                             }
@@ -44,13 +44,13 @@ struct WorkshopFilterSidebar: View {
                         VStack(alignment: .leading, spacing: 8) {
                             ForEach(WorkshopAgeRating.allCases) { rating in
                                 Toggle(rating.displayName, isOn: Binding(
-                                    get: { workshopViewModel.ageRatingFilter.contains(rating) },
-                                    set: { workshopViewModel.applyAgeRatingFilter(rating, isOn: $0) }
+                                    get: { browseStore.ageRatingFilter.contains(rating) },
+                                    set: { browseStore.applyAgeRatingFilter(rating, isOn: $0) }
                                 ))
                                 .toggleStyle(.checkbox)
                             }
 
-                            if workshopViewModel.ageRatingFilter.isEmpty {
+                            if browseStore.ageRatingFilter.isEmpty {
                                 Text("未选择任何分级，当前显示全部分级")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
@@ -62,47 +62,47 @@ struct WorkshopFilterSidebar: View {
                     FilterSection("分辨率", id: "workshop.resolution", alignment: .leading) {
                         VStack(alignment: .leading, spacing: 16) {
                             HStack {
-                                Button("全选") { workshopViewModel.selectAllResolutions() }
-                                    .disabled(workshopViewModel.allResolutionsSelected)
-                                Button("清空") { workshopViewModel.clearResolutions() }
-                                    .disabled(workshopViewModel.allResolutionsCleared)
+                                Button("全选") { browseStore.selectAllResolutions() }
+                                    .disabled(browseStore.allResolutionsSelected)
+                                Button("清空") { browseStore.clearResolutions() }
+                                    .disabled(browseStore.allResolutionsCleared)
                             }
                             .buttonStyle(.link)
                             WorkshopResolutionFilterGroup(
-                                "其他", selection: $workshopViewModel.miscResolution,
+                                "其他", selection: $browseStore.miscResolution,
                                 options: FRMiscResolution.allOptions,
                                 onChange: { option, isOn in
-                                    workshopViewModel.setResolutionOption(\.miscResolution, option: option, isOn: isOn)
+                                    browseStore.setResolutionOption(\.miscResolution, option: option, isOn: isOn)
                                 })
                             WorkshopResolutionFilterGroup(
-                                "宽屏", selection: $workshopViewModel.widescreenResolution,
+                                "宽屏", selection: $browseStore.widescreenResolution,
                                 options: FRWidescreenResolution.allOptions,
                                 onChange: { option, isOn in
-                                    workshopViewModel.setResolutionOption(\.widescreenResolution, option: option, isOn: isOn)
+                                    browseStore.setResolutionOption(\.widescreenResolution, option: option, isOn: isOn)
                                 })
                             WorkshopResolutionFilterGroup(
-                                "超宽屏", selection: $workshopViewModel.ultraWidescreenResolution,
+                                "超宽屏", selection: $browseStore.ultraWidescreenResolution,
                                 options: FRUltraWidescreenResolution.allOptions,
                                 onChange: { option, isOn in
-                                    workshopViewModel.setResolutionOption(\.ultraWidescreenResolution, option: option, isOn: isOn)
+                                    browseStore.setResolutionOption(\.ultraWidescreenResolution, option: option, isOn: isOn)
                                 })
                             WorkshopResolutionFilterGroup(
-                                "双显示器", selection: $workshopViewModel.dualscreenResolution,
+                                "双显示器", selection: $browseStore.dualscreenResolution,
                                 options: FRDualscreenResolution.allOptions,
                                 onChange: { option, isOn in
-                                    workshopViewModel.setResolutionOption(\.dualscreenResolution, option: option, isOn: isOn)
+                                    browseStore.setResolutionOption(\.dualscreenResolution, option: option, isOn: isOn)
                                 })
                             WorkshopResolutionFilterGroup(
-                                "三显示器", selection: $workshopViewModel.triplescreenResolution,
+                                "三显示器", selection: $browseStore.triplescreenResolution,
                                 options: FRTriplescreenResolution.allOptions,
                                 onChange: { option, isOn in
-                                    workshopViewModel.setResolutionOption(\.triplescreenResolution, option: option, isOn: isOn)
+                                    browseStore.setResolutionOption(\.triplescreenResolution, option: option, isOn: isOn)
                                 })
                             WorkshopResolutionFilterGroup(
-                                "纵向监视器/手机", selection: $workshopViewModel.portraitResolution,
+                                "纵向监视器/手机", selection: $browseStore.portraitResolution,
                                 options: FRPortraitScreenResolution.allOptions,
                                 onChange: { option, isOn in
-                                    workshopViewModel.setResolutionOption(\.portraitResolution, option: option, isOn: isOn)
+                                    browseStore.setResolutionOption(\.portraitResolution, option: option, isOn: isOn)
                                 })
                         }
                     }
@@ -111,14 +111,10 @@ struct WorkshopFilterSidebar: View {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack {
                                 Button("全选") {
-                                    workshopViewModel.selectedTags = Set(WorkshopTag.allCases.map { $0.rawValue })
-                                    workshopViewModel.currentPage = 1
-                                    workshopViewModel.search()
+                                    browseStore.selectAllTags()
                                 }
                                 Button("清空") {
-                                    workshopViewModel.selectedTags.removeAll()
-                                    workshopViewModel.currentPage = 1
-                                    workshopViewModel.search()
+                                    browseStore.clearTags()
                                 }
                             }
                             .buttonStyle(.link)
@@ -126,8 +122,8 @@ struct WorkshopFilterSidebar: View {
                             VStack(alignment: .leading, spacing: 8) {
                                 ForEach(WorkshopTag.allCases) { tag in
                                     Toggle(tag.displayName, isOn: Binding(
-                                        get: { workshopViewModel.selectedTags.contains(tag.rawValue) },
-                                        set: { _ in workshopViewModel.applyTagFilter(tag.rawValue) }
+                                        get: { browseStore.selectedTags.contains(tag.rawValue) },
+                                        set: { _ in browseStore.applyTagFilter(tag.rawValue) }
                                     ))
                                     .toggleStyle(.checkbox)
                                 }

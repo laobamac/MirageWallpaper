@@ -17,7 +17,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var contentViewModel = ContentViewModel()
     lazy var wallpaperViewModel = WallpaperViewModel()
     var globalSettingsViewModel = GlobalSettingsViewModel()
-    var workshopViewModel = WorkshopViewModel()
+    @MainActor lazy var workshopFeature = WorkshopFeature()
     var navigationModel = MainNavigationModel()
 
     var importOpenPanel: NSOpenPanel!

@@ -8,7 +8,13 @@ import SwiftUI
 
 struct DiscoverView: View {
     @EnvironmentObject private var globalSettingsViewModel: GlobalSettingsViewModel
-    @ObservedObject var workshopViewModel: WorkshopViewModel
+    @Bindable var discoverStore: DiscoverStore
+    let creatorStore: WorkshopCreatorStore
+    let downloadStore: WorkshopDownloadStore
+    let interactionStore: WorkshopInteractionStore
+    let libraryStore: WorkshopLibraryStore
+    let selectionCoordinator: WorkshopSelectionCoordinator
+    let subscriptionStore: SubscriptionStore
     @ObservedObject var viewModel: ContentViewModel
     @ObservedObject var wallpaperViewModel: WallpaperViewModel
     let navigationModel: MainNavigationModel
@@ -19,7 +25,7 @@ struct DiscoverView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if let browse = workshopViewModel.discoverBrowse {
+            if let browse = discoverStore.browse {
                 browseToolbar(browse)
                 Divider()
                 browseContent(browse)
@@ -33,8 +39,8 @@ struct DiscoverView: View {
             WallpaperGridViewMenu(viewModel: viewModel)
         }
         .onAppear {
-            if workshopViewModel.discoverRows.isEmpty {
-                workshopViewModel.loadDiscover()
+            if discoverStore.rows.isEmpty {
+                discoverStore.load()
             }
         }
     }
@@ -44,14 +50,14 @@ struct DiscoverView: View {
             HStack(spacing: 7) {
                 Image(systemName: "magnifyingglass")
                     .font(.title3)
-                TextField("查找壁纸", text: $workshopViewModel.discoverSearchText)
+                TextField("查找壁纸", text: $discoverStore.searchText)
                     .textFieldStyle(.plain)
                     .onSubmit {
-                        workshopViewModel.performDiscoverSearch()
+                        discoverStore.performSearch()
                     }
-                if !workshopViewModel.discoverSearchText.isEmpty {
+                if !discoverStore.searchText.isEmpty {
                     Button {
-                        workshopViewModel.clearDiscoverSearch()
+                        discoverStore.clearSearch()
                     } label: {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundStyle(.secondary)
@@ -66,7 +72,7 @@ struct DiscoverView: View {
             .clipShape(RoundedRectangle(cornerRadius: 3))
 
             Button {
-                workshopViewModel.performDiscoverSearch()
+                discoverStore.performSearch()
             } label: {
                 Label("查找", systemImage: "magnifyingglass")
                     .font(.headline)
@@ -74,24 +80,24 @@ struct DiscoverView: View {
                     .padding(.horizontal, 9)
             }
             .buttonStyle(.borderless)
-            .disabled(workshopViewModel.discoverSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .disabled(discoverStore.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
             Spacer()
 
-            if workshopViewModel.isDiscoverDetailLoading {
+            if discoverStore.isDetailLoading {
                 ProgressView()
                     .controlSize(.small)
                     .help("正在加载壁纸详情")
             }
 
             Button {
-                workshopViewModel.refreshDiscover()
+                discoverStore.refresh()
             } label: {
                 Image(systemName: "arrow.clockwise")
                     .frame(width: 18, height: 18)
             }
             .buttonStyle(.borderless)
-            .disabled(workshopViewModel.isDiscoverLoading)
+            .disabled(discoverStore.isLoading)
             .help("刷新发现")
         }
         .padding(.horizontal, 18)
@@ -101,7 +107,7 @@ struct DiscoverView: View {
     private func browseToolbar(_ browse: DiscoverBrowseState) -> some View {
         HStack(spacing: 10) {
             Button {
-                workshopViewModel.closeDiscoverBrowse()
+                discoverStore.closeBrowse()
             } label: {
                 Image(systemName: "arrow.left")
                     .font(.headline)
@@ -122,14 +128,14 @@ struct DiscoverView: View {
 
             Spacer()
 
-            if workshopViewModel.isDiscoverDetailLoading {
+            if discoverStore.isDetailLoading {
                 ProgressView()
                     .controlSize(.small)
                     .help("正在加载壁纸详情")
             }
 
             Button {
-                workshopViewModel.refreshDiscover()
+                discoverStore.refresh()
             } label: {
                 Image(systemName: "arrow.clockwise")
                     .frame(width: 18, height: 18)
@@ -146,26 +152,32 @@ struct DiscoverView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 Group {
-                    if workshopViewModel.isDiscoverLoading && workshopViewModel.discoverRows.isEmpty {
+                    if discoverStore.isLoading && discoverStore.rows.isEmpty {
                         loadingState
-                    } else if let error = workshopViewModel.discoverError,
-                              workshopViewModel.discoverRows.isEmpty {
+                    } else if let error = discoverStore.error,
+                              discoverStore.rows.isEmpty {
                         errorState(error)
-                    } else if workshopViewModel.discoverRows.isEmpty {
+                    } else if discoverStore.rows.isEmpty {
                         emptyState
                     } else {
                         LazyVStack(alignment: .leading, spacing: 34) {
-                            ForEach(workshopViewModel.discoverRows) { row in
+                            ForEach(discoverStore.rows) { row in
                                 DiscoverSectionView(
                                     row: row,
-                                    workshopViewModel: workshopViewModel,
+                                    discoverStore: discoverStore,
+                                    creatorStore: creatorStore,
+                                    downloadStore: downloadStore,
+                                    interactionStore: interactionStore,
+                                    libraryStore: libraryStore,
+                                    selectionCoordinator: selectionCoordinator,
+                                    subscriptionStore: subscriptionStore,
                                     contentViewModel: viewModel,
                                     wallpaperViewModel: wallpaperViewModel,
                                     isActive: isActive,
                                     animatedPreviewMode: globalSettingsViewModel.settings.animatedPreviewPlaybackMode,
                                     onSeeAll: {
                                         discoverReturnRowID = row.id
-                                        workshopViewModel.openDiscoverRow(id: row.id)
+                                        discoverStore.openRow(id: row.id)
                                     }
                                 )
                                 .id(row.id)
@@ -218,11 +230,16 @@ struct DiscoverView: View {
                                 WorkshopItemCard(
                                     item: item,
                                     isHovered: hoveredID == item.id,
-                                    isSelected: workshopViewModel.discoverSelectedItemID == item.id,
-                                    isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
-                                    presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
-                                    downloadState: workshopViewModel.downloadState(for: item.publishedFileId),
-                                    isFavorite: workshopViewModel.isWorkshopFavorite(item.publishedFileId),
+                                    isSelected: discoverStore.selectedItemID == item.id,
+                                    libraryStatus: libraryStore.status(
+                                        for: item.publishedFileId
+                                    ),
+                                    downloadStatus: downloadStore.status(
+                                        for: item.publishedFileId
+                                    ),
+                                    isFavorite: interactionStore.isFavorite(
+                                        item.publishedFileId
+                                    ),
                                     isActive: isActive,
                                     animatedPreviewMode: globalSettingsViewModel.settings.animatedPreviewPlaybackMode
                                 )
@@ -230,14 +247,19 @@ struct DiscoverView: View {
                                     hoveredID = hovered ? item.id : nil
                                 }
                                 .onTapGesture {
-                                    workshopViewModel.selectDiscoverItem(item)
+                                    discoverStore.select(item)
                                 }
                                 .contextMenu {
-                                    if let wallpaper = workshopViewModel.installedItem(workshopId: item.publishedFileId) {
+                                    if let wallpaper = libraryStore.installedItem(
+                                        id: item.publishedFileId
+                                    ) {
                                         ExplorerItemMenu(
                                             contentViewModel: viewModel,
                                             wallpaperViewModel: wallpaperViewModel,
-                                            workshopViewModel: workshopViewModel,
+                                            creatorStore: creatorStore,
+                                            interactionStore: interactionStore,
+                                            libraryStore: libraryStore,
+                                            selectionCoordinator: selectionCoordinator,
                                             current: wallpaper
                                         )
                                         ExplorerGlobalMenu(
@@ -247,7 +269,11 @@ struct DiscoverView: View {
                                     } else {
                                         WorkshopCardContextMenu(
                                             item: item,
-                                            workshopViewModel: workshopViewModel
+                                            creatorStore: creatorStore,
+                                            downloadStore: downloadStore,
+                                            interactionStore: interactionStore,
+                                            selectionCoordinator: selectionCoordinator,
+                                            subscriptionStore: subscriptionStore
                                         )
                                         WallpaperGridViewMenu(viewModel: viewModel)
                                     }
@@ -266,7 +292,7 @@ struct DiscoverView: View {
                     PageNavigator(
                         currentPage: browse.page,
                         pageCount: browse.totalPages,
-                        onSelect: workshopViewModel.goToDiscoverBrowsePage
+                        onSelect: discoverStore.goToBrowsePage
                     )
                     .padding(.bottom, 12)
                 }
@@ -298,7 +324,7 @@ struct DiscoverView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
             Button("重试") {
-                workshopViewModel.refreshDiscover()
+                discoverStore.refresh()
             }
         }
         .padding(.horizontal, 30)

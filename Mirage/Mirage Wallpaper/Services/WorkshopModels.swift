@@ -535,7 +535,12 @@ struct DownloadTask: Identifiable, Equatable {
     var purpose: DownloadPurpose
 
     static func == (lhs: DownloadTask, rhs: DownloadTask) -> Bool {
-        lhs.id == rhs.id && lhs.attemptID == rhs.attemptID && lhs.state == rhs.state
+        lhs.id == rhs.id &&
+            lhs.attemptID == rhs.attemptID &&
+            lhs.state == rhs.state &&
+            lhs.startedAt == rhs.startedAt &&
+            lhs.completedAt == rhs.completedAt &&
+            lhs.purpose == rhs.purpose
     }
 }
 
@@ -545,7 +550,7 @@ enum DownloadPurpose: Equatable {
     case presetDependency
 }
 
-struct PresetDependencyPrompt: Identifiable {
+struct PresetDependencyPrompt: Identifiable, Equatable {
     let presetID: String
     let presetTitle: String
     let dependencyID: String

@@ -8,7 +8,13 @@ import SwiftUI
 
 struct SubscribedWorkshopView: View {
     @EnvironmentObject private var globalSettingsViewModel: GlobalSettingsViewModel
-    @ObservedObject var workshopViewModel: WorkshopViewModel
+    @Bindable var subscriptionStore: SubscriptionStore
+    let creatorStore: WorkshopCreatorStore
+    let downloadStore: WorkshopDownloadStore
+    let interactionStore: WorkshopInteractionStore
+    let libraryStore: WorkshopLibraryStore
+    let selectionCoordinator: WorkshopSelectionCoordinator
+    let sessionStore: SteamSessionStore
     @ObservedObject var viewModel: ContentViewModel
     @ObservedObject var wallpaperViewModel: WallpaperViewModel
     @ObservedObject private var steamService = SteamServiceManager.shared
@@ -20,47 +26,47 @@ struct SubscribedWorkshopView: View {
         VStack(spacing: 8) {
             toolbar
 
-            if let error = workshopViewModel.subscriptionsError,
-               !workshopViewModel.subscriptionItems.isEmpty {
+            if let error = subscriptionStore.error,
+               !subscriptionStore.items.isEmpty {
                 errorBanner(error)
             }
 
             content
         }
         .onAppear {
-            workshopViewModel.checkSteamSetup()
+            sessionStore.checkSetup()
             if steamService.isLoggedIn &&
-                workshopViewModel.subscriptionCatalogItems.isEmpty &&
-                !workshopViewModel.isLoadingSubscriptions {
-                workshopViewModel.refreshSubscriptions(startIndex: 0)
+                subscriptionStore.catalogItems.isEmpty &&
+                !subscriptionStore.isLoading {
+                subscriptionStore.refresh(startIndex: 0)
             }
         }
         .onChange(of: steamService.isLoggedIn) { _, isLoggedIn in
             if isLoggedIn {
-                workshopViewModel.refreshSubscriptions(startIndex: 0)
+                subscriptionStore.refresh(startIndex: 0)
             }
         }
         .onChange(of: viewModel.wallpapersPerPage) { _, _ in
-            workshopViewModel.subscriptionPageSizeDidChange()
+            subscriptionStore.pageSizeDidChange()
         }
         .alert(
             "下载全部已订阅壁纸",
             isPresented: Binding(
-                get: { workshopViewModel.subscriptionDownloadPlan != nil },
-                set: { if !$0 { workshopViewModel.dismissSubscriptionDownloadPlan() } }
+                get: { subscriptionStore.downloadPlan != nil },
+                set: { if !$0 { subscriptionStore.dismissDownloadPlan() } }
             ),
-            presenting: workshopViewModel.subscriptionDownloadPlan
+            presenting: subscriptionStore.downloadPlan
         ) { plan in
             if plan.downloadCount > 0 {
                 Button("开始下载") {
-                    workshopViewModel.confirmSubscriptionDownloads()
+                    subscriptionStore.confirmDownloads()
                 }
                 Button("取消", role: .cancel) {
-                    workshopViewModel.dismissSubscriptionDownloadPlan()
+                    subscriptionStore.dismissDownloadPlan()
                 }
             } else {
                 Button("好", role: .cancel) {
-                    workshopViewModel.dismissSubscriptionDownloadPlan()
+                    subscriptionStore.dismissDownloadPlan()
                 }
             }
         } message: { plan in
@@ -135,8 +141,8 @@ struct SubscribedWorkshopView: View {
             Label("已订阅", systemImage: "checkmark.circle.fill")
                 .font(.headline)
 
-            if !workshopViewModel.subscriptionCatalogItems.isEmpty {
-                Text(L("共 %d 项", workshopViewModel.subscriptionTotal))
+            if !subscriptionStore.catalogItems.isEmpty {
+                Text(L("共 %d 项", subscriptionStore.total))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -147,15 +153,15 @@ struct SubscribedWorkshopView: View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
-            TextField("搜索已订阅壁纸...", text: $workshopViewModel.subscriptionSearchText)
+            TextField("搜索已订阅壁纸...", text: $subscriptionStore.searchText)
                 .textFieldStyle(.plain)
                 .onSubmit {
-                    workshopViewModel.refreshSubscriptionFilters()
+                    subscriptionStore.refreshFilters()
                 }
-            if !workshopViewModel.subscriptionSearchText.isEmpty {
+            if !subscriptionStore.searchText.isEmpty {
                 Button {
-                    workshopViewModel.subscriptionSearchText = ""
-                    workshopViewModel.refreshSubscriptionFilters()
+                    subscriptionStore.searchText = ""
+                    subscriptionStore.refreshFilters()
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundStyle(.secondary)
@@ -175,9 +181,9 @@ struct SubscribedWorkshopView: View {
 
     private var downloadAllButton: some View {
         Button {
-            workshopViewModel.downloadAllSubscriptions()
+            subscriptionStore.prepareDownloadAll()
         } label: {
-            if workshopViewModel.isPreparingSubscriptionDownloads {
+            if subscriptionStore.isPreparingDownloads {
                 HStack(spacing: 6) {
                     ProgressView()
                         .controlSize(.small)
@@ -190,29 +196,29 @@ struct SubscribedWorkshopView: View {
         .buttonStyle(.borderedProminent)
         .disabled(
             !steamService.isLoggedIn ||
-            workshopViewModel.isPreparingSubscriptionDownloads ||
-            workshopViewModel.subscriptionCatalogItems.isEmpty
+            subscriptionStore.isPreparingDownloads ||
+            subscriptionStore.catalogItems.isEmpty
         )
     }
 
     private var refreshButton: some View {
         Button {
-            workshopViewModel.refreshSubscriptions()
+            subscriptionStore.refresh()
         } label: {
             Image(systemName: "arrow.triangle.2.circlepath")
                 .frame(width: 16, height: 16)
         }
-        .disabled(!steamService.isLoggedIn || workshopViewModel.isLoadingSubscriptions)
+        .disabled(!steamService.isLoggedIn || subscriptionStore.isLoading)
         .help(L("刷新已订阅壁纸"))
     }
 
     @ViewBuilder
     private var accountStatus: some View {
-        if workshopViewModel.steamSetupState == .checking {
+        if sessionStore.setupState == .checking {
             HStack(spacing: 6) {
                 ProgressView()
                     .controlSize(.small)
-                Text(workshopViewModel.steamCheckingMessage)
+                Text(sessionStore.checkingMessage)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -236,11 +242,11 @@ struct SubscribedWorkshopView: View {
 
     @ViewBuilder
     private var content: some View {
-        if workshopViewModel.steamSetupState == .checking {
+        if sessionStore.setupState == .checking {
             centered {
                 ProgressView()
                     .scaleEffect(1.3)
-                Text(workshopViewModel.steamCheckingMessage)
+                Text(sessionStore.checkingMessage)
                     .font(.title3)
                 Text("正在确认 Steam 登录状态，请稍候。")
                     .font(.caption)
@@ -258,15 +264,15 @@ struct SubscribedWorkshopView: View {
                 }
                 .buttonStyle(.borderedProminent)
             }
-        } else if workshopViewModel.isLoadingSubscriptions && workshopViewModel.subscriptionItems.isEmpty {
+        } else if subscriptionStore.isLoading && subscriptionStore.items.isEmpty {
             centered {
                 ProgressView()
                     .scaleEffect(1.3)
                 Text("正在获取已订阅壁纸…")
                     .foregroundStyle(.secondary)
             }
-        } else if let error = workshopViewModel.subscriptionsError,
-                  workshopViewModel.subscriptionItems.isEmpty {
+        } else if let error = subscriptionStore.error,
+                  subscriptionStore.items.isEmpty {
             centered {
                 Image(systemName: "exclamationmark.triangle")
                     .font(.system(size: 36))
@@ -276,11 +282,11 @@ struct SubscribedWorkshopView: View {
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                 Button("重试") {
-                    workshopViewModel.refreshSubscriptions()
+                    subscriptionStore.refresh()
                 }
                 .buttonStyle(.borderedProminent)
             }
-        } else if workshopViewModel.subscriptionCatalogItems.isEmpty {
+        } else if subscriptionStore.catalogItems.isEmpty {
             centered {
                 Image(systemName: "rectangle.stack.badge.minus")
                     .font(.system(size: 40))
@@ -292,7 +298,7 @@ struct SubscribedWorkshopView: View {
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
             }
-        } else if workshopViewModel.subscriptionItems.isEmpty {
+        } else if subscriptionStore.items.isEmpty {
             centered {
                 Image(systemName: "line.3.horizontal.decrease.circle")
                     .font(.system(size: 40))
@@ -303,7 +309,7 @@ struct SubscribedWorkshopView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Button("重置筛选") {
-                    workshopViewModel.clearSubscriptionFilters()
+                    subscriptionStore.clearFilters()
                 }
                 .buttonStyle(.borderedProminent)
             }
@@ -328,15 +334,20 @@ struct SubscribedWorkshopView: View {
                         alignment: .leading,
                         spacing: 14
                     ) {
-                        ForEach(workshopViewModel.subscriptionItems) { item in
+                        ForEach(subscriptionStore.items) { item in
                             WorkshopItemCard(
                                 item: item,
                                 isHovered: hoveredItemID == item.id,
-                                isSelected: workshopViewModel.selectedItem?.id == item.id,
-                                isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
-                                presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
-                                downloadState: workshopViewModel.downloadState(for: item.publishedFileId),
-                                isFavorite: workshopViewModel.isWorkshopFavorite(item.publishedFileId),
+                                isSelected: selectionCoordinator.selectedItem?.id == item.id,
+                                libraryStatus: libraryStore.status(
+                                    for: item.publishedFileId
+                                ),
+                                downloadStatus: downloadStore.status(
+                                    for: item.publishedFileId
+                                ),
+                                isFavorite: interactionStore.isFavorite(
+                                    item.publishedFileId
+                                ),
                                 isActive: isActive,
                                 animatedPreviewMode: globalSettingsViewModel.settings.animatedPreviewPlaybackMode
                             )
@@ -344,12 +355,16 @@ struct SubscribedWorkshopView: View {
                                 hoveredItemID = hovering ? item.id : nil
                             }
                             .onTapGesture {
-                                workshopViewModel.selectWorkshopItem(item)
+                                selectionCoordinator.selectWorkshopItem(item)
                             }
                             .contextMenu {
                                 WorkshopCardContextMenu(
                                     item: item,
-                                    workshopViewModel: workshopViewModel
+                                    creatorStore: creatorStore,
+                                    downloadStore: downloadStore,
+                                    interactionStore: interactionStore,
+                                    selectionCoordinator: selectionCoordinator,
+                                    subscriptionStore: subscriptionStore
                                 )
                                 WallpaperGridViewMenu(viewModel: viewModel, showsPageSize: true)
                             }
@@ -360,22 +375,22 @@ struct SubscribedWorkshopView: View {
                     .padding(.trailing)
                     #endif
 
-                    if workshopViewModel.subscriptionPageCount > 1 {
+                    if subscriptionStore.pageCount > 1 {
                         Color.clear.frame(height: 58)
                     }
                 }
 
-                if workshopViewModel.subscriptionPageCount > 1 {
+                if subscriptionStore.pageCount > 1 {
                     PageNavigator(
-                        currentPage: workshopViewModel.subscriptionCurrentPage,
-                        pageCount: workshopViewModel.subscriptionPageCount,
-                        onSelect: workshopViewModel.goToSubscriptionPage
+                        currentPage: subscriptionStore.currentPage,
+                        pageCount: subscriptionStore.pageCount,
+                        onSelect: subscriptionStore.goToPage
                     )
-                    .disabled(workshopViewModel.isLoadingSubscriptions)
+                    .disabled(subscriptionStore.isLoading)
                     .padding(.bottom, 12)
                 }
             }
-            .onChange(of: workshopViewModel.subscriptionStartIndex) { _, _ in
+            .onChange(of: subscriptionStore.startIndex) { _, _ in
                 withAnimation(.easeOut(duration: 0.2)) {
                     proxy.scrollTo("subscriptionsTop", anchor: .top)
                 }

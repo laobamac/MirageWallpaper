@@ -8,7 +8,7 @@ import SwiftUI
 
 struct DiscoverBannerView: View {
     var items: [WorkshopItem]
-    @ObservedObject var workshopViewModel: WorkshopViewModel
+    let selectionCoordinator: WorkshopSelectionCoordinator
     @ObservedObject var contentViewModel: ContentViewModel
 
     @State private var currentIndex: Int = 0
@@ -24,7 +24,7 @@ struct DiscoverBannerView: View {
                             .opacity(index == currentIndex ? 1 : 0)
                             .animation(.easeInOut(duration: 0.5), value: currentIndex)
                             .onTapGesture {
-                                workshopViewModel.selectWorkshopItem(item)
+                                selectionCoordinator.selectWorkshopItem(item)
                             }
                     }
                 }

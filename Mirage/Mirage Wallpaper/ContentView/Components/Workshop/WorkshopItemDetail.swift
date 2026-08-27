@@ -9,7 +9,14 @@ import Combine
 
 struct WorkshopItemDetail: View {
     var item: WorkshopItem?
-    @ObservedObject var workshopViewModel: WorkshopViewModel
+    let browseStore: WorkshopBrowseStore
+    let creatorStore: WorkshopCreatorStore
+    let downloadStore: WorkshopDownloadStore
+    @Bindable var interactionStore: WorkshopInteractionStore
+    let libraryStore: WorkshopLibraryStore
+    let selectionCoordinator: WorkshopSelectionCoordinator
+    let sessionStore: SteamSessionStore
+    let subscriptionStore: SubscriptionStore
     var isEmbedded: Bool = false
     var embeddedCreatorSteamId: String?
     var isActive: Bool = true
@@ -33,7 +40,8 @@ struct WorkshopItemDetail: View {
         }
         .task(id: item?.publishedFileId) {
             guard let item else { return }
-            workshopViewModel.prepareWorkshopInteractions(for: item)
+            subscriptionStore.refreshStates(for: [item])
+            interactionStore.prepareComments(for: item)
         }
         .confirmationDialog(
             "取消订阅",
@@ -41,7 +49,7 @@ struct WorkshopItemDetail: View {
             presenting: item
         ) { item in
             Button("取消订阅", role: .destructive) {
-                workshopViewModel.unsubscribe(item)
+                subscriptionStore.unsubscribe(item)
             }
             Button("取消", role: .cancel) { }
         } message: { _ in
@@ -75,7 +83,7 @@ struct WorkshopItemDetail: View {
                     Button {
                         if isSelf { return }
                         if let creator = WorkshopCreator(item: item) {
-                            workshopViewModel.openCreatorProfile(creator)
+                            creatorStore.open(creator)
                         }
                     } label: {
                         HStack(spacing: 10) {
@@ -104,7 +112,7 @@ struct WorkshopItemDetail: View {
 
                     if let creator = WorkshopCreator(item: item), creator.profileURL != nil {
                         Button {
-                            workshopViewModel.openCreatorWorkshop(creator)
+                            browseStore.openCreatorWorkshop(creator)
                         } label: {
                             Label(LocalizedStringKey("在 Steam 中查看作者"), systemImage: "safari")
                         }
@@ -216,21 +224,21 @@ struct WorkshopItemDetail: View {
     @ViewBuilder
     func favoriteSection(for item: WorkshopItem) -> some View {
         let id = item.publishedFileId
-        let isFavorite = workshopViewModel.isWorkshopFavorite(id)
-        let isChanging = workshopViewModel.changingFavoriteIDs.contains(id)
+        let isFavorite = interactionStore.isFavorite(id)
+        let isChanging = interactionStore.changingFavoriteIDs.contains(id)
 
         VStack(spacing: 6) {
-            if workshopViewModel.steamSetupState == .checking {
+            if sessionStore.setupState == .checking {
                 HStack(spacing: 8) {
                     ProgressView()
                         .controlSize(.small)
-                    Text(workshopViewModel.steamCheckingMessage)
+                    Text(sessionStore.checkingMessage)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 5)
-            } else if workshopViewModel.steamSetupState != .ready {
+            } else if sessionStore.setupState != .ready {
                 Button {
                     AppDelegate.shared.openSteamSetup()
                 } label: {
@@ -250,7 +258,7 @@ struct WorkshopItemDetail: View {
                 .padding(.vertical, 5)
             } else {
                 Button {
-                    workshopViewModel.toggleFavorite(item)
+                    interactionStore.toggleFavorite(item)
                 } label: {
                     Label(
                         LocalizedStringKey(isFavorite ? "取消收藏" : "加入收藏"),
@@ -262,7 +270,7 @@ struct WorkshopItemDetail: View {
                 .tint(isFavorite ? .red : .accentColor)
             }
 
-            if let error = workshopViewModel.favoriteActionError(for: id) {
+            if let error = interactionStore.favoriteError(for: id) {
                 Text(error)
                     .font(.caption2)
                     .foregroundStyle(.red)
@@ -274,22 +282,20 @@ struct WorkshopItemDetail: View {
     @ViewBuilder
     func subscriptionSection(for item: WorkshopItem) -> some View {
         let id = item.publishedFileId
-        let state = workshopViewModel.subscriptionState(for: id)
-        let isChecking = workshopViewModel.checkingSubscriptionIDs.contains(id)
-        let isChanging = workshopViewModel.changingSubscriptionIDs.contains(id)
+        let status = subscriptionStore.status(for: id)
 
         VStack(spacing: 6) {
-            if workshopViewModel.steamSetupState == .checking {
+            if sessionStore.setupState == .checking {
                 HStack(spacing: 8) {
                     ProgressView()
                         .controlSize(.small)
-                    Text(workshopViewModel.steamCheckingMessage)
+                    Text(sessionStore.checkingMessage)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 5)
-            } else if workshopViewModel.steamSetupState != .ready {
+            } else if sessionStore.setupState != .ready {
                 Button {
                     AppDelegate.shared.openSteamSetup()
                 } label: {
@@ -297,24 +303,24 @@ struct WorkshopItemDetail: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-            } else if isChecking || isChanging {
+            } else if status.isChecking || status.isChanging {
                 HStack(spacing: 8) {
                     ProgressView()
                         .controlSize(.small)
-                    Text(LocalizedStringKey(isChanging ? "正在同步订阅状态…" : "正在检查订阅状态…"))
+                    Text(LocalizedStringKey(status.isChanging ? "正在同步订阅状态…" : "正在检查订阅状态…"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 5)
-            } else if state == .unknown {
+            } else if status.state == .unknown {
                 Button {
-                    workshopViewModel.refreshSubscriptionStates(for: [item])
+                    subscriptionStore.refreshStates(for: [item])
                 } label: {
                     Label("重新检查订阅状态", systemImage: "arrow.clockwise")
                         .frame(maxWidth: .infinity)
                 }
-            } else if state == .subscribed {
+            } else if status.state == .subscribed {
                 Button {
                     isConfirmingUnsubscribe = true
                 } label: {
@@ -325,7 +331,7 @@ struct WorkshopItemDetail: View {
                 .tint(.red)
             } else {
                 Button {
-                    workshopViewModel.subscribe(item)
+                    subscriptionStore.subscribe(item)
                 } label: {
                     Label("订阅并下载", systemImage: "plus.circle.fill")
                         .frame(maxWidth: .infinity)
@@ -333,7 +339,7 @@ struct WorkshopItemDetail: View {
                 .buttonStyle(.borderedProminent)
             }
 
-            if let error = workshopViewModel.subscriptionActionError(for: id) {
+            if let error = status.actionError {
                 Text(error)
                     .font(.caption2)
                     .foregroundStyle(.red)
@@ -346,22 +352,22 @@ struct WorkshopItemDetail: View {
     func commentsSection(for item: WorkshopItem) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text(L("%d 条评论", workshopViewModel.commentsTotal))
+                Text(L("%d 条评论", interactionStore.commentsTotal))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button {
-                    workshopViewModel.refreshComments(for: item)
+                    interactionStore.refreshComments(for: item)
                 } label: {
                     Image(systemName: "arrow.triangle.2.circlepath")
                 }
                 .buttonStyle(.plain)
-                .disabled(workshopViewModel.isLoadingComments)
+                .disabled(interactionStore.isLoadingComments)
                 .help(L("刷新评论"))
             }
 
-            if workshopViewModel.commentsItemID != item.publishedFileId ||
-                workshopViewModel.isLoadingComments && workshopViewModel.comments.isEmpty {
+            if interactionStore.commentsItemID != item.publishedFileId ||
+                interactionStore.isLoadingComments && interactionStore.comments.isEmpty {
                 HStack {
                     Spacer()
                     ProgressView()
@@ -369,15 +375,15 @@ struct WorkshopItemDetail: View {
                     Spacer()
                 }
                 .padding(.vertical, 8)
-            } else if let error = workshopViewModel.commentsError,
-                      workshopViewModel.comments.isEmpty {
+            } else if let error = interactionStore.commentsError,
+                      interactionStore.comments.isEmpty {
                 Text(error)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 6)
-            } else if workshopViewModel.comments.isEmpty {
+            } else if interactionStore.comments.isEmpty {
                 Text("暂无评论")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
@@ -385,29 +391,29 @@ struct WorkshopItemDetail: View {
                     .padding(.vertical, 6)
             } else {
                 VStack(spacing: 8) {
-                    ForEach(workshopViewModel.comments) { comment in
+                    ForEach(interactionStore.comments) { comment in
                         commentRow(comment)
                     }
                 }
             }
 
-            if workshopViewModel.commentsStartIndex > 0 ||
-                workshopViewModel.commentsNextStartIndex < workshopViewModel.commentsTotal {
+            if interactionStore.commentsStartIndex > 0 ||
+                interactionStore.commentsNextStartIndex < interactionStore.commentsTotal {
                 HStack {
                     Button {
-                        workshopViewModel.loadPreviousComments(for: item)
+                        interactionStore.loadPreviousComments(for: item)
                     } label: {
                         Image(systemName: "chevron.left")
                     }
-                    .disabled(workshopViewModel.commentsStartIndex == 0 || workshopViewModel.isLoadingComments)
+                    .disabled(interactionStore.commentsStartIndex == 0 || interactionStore.isLoadingComments)
 
                     Spacer()
 
                     Text(L(
                         "%d–%d / %d",
-                        workshopViewModel.comments.isEmpty ? 0 : workshopViewModel.commentsStartIndex + 1,
-                        workshopViewModel.commentsStartIndex + workshopViewModel.comments.count,
-                        workshopViewModel.commentsTotal
+                        interactionStore.comments.isEmpty ? 0 : interactionStore.commentsStartIndex + 1,
+                        interactionStore.commentsStartIndex + interactionStore.comments.count,
+                        interactionStore.commentsTotal
                     ))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
@@ -416,27 +422,27 @@ struct WorkshopItemDetail: View {
                     Spacer()
 
                     Button {
-                        workshopViewModel.loadNextComments(for: item)
+                        interactionStore.loadNextComments(for: item)
                     } label: {
                         Image(systemName: "chevron.right")
                     }
                     .disabled(
-                        workshopViewModel.commentsNextStartIndex <= workshopViewModel.commentsStartIndex ||
-                        workshopViewModel.commentsNextStartIndex >= workshopViewModel.commentsTotal ||
-                        workshopViewModel.isLoadingComments
+                        interactionStore.commentsNextStartIndex <= interactionStore.commentsStartIndex ||
+                        interactionStore.commentsNextStartIndex >= interactionStore.commentsTotal ||
+                        interactionStore.isLoadingComments
                     )
                 }
             }
 
-            if workshopViewModel.commentsCanPost {
-                TextField("发表评论", text: $workshopViewModel.commentDraft, axis: .vertical)
+            if interactionStore.commentsCanPost {
+                TextField("发表评论", text: $interactionStore.commentDraft, axis: .vertical)
                     .lineLimit(2...5)
                 HStack {
                     Spacer()
                     Button {
-                        workshopViewModel.postComment(for: item)
+                        interactionStore.postComment(for: item)
                     } label: {
-                        if workshopViewModel.isPostingComment {
+                        if interactionStore.isPostingComment {
                             ProgressView()
                                 .controlSize(.small)
                                 .frame(width: 16, height: 16)
@@ -446,18 +452,18 @@ struct WorkshopItemDetail: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(
-                        workshopViewModel.commentDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-                        workshopViewModel.isPostingComment
+                        interactionStore.commentDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                        interactionStore.isPostingComment
                     )
                 }
-            } else if SteamServiceManager.shared.isLoggedIn && workshopViewModel.commentsError == nil {
+            } else if SteamServiceManager.shared.isLoggedIn && interactionStore.commentsError == nil {
                 Text("该作品当前不允许发表评论")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
 
-            if let error = workshopViewModel.commentsError,
-               !workshopViewModel.comments.isEmpty {
+            if let error = interactionStore.commentsError,
+               !interactionStore.comments.isEmpty {
                 Text(error)
                     .font(.caption2)
                     .foregroundStyle(.red)
@@ -466,7 +472,7 @@ struct WorkshopItemDetail: View {
     }
 
     func commentRow(_ comment: WorkshopComment) -> some View {
-        let creator = workshopViewModel.commentAuthors[comment.authorSteamId]
+        let creator = interactionStore.commentAuthors[comment.authorSteamId]
         let isCurrentUser = comment.authorSteamId == SteamServiceManager.shared.steamId
         let creatorName = creator?.name.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let displayName = !creatorName.isEmpty
@@ -514,15 +520,15 @@ struct WorkshopItemDetail: View {
 
     @ViewBuilder
     func downloadSection(for item: WorkshopItem) -> some View {
-        let hasDownloadTask = workshopViewModel.downloadState(for: item.publishedFileId) != nil
-        let installed = workshopViewModel.installedItem(workshopId: item.publishedFileId)
+        let hasDownloadTask = downloadStore.state(for: item.publishedFileId) != nil
+        let installed = libraryStore.installedItem(id: item.publishedFileId)
         if let installed, installed.needsPresetDependency {
             VStack(spacing: 6) {
                 Text("预设已下载，但缺少基础壁纸 \(installed.presetDependency?.rawValue ?? "")")
                     .font(.caption2)
                     .foregroundStyle(.orange)
                 Button {
-                    workshopViewModel.requestPresetDependency(for: installed)
+                    selectionCoordinator.requestPresetDependency(for: installed)
                 } label: {
                     Label("下载基础壁纸", systemImage: "square.stack.3d.up.fill")
                         .frame(maxWidth: .infinity)
@@ -540,40 +546,40 @@ struct WorkshopItemDetail: View {
 
             if isEmbedded, let installed {
                 Button {
-                    workshopViewModel.openInstalledWallpaper(installed)
+                    selectionCoordinator.openInstalledWallpaper(installed)
                 } label: {
                     Label(LocalizedStringKey("设为壁纸"), systemImage: "play.rectangle.fill")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
             }
-        } else if workshopViewModel.steamSetupState == .checking {
+        } else if sessionStore.setupState == .checking {
             HStack(spacing: 8) {
                 ProgressView()
                     .controlSize(.small)
-                Text(workshopViewModel.steamCheckingMessage)
+                Text(sessionStore.checkingMessage)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 6)
-        } else if workshopViewModel.steamSetupState != .ready {
+        } else if sessionStore.setupState != .ready {
             VStack(spacing: 6) {
-                Text(workshopViewModel.steamServiceStatus.workshopDownload.summary)
+                Text(sessionStore.serviceStatus.workshopDownload.summary)
                     .font(.caption2)
                     .foregroundStyle(.orange)
                 Button {
                     AppDelegate.shared.openSteamSetup()
                 } label: {
                     Label(
-                        LocalizedStringKey(workshopViewModel.steamSetupState == .serviceUnavailable ? "检查 Steam 服务" : "登录全球 Steam"),
+                        LocalizedStringKey(sessionStore.setupState == .serviceUnavailable ? "检查 Steam 服务" : "登录全球 Steam"),
                         systemImage: "person.crop.circle.badge.exclamationmark"
                     )
                     .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
             }
-        } else if let state = workshopViewModel.downloadState(for: item.publishedFileId) {
+        } else if let state = downloadStore.state(for: item.publishedFileId) {
             switch state {
             case .downloading(let progress):
                 VStack(spacing: 4) {
@@ -584,7 +590,7 @@ struct WorkshopItemDetail: View {
                         .foregroundStyle(.secondary)
                 }
                 Button {
-                    workshopViewModel.cancelDownload(item)
+                    selectionCoordinator.cancelDownload(item)
                 } label: {
                     Label("取消下载", systemImage: "xmark.circle")
                         .frame(maxWidth: .infinity)
@@ -616,8 +622,10 @@ struct WorkshopItemDetail: View {
                     .font(.caption2)
                     .foregroundStyle(.red)
                 Button {
-                    if let task = workshopViewModel.downloadQueue.first(where: { $0.id == item.publishedFileId }) {
-                        workshopViewModel.retryDownload(task)
+                    if let task = downloadStore.task(
+                        for: item.publishedFileId
+                    ) {
+                        downloadStore.retry(task)
                     }
                 } label: {
                     Label("重试", systemImage: "arrow.clockwise")
@@ -635,7 +643,7 @@ struct WorkshopItemDetail: View {
             }
         } else {
             Button {
-                workshopViewModel.downloadItem(item)
+                downloadStore.download(item)
             } label: {
                 Label(LocalizedStringKey(item.isPreset ? "下载预设" : "下载壁纸"), systemImage: "arrow.down.circle.fill")
                     .frame(maxWidth: .infinity)
@@ -755,12 +763,97 @@ enum CreatorGridMetrics {
     }
 }
 
+private struct CreatorWorkshopItemCell: View {
+    let item: WorkshopItem
+    let libraryStatus: WorkshopLibraryItemStatus
+    let downloadStatus: WorkshopDownloadStatus
+    let downloadStore: WorkshopDownloadStore
+    let interactionStore: WorkshopInteractionStore
+    let isActive: Bool
+    let animatedPreviewMode: GSAnimatedPreviewPlayback
+    let onSelect: () -> Void
+
+    @State private var isHovered = false
+    @Binding var iconSize: Double
+    @Binding var pageSize: Int
+
+    var body: some View {
+        WorkshopItemCard(
+            item: item,
+            isHovered: isHovered,
+            isSelected: false,
+            libraryStatus: libraryStatus,
+            downloadStatus: downloadStatus,
+            isFavorite: interactionStore.isFavorite(item.publishedFileId),
+            isActive: isActive,
+            animatedPreviewMode: animatedPreviewMode
+        )
+        .onHover { isHovered = $0 }
+        .onTapGesture(perform: onSelect)
+        .contextMenu {
+            Section {
+                if interactionStore.changingFavoriteIDs.contains(item.publishedFileId) {
+                    Label("正在同步收藏状态…", systemImage: "arrow.triangle.2.circlepath")
+                } else {
+                    Button {
+                        interactionStore.toggleFavorite(item)
+                    } label: {
+                        Label(
+                            LocalizedStringKey(
+                                interactionStore.isFavorite(item.publishedFileId)
+                                    ? "取消收藏"
+                                    : "加入收藏"
+                            ),
+                            systemImage: interactionStore.isFavorite(item.publishedFileId)
+                                ? "heart.slash.fill"
+                                : "heart.fill"
+                        )
+                    }
+                }
+
+                Button {
+                    downloadStore.download(item)
+                } label: {
+                    Label(
+                        LocalizedStringKey(item.isPreset ? "下载预设" : "下载壁纸"),
+                        systemImage: "arrow.down.circle.fill"
+                    )
+                }
+                .disabled(downloadStatus.state != nil)
+
+                Button(action: onSelect) {
+                    Label(LocalizedStringKey("查看壁纸详情"), systemImage: "info.circle")
+                }
+            }
+
+            Section {
+                Button {
+                    guard let url = URL(
+                        string: "https://steamcommunity.com/sharedfiles/filedetails/?id=\(item.publishedFileId)"
+                    ) else { return }
+                    NSWorkspace.shared.open(url)
+                } label: {
+                    Label(LocalizedStringKey("在 Steam 中查看"), systemImage: "safari")
+                }
+            }
+
+            CreatorGridViewMenu(iconSize: $iconSize, pageSize: $pageSize)
+        }
+    }
+}
+
 struct CreatorProfileView: View {
     let creator: WorkshopCreator
-    @ObservedObject var workshopViewModel: WorkshopViewModel
+    let browseStore: WorkshopBrowseStore
+    let creatorStore: WorkshopCreatorStore
+    let downloadStore: WorkshopDownloadStore
+    let interactionStore: WorkshopInteractionStore
+    let libraryStore: WorkshopLibraryStore
+    let selectionCoordinator: WorkshopSelectionCoordinator
+    let sessionStore: SteamSessionStore
+    let subscriptionStore: SubscriptionStore
     let animatedPreviewMode: GSAnimatedPreviewPlayback
     @State private var selectedDetailItem: WorkshopItem?
-    @State private var hoveredItemID: String?
     @AppStorage("CreatorIconSize") private var iconSize: Double = CreatorGridMetrics.medium
     @AppStorage("CreatorPerPage") private var creatorPageSize: Int = 10
 
@@ -776,8 +869,7 @@ struct CreatorProfileView: View {
             iconSize = CreatorGridMetrics.normalized(iconSize)
         }
         .onChange(of: creatorPageSize) {
-            workshopViewModel.creatorItemsPage = 1
-            workshopViewModel.loadCreatorItems(for: creator)
+            creatorStore.reloadFromFirstPage()
         }
     }
 
@@ -823,7 +915,7 @@ struct CreatorProfileView: View {
                 }
 
                 Button {
-                    workshopViewModel.showCreatorProfile = false
+                    creatorStore.close()
                 } label: {
                     Image(systemName: "xmark")
                 }
@@ -843,14 +935,14 @@ struct CreatorProfileView: View {
 
     @ViewBuilder
     private var creatorContent: some View {
-        if workshopViewModel.isLoadingCreatorItems && workshopViewModel.creatorItems.isEmpty {
+        if creatorStore.isLoading && creatorStore.items.isEmpty {
             centeredContent {
                 ProgressView()
                 Text(LocalizedStringKey("加载中..."))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-        } else if let error = workshopViewModel.creatorItemsError, workshopViewModel.creatorItems.isEmpty {
+        } else if let error = creatorStore.error, creatorStore.items.isEmpty {
             centeredContent {
                 Image(systemName: "exclamationmark.triangle")
                     .font(.system(size: 32))
@@ -861,12 +953,12 @@ struct CreatorProfileView: View {
                     .multilineTextAlignment(.center)
                     .padding(.horizontal)
                 Button(LocalizedStringKey("重试")) {
-                    workshopViewModel.loadCreatorItems(for: creator)
+                    creatorStore.loadItems()
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
             }
-        } else if workshopViewModel.creatorItems.isEmpty && !workshopViewModel.isLoadingCreatorItems {
+        } else if creatorStore.items.isEmpty && !creatorStore.isLoading {
             centeredContent {
                 Image(systemName: "rectangle.on.rectangle.slash")
                     .font(.system(size: 32))
@@ -898,85 +990,39 @@ struct CreatorProfileView: View {
                     .id("creatorTop")
 
                 LazyVGrid(columns: gridColumns, spacing: 10) {
-                    ForEach(workshopViewModel.creatorItems) { item in
-                        WorkshopItemCard(
+                    ForEach(creatorStore.items) { item in
+                        CreatorWorkshopItemCell(
                             item: item,
-                            isHovered: hoveredItemID == item.id,
-                            isSelected: false,
-                            isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
-                            presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
-                            downloadState: workshopViewModel.downloadState(for: item.publishedFileId),
-                            isFavorite: workshopViewModel.isWorkshopFavorite(item.publishedFileId),
+                            libraryStatus: libraryStore.status(
+                                for: item.publishedFileId
+                            ),
+                            downloadStatus: downloadStore.status(
+                                for: item.publishedFileId
+                            ),
+                            downloadStore: downloadStore,
+                            interactionStore: interactionStore,
                             isActive: selectedDetailItem == nil,
-                            animatedPreviewMode: animatedPreviewMode
+                            animatedPreviewMode: animatedPreviewMode,
+                            onSelect: { selectedDetailItem = item },
+                            iconSize: $iconSize,
+                            pageSize: $creatorPageSize
                         )
-                        .onHover { hovering in
-                            hoveredItemID = hovering ? item.id : nil
-                        }
-                        .onTapGesture {
-                            selectedDetailItem = item
-                        }
-                        .contextMenu {
-                            Section {
-                                if workshopViewModel.changingFavoriteIDs.contains(item.publishedFileId) {
-                                    Label("正在同步收藏状态…", systemImage: "arrow.triangle.2.circlepath")
-                                } else {
-                                    Button {
-                                        workshopViewModel.toggleFavorite(item)
-                                    } label: {
-                                        Label(
-                                            LocalizedStringKey(workshopViewModel.isWorkshopFavorite(item.publishedFileId) ? "取消收藏" : "加入收藏"),
-                                            systemImage: workshopViewModel.isWorkshopFavorite(item.publishedFileId) ? "heart.slash.fill" : "heart.fill"
-                                        )
-                                    }
-                                }
-
-                                Button {
-                                    workshopViewModel.downloadItem(item)
-                                } label: {
-                                    Label(
-                                        LocalizedStringKey(item.isPreset ? "下载预设" : "下载壁纸"),
-                                        systemImage: "arrow.down.circle.fill"
-                                    )
-                                }
-                                .disabled(workshopViewModel.downloadState(for: item.publishedFileId) != nil)
-
-                                Button {
-                                    selectedDetailItem = item
-                                } label: {
-                                    Label(LocalizedStringKey("查看壁纸详情"), systemImage: "info.circle")
-                                }
-                            }
-
-                            Section {
-                                Button {
-                                    guard let url = URL(
-                                        string: "https://steamcommunity.com/sharedfiles/filedetails/?id=\(item.publishedFileId)"
-                                    ) else { return }
-                                    NSWorkspace.shared.open(url)
-                                } label: {
-                                    Label(LocalizedStringKey("在 Steam 中查看"), systemImage: "safari")
-                                }
-                            }
-
-                            CreatorGridViewMenu(iconSize: $iconSize, pageSize: $creatorPageSize)
-                        }
                     }
                 }
                 .padding(12)
                 .frame(maxWidth: .infinity)
                 .contentShape(Rectangle())
 
-                if workshopViewModel.creatorTotalPages > 1 {
+                if creatorStore.totalPages > 1 {
                     PageNavigator(
-                        currentPage: workshopViewModel.creatorItemsPage,
-                        pageCount: workshopViewModel.creatorTotalPages,
-                        onSelect: workshopViewModel.goToCreatorPage
+                        currentPage: creatorStore.currentPage,
+                        pageCount: creatorStore.totalPages,
+                        onSelect: creatorStore.goToPage
                     )
                     .padding(.bottom, 12)
                 }
             }
-            .onChange(of: workshopViewModel.creatorItemsPage) { _, _ in
+            .onChange(of: creatorStore.currentPage) { _, _ in
                 withAnimation(.easeOut(duration: 0.2)) {
                     proxy.scrollTo("creatorTop", anchor: .top)
                 }
@@ -1019,7 +1065,14 @@ struct CreatorProfileView: View {
 
             WorkshopItemDetail(
                 item: item,
-                workshopViewModel: workshopViewModel,
+                browseStore: browseStore,
+                creatorStore: creatorStore,
+                downloadStore: downloadStore,
+                interactionStore: interactionStore,
+                libraryStore: libraryStore,
+                selectionCoordinator: selectionCoordinator,
+                sessionStore: sessionStore,
+                subscriptionStore: subscriptionStore,
                 isEmbedded: true,
                 embeddedCreatorSteamId: creator.steamId
             )

@@ -7,34 +7,34 @@
 import SwiftUI
 
 struct SubscribedWorkshopFilterSidebar: View {
-    @ObservedObject var workshopViewModel: WorkshopViewModel
+    @Bindable var subscriptionStore: SubscriptionStore
 
     var body: some View {
         VStack {
             ScrollView {
                 VStack(spacing: 30) {
                     Button {
-                        workshopViewModel.clearSubscriptionFilters()
+                        subscriptionStore.clearFilters()
                     } label: {
                         Label("重置筛选", systemImage: "arrow.triangle.2.circlepath")
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 5)
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(!workshopViewModel.hasActiveSubscriptionFilters)
+                    .disabled(!subscriptionStore.hasActiveFilters)
 
                     ShowOnlyFilterSection(
                         id: "subscriptions.showOnly",
-                        selection: workshopViewModel.subscriptionShowOnly,
-                        onChange: workshopViewModel.setSubscriptionShowOnly
+                        selection: subscriptionStore.showOnly,
+                        onChange: subscriptionStore.setShowOnly
                     )
 
                     FilterSection("类型", id: "subscriptions.type", alignment: .leading) {
                         VStack(alignment: .leading, spacing: 8) {
                             ForEach(WorkshopTypeFilter.allCases) { filter in
                                 Toggle(filter.label, isOn: Binding(
-                                    get: { workshopViewModel.subscriptionSelectedTypeFilters.contains(filter) },
-                                    set: { workshopViewModel.setSubscriptionTypeFilter(filter, isOn: $0) }
+                                    get: { subscriptionStore.selectedTypeFilters.contains(filter) },
+                                    set: { subscriptionStore.setTypeFilter(filter, isOn: $0) }
                                 ))
                                 .toggleStyle(.checkbox)
                             }
@@ -45,15 +45,15 @@ struct SubscribedWorkshopFilterSidebar: View {
                         VStack(alignment: .leading, spacing: 8) {
                             ForEach(WorkshopAgeRating.allCases) { rating in
                                 Toggle(rating.displayName, isOn: Binding(
-                                    get: { workshopViewModel.subscriptionAgeRatingFilter.contains(rating) },
+                                    get: { subscriptionStore.ageRatingFilter.contains(rating) },
                                     set: {
-                                        workshopViewModel.applySubscriptionAgeRatingFilter(rating, isOn: $0)
+                                        subscriptionStore.applyAgeRatingFilter(rating, isOn: $0)
                                     }
                                 ))
                                 .toggleStyle(.checkbox)
                             }
 
-                            if workshopViewModel.subscriptionAgeRatingFilter.isEmpty {
+                            if subscriptionStore.ageRatingFilter.isEmpty {
                                 Text("未选择任何分级，当前显示全部分级")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
@@ -65,20 +65,20 @@ struct SubscribedWorkshopFilterSidebar: View {
                     FilterSection("分辨率", id: "subscriptions.resolution", alignment: .leading) {
                         VStack(alignment: .leading, spacing: 16) {
                             HStack {
-                                Button("全选") { workshopViewModel.selectAllSubscriptionResolutions() }
-                                    .disabled(workshopViewModel.allSubscriptionResolutionsSelected)
-                                Button("清空") { workshopViewModel.clearSubscriptionResolutions() }
-                                    .disabled(workshopViewModel.allSubscriptionResolutionsCleared)
+                                Button("全选") { subscriptionStore.selectAllResolutions() }
+                                    .disabled(subscriptionStore.allResolutionsSelected)
+                                Button("清空") { subscriptionStore.clearResolutions() }
+                                    .disabled(subscriptionStore.allResolutionsCleared)
                             }
                             .buttonStyle(.link)
 
                             SubscribedResolutionFilterGroup(
                                 "其他",
-                                selection: $workshopViewModel.subscriptionMiscResolution,
+                                selection: $subscriptionStore.miscResolution,
                                 options: FRMiscResolution.allOptions,
                                 onChange: { option, isOn in
-                                    workshopViewModel.setSubscriptionResolutionOption(
-                                        \.subscriptionMiscResolution,
+                                    subscriptionStore.setResolutionOption(
+                                        \.miscResolution,
                                         option: option,
                                         isOn: isOn
                                     )
@@ -86,11 +86,11 @@ struct SubscribedWorkshopFilterSidebar: View {
                             )
                             SubscribedResolutionFilterGroup(
                                 "宽屏",
-                                selection: $workshopViewModel.subscriptionWidescreenResolution,
+                                selection: $subscriptionStore.widescreenResolution,
                                 options: FRWidescreenResolution.allOptions,
                                 onChange: { option, isOn in
-                                    workshopViewModel.setSubscriptionResolutionOption(
-                                        \.subscriptionWidescreenResolution,
+                                    subscriptionStore.setResolutionOption(
+                                        \.widescreenResolution,
                                         option: option,
                                         isOn: isOn
                                     )
@@ -98,11 +98,11 @@ struct SubscribedWorkshopFilterSidebar: View {
                             )
                             SubscribedResolutionFilterGroup(
                                 "超宽屏",
-                                selection: $workshopViewModel.subscriptionUltraWidescreenResolution,
+                                selection: $subscriptionStore.ultraWidescreenResolution,
                                 options: FRUltraWidescreenResolution.allOptions,
                                 onChange: { option, isOn in
-                                    workshopViewModel.setSubscriptionResolutionOption(
-                                        \.subscriptionUltraWidescreenResolution,
+                                    subscriptionStore.setResolutionOption(
+                                        \.ultraWidescreenResolution,
                                         option: option,
                                         isOn: isOn
                                     )
@@ -110,11 +110,11 @@ struct SubscribedWorkshopFilterSidebar: View {
                             )
                             SubscribedResolutionFilterGroup(
                                 "双显示器",
-                                selection: $workshopViewModel.subscriptionDualscreenResolution,
+                                selection: $subscriptionStore.dualscreenResolution,
                                 options: FRDualscreenResolution.allOptions,
                                 onChange: { option, isOn in
-                                    workshopViewModel.setSubscriptionResolutionOption(
-                                        \.subscriptionDualscreenResolution,
+                                    subscriptionStore.setResolutionOption(
+                                        \.dualscreenResolution,
                                         option: option,
                                         isOn: isOn
                                     )
@@ -122,11 +122,11 @@ struct SubscribedWorkshopFilterSidebar: View {
                             )
                             SubscribedResolutionFilterGroup(
                                 "三显示器",
-                                selection: $workshopViewModel.subscriptionTriplescreenResolution,
+                                selection: $subscriptionStore.triplescreenResolution,
                                 options: FRTriplescreenResolution.allOptions,
                                 onChange: { option, isOn in
-                                    workshopViewModel.setSubscriptionResolutionOption(
-                                        \.subscriptionTriplescreenResolution,
+                                    subscriptionStore.setResolutionOption(
+                                        \.triplescreenResolution,
                                         option: option,
                                         isOn: isOn
                                     )
@@ -134,11 +134,11 @@ struct SubscribedWorkshopFilterSidebar: View {
                             )
                             SubscribedResolutionFilterGroup(
                                 "纵向监视器/手机",
-                                selection: $workshopViewModel.subscriptionPortraitResolution,
+                                selection: $subscriptionStore.portraitResolution,
                                 options: FRPortraitScreenResolution.allOptions,
                                 onChange: { option, isOn in
-                                    workshopViewModel.setSubscriptionResolutionOption(
-                                        \.subscriptionPortraitResolution,
+                                    subscriptionStore.setResolutionOption(
+                                        \.portraitResolution,
                                         option: option,
                                         isOn: isOn
                                     )
@@ -150,10 +150,10 @@ struct SubscribedWorkshopFilterSidebar: View {
                     FilterSection("标签", id: "subscriptions.tags", alignment: .leading) {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack {
-                                Button("全选") { workshopViewModel.selectAllSubscriptionTags() }
-                                    .disabled(workshopViewModel.allSubscriptionTagsSelected)
-                                Button("清空") { workshopViewModel.clearSubscriptionTags() }
-                                    .disabled(workshopViewModel.subscriptionSelectedTags.isEmpty)
+                                Button("全选") { subscriptionStore.selectAllTags() }
+                                    .disabled(subscriptionStore.allTagsSelected)
+                                Button("清空") { subscriptionStore.clearTags() }
+                                    .disabled(subscriptionStore.selectedTags.isEmpty)
                             }
                             .buttonStyle(.link)
 
@@ -161,10 +161,10 @@ struct SubscribedWorkshopFilterSidebar: View {
                                 ForEach(WorkshopTag.allCases) { tag in
                                     Toggle(tag.displayName, isOn: Binding(
                                         get: {
-                                            workshopViewModel.subscriptionSelectedTags.contains(tag.rawValue)
+                                            subscriptionStore.selectedTags.contains(tag.rawValue)
                                         },
                                         set: { _ in
-                                            workshopViewModel.applySubscriptionTagFilter(tag.rawValue)
+                                            subscriptionStore.applyTagFilter(tag.rawValue)
                                         }
                                     ))
                                     .toggleStyle(.checkbox)

@@ -27,13 +27,13 @@ struct WEExploreDefinition: Decodable {
     let exact: Bool?
 }
 
-enum DiscoverQueryKind {
+enum DiscoverQueryKind: Equatable {
     case workshop
     case creator(steamId: String, sortMethod: String)
     case collection(id: String)
 }
 
-struct DiscoverQuery: Identifiable {
+struct DiscoverQuery: Identifiable, Equatable {
     let id: String
     var title: String
     let kind: DiscoverQueryKind
@@ -46,7 +46,7 @@ struct DiscoverQuery: Identifiable {
     let relevanceTags: [String]
 }
 
-struct DiscoverRow: Identifiable {
+struct DiscoverRow: Identifiable, Equatable {
     let id: String
     var query: DiscoverQuery
     var items: [WorkshopItem] = []
@@ -56,7 +56,7 @@ struct DiscoverRow: Identifiable {
     var error: String?
 }
 
-struct DiscoverBrowseState {
+struct DiscoverBrowseState: Equatable {
     let query: DiscoverQuery
     var items: [WorkshopItem] = []
     var total = 0
