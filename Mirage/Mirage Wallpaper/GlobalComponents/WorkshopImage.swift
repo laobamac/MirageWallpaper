@@ -64,6 +64,16 @@ actor WorkshopImageLoader {
     private let diskDirectory: URL
     private var pendingLoads: [RequestKey: PendingLoad] = [:]
 
+    // File I/O and ImageIO are synchronous. Keep them off the cooperative
+    // executor and cap their concurrency independently from URLSession.
+    private static let blockingWorkQueue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.name = "cn.laobamac.Mirage.workshopImage.blocking"
+        queue.qualityOfService = .userInitiated
+        queue.maxConcurrentOperationCount = 4
+        return queue
+    }()
+
     private static func makeSession() -> URLSession {
         let configuration = URLSessionConfiguration.default
         configuration.timeoutIntervalForRequest = 20
@@ -213,14 +223,10 @@ actor WorkshopImageLoader {
         requestID: UUID,
         result: Result<PreparedImage, Error>
     ) {
-        // A fully cancelled generation may have been replaced for the same key.
-        guard let pending = pendingLoads[key],
-              pending.generationID == requestID else { return }
-        pendingLoads.removeValue(forKey: key)
-
-        let subscriberResult: Result<LoadedImage, Error>
-        switch result {
-        case .success(let prepared):
+        // Cache a completed success even when cancellation removed the last
+        // subscriber before this actor turn. Generation matching only guards
+        // continuation fan-out, not cache publication.
+        if case .success(let prepared) = result {
             let animated = prepared.animationData != nil
             setAnimatedFlag(animated, for: key.url)
             store(
@@ -230,6 +236,16 @@ actor WorkshopImageLoader {
                 imageKey: memoryKey(key.url, key.maxPixel),
                 animated: animated
             )
+        }
+
+        // A fully cancelled generation may have been replaced for the same key.
+        guard let pending = pendingLoads[key],
+              pending.generationID == requestID else { return }
+        pendingLoads.removeValue(forKey: key)
+
+        let subscriberResult: Result<LoadedImage, Error>
+        switch result {
+        case .success(let prepared):
             subscriberResult = .success(
                 LoadedImage(image: prepared.image, animationData: prepared.animationData)
             )
@@ -250,14 +266,22 @@ actor WorkshopImageLoader {
         try Task.checkCancellation()
 
         if key.url.isFileURL {
-            let data = try Data(contentsOf: key.url, options: .mappedIfSafe)
+            let data = try await performBlocking {
+                try Data(contentsOf: key.url, options: .mappedIfSafe)
+            }
             try Task.checkCancellation()
-            return try prepare(data: data, maxPixel: key.maxPixel)
+            return try await performBlocking {
+                try prepare(data: data, maxPixel: key.maxPixel)
+            }
         }
 
         let disk = diskURL(for: key.url, in: diskDirectory)
-        if let data = try? Data(contentsOf: disk), !data.isEmpty,
-           let prepared = try? prepare(data: data, maxPixel: key.maxPixel) {
+        if let prepared = try? await performBlocking({
+            guard let data = try? Data(contentsOf: disk), !data.isEmpty else {
+                throw LoadError.invalidData
+            }
+            return try prepare(data: data, maxPixel: key.maxPixel)
+        }) {
             try Task.checkCancellation()
             return prepared
         }
@@ -270,9 +294,25 @@ actor WorkshopImageLoader {
         guard ok else { throw LoadError.invalidResponse }
         guard !data.isEmpty else { throw LoadError.invalidData }
 
-        try? data.write(to: disk, options: .atomic)
         try Task.checkCancellation()
-        return try prepare(data: data, maxPixel: key.maxPixel)
+        return try await performBlocking {
+            try? data.write(to: disk, options: .atomic)
+            return try prepare(data: data, maxPixel: key.maxPixel)
+        }
+    }
+
+    private static func performBlocking<T>(
+        _ work: @escaping () throws -> T
+    ) async throws -> T {
+        try await withCheckedThrowingContinuation { continuation in
+            blockingWorkQueue.addOperation {
+                do {
+                    continuation.resume(returning: try work())
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
     }
 
     private static func prepare(data: Data, maxPixel: Int) throws -> PreparedImage {
