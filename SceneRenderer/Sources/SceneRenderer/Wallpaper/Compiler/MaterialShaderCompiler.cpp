@@ -792,6 +792,124 @@ inline void NormalizeExpandedShaderSource(std::string& src) {
     src = std::move(out);
 }
 
+inline bool IsShaderIdentChar(char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+}
+
+inline usize SkipShaderBlank(const std::string& src, usize pos) {
+    while (pos < src.size() &&
+           (src[pos] == ' ' || src[pos] == '\t' || src[pos] == '\r' || src[pos] == '\n'))
+        ++pos;
+    return pos;
+}
+
+inline bool MatchShaderTokenSeq(const std::string& src, usize pos,
+                                std::span<const std::string_view> tokens, usize& end) {
+    for (auto token : tokens) {
+        pos = SkipShaderBlank(src, pos);
+        if (pos + token.size() > src.size()) return false;
+        if (src.compare(pos, token.size(), token) != 0) return false;
+        pos += token.size();
+        if (IsShaderIdentChar(token.back()) && pos < src.size() && IsShaderIdentChar(src[pos]))
+            return false;
+    }
+    end = pos;
+    return true;
+}
+
+inline bool ReplaceShaderTokenSeq(std::string& src, std::span<const std::string_view> tokens,
+                                  std::string_view repl) {
+    bool  hit = false;
+    usize pos = 0;
+    for (;;) {
+        usize next = src.find(tokens.front(), pos);
+        if (next == std::string::npos) break;
+        if (next > 0 && IsShaderIdentChar(src[next - 1])) {
+            pos = next + 1;
+            continue;
+        }
+        usize end = 0;
+        if (! MatchShaderTokenSeq(src, next, tokens, end)) {
+            pos = next + 1;
+            continue;
+        }
+        src.replace(next, end - next, repl);
+        pos = next + repl.size();
+        hit = true;
+    }
+    return hit;
+}
+
+inline std::string PatchLegacyPremultipliedLighting(const std::string& src) {
+    static constexpr std::string_view kLegacy { "g_LightsColorPremultiplied" };
+    if (src.find(kLegacy) == std::string::npos) return src;
+    if (src.find("ComputePBRLight(") == std::string::npos) return src;
+    if (src.find("vec3 ComputePBRLight(") != std::string::npos) return src;
+    if (src.find("g_LightsColorRadius") != std::string::npos) return src;
+    if (src.find("g_LightsConeExponent") != std::string::npos) return src;
+
+    std::string out = src;
+
+    static constexpr std::string_view kPacked[] = {
+        "vec3", "(",  "g_LightsColorPremultiplied", "[", "0", "]", ".", "w",
+        ",",    "g_LightsColorPremultiplied",       "[", "1", "]", ".", "w",
+        ",",    "g_LightsColorPremultiplied",       "[", "2", "]", ".", "w",
+        ")"
+    };
+    ReplaceShaderTokenSeq(out, kPacked, "g_LightsColorRadius[3], g_LightsConeExponent[3].z");
+
+    static constexpr std::string_view kIndices[]  = { "0", "1", "2" };
+    static constexpr std::string_view kSwizzles[] = { "rgb", "xyz" };
+    for (auto index : kIndices) {
+        const std::string repl = "g_LightsColorRadius[" + std::string(index) +
+                                 "], g_LightsConeExponent[" + std::string(index) + "].z";
+        for (auto swizzle : kSwizzles) {
+            const std::string_view tokens[] = { kLegacy, "[", index, "]", ".", swizzle };
+            ReplaceShaderTokenSeq(out, tokens, repl);
+        }
+    }
+
+    static constexpr std::string_view kDeclRepl {
+        "uniform vec4 g_LightsColorRadius[4];\nuniform vec4 g_LightsConeExponent[4];"
+    };
+    static constexpr std::string_view kDecl4[] = { "uniform", "vec4", "g_LightsColorPremultiplied",
+                                                  "[",       "3",    "]",
+                                                  ";" };
+    static constexpr std::string_view kDecl3[] = { "uniform", "vec3", "g_LightsColorPremultiplied",
+                                                  "[",       "3",    "]",
+                                                  ";" };
+    if (! ReplaceShaderTokenSeq(out, kDecl4, kDeclRepl))
+        ReplaceShaderTokenSeq(out, kDecl3, kDeclRepl);
+
+    if (out.find(kLegacy) != std::string::npos) return src;
+
+    static constexpr std::string_view kCall[] = { "ComputePBRLight", "(" };
+    if (! ReplaceShaderTokenSeq(out, kCall, "_ww_ComputePBRLightBounded(")) return src;
+
+    return out;
+}
+
+inline std::string PatchCommonPbrInclude(std::string_view include_name, std::string src) {
+    if (include_name != "common_pbr.h") return src;
+    if (src.find("_ww_ComputePBRLightBounded") != std::string::npos) return src;
+    if (src.find("vec3 ComputePBRLight(") == std::string::npos) return src;
+
+    static constexpr std::string_view helper = R"(
+vec3 _ww_ComputePBRLightBounded(vec3 N, vec3 L, vec3 V, vec3 albedo, vec4 lightColorRadius,
+	float lightExponent, vec3 baseReflectance, float roughness, float metallic)
+{
+	float lightDistance = max(length(L), 0.0001);
+	float falloff = saturate(1.0 - lightDistance / max(lightColorRadius.w, 0.0001));
+	vec3 boundedColor = lightColorRadius.rgb *
+		pow(falloff + 1.17549435e-38, max(lightExponent, 0.0)) *
+		(lightDistance * lightDistance);
+	return ComputePBRLight(N, L, V, albedo, boundedColor, baseReflectance, roughness, metallic);
+}
+)";
+    src.append(helper);
+    return src;
+}
+
 inline std::string PatchCommonPerspectiveInclude(std::string_view include_name, std::string src) {
     if (include_name != "common_perspective.h") return src;
     if (src.find("_ww_perspective_mat") != std::string::npos) return src;
@@ -856,6 +974,7 @@ inline std::string LoadGlslInclude(fs::VFS& vfs, const std::string& input) {
         std::string includeName = line.substr(in_p + 1, in_e - in_p - 1);
         std::string includeSrc  = fs::GetFileContent(vfs, "/assets/shaders/" + includeName);
         includeSrc              = PatchCommonPerspectiveInclude(includeName, std::move(includeSrc));
+        includeSrc              = PatchCommonPbrInclude(includeName, std::move(includeSrc));
         output.append("\n//-----include ");
         output.append(includeName);
         output.append("\n");
@@ -1881,9 +2000,10 @@ inline bool SaveShaderToFile(std::span<const ShaderCode> codes, fs::IBinaryStrea
 
 } // namespace
 
-std::string WPShaderParser::PreShaderSrc(fs::VFS& vfs, const std::string& src,
+std::string WPShaderParser::PreShaderSrc(fs::VFS& vfs, const std::string& in_src,
                                          WPShaderInfo*                       pWPShaderInfo,
                                          const std::vector<WPShaderTexInfo>& texinfos) {
+    const std::string src = PatchLegacyPremultipliedLighting(in_src);
     // Expand `#include "FILE"` in place: replace each include line with its
     // resolved content (recursively expanded). Preserves the include's
     // original position so a `struct Grid { ... }; #include "common.h"`
