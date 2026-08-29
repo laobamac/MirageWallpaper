@@ -767,17 +767,18 @@ void VulkanRender::pumpFontAtlases(Scene& scene) {
         }
         const auto fm     = face->Metrics();
         const auto pixels = face->AtlasPixels();
-        (void)tex.UploadFontAtlasRegion(face->AtlasUrl(),
-                                        pixels.data(),
-                                        fm.atlas_w,
-                                        min_x,
-                                        min_y,
-                                        max_x - min_x,
-                                        max_y - min_y);
-        // Clear regardless: if VkImage didn't exist yet, the pixels are
-        // already in the CPU buffer that CreateTex aliases on its first
-        // call. Re-uploading would just duplicate work.
-        face->ClearDirtyRects();
+        const bool uploaded = tex.UploadFontAtlasRegion(face->AtlasUrl(),
+                                                        pixels.data(),
+                                                        fm.atlas_w,
+                                                        min_x,
+                                                        min_y,
+                                                        max_x - min_x,
+                                                        max_y - min_y);
+        // Clear when the copy is queued, and also when no VkImage exists yet:
+        // the pixels are then already in the CPU buffer CreateTex aliases on
+        // its first call. Stay pending only if an image was there and the
+        // upload itself failed.
+        if (uploaded || ! tex.HasFontAtlasImage(face->AtlasUrl())) face->ClearDirtyRects();
     }
 }
 

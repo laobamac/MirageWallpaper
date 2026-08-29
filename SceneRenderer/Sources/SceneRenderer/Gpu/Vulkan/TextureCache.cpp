@@ -1306,6 +1306,11 @@ bool TextureCache::UploadFontAtlasRegion(const std::string& key, const std::uint
     return true;
 }
 
+bool TextureCache::HasFontAtlasImage(const std::string& key) const {
+    auto it = m_tex_map.find(key);
+    return it != m_tex_map.end() && ! it->second.slots.empty();
+}
+
 TextureCache::TextureCache(const Device& device): m_device(device) {}
 
 TextureCache::~TextureCache() {};

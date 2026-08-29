@@ -853,6 +853,23 @@ bool ContainsSubstring(std::string_view s, std::string_view what) noexcept {
     return s.find(what) != std::string::npos;
 }
 
+constexpr std::uint32_t kEllipsisCodepoint { 0x2026 };
+
+bool IsBreakableSpace(std::uint32_t cp) noexcept {
+    return cp == 0x0020 || cp == 0x0009 || cp == 0x00A0 || (cp >= 0x2000 && cp <= 0x200A) ||
+           cp == 0x205F || cp == 0x3000;
+}
+
+bool AllowsBreakBefore(std::uint32_t cp) noexcept {
+    if (cp >= 0x1100 && cp <= 0x11FF) return true;
+    if (cp >= 0x2E80 && cp <= 0xA4CF) return true;
+    if (cp >= 0xAC00 && cp <= 0xD7AF) return true;
+    if (cp >= 0xF900 && cp <= 0xFAFF) return true;
+    if (cp >= 0xFF00 && cp <= 0xFF60) return true;
+    if (cp >= 0x20000 && cp <= 0x3FFFD) return true;
+    return false;
+}
+
 } // namespace
 
 std::array<float, 2> ResolveTextAnchorPosition(std::string_view horizontal,
@@ -862,13 +879,17 @@ std::array<float, 2> ResolveTextAnchorPosition(std::string_view horizontal,
                                                float            frame_width,
                                                float            frame_height,
                                                float            scale_x,
-                                               float            scale_y) {
-    float x = origin_x;
-    float y = origin_y;
-    if (ContainsSubstring(horizontal, "left")) x += frame_width * scale_x * 0.5f;
-    if (ContainsSubstring(horizontal, "right")) x -= frame_width * scale_x * 0.5f;
-    if (ContainsSubstring(vertical, "top")) y -= frame_height * scale_y * 0.5f;
-    if (ContainsSubstring(vertical, "bottom")) y += frame_height * scale_y * 0.5f;
+                                               float            scale_y,
+                                               float            line_box_width,
+                                               float            line_box_height) {
+    float       x       = origin_x;
+    float       y       = origin_y;
+    const float inset_x = (frame_width - line_box_width) * scale_x * 0.5f;
+    const float inset_y = (frame_height - line_box_height) * scale_y * 0.5f;
+    if (ContainsSubstring(horizontal, "left")) x += frame_width * scale_x * 0.5f - inset_x;
+    if (ContainsSubstring(horizontal, "right")) x -= frame_width * scale_x * 0.5f - inset_x;
+    if (ContainsSubstring(vertical, "top")) y -= frame_height * scale_y * 0.5f - inset_y;
+    if (ContainsSubstring(vertical, "bottom")) y += frame_height * scale_y * 0.5f - inset_y;
     return { x, y };
 }
 
@@ -888,6 +909,7 @@ struct TextLayouter::Impl {
     std::string current_text;
     bool        missing_glyph_logged { false };
     bool        truncate_logged { false };
+    float       layout_scale { 1.0f };
 
     // Scratch buffers reused across SetText calls — avoids reallocs for
     // every script tick. Sized at construction to peak capacity.
@@ -906,6 +928,13 @@ struct TextLayouter::Impl {
         texcoords.assign(pq * 4 * 2, 0.0f);
         colors.assign(pq * 4 * 4, 0.0f);
         indices.assign(pq * 6, 0u);
+        SeedEllipsis();
+    }
+
+    void SeedEllipsis() {
+        if (! style.use_ellipsis || face == nullptr) return;
+        const std::uint32_t cp[1] { kEllipsisCodepoint };
+        face->Populate(std::span<const std::uint32_t>(cp, 1));
     }
 };
 
@@ -940,6 +969,15 @@ void TextLayouter::SetFace(FontFace* face) {
     im.metrics              = face->Metrics();
     im.missing_glyph_logged = false;
     im.truncate_logged      = false;
+    im.SeedEllipsis();
+    SetText(im.current_text);
+}
+
+void TextLayouter::SetLayoutScale(float scale) {
+    auto& im = *m_impl;
+    if (! std::isfinite(scale) || scale <= 0.0f) return;
+    if (im.layout_scale == scale) return;
+    im.layout_scale = scale;
     SetText(im.current_text);
 }
 
@@ -1035,13 +1073,23 @@ void TextLayouter::SetText(std::string_view utf8) {
     im.current_text = std::move(next_text);
     auto codepoints = DecodeUtf8(im.current_text);
 
+    const float ls = im.layout_scale;
+
     // Split into lines and look up pre-rasterised glyph metrics.
     std::vector<TextLineRunGI> lines;
     lines.emplace_back();
-    std::size_t total_glyph_quads = 0;
+    const bool  wrap      = im.style.limit_width && im.style.max_width > 0.0f;
+    const float wrap_limit = im.style.max_width;
+    std::size_t break_head_count = 0;
+    float       break_head_width = 0.0f;
+    std::size_t break_tail_count = 0;
+    bool        have_break       = false;
+    bool        prev_was_space   = false;
     for (std::uint32_t cp : codepoints) {
         if (cp == '\n') {
             lines.emplace_back();
+            have_break     = false;
+            prev_was_space = false;
             continue;
         }
         const auto* gi = im.face->Lookup(cp);
@@ -1055,9 +1103,73 @@ void TextLayouter::SetText(std::string_view utf8) {
             }
             continue;
         }
-        lines.back().glyphs.push_back(gi);
-        lines.back().width += gi->advance_x;
-        if (gi->pixel_w != 0 && gi->pixel_h != 0) ++total_glyph_quads;
+        const float advance   = gi->advance_x * ls;
+        const bool  is_space  = IsBreakableSpace(cp);
+        auto*       line      = &lines.back();
+        if (wrap && ! line->glyphs.empty() && line->width + advance > wrap_limit) {
+            if (is_space) {
+                lines.emplace_back();
+                have_break     = false;
+                prev_was_space = false;
+                continue;
+            }
+            std::size_t head_count = line->glyphs.size();
+            float       head_width = line->width;
+            std::size_t tail_count = head_count;
+            if (! AllowsBreakBefore(cp) && have_break) {
+                head_count = break_head_count;
+                head_width = break_head_width;
+                tail_count = break_tail_count;
+            }
+            std::vector<const GlyphInfo*> carry(line->glyphs.begin() + tail_count,
+                                                line->glyphs.end());
+            line->glyphs.resize(head_count);
+            line->width = head_width;
+            lines.emplace_back();
+            line = &lines.back();
+            for (auto* moved : carry) {
+                line->glyphs.push_back(moved);
+                line->width += moved->advance_x * ls;
+            }
+            have_break     = false;
+            prev_was_space = false;
+        }
+        line = &lines.back();
+        if (wrap && is_space && ! line->glyphs.empty() && ! prev_was_space) {
+            have_break       = true;
+            break_head_count = line->glyphs.size();
+            break_head_width = line->width;
+        }
+        line->glyphs.push_back(gi);
+        line->width += advance;
+        if (wrap && is_space && have_break) break_tail_count = line->glyphs.size();
+        prev_was_space = is_space;
+    }
+
+    if (im.style.limit_rows && im.style.max_rows > 0 && lines.size() > im.style.max_rows) {
+        lines.resize(im.style.max_rows);
+        if (im.style.use_ellipsis) {
+            const auto* dots = im.face->Lookup(kEllipsisCodepoint);
+            if (dots != nullptr) {
+                auto&       last  = lines.back();
+                const float dot_w = dots->advance_x * ls;
+                if (wrap) {
+                    while (! last.glyphs.empty() && last.width + dot_w > wrap_limit) {
+                        last.width -= last.glyphs.back()->advance_x * ls;
+                        last.glyphs.pop_back();
+                    }
+                }
+                last.glyphs.push_back(dots);
+                last.width += dot_w;
+            }
+        }
+    }
+
+    std::size_t total_glyph_quads = 0;
+    for (const auto& line : lines) {
+        for (const auto* gi : line.glyphs) {
+            if (gi->pixel_w != 0 && gi->pixel_h != 0) ++total_glyph_quads;
+        }
     }
 
     bool        has_bg      = im.style.opaquebackground;
@@ -1080,11 +1192,14 @@ void TextLayouter::SetText(std::string_view utf8) {
     }
 
     auto& fm     = im.metrics;
+    const float ascender    = fm.ascender * ls;
+    const float descender   = fm.descender * ls;
+    const float line_height = fm.line_height * ls;
     float text_w = 0.0f;
     for (auto& l : lines)
         if (l.width > text_w) text_w = l.width;
     float text_h =
-        fm.ascender - fm.descender + static_cast<float>(lines.size() - 1) * fm.line_height;
+        ascender - descender + static_cast<float>(lines.size() - 1) * line_height;
     im.last_text_w          = text_w;
     im.last_text_h          = text_h;
     im.last_source_w        = text_w;
@@ -1208,19 +1323,19 @@ void TextLayouter::SetText(std::string_view utf8) {
         } else {
             line_origin_x = -line.width * 0.5f;
         }
-        float baseline_y = text_top - fm.ascender - static_cast<float>(li) * fm.line_height;
+        float baseline_y = text_top - ascender - static_cast<float>(li) * line_height;
 
         float pen_x = line_origin_x;
         for (auto* gi : line.glyphs) {
             if (q >= im.peak_quads) break;
             if (gi->pixel_w == 0 || gi->pixel_h == 0) {
-                pen_x += gi->advance_x;
+                pen_x += gi->advance_x * ls;
                 continue;
             }
-            float left   = pen_x + gi->bearing_x;
-            float right  = left + gi->layout_w;
-            float top    = baseline_y + gi->bearing_y;
-            float bottom = top - gi->layout_h;
+            float left   = pen_x + gi->bearing_x * ls;
+            float right  = left + gi->layout_w * ls;
+            float top    = baseline_y + gi->bearing_y * ls;
+            float bottom = top - gi->layout_h * ls;
             float u_l    = static_cast<float>(gi->atlas_x) / static_cast<float>(fm.atlas_w);
             float u_r =
                 static_cast<float>(gi->atlas_x + gi->pixel_w) / static_cast<float>(fm.atlas_w);
@@ -1229,7 +1344,7 @@ void TextLayouter::SetText(std::string_view utf8) {
                 static_cast<float>(gi->atlas_y + gi->pixel_h) / static_cast<float>(fm.atlas_h);
             write_quad(q++, left, right, bottom, top, u_l, u_r, v_t, v_b, text_rgba);
             include_glyph_bounds(left, right, bottom, top);
-            pen_x += gi->advance_x;
+            pen_x += gi->advance_x * ls;
             ++emitted_glyphs;
             if (emitted_glyphs >= total_glyph_quads) break;
         }

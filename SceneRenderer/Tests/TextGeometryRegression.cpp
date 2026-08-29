@@ -169,18 +169,36 @@ int main() {
         .source_centered  = true,
     };
     const auto clock_geometry = sr::text::ResolveTextGeometry(clock_policy, clock_metrics);
-    const auto clock_anchor = sr::text::ResolveTextAnchorPosition(
-        "center", "bottom", 0.0f, -46.78589f, 104.0f, 58.0f, 0.75f, 0.75f);
+    const auto clock_anchor   = sr::text::ResolveTextAnchorPosition("center",
+                                                                 "bottom",
+                                                                 0.0f,
+                                                                 -46.78589f,
+                                                                 104.0f,
+                                                                 58.0f,
+                                                                 0.75f,
+                                                                 0.75f,
+                                                                 clock_metrics.text_width,
+                                                                 clock_metrics.text_height);
 
     ok &= Near(clock_geometry.draw_height, 35.0f);
     ok &= Near(clock_geometry.draw_offset_y, 1.0f);
-    ok &= Near(clock_anchor[1], -25.03589f);
+    // Bottom-aligned: the 55 px line box sits flush on the frame's bottom
+    // edge, so the anchor rises by half the line box, not half the frame.
+    ok &= Near(clock_anchor[1], -26.16089f);
 
-    // The neighbouring date is centre-aligned. With the clock's authored
-    // frame, the final parent-scaled ink gap is 9.32 px; substituting the
-    // clock's 35 px ink height for its frame makes this negative (overlap).
-    const auto date_anchor = sr::text::ResolveTextAnchorPosition(
-        "center", "center", 0.0f, -54.06921f, 66.0f, 24.0f, 1.25f, 1.25f);
+    // The neighbouring date is centre-aligned. Anchoring by the line box keeps
+    // the final parent-scaled ink gap positive; anchoring by the 35 px ink box
+    // instead would make it negative (overlap).
+    const auto date_anchor = sr::text::ResolveTextAnchorPosition("center",
+                                                                "center",
+                                                                0.0f,
+                                                                -54.06921f,
+                                                                66.0f,
+                                                                24.0f,
+                                                                1.25f,
+                                                                1.25f,
+                                                                40.0f,
+                                                                20.0f);
     constexpr float parent_scale       = 1.4f;
     constexpr float date_source_center = 0.5f;
     constexpr float date_draw_height   = 15.0f;
@@ -192,7 +210,7 @@ int main() {
     const float half_heights =
         (clock_geometry.draw_height * 0.75f + date_draw_height * 1.25f) *
         parent_scale * 0.5f;
-    ok &= Near(centre_distance - half_heights, 9.32164f, 0.002f);
+    ok &= Near(centre_distance - half_heights, 7.74664f, 0.002f);
 
     // An effect layer retains the font-baseline source position. Geometry
     // resolution must keep the authored 533x238 frame intact while ensuring

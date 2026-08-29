@@ -4968,6 +4968,11 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
     style.halign                = obj.horizontalalign.empty() ? obj.alignment : obj.horizontalalign;
     style.padding               = static_cast<float>(obj.padding);
     style.center_source         = ! copy_background_seed && ! has_bg;
+    style.limit_width           = obj.limitwidth && obj.maxwidth > 0.0f;
+    style.max_width             = obj.maxwidth;
+    style.limit_rows            = obj.limitrows && obj.maxrows > 0;
+    style.max_rows              = obj.maxrows;
+    style.use_ellipsis          = obj.limituseellipsis;
 
     auto align_or_default = [](std::string      value,
                                std::string_view fallback,
@@ -4988,6 +4993,7 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
     layouter->SetText(s_text);
     auto current_text       = std::make_shared<std::string>(s_text);
     auto current_point_size = std::make_shared<double>(obj.pointsize);
+    auto raster_px          = std::make_shared<std::uint32_t>(px);
 
     auto  initial_metrics = layouter->Metrics();
     float text_w          = initial_metrics.text_width;
@@ -5048,6 +5054,8 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
         float       height { 1.0f };
         bool        authored_width { false };
         bool        authored_height { false };
+        float       line_box_width { 1.0f };
+        float       line_box_height { 1.0f };
     };
 
     // `size` is the logical text-layer frame used by WE for alignment and
@@ -5419,7 +5427,9 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
                                                               anchor_state->width,
                                                               anchor_state->height,
                                                               scale.x(),
-                                                              scale.y());
+                                                              scale.y(),
+                                                              anchor_state->line_box_width,
+                                                              anchor_state->line_box_height);
         Vector3f pos = anchor_state->origin;
         pos.x()      = anchored[0];
         pos.y()      = anchored[1];
@@ -5446,6 +5456,8 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
         if (! anchor_state->authored_height)
             anchor_state->height = std::max(1.0f, metrics.text_height + 2.0f * text_padding);
         compose_ptr->SetSize({ anchor_state->width, anchor_state->height });
+        anchor_state->line_box_width  = std::max(1.0f, metrics.text_width);
+        anchor_state->line_box_height = std::max(1.0f, metrics.text_height);
         apply_text_anchor();
         if (direct_text) return;
 
@@ -5529,28 +5541,37 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
                           layouter,
                           rebuild_compose,
                           current_text,
-                          current_point_size](double next_point_size) {
+                          current_point_size,
+                          raster_px](double next_point_size) {
         if (scene == nullptr || font_cache_ptr == nullptr || ! std::isfinite(next_point_size) ||
             next_point_size <= 0.0) {
             return;
         }
-        auto* next_face = font_cache_ptr->GetFace(
-            font_blob, TextPointSizeToPx(static_cast<float>(next_point_size)));
-        if (next_face == nullptr) return;
-        next_face->Populate(text::DecodeUtf8(*current_text));
-        if (! EnsureTextAtlas(*scene, *next_face)) return;
-        *current_point_size = next_point_size;
-        if (auto* mat = sp_mesh->Material()) {
-            auto mutation = scene->SetMaterialTextureSlot(*mat, 0, next_face->AtlasUrl());
-            // The slot swap alone doesn't rebind the GPU descriptor. Queue the
-            // changed material so RenderSetUserProperty rebinds the new atlas;
-            // without this the mesh gets new-layout UVs while the GPU still
-            // samples the old atlas → glyphs shatter on size change.
-            if (mutation.changed && mutation.material.has_value()) {
-                scene->QueueTextTextureRefresh(*mutation.material);
-            }
+        const std::uint32_t want_px = TextPointSizeToPx(static_cast<float>(next_point_size));
+        std::uint32_t       use_px  = *raster_px;
+        if (want_px > use_px) {
+            use_px = std::clamp<std::uint32_t>(std::max(want_px, use_px * 2u), 1u, 1024u);
         }
-        layouter->SetFace(next_face);
+        if (use_px != *raster_px) {
+            auto* next_face = font_cache_ptr->GetFace(font_blob, use_px);
+            if (next_face == nullptr) return;
+            next_face->Populate(text::DecodeUtf8(*current_text));
+            if (! EnsureTextAtlas(*scene, *next_face)) return;
+            *raster_px = use_px;
+            if (auto* mat = sp_mesh->Material()) {
+                auto mutation = scene->SetMaterialTextureSlot(*mat, 0, next_face->AtlasUrl());
+                // The slot swap alone doesn't rebind the GPU descriptor. Queue the
+                // changed material so the per-frame drain rebinds the new atlas;
+                // without this the mesh gets new-layout UVs while the GPU still
+                // samples the old atlas → glyphs shatter on size change.
+                if (mutation.changed && mutation.material.has_value()) {
+                    scene->QueueTextTextureRefresh(*mutation.material);
+                }
+            }
+            layouter->SetFace(next_face);
+        }
+        *current_point_size = next_point_size;
+        layouter->SetLayoutScale(static_cast<float>(want_px) / static_cast<float>(*raster_px));
         rebuild_compose(layouter->Metrics());
     };
 

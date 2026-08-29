@@ -1063,6 +1063,7 @@ private:
     void consumeDirtyEventsCoveredByGraphRebuild();
     void refreshPreparedMeshDirtyEvents();
     void refreshPreparedMaterialDirtyEvents();
+    void refreshPendingTextAtlasSwaps();
 
     bool snapshotExternalAudio(wavsen::audio::AudioSpectrum& out) {
         if (! m_external_audio.load(std::memory_order_acquire)) return false;
@@ -1232,6 +1233,7 @@ void SceneRenderController::on(RenderDraw&&) {
             }
         }
         m_scene->paritileSys->Emitt();
+        refreshPendingTextAtlasSwaps();
         refreshPreparedMeshDirtyEvents();
         refreshPreparedMaterialDirtyEvents();
 
@@ -1314,6 +1316,16 @@ void SceneRenderController::refreshPreparedMeshDirtyEvents() {
             m_render_scene,
             event.mesh,
             vulkan::ToPassInvalidationFlags(vulkan::PassInvalidation::Resources));
+    }
+}
+
+void SceneRenderController::refreshPendingTextAtlasSwaps() {
+    if (! m_scene || ! renderInited() || ! m_rg) return;
+    auto materials = m_scene->TakeTextTextureRefresh();
+    if (materials.empty()) return;
+    m_render_scene = ExtractRenderSceneSnapshot(*m_scene);
+    if (! m_render->refreshPreparedMaterialTextures(*m_scene, m_render_scene, materials)) {
+        rebuildRenderGraph(vulkan::RenderGraphResourceRetention::KeepSceneTextures, false);
     }
 }
 
