@@ -3110,6 +3110,8 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj,
     if (! has_author_effect && (is_hidden_link_source || is_linked_composite)) {
         AppendLayerCompositePassthroughEffect(vfs, wpimgobj);
     }
+    const bool composite_render_path =
+        wpimgobj.composite_layer && ! (is_hidden_link_source || is_linked_composite);
 
     bool hasEffect =
         CountRuntimeImageEffects(wpimgobj.effects, context.scene_accesses_effects) > 0;
@@ -3139,7 +3141,7 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj,
             : AlignmentOffset(wpimgobj.alignment, { geometry_size[0], geometry_size[1] });
     const bool solid_scene_context = HasSolidCompositeContext(context, wpimgobj);
     spImgNode->SetSize({ geometry_size[0], geometry_size[1] });
-    if (hasEffect && wpimgobj.composite_layer) {
+    if (hasEffect && composite_render_path) {
         spImgNode->SetGeometryTransform(
             Affine3d(Translation3d(alignment_offset.cast<double>())).matrix());
     }
@@ -3547,7 +3549,7 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj,
         auto& scene = *context.scene;
         // currently use addr for unique
         std::string nodeAddr = getAddr(spImgNode.as_ptr());
-        if (wpimgobj.composite_layer && ! wpimgobj.fullscreen) {
+        if (composite_render_path && ! wpimgobj.fullscreen) {
             auto anchor = rstd::sync::Arc<SceneNode>::make(
                 alignment_offset,
                 Vector3f::Ones(),
@@ -3578,7 +3580,7 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj,
                                                         ? effect_camera_anchor->get()
                                                         : spImgNode.as_ptr());
         }
-        if (wpimgobj.composite_layer) {
+        if (composite_render_path) {
             const std::string group_camera = nodeAddr + "_group";
             const auto        group_extent =
                 NonZeroRenderTargetExtent(effect_target_size[0], effect_target_size[1]);
@@ -3620,11 +3622,11 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj,
                 .allowReuse           = true,
                 .force_clear          = ! wpimgobj.fullscreen,
                 .clear_on_first_write = true,
-                .preserve_on_write    = wpimgobj.composite_layer,
+                .preserve_on_write    = composite_render_path,
             };
             if (wpimgobj.fullscreen) {
                 scene.renderTargets[effect_ppong_a].bind = { .enable = true, .screen = true };
-            } else if (wpimgobj.composite_layer) {
+            } else if (composite_render_path) {
                 scene.renderTargets[effect_ppong_a].bind = {
                     .enable = true,
                     .name   = nodeAddr + "_group",
@@ -3714,7 +3716,7 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj,
                         scene.renderTargets[rtname] = { .width      = fbo_size[0],
                                                         .height     = fbo_size[1],
                                                         .allowReuse = ! wpfbo.unique };
-                        if (wpimgobj.composite_layer && wpfbo.fit == 0) {
+                        if (composite_render_path && wpfbo.fit == 0) {
                             scene.renderTargets[rtname].bind = {
                                 .enable = true,
                                 .name   = effect_ppong_a,
