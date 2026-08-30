@@ -179,12 +179,42 @@ void SceneUniformUpdater::InitUniforms(SceneNode* pNode, const ExistsUniformOp& 
 
 std::optional<SceneNodeRenderTransform>
 SceneUniformUpdater::NodeRenderTransform(SceneNode* pNode, SceneRenderViewKind render_view) {
+    return NodeTransform(pNode, render_view, false);
+}
+
+std::optional<SceneNodeRenderTransform>
+SceneUniformUpdater::NodeScreenTransform(SceneNode* pNode, SceneRenderViewKind render_view) {
+    return NodeTransform(pNode, render_view, true);
+}
+
+std::optional<SceneNodeRenderTransform>
+SceneUniformUpdater::NodeTransform(SceneNode* pNode, SceneRenderViewKind render_view,
+                                   bool screen_camera) {
     if (pNode == nullptr) return std::nullopt;
     pNode->UpdateTrans();
 
     SceneCamera*     camera { nullptr };
     std::string_view cam_name = pNode->Camera();
-    if (! pNode->Camera().empty()) {
+    if (screen_camera) {
+        SceneCamera* perspective { nullptr };
+        if (auto it = m_scene->cameras.find("global_perspective"); it != m_scene->cameras.end())
+            perspective = it->second.get();
+        SceneCamera* own { nullptr };
+        if (! cam_name.empty()) {
+            if (auto it = m_scene->cameras.find(std::string(cam_name));
+                it != m_scene->cameras.end())
+                own = it->second.get();
+        }
+        if (own != nullptr && (own == m_scene->activeCamera || own == perspective)) {
+            camera = own;
+        } else if (pNode->Perspective() && perspective != nullptr) {
+            camera   = perspective;
+            cam_name = "global_perspective";
+        } else {
+            camera   = m_scene->activeCamera;
+            cam_name = {};
+        }
+    } else if (! pNode->Camera().empty()) {
         auto it = m_scene->cameras.find(std::string(cam_name));
         if (it != m_scene->cameras.end()) camera = it->second.get();
     } else if (pNode->Perspective()) {
@@ -217,10 +247,11 @@ SceneUniformUpdater::NodeRenderTransform(SceneNode* pNode, SceneRenderViewKind r
     auto node_data_it = m_nodeDataMap.find(pNode);
     const bool has_node_data = node_data_it != m_nodeDataMap.end();
     const auto* node_data = has_node_data ? std::addressof(node_data_it->second) : nullptr;
-    Matrix4d model = has_node_data && node_data->vertices_in_world_space
+    Matrix4d model = has_node_data && node_data->vertices_in_world_space && ! screen_camera
                          ? Matrix4d::Identity()
                          : pNode->ModelTrans();
-    if (has_node_data && cam_name != "effect" && ! node_data->vertices_in_world_space) {
+    if (has_node_data && cam_name != "effect" &&
+        (screen_camera || ! node_data->vertices_in_world_space)) {
         auto camera_node = camera->GetAttachedNode();
         const bool layer_local_effect_source =
             camera->HasImgEffect() && camera_node.is_some() &&

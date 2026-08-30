@@ -146,7 +146,14 @@ public:
     NodeRenderTransform(SceneNode* node,
                         SceneRenderViewKind view = SceneRenderViewKind::Primary);
 
+    std::optional<SceneNodeRenderTransform>
+    NodeScreenTransform(SceneNode* node,
+                        SceneRenderViewKind view = SceneRenderViewKind::Primary);
+
 private:
+    std::optional<SceneNodeRenderTransform>
+    NodeTransform(SceneNode* node, SceneRenderViewKind view, bool screen_camera);
+
     Scene*               m_scene;
     SceneCameraParallax  m_parallax;
     SceneCameraShake     m_cameraShake;

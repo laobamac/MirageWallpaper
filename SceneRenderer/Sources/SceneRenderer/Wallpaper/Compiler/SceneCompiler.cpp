@@ -555,7 +555,7 @@ script::ScriptScene& EnsureScriptScene(ParseContext& context) {
         context.script_scene->runtime().SetCursorProjectionResolver(
             [updater](SceneNode* node) -> std::optional<script::CursorProjection> {
                 if (updater == nullptr) return std::nullopt;
-                auto transform = updater->NodeRenderTransform(node);
+                auto transform = updater->NodeScreenTransform(node);
                 if (! transform) return std::nullopt;
                 return script::CursorProjection {
                     .model                 = transform->model,
