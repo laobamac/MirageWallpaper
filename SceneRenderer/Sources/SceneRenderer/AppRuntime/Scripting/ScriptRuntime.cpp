@@ -1268,13 +1268,17 @@ CursorNodePoint ResolveCursorNode(EngineHostState* host, sr::SceneNode* n,
             Eigen::Vector2f size = n->Size();
             if (size.x() == 0.0f && size.y() == 0.0f)
                 size = Eigen::Vector2f { 100.0f, 100.0f };
+            const double cx =
+                n->HasHitCenter() ? static_cast<double>(n->HitCenter().x()) : 0.0;
+            const double cy =
+                n->HasHitCenter() ? static_cast<double>(n->HitCenter().y()) : 0.0;
             const double hx = static_cast<double>(size.x()) * 0.5;
             const double hy = static_cast<double>(size.y()) * 0.5;
             const std::array<Eigen::Vector4d, 4> local_corners {
-                Eigen::Vector4d { -hx, -hy, 0.0, 1.0 },
-                Eigen::Vector4d { hx, -hy, 0.0, 1.0 },
-                Eigen::Vector4d { hx, hy, 0.0, 1.0 },
-                Eigen::Vector4d { -hx, hy, 0.0, 1.0 },
+                Eigen::Vector4d { cx - hx, cy - hy, 0.0, 1.0 },
+                Eigen::Vector4d { cx + hx, cy - hy, 0.0, 1.0 },
+                Eigen::Vector4d { cx + hx, cy + hy, 0.0, 1.0 },
+                Eigen::Vector4d { cx - hx, cy + hy, 0.0, 1.0 },
             };
             std::array<Eigen::Vector2d, 4> screen_corners;
             bool projected = true;
@@ -1342,16 +1346,21 @@ CursorNodePoint ResolveCursorNode(EngineHostState* host, sr::SceneNode* n,
     }
 
     n->UpdateTrans();
-    Eigen::Matrix4d m  = n->ModelTrans() * n->GeometryTransform();
-    if (n->Mesh()) m *= n->Mesh()->GeometryTransform();
+    Eigen::Matrix4d m = n->ModelTrans();
+    if (! n->HasHitCenter()) {
+        m *= n->GeometryTransform();
+        if (n->Mesh()) m *= n->Mesh()->GeometryTransform();
+    }
     Eigen::Vector2f sz = n->Size();
     if (sz.x() == 0.0f && sz.y() == 0.0f) sz = Eigen::Vector2f { 100.0f, 100.0f };
+    double cx = n->HasHitCenter() ? static_cast<double>(n->HitCenter().x()) : 0.0;
+    double cy = n->HasHitCenter() ? static_cast<double>(n->HitCenter().y()) : 0.0;
     double          hx = sz.x() * 0.5, hy = sz.y() * 0.5;
     Eigen::Vector4d corners[4] = {
-        { -hx, -hy, 0, 1 },
-        { hx, -hy, 0, 1 },
-        { hx, hy, 0, 1 },
-        { -hx, hy, 0, 1 },
+        { cx - hx, cy - hy, 0, 1 },
+        { cx + hx, cy - hy, 0, 1 },
+        { cx + hx, cy + hy, 0, 1 },
+        { cx - hx, cy + hy, 0, 1 },
     };
     double minx = 1e30, miny = 1e30, maxx = -1e30, maxy = -1e30;
     for (auto& corner : corners) {

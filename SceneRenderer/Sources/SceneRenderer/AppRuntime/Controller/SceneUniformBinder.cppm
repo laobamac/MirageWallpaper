@@ -152,7 +152,8 @@ public:
 
 private:
     std::optional<SceneNodeRenderTransform>
-    NodeTransform(SceneNode* node, SceneRenderViewKind view, bool screen_camera);
+    NodeTransform(SceneNode* node, SceneRenderViewKind view, bool screen_camera,
+                  bool apply_geometry_transform);
 
     Scene*               m_scene;
     SceneCameraParallax  m_parallax;

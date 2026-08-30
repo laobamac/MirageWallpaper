@@ -474,6 +474,7 @@ std::vector<sr::SceneNode*> SpawnLayerClones(ParseContext& context, SceneNode* t
             tmpl->Translate(), tmpl->Scale(), tmpl->Rotation(), tmpl->Name());
         clone->SetLocalFrame(tmpl->LocalFrame());
         clone->SetSize(tmpl->Size());
+        if (tmpl->HasHitCenter()) clone->SetHitCenter(tmpl->HitCenter());
         clone->SetGeometryTransform(tmpl->GeometryTransform());
         clone->SetPerspective(tmpl->Perspective());
         clone->SetReflected(tmpl->Reflected());
@@ -3143,6 +3144,7 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj,
             : AlignmentOffset(wpimgobj.alignment, { geometry_size[0], geometry_size[1] });
     const bool solid_scene_context = HasSolidCompositeContext(context, wpimgobj);
     spImgNode->SetSize({ geometry_size[0], geometry_size[1] });
+    spImgNode->SetHitCenter({ alignment_offset.x(), alignment_offset.y() });
     if (hasEffect && composite_render_path) {
         spImgNode->SetGeometryTransform(
             Affine3d(Translation3d(alignment_offset.cast<double>())).matrix());
@@ -3998,6 +4000,7 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj,
             const Vector3f delta = offset - alignment_offset;
             const Matrix4d translation =
                 Affine3d(Translation3d(delta.cast<double>())).matrix();
+            if (node) node->SetHitCenter({ offset.x(), offset.y() });
             if (image_effect_layer) {
                 if (node && effect_camera_anchor) {
                     node->SetGeometryTransform(source_alignment_base_transform * translation);
@@ -6354,6 +6357,7 @@ private:
             tmpl->Translate(), tmpl->Scale(), tmpl->Rotation(), tmpl->Name());
         clone->SetLocalFrame(tmpl->LocalFrame());
         clone->SetSize(tmpl->Size());
+        if (tmpl->HasHitCenter()) clone->SetHitCenter(tmpl->HitCenter());
         clone->SetGeometryTransform(tmpl->GeometryTransform());
         clone->SetPerspective(tmpl->Perspective());
         clone->SetReflected(tmpl->Reflected());

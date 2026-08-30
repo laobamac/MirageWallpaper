@@ -179,17 +179,18 @@ void SceneUniformUpdater::InitUniforms(SceneNode* pNode, const ExistsUniformOp& 
 
 std::optional<SceneNodeRenderTransform>
 SceneUniformUpdater::NodeRenderTransform(SceneNode* pNode, SceneRenderViewKind render_view) {
-    return NodeTransform(pNode, render_view, false);
+    return NodeTransform(pNode, render_view, false, true);
 }
 
 std::optional<SceneNodeRenderTransform>
 SceneUniformUpdater::NodeScreenTransform(SceneNode* pNode, SceneRenderViewKind render_view) {
-    return NodeTransform(pNode, render_view, true);
+    const bool offset_in_hit_center = pNode != nullptr && pNode->HasHitCenter();
+    return NodeTransform(pNode, render_view, true, ! offset_in_hit_center);
 }
 
 std::optional<SceneNodeRenderTransform>
 SceneUniformUpdater::NodeTransform(SceneNode* pNode, SceneRenderViewKind render_view,
-                                   bool screen_camera) {
+                                   bool screen_camera, bool apply_geometry_transform) {
     if (pNode == nullptr) return std::nullopt;
     pNode->UpdateTrans();
 
@@ -290,8 +291,10 @@ SceneUniformUpdater::NodeTransform(SceneNode* pNode, SceneRenderViewKind render_
         }
     }
 
-    model *= pNode->GeometryTransform();
-    if (pNode->Mesh()) model *= pNode->Mesh()->GeometryTransform();
+    if (apply_geometry_transform) {
+        model *= pNode->GeometryTransform();
+        if (pNode->Mesh()) model *= pNode->Mesh()->GeometryTransform();
+    }
     return SceneNodeRenderTransform {
         .model                 = model,
         .view_projection       = view_projection,

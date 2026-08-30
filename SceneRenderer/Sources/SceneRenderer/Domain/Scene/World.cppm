@@ -1286,6 +1286,13 @@ public:
     // reading `thisLayer.size` then fall back to the legacy 100×100 stub.
     const auto& Size() const { return m_size; }
     void        SetSize(Eigen::Vector2f v) { m_size = v; }
+
+    const auto& HitCenter() const { return m_hit_center; }
+    bool        HasHitCenter() const { return m_has_hit_center; }
+    void        SetHitCenter(Eigen::Vector2f v) {
+        m_hit_center     = v;
+        m_has_hit_center = true;
+    }
     const auto& GeometryTransform() const { return m_geometry_transform; }
     void        SetGeometryTransform(Eigen::Matrix4d transform) {
         m_geometry_transform = std::move(transform);
@@ -1569,6 +1576,8 @@ private:
     Eigen::Vector3f m_rotation { 0.0f, 0.0f, 0.0f };
     Eigen::Matrix4d m_local_frame { Eigen::Matrix4d::Identity() };
     Eigen::Vector2f m_size { 0.0f, 0.0f };
+    Eigen::Vector2f m_hit_center { 0.0f, 0.0f };
+    bool            m_has_hit_center { false };
     Eigen::Matrix4d m_geometry_transform { Eigen::Matrix4d::Identity() };
 
     bool                               m_visible { true };
