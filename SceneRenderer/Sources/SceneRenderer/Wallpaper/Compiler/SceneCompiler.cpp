@@ -3683,9 +3683,10 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj,
                             : std::string(WE_SPEC_PREFIX) + wpfbo.name + "_" + effaddr;
                     if (wpimgobj.fullscreen) {
                         scene.renderTargets[rtname] = {
-                            .width      = 2,
-                            .height     = 2,
-                            .allowReuse = ! wpfbo.unique,
+                            .width                = 2,
+                            .height               = 2,
+                            .allowReuse           = ! wpfbo.unique,
+                            .clear_on_first_write = ! wpfbo.unique,
                         };
                         scene.renderTargets[rtname].bind = {
                             .enable = true,
@@ -3713,9 +3714,12 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj,
                             return { static_cast<uint16_t>(scaled_extent[0]),
                                      static_cast<uint16_t>(scaled_extent[1]) };
                         }();
-                        scene.renderTargets[rtname] = { .width      = fbo_size[0],
-                                                        .height     = fbo_size[1],
-                                                        .allowReuse = ! wpfbo.unique };
+                        scene.renderTargets[rtname] = {
+                            .width                = fbo_size[0],
+                            .height               = fbo_size[1],
+                            .allowReuse           = ! wpfbo.unique,
+                            .clear_on_first_write = ! wpfbo.unique,
+                        };
                         if (composite_render_path && wpfbo.fit == 0) {
                             scene.renderTargets[rtname].bind = {
                                 .enable = true,

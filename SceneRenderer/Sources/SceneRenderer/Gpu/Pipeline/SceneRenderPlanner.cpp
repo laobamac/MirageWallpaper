@@ -196,8 +196,9 @@ static rg::TextureNodeRef AddCopyPass(ExtraInfo& extra, rg::TextureNodeRef in,
             FillCopyTextureRequests(extra, pdesc);
             pdesc.dst_matches_src = ! out_desc.has_value();
             if (pdesc.dst_matches_src && pdesc.src_request) {
-                pdesc.dst_request       = *pdesc.src_request;
-                pdesc.dst_request->name = desc.key;
+                pdesc.dst_request          = *pdesc.src_request;
+                pdesc.dst_request->name    = desc.key;
+                pdesc.dst_request->persist = false;
             }
         });
     return copy;

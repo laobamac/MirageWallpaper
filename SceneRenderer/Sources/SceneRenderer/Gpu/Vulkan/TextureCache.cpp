@@ -1416,28 +1416,33 @@ std::optional<ImageParameters> TextureCache::Query(std::string_view key, Texture
 
         if (query.content_hash != tex_hash) {
             query.query_keys.erase(query_key);
-            query.share_ready = ! query.persist && query.query_keys.empty();
             m_query_map.erase(it);
+            if (query.query_keys.empty()) {
+                query.persist     = false;
+                query.share_ready = true;
+            }
         } else {
             query.share_ready = false;
-            query.persist     = persist;
+            query.persist     = query.persist || persist;
             query.query_keys.insert(query_key);
 
             return ToImageParameters(query.image);
         }
     }
 
-    for (auto& query : m_query_texs) {
-        if (! (query->share_ready)) continue;
-        if (query->content_hash != tex_hash) continue;
+    if (! persist) {
+        for (auto& query : m_query_texs) {
+            if (! (query->share_ready)) continue;
+            if (query->persist) continue;
+            if (query->content_hash != tex_hash) continue;
 
-        query->share_ready = false;
-        query->persist     = persist;
-        query->query_keys.insert(query_key);
+            query->share_ready = false;
+            query->query_keys.insert(query_key);
 
-        m_query_map[query_key] = &(*query);
+            m_query_map[query_key] = &(*query);
 
-        return ToImageParameters(query->image);
+            return ToImageParameters(query->image);
+        }
     }
 
     m_query_texs.emplace_back(std::make_unique<QueryTex>());
@@ -1458,7 +1463,7 @@ std::optional<ImageParameters> TextureCache::Query(std::string_view key, Texture
 void TextureCache::MarkShareReady(std::string_view key) {
     auto it = m_query_map.find(key);
     if (it != m_query_map.end()) {
-        auto& query = it->second;
+        auto* query = it->second;
         if (query->persist) return;
         query->query_keys.erase(std::string(key));
         query->share_ready = query->query_keys.empty();

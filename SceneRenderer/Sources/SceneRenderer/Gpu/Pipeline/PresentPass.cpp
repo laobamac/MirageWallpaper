@@ -125,6 +125,17 @@ const char* FrameDumpPath() {
     static const char* v = EnvPath("SCENERENDERER_DUMP_FRAME");
     return v;
 }
+uint32_t FrameDumpDelay() {
+    static const uint32_t v = [] {
+        const char* raw = EnvPath("SCENERENDERER_DUMP_FRAME_AT");
+        if (raw == nullptr) return 0u;
+        char*               end   = nullptr;
+        const unsigned long value = std::strtoul(raw, &end, 10);
+        if (end == raw) return 0u;
+        return static_cast<uint32_t>(value);
+    }();
+    return v;
+}
 const char* PresentDumpPath() {
     static const char* v = EnvPath("SCENERENDERER_DUMP_PRESENT");
     return v;
@@ -192,6 +203,7 @@ void FinPass::recordFrameDump(const Device& device, RenderingResources& rr) {
     if ((m_dump_done && ! live_frame) || m_dump_pending) return;
     const char* dump_path = FrameDumpPath();
     if ((dump_path == nullptr || dump_path[0] == '\0') && ! live_frame) return;
+    if (! live_frame && m_dump_frame_index++ < FrameDumpDelay()) return;
 
     const uint32_t width  = m_desc.vk_result.extent.width;
     const uint32_t height = m_desc.vk_result.extent.height;

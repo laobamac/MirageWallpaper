@@ -69,6 +69,7 @@ private:
     uint32_t       m_dump_height { 0 };
     bool           m_dump_pending { false };
     bool           m_dump_done { false };
+    uint32_t       m_dump_frame_index { 0 };
     bool           m_path_logged { false };
     bool           m_present_dump_warned { false };
     vvk::VmaBuffer m_present_dump_buffer;
