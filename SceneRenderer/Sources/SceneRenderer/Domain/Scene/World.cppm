@@ -1357,6 +1357,7 @@ public:
                ! m_field_animation_playbacks.empty();
     }
     void SetAlphaSource(SceneNode* node) { m_alpha_source = node; }
+    SceneNode* AlphaSource() const { return m_alpha_source; }
 
     const std::string& VisibleUserKey() const { return m_visible_user_binding.key; }
     void               SetVisibleUserKey(std::string k) {

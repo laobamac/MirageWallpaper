@@ -945,6 +945,7 @@ public:
 
     void setOnClearColor(ClearColorCallback cb) { m_clear_color_cb = std::move(cb); }
     void setOnAudioDemand(AudioDemandCallback cb) { m_audio_demand_cb = std::move(cb); }
+    void setOnUserShortcut(UserShortcutCallback cb) { m_user_shortcut_cb = std::move(cb); }
 
 private:
     void loadScene();
@@ -963,6 +964,7 @@ private:
     UserPropertyDiagnosticCallback               m_user_property_diagnostic_cb;
     ClearColorCallback                           m_clear_color_cb;
     AudioDemandCallback                          m_audio_demand_cb;
+    UserShortcutCallback                         m_user_shortcut_cb;
     uint64_t                                     m_audio_pause_generation { 0 };
     uint64_t                                     m_config_generation { 0 };
     uint64_t                                     m_prepared_scene_generation { 0 };
@@ -1775,6 +1777,14 @@ void SceneRuntimeController::loadScene() {
             std::string ls_file = (ls_dir / (scene_id + ".json")).native();
             sr::script::SetScenePersistence(*scene, std::move(ls_file));
         }
+        if (m_user_shortcut_cb) {
+            sr::script::SetSceneUserShortcutOpener(
+                *scene,
+                [cb = m_user_shortcut_cb](std::string_view name, std::string_view target) {
+                    cb(name, target);
+                    return true;
+                });
+        }
         // Surface the parsed clear color before the scene is shipped
         // off to the render thread; downstream callers use it to keep
         // letterbox/background fill aligned with the scene.
@@ -1964,6 +1974,10 @@ void SceneWallpaper::setOnClearColor(ClearColorCallback cb) {
 
 void SceneWallpaper::setOnAudioDemand(AudioDemandCallback cb) {
     m_runtime->setOnAudioDemand(std::move(cb));
+}
+
+void SceneWallpaper::setOnUserShortcut(UserShortcutCallback cb) {
+    m_runtime->setOnUserShortcut(std::move(cb));
 }
 
 void SceneWallpaper::setOnFirstFrame(FirstFrameCallback cb) {

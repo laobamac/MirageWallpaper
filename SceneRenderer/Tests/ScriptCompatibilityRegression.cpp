@@ -1374,6 +1374,161 @@ void TestMixedAudioBufferResolutions() {
           "64-bin audio cache refreshes without changing shape");
 }
 
+void TestSceneLayerEnumeration() {
+    sr::Scene scene;
+    auto      internal = rstd::sync::Arc<sr::SceneNode>::make(
+        Eigen::Vector3f::Zero(), Eigen::Vector3f::Ones(), Eigen::Vector3f::Zero(), "internal");
+    scene.sceneGraph->AppendChild(internal.clone());
+
+    std::array<rstd::sync::Arc<sr::SceneNode>, 3> layers {
+        rstd::sync::Arc<sr::SceneNode>::make(
+            Eigen::Vector3f::Zero(), Eigen::Vector3f::Ones(), Eigen::Vector3f::Zero(), "background"),
+        rstd::sync::Arc<sr::SceneNode>::make(
+            Eigen::Vector3f::Zero(), Eigen::Vector3f::Ones(), Eigen::Vector3f::Zero(), "dock"),
+        rstd::sync::Arc<sr::SceneNode>::make(
+            Eigen::Vector3f::Zero(), Eigen::Vector3f::Ones(), Eigen::Vector3f::Zero(), "launcher"),
+    };
+    std::int32_t id = 601;
+    for (auto& layer : layers) {
+        scene.sceneGraph->AppendChild(layer.clone());
+        scene.RegisterNode(*layer, sr::WallpaperLayerId { .value = id++ });
+    }
+
+    sr::script::JsRuntime runtime;
+    runtime.SetScene(&scene);
+    auto* script = runtime.MakeFieldScript(
+        R"JS(
+            let result = -1;
+            export function init() {
+                const count = thisScene.getLayerCount();
+                let consistent = 1;
+                for (let i = 0; i < count; ++i) {
+                    const layer = thisScene.getLayer(i);
+                    if (typeof layer.name !== 'string' || layer.name === '') consistent = 0;
+                    if (thisScene.getLayerIndex(layer) !== i) consistent = 0;
+                }
+                const missing = thisScene.getLayer(count);
+                if (typeof missing.name !== 'string' || missing.name !== '') consistent = 0;
+                if (thisScene.getLayer('dock').name !== 'dock') consistent = 0;
+                if (thisScene.enumerateLayers().length !== count) consistent = 0;
+                result = count * 10 + consistent;
+            }
+            export function update() { return result; }
+        )JS",
+        "test/scene_layer_enumeration",
+        sr::script::FieldKind::Scalar,
+        Parse("{}"),
+        Parse("0"),
+        layers[1].as_ptr());
+    Check(script != nullptr, "scene layer enumeration script compiles");
+    if (! script) return;
+
+    runtime.SetSceneRoot(scene.sceneGraph.as_ptr());
+    runtime.TickAll();
+    const auto* result = std::get_if<sr::script::ScalarValue>(&script->last_value());
+    Check(result && result->v == 31.0,
+          "getLayerCount, numeric getLayer and enumerateLayers share the getLayerIndex order");
+}
+
+void TestFieldScriptUpdateDetection() {
+    sr::script::JsRuntime runtime;
+    auto                  node = rstd::sync::Arc<sr::SceneNode>::make();
+    auto*                 hover = runtime.MakeFieldScript(
+        R"JS(
+            export let __workshopId = '3674038504';
+            export function cursorEnter() {}
+            export function cursorLeave() {}
+        )JS",
+        "test/visible_hit_area_without_update",
+        sr::script::FieldKind::Bool,
+        Parse("{}"),
+        Parse("false"),
+        node.as_ptr());
+    Check(hover != nullptr && ! hover->HasUpdate(),
+          "a cursor-only visible binding exports no update");
+
+    auto* driven = runtime.MakeFieldScript(
+        R"JS(
+            let on = false;
+            export function cursorClick() { on = ! on; }
+            export function update() { return on; }
+        )JS",
+        "test/visible_toggle_with_update",
+        sr::script::FieldKind::Bool,
+        Parse("{}"),
+        Parse("false"),
+        node.as_ptr());
+    Check(driven != nullptr && driven->HasUpdate(),
+          "a toggling visible binding exports update");
+}
+
+void TestUserShortcutOpening() {
+    sr::SceneNode node({ 960.0f, 540.0f, 0.0f },
+                       { 1.0f, 1.0f, 1.0f },
+                       { 0.0f, 0.0f, 0.0f });
+    node.SetSize({ 100.0f, 100.0f });
+    node.SetSolid(true);
+
+    std::vector<std::pair<std::string, std::string>> opened;
+    sr::script::JsRuntime                           runtime;
+    runtime.SetUserShortcutOpener([&opened](std::string_view name, std::string_view target) {
+        opened.emplace_back(std::string(name), std::string(target));
+        return true;
+    });
+    runtime.SetUserProperty(
+        "s01c", Parse(R"({"type":"usershortcut","value":"https://example.com/launch"})"));
+
+    auto* script = runtime.MakeFieldScript(
+        R"JS(
+            let result = 0;
+            export function cursorUp() {
+                if (engine.openUserShortcut('s01c')) result += 1;
+                if (engine.openUserShortcut('s01c')) result += 1000;
+            }
+            export function cursorClick() {
+                if (engine.openUserShortcut('launcher1')) result += 100;
+                if (engine.openUserShortcut(' s01c ')) result += 10;
+            }
+            export function update() {
+                if (engine.openUserShortcut('s01c')) result += 10000;
+                return result;
+            }
+        )JS",
+        "test/user_shortcut_opening",
+        sr::script::FieldKind::Scalar,
+        Parse("{}"),
+        Parse("0"),
+        &node);
+    Check(script != nullptr, "user shortcut script compiles");
+    if (! script) return;
+
+    sr::script::FrameInputs input;
+    input.cursor_x              = 0.5f;
+    input.cursor_y              = 0.5f;
+    input.cursor_in_window      = true;
+    input.mouse_buttons_down    = 1;
+    input.mouse_buttons_pressed = 1;
+    runtime.SetFrameInputs(input);
+    runtime.TickAll();
+    Check(opened.empty(), "update and cursorDown alone open no user shortcut");
+
+    input.mouse_buttons_down     = 0;
+    input.mouse_buttons_pressed  = 0;
+    input.mouse_buttons_released = 1;
+    runtime.SetFrameInputs(input);
+    runtime.TickAll();
+    const auto* result = std::get_if<sr::script::ScalarValue>(&script->last_value());
+    Check(result && result->v == 11.0,
+          "openUserShortcut succeeds once per cursor callback and never outside one");
+    Check(opened.size() == 2, "an unbound shortcut key keeps the click budget unspent");
+    if (opened.size() == 2) {
+        Check(opened.front().first == "s01c" &&
+                  opened.front().second == "https://example.com/launch" &&
+                  opened.back() == opened.front(),
+              "the host receives the trimmed property key and its resolved target");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -1403,6 +1558,9 @@ int main() {
     TestDegenerateProjectedCursorMisses();
     TestPrimitiveEngineUserPropertyValues();
     TestMixedAudioBufferResolutions();
+    TestSceneLayerEnumeration();
+    TestFieldScriptUpdateDetection();
+    TestUserShortcutOpening();
     if (g_failures == 0) std::cout << "ScriptCompatibilityRegression: ok\n";
     return g_failures == 0 ? 0 : 1;
 }

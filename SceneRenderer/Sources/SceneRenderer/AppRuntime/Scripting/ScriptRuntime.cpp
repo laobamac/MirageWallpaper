@@ -465,6 +465,8 @@ struct EngineHostState {
     // backing SceneNode.
     JSValue default_layer { JS_UNDEFINED };
     JSValue default_scene { JS_UNDEFINED };
+    UserShortcutOpener open_user_shortcut;
+    bool               shortcut_allowed { false };
     // Retained global object + interned atoms for per-frame thisLayer/
     // thisObject/thisScene rebinding without string hashing.
     JSValue global_obj { JS_UNDEFINED };
@@ -724,6 +726,9 @@ FieldScript::~FieldScript() = default;
 FieldKind          FieldScript::field_kind() const noexcept { return m_impl->kind; }
 const ScriptValue& FieldScript::last_value() const noexcept { return m_impl->last_value; }
 bool               FieldScript::alive() const noexcept { return m_impl->alive; }
+bool               FieldScript::HasUpdate() const noexcept {
+    return m_impl->ctx != nullptr && JS_IsFunction(m_impl->ctx, m_impl->update_fn);
+}
 std::string_view   FieldScript::script_sha() const noexcept { return m_impl->sha; }
 std::span<const std::string> FieldScript::RegisteredAssets() const noexcept {
     return m_impl->registered_assets;
@@ -1500,6 +1505,58 @@ JSValue EngineRegisterAsset(JSContext* ctx, JSValueConst /*this_val*/, int argc,
     return JS_NewObject(ctx);
 }
 
+JSValue EngineOpenUserShortcut(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    if (host == nullptr || argc < 1 || ! host->shortcut_allowed) return JS_NewBool(ctx, false);
+
+    const char* raw = JS_ToCString(ctx, argv[0]);
+    if (raw == nullptr) return JS_NewBool(ctx, false);
+    std::string key { raw };
+    JS_FreeCString(ctx, raw);
+    while (! key.empty() && (key.front() == ' ' || key.front() == '\t')) key.erase(key.begin());
+    while (! key.empty() && (key.back() == ' ' || key.back() == '\t')) key.pop_back();
+    if (key.empty()) return JS_NewBool(ctx, false);
+
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue engine = JS_GetPropertyStr(ctx, global, "engine");
+    JSValue props  = JS_GetPropertyStr(ctx, engine, "userProperties");
+    JSValue slot   = JS_IsObject(props) ? JS_GetPropertyStr(ctx, props, key.c_str()) : JS_UNDEFINED;
+    JSValue value  = JS_DupValue(ctx, slot);
+    if (JS_IsObject(slot) && ! JS_IsFunction(ctx, slot)) {
+        JSValue inner = JS_GetPropertyStr(ctx, slot, "value");
+        if (! JS_IsUndefined(inner)) {
+            JS_FreeValue(ctx, value);
+            value = inner;
+        } else {
+            JS_FreeValue(ctx, inner);
+        }
+    }
+    std::string target;
+    if (JS_IsString(value)) {
+        if (const char* text = JS_ToCString(ctx, value); text != nullptr) {
+            target.assign(text);
+            JS_FreeCString(ctx, text);
+        }
+    }
+    JS_FreeValue(ctx, value);
+    JS_FreeValue(ctx, slot);
+    JS_FreeValue(ctx, props);
+    JS_FreeValue(ctx, engine);
+    JS_FreeValue(ctx, global);
+
+    while (! target.empty() && (target.front() == ' ' || target.front() == '\t'))
+        target.erase(target.begin());
+    while (! target.empty() && (target.back() == ' ' || target.back() == '\t')) target.pop_back();
+    if (target.empty()) return JS_NewBool(ctx, false);
+    if (! host->open_user_shortcut) {
+        rstd_warn("script asked to open user shortcut '{}' but no host opener is installed", key);
+        return JS_NewBool(ctx, false);
+    }
+    const bool opened      = host->open_user_shortcut(key, target);
+    host->shortcut_allowed = false;
+    return JS_NewBool(ctx, opened);
+}
+
 // createScriptProperties() — the JS-side declarative builder. We implement
 // it as a thin C function that returns an object exposing addX / finish.
 // addX records the descriptor on the builder object's `__props` dict; the
@@ -1619,6 +1676,8 @@ globalThis.createScriptProperties = function () {
       return u;
     };
     const sameScalar = (a, b) => String(a) === String(b);
+    const isUserPropPair = (v) =>
+      v !== null && typeof v === 'object' && 'user' in v && 'value' in v;
     const unwrapUserProp = (h) => {
       if (h === undefined || h === null) return undefined;
       if (typeof h !== 'object' || !('user' in h) || !('value' in h)) return h;
@@ -1636,6 +1695,7 @@ globalThis.createScriptProperties = function () {
         // .value when present, else use the bare value directly.
         return applyHostScale(h, userValue(u));
       }
+      if (isUserPropPair(h.value)) return applyHostScale(h, unwrapUserProp(h.value));
       return applyHostScale(h, h.value);
     };
     const coerceDescriptorValue = (descriptor, value) => {
@@ -1842,6 +1902,7 @@ function __wwCreateNodeStub() {
         alpha:          1,
         brightness:     1,
         color:          new Vec3(1, 1, 1),
+        name:           '',
     };
     // Identity 4x4 column-major matrix. m[13] is the y-translation slot
     // some clock scripts read.
@@ -1853,6 +1914,11 @@ function __wwCreateNodeStub() {
             if (key === 'getChildren')         return () => [];
             if (key === 'getName')             return () => '';
             if (key === 'getLayer')            return (_n) => __wwCreateNodeStub();
+            if (key === 'getLayerCount')       return () => 0;
+            if (key === 'enumerateLayers')     return () => [];
+            if (key === 'getLayerIndex')       return (_l) => -1;
+            if (key === 'sortLayer')           return (_l, _i) => false;
+            if (key === 'getInitialLayerConfig') return (_l) => ({});
             if (key === 'getEffect')           return (_n) => __wwCreateEffectStub();
             if (key === 'getEffectCount')      return () => 0;
             if (key === 'getCameraTransforms') return () => ({ eye: new Vec3(), center: new Vec3(0, 0, -1), up: new Vec3(0, 1, 0) });
@@ -2011,6 +2077,7 @@ void InstallEngineGlobal(JSContext* ctx) {
     define_fn("clearTimeout", EngineClearDeferred, 1);
     define_fn("clearInterval", EngineClearDeferred, 1);
     define_fn("registerAsset", EngineRegisterAsset, 1);
+    define_fn("openUserShortcut", EngineOpenUserShortcut, 1);
 
     // A handful of corpus scripts call setTimeout/clearTimeout bare (no
     // `engine.` prefix). Mirror onto globalThis so they resolve.
@@ -2830,16 +2897,46 @@ JSValue NodeGetName(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
     return NodeGetNameValue(ctx, this_val);
 }
 
+void CollectSceneLayers(sr::SceneNode* root, std::vector<sr::SceneNode*>& out) {
+    if (root == nullptr) return;
+    for (const auto& child : root->GetChildren()) {
+        sr::SceneNode* node = child.as_ptr();
+        if (node == nullptr) continue;
+        if (node->SceneScriptLayer()) out.push_back(node);
+        CollectSceneLayers(node, out);
+    }
+}
+
 JSValue NodeGetLayer(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
     auto* n    = GetLayerNode(this_val);
     if (! n || argc < 1) return JS_DupValue(ctx, host->default_layer);
+
+    if (JS_IsNumber(argv[0])) {
+        int64_t index {};
+        if (JS_ToInt64(ctx, &index, argv[0]) != 0 || index < 0)
+            return WrapLayerName(ctx, std::string {});
+        std::vector<sr::SceneNode*> layers;
+        CollectSceneLayers(n, layers);
+        if (static_cast<std::size_t>(index) >= layers.size())
+            return WrapLayerName(ctx, std::string {});
+        return WrapLayerNode(ctx, layers[static_cast<std::size_t>(index)]);
+    }
+
     const char* name = JS_ToCString(ctx, argv[0]);
     if (! name) return JS_DupValue(ctx, host->default_layer);
     std::string     layer_name { name };
     sr::SceneNode* hit = n->FindByName(layer_name);
     JS_FreeCString(ctx, name);
     return hit ? WrapLayerNode(ctx, hit) : WrapLayerName(ctx, std::move(layer_name));
+}
+
+JSValue NodeSceneGetLayerCount(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* n = GetLayerNode(this_val);
+    if (n == nullptr) return JS_NewInt32(ctx, 0);
+    std::vector<sr::SceneNode*> layers;
+    CollectSceneLayers(n, layers);
+    return JS_NewInt64(ctx, static_cast<int64_t>(layers.size()));
 }
 
 JSValue NodeGetEffect(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
@@ -2916,16 +3013,11 @@ JSValue NodeSceneEnumerateLayers(JSContext* ctx, JSValueConst this_val, int, JSV
     auto*   n   = GetLayerNode(this_val);
     if (! n) return arr;
 
-    uint32_t i      = 0;
-    auto     append = [&](auto& self, sr::SceneNode* node) -> void {
-        if (! node) return;
+    uint32_t                    i = 0;
+    std::vector<sr::SceneNode*> layers;
+    CollectSceneLayers(n, layers);
+    for (auto* node : layers) {
         JS_DefinePropertyValueUint32(ctx, arr, i++, WrapLayerNode(ctx, node), JS_PROP_C_W_E);
-        for (const auto& child : node->GetChildren()) {
-            self(self, child.as_ptr());
-        }
-    };
-    for (const auto& child : n->GetChildren()) {
-        append(append, child.as_ptr());
     }
     JS_DefinePropertyValueStr(ctx, arr, "__wwRoot", WrapLayerNode(ctx, n), JS_PROP_C_W_E);
     JS_DefinePropertyValueStr(ctx,
@@ -3788,6 +3880,7 @@ const JSCFunctionListEntry s_layer_proto_funcs[] = {
     JS_CFUNC_DEF("getChildren", 0, NodeGetChildren),
     JS_CFUNC_DEF("getName", 0, NodeGetName),
     JS_CFUNC_DEF("getLayer", 1, NodeGetLayer),
+    JS_CFUNC_DEF("getLayerCount", 0, NodeSceneGetLayerCount),
     JS_CFUNC_DEF("getEffect", 1, NodeGetEffect),
     JS_CFUNC_DEF("getEffectCount", 0, NodeGetEffectCount),
     JS_CFUNC_DEF("enumerateLayers", 0, NodeSceneEnumerateLayers),
@@ -4186,6 +4279,10 @@ void JsRuntime::SetCursorProjectionResolver(CursorProjectionResolver resolver) {
     m_impl->host.cursor_projection_resolver = std::move(resolver);
 }
 
+void JsRuntime::SetUserShortcutOpener(UserShortcutOpener opener) {
+    m_impl->host.open_user_shortcut = std::move(opener);
+}
+
 void JsRuntime::SetPersistence(std::string path) {
     m_impl->host.ls_path = std::move(path);
     LoadLocalStorage(&m_impl->host);
@@ -4199,6 +4296,17 @@ void RunFieldScriptInit(JSContext* ctx, JsRuntime::Impl* rt, FieldScript* fs);
 void JsRuntime::SetScene(sr::Scene* scene) {
     if (! m_impl) return;
     m_impl->host.scene = scene;
+    if (scene != nullptr)
+        SetCanvasSize(static_cast<float>(scene->ortho[0]), static_cast<float>(scene->ortho[1]));
+}
+
+void JsRuntime::SetCanvasSize(float width, float height) {
+    if (! m_impl) return;
+    if (! (width > 0.0f) || ! (height > 0.0f)) return;
+    m_impl->host.inputs.canvas_w = width;
+    m_impl->host.inputs.canvas_h = height;
+    m_impl->host.inputs.screen_w = width;
+    m_impl->host.inputs.screen_h = height;
 }
 
 void JsRuntime::SetInitializationOrder(FieldScript& script, std::uint64_t order) {
@@ -4301,8 +4409,13 @@ void JsRuntime::TickAll() {
             ctx, JS_IsUndefined(I->wrapped_layer) ? m_impl->host.default_layer : I->wrapped_layer);
         m_impl->host.active_field_script = fs.get();
         auto invoke_cursor = [&](const char* name, int button) {
-            JSValue event = MakeCursorEvent(ctx, current_cursor, button);
+            JSValue    event  = MakeCursorEvent(ctx, current_cursor, button);
+            const bool clicky = std::strcmp(name, "cursorDown") == 0 ||
+                                std::strcmp(name, "cursorUp") == 0 ||
+                                std::strcmp(name, "cursorClick") == 0;
+            m_impl->host.shortcut_allowed = clicky;
             InvokeEventCallback(ctx, I->module_ns, name, event, m_impl.get(), I->sha);
+            m_impl->host.shortcut_allowed = false;
             JS_FreeValue(ctx, event);
         };
         if (over_node != I->cursor_inside) {
@@ -4816,6 +4929,12 @@ void SetScenePersistence(sr::Scene& scene, std::string path) {
     auto* ss = static_cast<ScriptScene*>(scene.script_scene.get());
     if (! ss) return;
     ss->runtime().SetPersistence(std::move(path));
+}
+
+void SetSceneUserShortcutOpener(sr::Scene& scene, UserShortcutOpener opener) {
+    auto* ss = static_cast<ScriptScene*>(scene.script_scene.get());
+    if (! ss) return;
+    ss->runtime().SetUserShortcutOpener(std::move(opener));
 }
 
 } // namespace sr::script

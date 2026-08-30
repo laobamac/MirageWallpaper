@@ -23,6 +23,7 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <sys/event.h>
 #include <sys/types.h>
 #include <thread>
@@ -181,6 +182,33 @@ void EmitAudioDemand(bool needed) {
     std::lock_guard lock(LifecycleOutputMutex());
     std::cout << "{\"event\":\"audio-demand\",\"needed\":"
               << (needed ? "true" : "false") << "}\n" << std::flush;
+}
+
+std::string JsonEscaped(std::string_view text) {
+    static constexpr char kHex[] = "0123456789abcdef";
+    std::string           out;
+    out.reserve(text.size() + 8);
+    for (const char c : text) {
+        const auto byte = static_cast<unsigned char>(c);
+        if (c == '"' || c == '\\') {
+            out.push_back('\\');
+            out.push_back(c);
+        } else if (byte < 0x20) {
+            out += "\\u00";
+            out.push_back(kHex[(byte >> 4) & 0xF]);
+            out.push_back(kHex[byte & 0xF]);
+        } else {
+            out.push_back(c);
+        }
+    }
+    return out;
+}
+
+void EmitUserShortcut(std::string_view name, std::string_view target) {
+    if (target.empty()) return;
+    std::lock_guard lock(LifecycleOutputMutex());
+    std::cout << "{\"event\":\"open-shortcut\",\"name\":\"" << JsonEscaped(name)
+              << "\",\"value\":\"" << JsonEscaped(target) << "\"}\n" << std::flush;
 }
 
 /// Answers a {"cmd":"snapshot"} request. The token is echoed verbatim so the app
@@ -590,6 +618,7 @@ int main(int argc, char** argv) {
     }
 
     wallpaper->setOnAudioDemand(EmitAudioDemand);
+    wallpaper->setOnUserShortcut(EmitUserShortcut);
     wallpaper->configure(std::move(config));
     wallpaper->initVulkan(std::move(info));
 

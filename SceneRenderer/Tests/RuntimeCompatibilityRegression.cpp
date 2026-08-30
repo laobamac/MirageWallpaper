@@ -893,21 +893,19 @@ void TestCompositeLayerElisionAndPhysicalExtent() {
           "linked composite effect camera is registered");
     if (camera == linked->cameras.end() || ! camera->second) return;
     auto attached = camera->second->GetAttachedNode();
-    Check(attached.is_some() && (*attached)->Parent() == linked_node,
-          "linked composite capture camera follows its aligned layer anchor");
-    if (attached.is_some()) {
-        Check(Near((*attached)->Translate().x(), 50.0f) &&
-                  Near((*attached)->Translate().y(), 0.0f),
-              "linked composite capture camera uses authored left alignment");
-    }
+    auto global   = linked->activeCamera->GetAttachedNode();
+    Check(attached.is_some() && global.is_some() && *attached == *global,
+          "a linked composite captures through the shared passthrough camera node");
+    Check(linked->cameras.count(linked_node->Camera() + "_group") == 0,
+          "a linked composite registers no per-layer group camera");
 
-    Check(Near(static_cast<float>(linked_node->GeometryTransform()(0, 3)), 50.0f),
-          "linked composite source geometry uses authored left alignment");
+    Check(Near(static_cast<float>(linked_node->GeometryTransform()(0, 3)), 0.0f),
+          "a linked composite keeps its authored source geometry unshifted");
     auto effect_layer = camera->second->GetImgEffect();
     Check(effect_layer != nullptr, "linked composite camera retains its effect layer");
     if (effect_layer) {
         Check(Near(static_cast<float>(effect_layer->FinalMesh().GeometryTransform()(0, 3)), 50.0f),
-              "linked composite final geometry matches source alignment");
+              "linked composite final geometry carries the authored alignment offset");
     }
 
     const std::string pingpong =
@@ -915,9 +913,11 @@ void TestCompositeLayerElisionAndPhysicalExtent() {
     auto target = linked->renderTargets.find(pingpong);
     Check(target != linked->renderTargets.end(), "linked composite allocates its source target");
     if (target != linked->renderTargets.end()) {
-        Check(target->second.bind.enable && target->second.bind.screen &&
-                  target->second.bind.name == linked_node->Camera(),
-              "linked composite target defers sizing to physical output projection");
+        Check(! target->second.bind.enable && target->second.width == 100 &&
+                  target->second.height == 100,
+              "a linked composite source target keeps its authored fixed extent");
+        Check(! target->second.preserve_on_write,
+              "a linked composite source target does not preserve previous contents");
     }
 
     sr::vulkan::UpdateCameraFillModeForExtent(
@@ -1576,6 +1576,155 @@ void TestPlaybackSpeedAndAtomicCachePublication() {
     std::filesystem::remove_all(root, ec);
 }
 
+void TestSwizzledVaryingDeclCompatibility() {
+    sr::SceneShaderVariantDesc desc;
+    desc.scene_id    = "swizzled-varying-test";
+    desc.shader_name = "swizzled-varying-test";
+    desc.stages.push_back(sr::SceneShaderVariantStage {
+        .stage      = sr::ShaderType::VERTEX,
+        .source_key = "/assets/shaders/swizzled-varying-test.vert",
+        .source     = R"(
+attribute vec3 a_Position;
+varying vec4 v_Size.xy;
+void main() {
+    v_Size = vec4(2.0, 3.0, 0.0, 0.0);
+    gl_Position = vec4(a_Position, 1.0);
+}
+)",
+    });
+    desc.stages.push_back(sr::SceneShaderVariantStage {
+        .stage      = sr::ShaderType::FRAGMENT,
+        .source_key = "/assets/shaders/swizzled-varying-test.frag",
+        .source     = R"(
+varying vec4 v_Size.xy;
+void main() {
+    gl_FragColor = vec4(v_Size.xy, 0.0, 1.0);
+}
+)",
+    });
+
+    sr::fs::VFS vfs;
+    const auto  result = sr::WPShaderParser::CompileSceneShaderVariant(desc, vfs);
+    Check(result.ok && result.shader && result.shader->codes.size() == 2,
+          "swizzled varying declarators compile in both stages");
+    if (! result.ok || ! result.shader) return;
+
+    std::vector<sr::vulkan::Uni_ShaderSpv> reflected_spvs;
+    sr::vulkan::ShaderReflected            reflection;
+    Check(sr::vulkan::GenReflect(result.shader->codes, reflected_spvs, reflection),
+          "a swizzle-declared varying still reflects across stages");
+}
+
+void TestScriptedInvisibleCompositeElision() {
+    const char* assets_root = std::getenv("SCENERENDERER_ASSETS_DIR");
+    if (assets_root == nullptr || assets_root[0] == '\0') return;
+
+    sr::fs::VFS vfs;
+    Check(vfs.Mount("/assets", sr::fs::CreatePhysicalFs(assets_root)),
+          "scripted visibility regression mounts the shared assets");
+    if (! vfs.Open("/assets/models/util/composelayer.json")) return;
+
+    auto document = sr::wpscene::ParseSceneDocumentJson(
+        R"JSON({
+            "camera": {},
+            "general": {"orthogonalprojection": {"width": 1920, "height": 1080}},
+            "objects": [{
+                "id": 930,
+                "name": "Hover Hit Area",
+                "image": "models/util/composelayer.json",
+                "config": {"passthrough": false},
+                "origin": [960.0, 540.0, 0.0],
+                "scale": [1.0, 1.0, 1.0],
+                "size": [1008.0, 245.0],
+                "solid": true,
+                "visible": {
+                    "value": false,
+                    "script": "export let __workshopId = '3674038504';\nexport function cursorEnter() {}\nexport function cursorLeave() {}\n"
+                }
+            }, {
+                "id": 931,
+                "name": "Scripted Toggle",
+                "image": "models/util/composelayer.json",
+                "config": {"passthrough": false},
+                "origin": [400.0, 300.0, 0.0],
+                "scale": [1.0, 1.0, 1.0],
+                "size": [200.0, 200.0],
+                "visible": {
+                    "value": false,
+                    "script": "let on = false;\nexport function cursorClick() { on = ! on; }\nexport function update() { return on; }\n"
+                }
+            }, {
+                "id": 932,
+                "name": "Hidden Link Source",
+                "image": "models/util/composelayer.json",
+                "copybackground": true,
+                "origin": [700.0, 400.0, 0.0],
+                "scale": [1.0, 1.0, 1.0],
+                "size": [100.0, 100.0],
+                "visible": false
+            }, {
+                "id": 933,
+                "name": "Composite Consumer",
+                "image": "models/util/composelayer.json",
+                "config": {"passthrough": false},
+                "origin": [200.0, 200.0, 0.0],
+                "scale": [1.0, 1.0, 1.0],
+                "size": [100.0, 100.0],
+                "instance": {"textures": ["_rt_imageLayerComposite_932_a"]},
+                "visible": true
+            }]
+        })JSON",
+        sr::wpscene::kSceneVersionUnknown);
+    Check(document.has_value(), "scripted visibility fixture parses");
+    if (! document) return;
+
+    wavsen::audio::SoundManager sound_manager;
+    sr::WPSceneParser           parser;
+    auto scene = parser.Parse("scripted-visibility", *document, vfs, sound_manager);
+    Check(scene != nullptr, "scripted visibility fixture compiles");
+    if (! scene) return;
+
+    Check(scene->visibility_elidable_layer_ids.count(930) != 0 &&
+              ! scene->RuntimeLayerVisibilityEnabled(sr::WallpaperLayerId { .value = 930 }),
+          "a visible binding without update leaves the hidden layer elided");
+    Check(scene->visibility_elidable_layer_ids.count(931) == 0 &&
+              scene->RuntimeLayerVisibilityEnabled(sr::WallpaperLayerId { .value = 931 }),
+          "a visible binding with update keeps its hidden layer in the graph");
+
+    auto snapshot = sr::ExtractRenderSceneSnapshot(*scene);
+    auto graph    = sr::sceneToRenderGraph(*scene, snapshot);
+    Check(graph != nullptr, "scripted visibility render graph builds");
+    if (! graph) return;
+
+    Check(! GraphEmitsLayer(*graph, snapshot, 930),
+          "the hidden hover hit area emits no render pass");
+    Check(GraphEmitsLayer(*graph, snapshot, 931),
+          "the scripted toggle keeps a render pass while hidden");
+    Check(snapshot.HasLinkConsumer(sr::WallpaperLayerId { .value = 932 }) &&
+              GraphEmitsLayer(*graph, snapshot, 932),
+          "a hidden link source still publishes its composite target");
+
+    std::size_t gated = 0, ungated = 0, mismatched = 0;
+    for (auto node_id : graph->topologicalOrder()) {
+        auto state = graph->passState(node_id);
+        if (! state || state->type != sr::rg::PassNode::Type::CustomShader) continue;
+        auto* pass = static_cast<sr::vulkan::CustomShaderPass*>(graph->getPass(node_id));
+        if (pass == nullptr) continue;
+        const auto& pdesc    = pass->desc();
+        const bool  expected = pdesc.alpha_mode == sr::SceneRenderAlphaMode::Composite &&
+                              pdesc.output == sr::SpecTex_Default;
+        if (pdesc.hide_when_node_invisible != expected) ++mismatched;
+        if (expected)
+            ++gated;
+        else
+            ++ungated;
+    }
+    Check(mismatched == 0,
+          "only main-composite passes gate their draw on runtime node visibility");
+    Check(gated > 0 && ungated > 0,
+          "the fixture covers both the gated composite and the ungated capture passes");
+}
+
 } // namespace
 
 int main() {
@@ -1610,6 +1759,8 @@ int main() {
     TestMdlv23MultiCurveMorphEvents();
     TestWallpaper2887099508Interactions();
     TestShaderHlslSemanticCompatibility();
+    TestSwizzledVaryingDeclCompatibility();
+    TestScriptedInvisibleCompositeElision();
     TestMissingTexturePlaceholderSemantics();
     TestParticleRuntimeState();
     TestPlaybackSpeedAndAtomicCachePublication();

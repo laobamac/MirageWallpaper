@@ -1278,6 +1278,18 @@ final class RendererController {
             return
         }
 
+        if event == "open-shortcut" {
+            guard isActive else { return }
+            let target = ((message["value"] as? String) ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !target.isEmpty else { return }
+            let name = (message["name"] as? String) ?? ""
+            DispatchQueue.main.async {
+                Self.openUserShortcut(name: name, target: target)
+            }
+            return
+        }
+
         if event == "renderer-error" {
             NSLog("[Mirage] 场景渲染器发生不可恢复错误 (显示器=\(displayID))")
             if isCandidate, let transition {
@@ -2632,6 +2644,20 @@ final class RendererController {
         for proc in actives {
             proc.send(Self.propertyCommand(key: key, property: property))
         }
+    }
+
+    private static func openUserShortcut(name: String, target: String) {
+        let expanded = (target as NSString).expandingTildeInPath
+        if FileManager.default.fileExists(atPath: expanded) {
+            NSWorkspace.shared.open(URL(fileURLWithPath: expanded))
+            return
+        }
+        if let url = URL(string: target), let scheme = url.scheme?.lowercased(),
+           scheme == "http" || scheme == "https" || scheme == "mailto" {
+            NSWorkspace.shared.open(url)
+            return
+        }
+        NSLog("[Mirage] 忽略用户快捷方式 \(name)：既不是本机路径也不是网页链接")
     }
 
     // MARK: Property → command / file

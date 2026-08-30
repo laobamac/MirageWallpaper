@@ -44,6 +44,14 @@ struct DeclMatch {
 
 // Try to match `[ws]<storage_kw> <type> <name>[opt-array][ws];` on the line
 // starting at `line_start`. Anchored — leading non-whitespace fails it.
+inline bool IsSwizzleWord(std::string_view s) noexcept {
+    if (s.empty() || s.size() > 4) return false;
+    for (char ch : s) {
+        if (std::string_view("xyzwrgbastpq").find(ch) == std::string_view::npos) return false;
+    }
+    return true;
+}
+
 inline std::optional<DeclMatch>
 TryParseDeclLine(std::string_view src, std::size_t line_start,
                  std::initializer_list<std::string_view> storage_kws) {
@@ -68,7 +76,27 @@ TryParseDeclLine(std::string_view src, std::size_t line_start,
     c.SkipHSpace();
     auto array = c.ReadArraySuffix();
     c.SkipHSpace();
+    std::string_view swizzle;
+    if (c.Peek() == '.') {
+        auto save = c.Save();
+        c.Advance();
+        auto sw = c.ReadIdent();
+        if (sw && IsSwizzleWord(*sw)) {
+            swizzle = *sw;
+            c.SkipHSpace();
+        } else {
+            c.Restore(save);
+        }
+    }
     if (! c.MatchChar(';')) return std::nullopt;
+    if (! swizzle.empty()) {
+        rstd_warn("shader decl '{} {} {}.{};' has a swizzled declarator, using '{}'",
+                  kw,
+                  tn->type,
+                  tn->name,
+                  swizzle,
+                  tn->type);
+    }
 
     DeclMatch m;
     m.start       = line_start;

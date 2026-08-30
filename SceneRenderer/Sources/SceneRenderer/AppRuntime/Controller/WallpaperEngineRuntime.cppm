@@ -28,6 +28,7 @@ using RenderPassDiagnosticCallback =
 // rendered frame is always opaque.
 using ClearColorCallback = std::function<void(float r, float g, float b)>;
 using AudioDemandCallback = std::function<void(bool needed)>;
+using UserShortcutCallback = std::function<void(std::string_view name, std::string_view target)>;
 
 inline bool IsValidScenePlaybackSpeed(float speed) noexcept {
     return std::isfinite(speed) && speed > 0.0f;
@@ -103,6 +104,7 @@ public:
     // `general.clearcolor`. Set once before initVulkan.
     void setOnClearColor(ClearColorCallback);
     void setOnAudioDemand(AudioDemandCallback);
+    void setOnUserShortcut(UserShortcutCallback);
 
     ExSwapchain* exSwapchain() const;
 

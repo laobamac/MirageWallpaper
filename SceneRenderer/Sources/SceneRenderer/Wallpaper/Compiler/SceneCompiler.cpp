@@ -496,6 +496,8 @@ std::vector<sr::SceneNode*> SpawnLayerClones(ParseContext& context, SceneNode* t
 script::ScriptScene& EnsureScriptScene(ParseContext& context) {
     if (! context.script_scene) {
         context.script_scene = std::make_unique<script::ScriptScene>();
+        context.script_scene->runtime().SetCanvasSize(static_cast<float>(context.ortho_w),
+                                                      static_cast<float>(context.ortho_h));
         auto layers          = context.puppet_layers;
         context.script_scene->runtime().SetBoneResolvers(
             [layers](SceneNode* node, std::string_view name) -> uint32_t {
@@ -1099,10 +1101,6 @@ void WireFieldScripts(ParseContext& context, const rstd::sync::Arc<SceneNode>& n
             // text/color/rate/intensity/... are wired elsewhere or not yet supported.
             continue;
         }
-        if (is_visible && node != nullptr && node->ID() >= 0) {
-            context.scene->EnableRuntimeLayerVisibility(
-                WallpaperLayerId { .value = node->ID() });
-        }
         std::string                  sha = utils::genSha1(std::span<const char>(sb.source));
         std::vector<sr::SceneNode*> clones;
         if (unsigned n = DetectAudioFanoutCount(sb.source); n > 1) {
@@ -1114,6 +1112,10 @@ void WireFieldScripts(ParseContext& context, const rstd::sync::Arc<SceneNode>& n
             rt.MakeFieldScript(sb.source, sha, kind, props, initial_value, node, std::move(clones));
         if (! fs) continue;
         RegisterFieldScriptMetadata(context, node, fs);
+        if (is_visible && node != nullptr && node->ID() >= 0 && fs->HasUpdate()) {
+            context.scene->EnableRuntimeLayerVisibility(
+                WallpaperLayerId { .value = node->ID() });
+        }
         if (is_visible)
             ss.AddActuator(
                 { fs, script::MakeNodeVisibleApply(node_sp.clone(), context.scene.get()) });

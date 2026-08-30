@@ -347,6 +347,9 @@ static void ToGraphPass(SceneNode* node, std::string_view output, i32 imgId, Ext
                 pdesc.submesh_index = smi;
                 pdesc.render_view   = render_view;
                 pdesc.alpha_mode    = alpha_mode;
+                pdesc.hide_when_node_invisible =
+                    alpha_mode == SceneRenderAlphaMode::Composite &&
+                    pass_output == SpecTex_Default;
                 if (auto node_id = scene.ResourceIndex().nodeId(*node)) {
                     if (auto draw_item = scene.ResourceIndex().drawItemFor(*node_id, smi)) {
                         pdesc.draw_item = *draw_item;

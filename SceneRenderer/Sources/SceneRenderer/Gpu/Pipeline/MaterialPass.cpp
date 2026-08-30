@@ -15,22 +15,23 @@ import sr.scene;
 using namespace sr::vulkan;
 
 CustomShaderPass::CustomShaderPass(const Desc& desc) {
-    m_desc.node                = desc.node;
-    m_desc.draw_item           = desc.draw_item;
-    m_desc.render_item         = desc.render_item;
-    m_desc.render_view         = desc.render_view;
-    m_desc.alpha_mode          = desc.alpha_mode;
-    m_desc.submesh_index       = desc.submesh_index;
-    m_desc.texture_bindings    = desc.texture_bindings;
-    m_desc.output              = desc.output;
-    m_desc.output_request      = desc.output_request;
-    m_desc.output_msaa_request = desc.output_msaa_request;
-    m_desc.depth_request       = desc.depth_request;
-    m_desc.sprites_map         = desc.sprites_map;
-    m_desc.clear_output        = desc.clear_output;
-    m_desc.transparent_clear   = desc.transparent_clear;
-    m_desc.clear_depth         = desc.clear_depth;
-    m_desc.preserve_output     = desc.preserve_output;
+    m_desc.node                     = desc.node;
+    m_desc.draw_item                = desc.draw_item;
+    m_desc.render_item              = desc.render_item;
+    m_desc.render_view              = desc.render_view;
+    m_desc.alpha_mode               = desc.alpha_mode;
+    m_desc.hide_when_node_invisible = desc.hide_when_node_invisible;
+    m_desc.submesh_index            = desc.submesh_index;
+    m_desc.texture_bindings         = desc.texture_bindings;
+    m_desc.output                   = desc.output;
+    m_desc.output_request           = desc.output_request;
+    m_desc.output_msaa_request      = desc.output_msaa_request;
+    m_desc.depth_request            = desc.depth_request;
+    m_desc.sprites_map              = desc.sprites_map;
+    m_desc.clear_output             = desc.clear_output;
+    m_desc.transparent_clear        = desc.transparent_clear;
+    m_desc.clear_depth              = desc.clear_depth;
+    m_desc.preserve_output          = desc.preserve_output;
 };
 CustomShaderPass::~CustomShaderPass() {}
 
@@ -487,13 +488,13 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
                 .binding   = i,
                 .stride    = (uint32_t)vertex.OneSizeOf(),
                 .inputRate = vertex.InstanceRate() ? VK_VERTEX_INPUT_RATE_INSTANCE
-                                                    : VK_VERTEX_INPUT_RATE_VERTEX,
+                                                   : VK_VERTEX_INPUT_RATE_VERTEX,
             };
             bind_descriptions.push_back(bind_desc);
 
             for (auto& item : ref->input_location_map) {
-                auto& name   = item.first;
-                auto& input  = item.second;
+                auto& name  = item.first;
+                auto& input = item.second;
                 // An instanced particle has separate corner and instance
                 // streams. Bind an input location only to the stream which
                 // actually owns that named attribute; assigning a missing
@@ -697,7 +698,7 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
                 mat->customShader.dirty = false;
             }
             auto update_unf_op = [&blocks, buf, bufref](std::string_view name,
-                                                        sr::ShaderValue value) {
+                                                        sr::ShaderValue  value) {
                 UpdateUniform(buf, *bufref, blocks, name, value);
             };
             shader_updater->UpdateUniforms(node, sprites, update_unf_op, render_view, alpha_mode);
@@ -861,6 +862,12 @@ void CustomShaderPass::beginRenderScope(RenderingResources& rr) {
 }
 
 void CustomShaderPass::recordRenderScopeDraw(RenderingResources& rr) {
+    if (m_desc.hide_when_node_invisible && m_desc.node != nullptr) {
+        const SceneNode* alpha_source = m_desc.node->AlphaSource();
+        if (! m_desc.node->Visible() || (alpha_source != nullptr && ! alpha_source->Visible())) {
+            return;
+        }
+    }
     auto& cmd    = rr.command;
     auto& outext = m_desc.vk_output.extent;
     for (usize i = 0; i < m_desc.vk_textures.size(); i++) {
@@ -957,11 +964,7 @@ void CustomShaderPass::recordRenderScopeDraw(RenderingResources& rr) {
             // Per-part drawing — preserves the file's z-order so later parts
             // overdraw earlier ones (eyelid over pupil during blink).
             for (const auto& r : ranges) {
-                cmd.DrawIndexed(r.index_count,
-                                draw_buffers.instance_count,
-                                r.first_index,
-                                0,
-                                0);
+                cmd.DrawIndexed(r.index_count, draw_buffers.instance_count, r.first_index, 0, 0);
             }
         }
     } else {
