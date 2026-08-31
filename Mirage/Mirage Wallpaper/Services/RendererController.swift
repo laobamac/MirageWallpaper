@@ -631,6 +631,9 @@ final class RendererController {
         SystemAudioSpectrumService.shared.onSpectrum = { [weak self] spectrum in
             self?.setAudioSpectrum(spectrum)
         }
+        NowPlayingService.shared.onUpdate = { [weak self] status in
+            self?.setMediaStatus(status)
+        }
     }
 
     func displayID(for screenIndex: Int) -> CGDirectDisplayID? {
@@ -2347,8 +2350,15 @@ final class RendererController {
     }
 
     private func refreshAudioSpectrumService() {
-        let enabled = queue.sync { hasSpectrumConsumersLocked() }
-        SystemAudioSpectrumService.shared.setEnabled(enabled)
+        let state = queue.sync {
+            let spectrum = hasSpectrumConsumersLocked()
+            let media = targetsLocked(nil, includeCandidates: true).contains {
+                $0.wallpaper.kind == .scene && $0.process.isRunning
+            }
+            return (spectrum, media)
+        }
+        SystemAudioSpectrumService.shared.setEnabled(state.0)
+        NowPlayingService.shared.setEnabled(state.1)
     }
 
     private func setAudioSpectrum(_ spectrum: [Float]) {
@@ -2359,6 +2369,15 @@ final class RendererController {
         for process in processes {
             guard process.wallpaper.kind == .scene || process.wallpaper.kind == .web else { continue }
             process.sendSpectrum(spectrum)
+        }
+    }
+
+    private func setMediaStatus(_ status: [String: Any]) {
+        let processes = queue.sync {
+            targetsLocked(nil, includeCandidates: true).filter { $0.wallpaper.kind == .scene }
+        }
+        for process in processes {
+            process.send(["cmd": "mediaStatus", "data": status])
         }
     }
 

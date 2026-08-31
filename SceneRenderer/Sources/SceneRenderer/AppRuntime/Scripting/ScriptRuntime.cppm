@@ -126,8 +126,15 @@ struct MediaStatus {
     std::string artist;
     std::string album;
     std::string album_artist;
+    double      position { 0.0 };
+    double      duration { 0.0 };
     std::string art_url;
     std::string previous_art_url;
+    std::array<float, 3> primary_color { 1.0f, 1.0f, 1.0f };
+    std::array<float, 3> secondary_color { 0.0f, 0.0f, 0.0f };
+    std::array<float, 3> tertiary_color { 0.0f, 0.0f, 0.0f };
+    std::array<float, 3> text_color { 0.0f, 0.0f, 0.0f };
+    std::array<float, 3> high_contrast_color { 0.0f, 0.0f, 0.0f };
 };
 
 using UserShortcutOpener = std::function<bool(std::string_view name, std::string_view target)>;

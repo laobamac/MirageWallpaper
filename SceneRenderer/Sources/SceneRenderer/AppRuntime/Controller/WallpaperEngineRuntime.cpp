@@ -434,8 +434,15 @@ sr::script::MediaStatus ToScriptMediaStatus(const MediaStatus& status) {
                                       .artist           = status.artist,
                                       .album            = status.album,
                                       .album_artist     = status.album_artist,
+                                      .position         = status.position,
+                                      .duration         = status.duration,
                                       .art_url          = status.art_url,
-                                      .previous_art_url = status.previous_art_url };
+                                      .previous_art_url = status.previous_art_url,
+                                      .primary_color    = status.primary_color,
+                                      .secondary_color  = status.secondary_color,
+                                      .tertiary_color   = status.tertiary_color,
+                                      .text_color       = status.text_color,
+                                      .high_contrast_color = status.high_contrast_color };
 }
 
 std::vector<SceneUserPropertyDiagnostic> CollectUserPropertyDiagnostics(const Scene&     scene,

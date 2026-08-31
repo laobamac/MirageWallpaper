@@ -149,6 +149,53 @@ void SceneControlChannel::dispatchLine(const char* line) {
             ++index;
         }
         m_wallpaper.setAudioSpectrum(std::move(left), std::move(right));
+    } else if (cmd == "mediaStatus") {
+        auto data = msg.get("data");
+        if (data.is_none() || ! (*data)->is_object()) return;
+        auto get_string = [&](const char* key) {
+            auto value = (*data)->get(key);
+            if (value.is_some() && (*value)->is_string())
+                return rstd::cppstd::to_string(*(*value)->as_str());
+            return std::string {};
+        };
+        auto get_number = [&](const char* key) {
+            auto value = (*data)->get(key);
+            if (value.is_some() && (*value)->is_number()) return (*value)->as_f64().unwrap_or(0.0);
+            return 0.0;
+        };
+        auto get_color = [&](const char* key, std::array<float, 3> fallback) {
+            auto value = (*data)->get(key);
+            if (value.is_none() || ! (*value)->is_array()) return fallback;
+            auto values = (*value)->as_array();
+            if (values.is_none() || (*values)->len() < 3) return fallback;
+            std::size_t index = 0;
+            for (const auto& component : **values) {
+                if (index >= fallback.size()) break;
+                auto number = component.as_f64();
+                if (number.is_none()) return fallback;
+                fallback[index++] = static_cast<float>(*number);
+            }
+            return fallback;
+        };
+        sr::MediaStatus media;
+        auto state = (*data)->get("state");
+        if (state.is_some() && (*state)->is_number())
+            media.state = static_cast<uint32_t>((*state)->as_u64().unwrap_or(0));
+        media.title = get_string("title");
+        media.artist = get_string("artist");
+        media.album = get_string("album");
+        media.album_artist = get_string("albumArtist");
+        media.position = get_number("position");
+        media.duration = get_number("duration");
+        media.art_url = get_string("artURL");
+        media.previous_art_url = get_string("previousArtURL");
+        media.primary_color = get_color("primaryColor", media.primary_color);
+        media.secondary_color = get_color("secondaryColor", media.secondary_color);
+        media.tertiary_color = get_color("tertiaryColor", media.tertiary_color);
+        media.text_color = get_color("textColor", media.text_color);
+        media.high_contrast_color =
+            get_color("highContrastColor", media.high_contrast_color);
+        m_wallpaper.setMediaStatus(std::move(media));
     } else if (cmd == "snapshot") {
         // Mirage.app wants a still of the live frame for the system desktop
         // picture. The outcome must always be reported, or the requester waits

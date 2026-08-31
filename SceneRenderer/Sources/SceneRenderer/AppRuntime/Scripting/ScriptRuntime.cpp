@@ -4034,6 +4034,15 @@ JSValue MakeMediaPropertiesEvent(JSContext* ctx, const MediaStatus& status) {
     return ev;
 }
 
+JSValue MakeMediaTimelineEvent(JSContext* ctx, const MediaStatus& status) {
+    JSValue ev = JS_NewObject(ctx);
+    JS_DefinePropertyValueStr(
+        ctx, ev, "position", JS_NewFloat64(ctx, status.position), JS_PROP_C_W_E);
+    JS_DefinePropertyValueStr(
+        ctx, ev, "duration", JS_NewFloat64(ctx, status.duration), JS_PROP_C_W_E);
+    return ev;
+}
+
 JSValue MakeMediaThumbnailEvent(JSContext* ctx, const MediaStatus& status) {
     JSValue ev = JS_NewObject(ctx);
     JS_DefinePropertyValueStr(
@@ -4054,11 +4063,22 @@ JSValue MakeMediaThumbnailEvent(JSContext* ctx, const MediaStatus& status) {
         "previousThumbnail",
         JS_NewStringLen(ctx, status.previous_art_url.data(), status.previous_art_url.size()),
         JS_PROP_C_W_E);
-    JS_DefinePropertyValueStr(ctx, ev, "primaryColor", MakeVec3(ctx, 1, 1, 1), JS_PROP_C_W_E);
-    JS_DefinePropertyValueStr(ctx, ev, "secondaryColor", MakeVec3(ctx, 0, 0, 0), JS_PROP_C_W_E);
-    JS_DefinePropertyValueStr(ctx, ev, "tertiaryColor", MakeVec3(ctx, 0, 0, 0), JS_PROP_C_W_E);
-    JS_DefinePropertyValueStr(ctx, ev, "textColor", MakeVec3(ctx, 0, 0, 0), JS_PROP_C_W_E);
-    JS_DefinePropertyValueStr(ctx, ev, "highContrastColor", MakeVec3(ctx, 0, 0, 0), JS_PROP_C_W_E);
+    JS_DefinePropertyValueStr(ctx, ev, "primaryColor",
+                              MakeVec3(ctx, status.primary_color[0], status.primary_color[1],
+                                       status.primary_color[2]), JS_PROP_C_W_E);
+    JS_DefinePropertyValueStr(ctx, ev, "secondaryColor",
+                              MakeVec3(ctx, status.secondary_color[0], status.secondary_color[1],
+                                       status.secondary_color[2]), JS_PROP_C_W_E);
+    JS_DefinePropertyValueStr(ctx, ev, "tertiaryColor",
+                              MakeVec3(ctx, status.tertiary_color[0], status.tertiary_color[1],
+                                       status.tertiary_color[2]), JS_PROP_C_W_E);
+    JS_DefinePropertyValueStr(ctx, ev, "textColor",
+                              MakeVec3(ctx, status.text_color[0], status.text_color[1],
+                                       status.text_color[2]), JS_PROP_C_W_E);
+    JS_DefinePropertyValueStr(
+        ctx, ev, "highContrastColor",
+        MakeVec3(ctx, status.high_contrast_color[0], status.high_contrast_color[1],
+                 status.high_contrast_color[2]), JS_PROP_C_W_E);
     return ev;
 }
 
@@ -4240,7 +4260,10 @@ void JsRuntime::SetMediaStatus(const MediaStatus& status) {
                                     prev.album_artist != status.album_artist;
     const bool thumbnail_changed =
         first || prev.art_url != status.art_url || prev.previous_art_url != status.previous_art_url;
-    if (! playback_changed && ! properties_changed && ! thumbnail_changed) return;
+    const bool timeline_changed =
+        first || prev.position != status.position || prev.duration != status.duration;
+    if (! playback_changed && ! properties_changed && ! thumbnail_changed && ! timeline_changed)
+        return;
 
     for (auto& fs : m_impl->scripts) {
         auto* I = fs->m_impl.get();
@@ -4264,6 +4287,12 @@ void JsRuntime::SetMediaStatus(const MediaStatus& status) {
             JSValue ev = MakeMediaThumbnailEvent(ctx, status);
             InvokeEventCallback(
                 ctx, I->module_ns, "mediaThumbnailChanged", ev, m_impl.get(), I->sha);
+            JS_FreeValue(ctx, ev);
+        }
+        if (timeline_changed) {
+            JSValue ev = MakeMediaTimelineEvent(ctx, status);
+            InvokeEventCallback(
+                ctx, I->module_ns, "mediaTimelineChanged", ev, m_impl.get(), I->sha);
             JS_FreeValue(ctx, ev);
         }
     }

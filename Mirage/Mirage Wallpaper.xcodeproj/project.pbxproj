@@ -208,6 +208,7 @@
 				A100000A0000000000000000 /* Copy Screen Savers */,
 				B100000A0000000000000000 /* Embed Login Items */,
 				D100000A0000000000000000 /* Embed App Extensions */,
+				A30000010000000000000000 /* Build Now Playing Helper */,
 				A20000010000000000000000 /* Build Steam Service */,
 			);
 			buildRules = (
@@ -370,6 +371,26 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
+		A30000010000000000000000 /* Build Now Playing Helper */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/Mirage Wallpaper/Services/NowPlayingBridge.mm",
+			);
+			name = "Build Now Playing Helper";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/NowPlaying/libMirageNowPlaying.dylib",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "set -euo pipefail\nSOURCE=\"$SRCROOT/Mirage Wallpaper/Services/NowPlayingBridge.mm\"\nOUTPUT_DIR=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/NowPlaying\"\nTEMP_DIR=\"$TARGET_TEMP_DIR/NowPlaying\"\nmkdir -p \"$OUTPUT_DIR\" \"$TEMP_DIR\"\nFILES=()\nfor ARCH in $ARCHS; do\n  FILE=\"$TEMP_DIR/libMirageNowPlaying-$ARCH.dylib\"\n  xcrun --sdk macosx clang++ -arch \"$ARCH\" -std=c++20 -fobjc-arc -dynamiclib -isysroot \"$SDKROOT\" -mmacosx-version-min=\"$MACOSX_DEPLOYMENT_TARGET\" \"$SOURCE\" -framework Foundation -framework AppKit -o \"$FILE\"\n  FILES+=(\"$FILE\")\ndone\nxcrun lipo -create \"${FILES[@]}\" -output \"$OUTPUT_DIR/libMirageNowPlaying.dylib\"\ncodesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY:--}\" \"$OUTPUT_DIR/libMirageNowPlaying.dylib\"\n";
+		};
 		A20000010000000000000000 /* Build Steam Service */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
