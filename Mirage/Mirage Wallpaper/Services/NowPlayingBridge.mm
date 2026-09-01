@@ -57,6 +57,14 @@ id CurrentController() {
             [configuration setValue:@NO forKey:@"singleShot"];
             [configuration setValue:@YES forKey:@"requestPlaybackState"];
             [configuration setValue:@YES forKey:@"requestPlaybackQueue"];
+            Class requestClass = NSClassFromString(@"MRPlaybackQueueRequest");
+            id request = Send0((id)requestClass, "new");
+            [request setValue:@0 forKey:@"location"];
+            [request setValue:@1 forKey:@"length"];
+            [request setValue:@YES forKey:@"includeMetadata"];
+            [request setValue:@512 forKey:@"artworkWidth"];
+            [request setValue:@512 forKey:@"artworkHeight"];
+            [configuration setValue:request forKey:@"playbackQueueRequest"];
         } @catch (NSException*) {
             return;
         }
@@ -87,10 +95,18 @@ NSDictionary* NowPlayingPayload() {
     id calculatedPosition = Value(metadata, @"calculatedPlaybackPosition");
     Put(output, @"position",
         calculatedPosition != nil ? calculatedPosition : Value(metadata, @"elapsedTime"));
+    id artwork = Value(item, @"artwork");
+    id itemArtworkData = Value(artwork, @"imageData");
+    if (![itemArtworkData isKindOfClass:[NSData class]] &&
+        [artwork respondsToSelector:sel_registerName("copyImageData")])
+        itemArtworkData = Send0(artwork, "copyImageData");
+    if ([itemArtworkData isKindOfClass:[NSData class]])
+        output[@"artworkData"] =
+            [itemArtworkData base64EncodedStringWithOptions:0];
     id artworkData = Value(metadata, @"artworkData");
     if ([artworkData isKindOfClass:[NSData class]])
         output[@"artworkData"] = [artworkData base64EncodedStringWithOptions:0];
-    Put(output, @"artworkMimeType", Value(metadata, @"artworkMimeType"));
+    Put(output, @"artworkMimeType", Value(metadata, @"artworkMIMEType"));
     NSNumber* playbackRate = Value(response, @"playbackRate");
     NSNumber* playbackState = Value(response, @"playbackState");
     BOOL playing = playbackRate.doubleValue > 0 || playbackState.unsignedIntegerValue == 1;
