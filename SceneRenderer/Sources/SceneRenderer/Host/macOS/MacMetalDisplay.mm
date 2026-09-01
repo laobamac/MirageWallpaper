@@ -10,6 +10,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <atomic>
 #include <os/log.h>
 
 namespace
@@ -331,7 +332,15 @@ extern "C" void SceneRendererMacMetalDisplayDraw(void* handle, void* texture,
     LogDisplayGeometryIfChanged(display, source_texture, source_width, source_height);
 
     id<CAMetalDrawable> drawable = [display->layer nextDrawable];
-    if (drawable == nil) return;
+    if (drawable == nil) {
+        static std::atomic<std::uint64_t> misses { 0 };
+        const auto count = misses.fetch_add(1, std::memory_order_relaxed) + 1;
+        if ((count % 60) == 1) {
+            static os_log_t logger = os_log_create("cn.laobamac.Mirage.ScreenSaver", "MetalDisplay");
+            os_log_error(logger, "CAMetalLayer nextDrawable returned nil (%{public}llu)", count);
+        }
+        return;
+    }
 
     MTLRenderPassDescriptor* pass = [MTLRenderPassDescriptor renderPassDescriptor];
     pass.colorAttachments[0].texture = drawable.texture;

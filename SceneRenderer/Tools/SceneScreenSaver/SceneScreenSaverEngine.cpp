@@ -21,16 +21,21 @@ extern "C" void MirageSceneSaverHostPresent(void* host, void* texture, std::uint
 
 namespace {
 
+using FirstFrameCallback = void (*)(void*);
+
 struct SaverEngine {
     sr::SceneWallpaper wallpaper;
     std::vector<void*> hosts;
     std::string configuration_key;
+    bool first_frame_presented { false };
 };
 
 struct SaverInstance {
     SaverEngine* engine { nullptr };
     void* host { nullptr };
     bool paused { false };
+    FirstFrameCallback first_frame_callback { nullptr };
+    void* first_frame_userdata { nullptr };
 };
 
 std::mutex g_engine_mutex;
@@ -86,9 +91,33 @@ void* CreateInstance(void* host, const char* assets_dir, const char* scene_pkg,
     }
     lock.unlock();
     auto engine = std::make_unique<SaverEngine>();
+    auto* engine_pointer = engine.get();
+    engine->wallpaper.setOnFirstFrame([engine_pointer] {
+        std::vector<std::pair<FirstFrameCallback, void*>> callbacks;
+        {
+            std::scoped_lock lock(g_engine_mutex);
+            engine_pointer->first_frame_presented = true;
+            for (auto* instance : g_instances) {
+                if (instance->engine == engine_pointer && instance->first_frame_callback != nullptr) {
+                    callbacks.emplace_back(instance->first_frame_callback,
+                                           instance->first_frame_userdata);
+                }
+            }
+        }
+        for (const auto& [callback, userdata] : callbacks) callback(userdata);
+    });
     engine->hosts.push_back(host);
     engine->configuration_key = configuration_key;
+    auto instance = std::make_unique<SaverInstance>(engine.get(), host, false);
+    {
+        std::scoped_lock instance_lock(g_engine_mutex);
+        g_instances.push_back(instance.get());
+    }
     if (!engine->wallpaper.init()) {
+        {
+            std::scoped_lock instance_lock(g_engine_mutex);
+            std::erase(g_instances, instance.get());
+        }
         MirageSceneSaverHostDestroy(host);
         return nullptr;
     }
@@ -99,6 +128,10 @@ void* CreateInstance(void* host, const char* assets_dir, const char* scene_pkg,
     config.fps = std::clamp<std::uint32_t>(fps, 10u, 60u);
     config.muted = true;
     if (!LoadProperties(properties_json, config)) {
+        {
+            std::scoped_lock instance_lock(g_engine_mutex);
+            std::erase(g_instances, instance.get());
+        }
         MirageSceneSaverHostDestroy(host);
         return nullptr;
     }
@@ -114,15 +147,19 @@ void* CreateInstance(void* host, const char* assets_dir, const char* scene_pkg,
     engine->wallpaper.configure(std::move(config));
     engine->wallpaper.initVulkan(std::move(info));
     if (!engine->wallpaper.waitVulkanInited(30000)) {
+        {
+            std::scoped_lock instance_lock(g_engine_mutex);
+            std::erase(g_instances, instance.get());
+        }
         MirageSceneSaverHostDestroy(host);
         return nullptr;
     }
     lock.lock();
     auto* created = engine.release();
     g_engines.push_back(created);
-    auto* instance = new SaverInstance { created, host, false };
-    g_instances.push_back(instance);
-    return instance;
+    instance->engine = created;
+    lock.unlock();
+    return instance.release();
 }
 
 }
@@ -160,6 +197,21 @@ extern "C" void MirageSceneSaverSetPaused(void* handle, int paused) {
 
 extern "C" void MirageSceneDesktopSetPaused(void* handle, int paused) {
     MirageSceneSaverSetPaused(handle, paused);
+}
+
+extern "C" void MirageSceneDesktopSetFirstFrameCallback(void* handle,
+                                                          FirstFrameCallback callback,
+                                                          void* userdata) {
+    auto* instance = static_cast<SaverInstance*>(handle);
+    bool first_frame_presented = false;
+    {
+        std::scoped_lock lock(g_engine_mutex);
+        if (instance == nullptr || instance->engine == nullptr) return;
+        instance->first_frame_callback = callback;
+        instance->first_frame_userdata = userdata;
+        first_frame_presented = instance->engine->first_frame_presented;
+    }
+    if (callback != nullptr && first_frame_presented) callback(userdata);
 }
 
 extern "C" void MirageSceneSaverDestroy(void* handle) {

@@ -26,6 +26,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var localizationObserver: NSObjectProtocol?
     private var openWindowObserver: NSObjectProtocol?
     private var dynamicLockScreenSessionObservers: [NSObjectProtocol] = []
+    private var dynamicLockScreenPowerObservers: [NSObjectProtocol] = []
 
     static var shared = AppDelegate()
 
@@ -94,6 +95,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         ]
+        let workspace = NSWorkspace.shared.notificationCenter
+        dynamicLockScreenPowerObservers = [
+            workspace.addObserver(forName: NSWorkspace.screensDidSleepNotification, object: nil, queue: .main) { [weak self] _ in
+                self?.postDynamicLockScreenSleep()
+            },
+            workspace.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+                self?.postDynamicLockScreenWake()
+            },
+            workspace.addObserver(forName: NSWorkspace.screensDidWakeNotification, object: nil, queue: .main) { [weak self] _ in
+                self?.postDynamicLockScreenWake()
+            }
+        ]
 
         wallpaperViewModel.renderer.onProcessExit = { [weak self] screen, abnormal in
             guard abnormal, screen == 0 else { return }
@@ -129,6 +142,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         CFNotificationCenterPostNotification(
             CFNotificationCenterGetDarwinNotifyCenter(),
             CFNotificationName(name as CFString),
+            nil,
+            nil,
+            true
+        )
+    }
+
+    private func postDynamicLockScreenWake() {
+        CFNotificationCenterPostNotification(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            CFNotificationName("cn.laobamac.Mirage.dynamicLockScreen.wake" as CFString),
+            nil,
+            nil,
+            true
+        )
+    }
+
+    private func postDynamicLockScreenSleep() {
+        CFNotificationCenterPostNotification(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            CFNotificationName("cn.laobamac.Mirage.dynamicLockScreen.sleep" as CFString),
             nil,
             nil,
             true

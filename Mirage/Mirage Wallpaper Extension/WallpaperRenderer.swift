@@ -78,11 +78,14 @@ struct MirageLockConfiguration: Codable {
 private final class MirageSceneLibrary {
     typealias Create = @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<CChar>?, UnsafePointer<CChar>?, UnsafePointer<CChar>?, UInt32, UInt32, UInt32) -> UnsafeMutableRawPointer?
     typealias SetPaused = @convention(c) (UnsafeMutableRawPointer?, Int32) -> Void
+    typealias FirstFrameCallback = @convention(c) (UnsafeMutableRawPointer?) -> Void
+    typealias SetFirstFrame = @convention(c) (UnsafeMutableRawPointer?, FirstFrameCallback?, UnsafeMutableRawPointer?) -> Void
     typealias Destroy = @convention(c) (UnsafeMutableRawPointer?) -> Void
 
     let handle: UnsafeMutableRawPointer
     let create: Create
     let setPaused: SetPaused
+    let setFirstFrame: SetFirstFrame
     let destroy: Destroy
 
     init?() {
@@ -94,10 +97,12 @@ private final class MirageSceneLibrary {
             guard let handle = dlopen(url.path, RTLD_NOW | RTLD_LOCAL),
                   let create = dlsym(handle, "MirageSceneDesktopCreate"),
                   let pause = dlsym(handle, "MirageSceneDesktopSetPaused"),
+                  let firstFrame = dlsym(handle, "MirageSceneDesktopSetFirstFrameCallback"),
                   let destroy = dlsym(handle, "MirageSceneDesktopDestroy") else { continue }
             self.handle = handle
             self.create = unsafeBitCast(create, to: Create.self)
             self.setPaused = unsafeBitCast(pause, to: SetPaused.self)
+            self.setFirstFrame = unsafeBitCast(firstFrame, to: SetFirstFrame.self)
             self.destroy = unsafeBitCast(destroy, to: Destroy.self)
             return
         }
@@ -109,6 +114,8 @@ private final class MirageSceneLibrary {
 
 final class MirageLockRenderer {
     private let rootLayer: CALayer
+    private let configuration: MirageLockDisplayConfiguration
+    private let renderSize: CGSize
     private var player: AVQueuePlayer?
     private var looper: AVPlayerLooper?
     private var memoryAssetLoader: MirageMemoryVideoAssetLoader?
@@ -119,6 +126,7 @@ final class MirageLockRenderer {
     private var videoLoadTask: Task<Void, Never>?
     private var videoLoadID = UUID()
     private var videoReady = false
+    private var sceneReady = false
     private var isPaused = false
     private var isLocked: Bool
     private let dynamicEnabled: Bool
@@ -130,6 +138,8 @@ final class MirageLockRenderer {
          configuration: MirageLockDisplayConfiguration, locked: Bool,
          dynamicEnabled: Bool) {
         self.rootLayer = rootLayer
+        self.configuration = configuration
+        self.renderSize = size
         self.isLocked = locked && dynamicEnabled
         self.dynamicEnabled = dynamicEnabled
         self.isVideo = configuration.kind == "video"
@@ -214,6 +224,7 @@ final class MirageLockRenderer {
     private func videoDidBecomeReady() {
         guard !videoReady else { return }
         videoReady = true
+        sceneReady = false
         updateDesktopLayerVisibility()
     }
 
@@ -250,12 +261,23 @@ final class MirageLockRenderer {
         }
         sceneLibrary = library
         sceneEngine = engine
+        let callbackPointer = Unmanaged.passUnretained(self).toOpaque()
+        library.setFirstFrame(engine, Self.firstFrameCallback, callbackPointer)
     }
 
     func pause() {
         isPaused = true
         player?.pause()
         if let sceneEngine { sceneLibrary?.setPaused(sceneEngine, 1) }
+    }
+
+    func prepareForSleep() {
+        pause()
+        if isLocked {
+            videoReady = false
+            sceneReady = false
+            updateDesktopLayerVisibility()
+        }
     }
 
     func resume() {
@@ -276,15 +298,21 @@ final class MirageLockRenderer {
     }
 
     private func updateDesktopLayerVisibility() {
+        let dynamicReady = isVideo ? videoReady : sceneReady
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        desktopLayer?.opacity = !isLocked || (isVideo && !videoReady) ? 1 : 0
+        desktopLayer?.opacity = !isLocked || !dynamicReady ? 1 : 0
         CATransaction.commit()
         CATransaction.flush()
     }
 
     func updateDesktopFallback(path: String?) {
         guard desktopFallbackPath != path || desktopLayer == nil else { return }
+        enqueueDesktopFallback(path: path, force: false)
+    }
+
+    private func enqueueDesktopFallback(path: String?, force: Bool) {
+        if !force, desktopFallbackPath == path, desktopLayer != nil { return }
         let image = path.flatMap(Self.loadImage) ?? Self.systemFallbackImage() ?? Self.solidImage()
         guard let image, let sample = Self.makeStillSampleBuffer(from: image) else { return }
         let layer: AVSampleBufferDisplayLayer
@@ -297,16 +325,33 @@ final class MirageLockRenderer {
             layer.videoGravity = .resizeAspectFill
             layer.isOpaque = true
             layer.zPosition = 1_000_000
-            layer.opacity = !isLocked || (isVideo && !videoReady) ? 1 : 0
+            let dynamicReady = isVideo ? videoReady : sceneReady
+            layer.opacity = !isLocked || !dynamicReady ? 1 : 0
             rootLayer.addSublayer(layer)
             desktopLayer = layer
         }
         Self.setDisplayImmediately(sample)
+        if force { layer.sampleBufferRenderer.flush() }
         layer.sampleBufferRenderer.enqueue(sample)
         desktopFallbackPath = path
     }
 
-    func stop() {
+    func recoverAfterWake() {
+        guard dynamicEnabled else { return }
+        enqueueDesktopFallback(path: desktopFallbackPath, force: true)
+        if isVideo {
+            resetVideoResources()
+            isPaused = !isLocked
+            loadVideo(configuration)
+        } else {
+            resetSceneResources()
+            sceneReady = false
+            loadScene(configuration, size: renderSize)
+        }
+        setLocked(isLocked)
+    }
+
+    private func resetVideoResources() {
         videoLoadID = UUID()
         videoLoadTask?.cancel()
         videoLoadTask = nil
@@ -317,12 +362,34 @@ final class MirageLockRenderer {
         player?.removeAllItems()
         looper = nil
         memoryAssetLoader = nil
-        if let sceneEngine { sceneLibrary?.destroy(sceneEngine) }
-        sceneEngine = nil
-        sceneLibrary = nil
         playerLayer?.removeFromSuperlayer()
         playerLayer = nil
         player = nil
+        videoReady = false
+    }
+
+    private func resetSceneResources() {
+        if let sceneEngine {
+            sceneLibrary?.setFirstFrame(sceneEngine, nil, nil)
+            sceneLibrary?.destroy(sceneEngine)
+        }
+        sceneEngine = nil
+        sceneLibrary = nil
+        sceneReady = false
+    }
+
+    private static let firstFrameCallback: MirageSceneLibrary.FirstFrameCallback = { pointer in
+        guard let pointer else { return }
+        let renderer = Unmanaged<MirageLockRenderer>.fromOpaque(pointer).takeUnretainedValue()
+        DispatchQueue.main.async {
+            renderer.sceneReady = true
+            renderer.updateDesktopLayerVisibility()
+        }
+    }
+
+    func stop() {
+        resetVideoResources()
+        resetSceneResources()
         desktopLayer?.sampleBufferRenderer.flush()
         desktopLayer?.removeFromSuperlayer()
         desktopLayer = nil

@@ -33,6 +33,9 @@ final class MirageWallpaperXPCHandler: NSObject, WallpaperExtensionXPCProtocol {
     private let lock = NSLock()
     private var observer: UnsafeMutableRawPointer?
     private var lockObservers: [NSObjectProtocol] = []
+    private var sleepObservers: [NSObjectProtocol] = []
+    private var wakeObservers: [NSObjectProtocol] = []
+    private var wakeRecoveryScheduled = false
     private var isLocked = false
 
     override init() {
@@ -59,6 +62,14 @@ final class MirageWallpaperXPCHandler: NSObject, WallpaperExtensionXPCProtocol {
             guard let object else { return }
             Unmanaged<MirageWallpaperXPCHandler>.fromOpaque(object).takeUnretainedValue().setLocked(false)
         }, "cn.laobamac.Mirage.dynamicLockScreen.unlocked" as CFString, nil, .deliverImmediately)
+        CFNotificationCenterAddObserver(center, retained, { _, object, _, _, _ in
+            guard let object else { return }
+            Unmanaged<MirageWallpaperXPCHandler>.fromOpaque(object).takeUnretainedValue().scheduleWakeRecovery()
+        }, "cn.laobamac.Mirage.dynamicLockScreen.wake" as CFString, nil, .deliverImmediately)
+        CFNotificationCenterAddObserver(center, retained, { _, object, _, _, _ in
+            guard let object else { return }
+            Unmanaged<MirageWallpaperXPCHandler>.fromOpaque(object).takeUnretainedValue().pauseForSleep()
+        }, "cn.laobamac.Mirage.dynamicLockScreen.sleep" as CFString, nil, .deliverImmediately)
         let distributed = DistributedNotificationCenter.default()
         lockObservers = [
             distributed.addObserver(forName: NSNotification.Name("com.apple.screenIsLocked"), object: nil, queue: .main) { [weak self] _ in
@@ -66,6 +77,20 @@ final class MirageWallpaperXPCHandler: NSObject, WallpaperExtensionXPCProtocol {
             },
             distributed.addObserver(forName: NSNotification.Name("com.apple.screenIsUnlocked"), object: nil, queue: .main) { [weak self] _ in
                 self?.setLocked(false)
+            }
+        ]
+        let workspace = NSWorkspace.shared.notificationCenter
+        sleepObservers = [
+            workspace.addObserver(forName: NSWorkspace.screensDidSleepNotification, object: nil, queue: .main) { [weak self] _ in
+                self?.pauseForSleep()
+            }
+        ]
+        wakeObservers = [
+            workspace.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+                self?.scheduleWakeRecovery()
+            },
+            workspace.addObserver(forName: NSWorkspace.screensDidWakeNotification, object: nil, queue: .main) { [weak self] _ in
+                self?.scheduleWakeRecovery()
             }
         ]
     }
@@ -76,10 +101,15 @@ final class MirageWallpaperXPCHandler: NSObject, WallpaperExtensionXPCProtocol {
             CFNotificationCenterRemoveObserver(CFNotificationCenterGetDarwinNotifyCenter(), observer, CFNotificationName("cn.laobamac.Mirage.dynamicLockScreen.desktopFallbackChanged" as CFString), nil)
             CFNotificationCenterRemoveObserver(CFNotificationCenterGetDarwinNotifyCenter(), observer, CFNotificationName("cn.laobamac.Mirage.dynamicLockScreen.locked" as CFString), nil)
             CFNotificationCenterRemoveObserver(CFNotificationCenterGetDarwinNotifyCenter(), observer, CFNotificationName("cn.laobamac.Mirage.dynamicLockScreen.unlocked" as CFString), nil)
+            CFNotificationCenterRemoveObserver(CFNotificationCenterGetDarwinNotifyCenter(), observer, CFNotificationName("cn.laobamac.Mirage.dynamicLockScreen.wake" as CFString), nil)
+            CFNotificationCenterRemoveObserver(CFNotificationCenterGetDarwinNotifyCenter(), observer, CFNotificationName("cn.laobamac.Mirage.dynamicLockScreen.sleep" as CFString), nil)
             Unmanaged<MirageWallpaperXPCHandler>.fromOpaque(observer).release()
         }
         let distributed = DistributedNotificationCenter.default()
         lockObservers.forEach { distributed.removeObserver($0) }
+        let workspace = NSWorkspace.shared.notificationCenter
+        sleepObservers.forEach { workspace.removeObserver($0) }
+        wakeObservers.forEach { workspace.removeObserver($0) }
         invalidateAll()
     }
 
@@ -246,6 +276,48 @@ final class MirageWallpaperXPCHandler: NSObject, WallpaperExtensionXPCProtocol {
                 context.isLocked = false
                 context.renderer?.setLocked(false)
             }
+        }
+        agentProxy?.invalidateSnapshots { _ in }
+    }
+
+    private func scheduleWakeRecovery() {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in self?.scheduleWakeRecovery() }
+            return
+        }
+        guard !wakeRecoveryScheduled else { return }
+        wakeRecoveryScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+            guard let self else { return }
+            self.wakeRecoveryScheduled = false
+            self.recoverAfterWake()
+        }
+    }
+
+    private func pauseForSleep() {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in self?.pauseForSleep() }
+            return
+        }
+        lock.lock()
+        let values = Array(contexts.values)
+        lock.unlock()
+        NSLog("[MirageLock] display sleep: pausing %lu contexts", values.count)
+        values.forEach { $0.renderer?.prepareForSleep() }
+    }
+
+    private func recoverAfterWake() {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in self?.recoverAfterWake() }
+            return
+        }
+        lock.lock()
+        let values = Array(contexts.values)
+        lock.unlock()
+        NSLog("[MirageLock] display wake: recovering %lu contexts", values.count)
+        values.forEach { context in
+            context.renderer?.recoverAfterWake()
+            context.context.layer = context.rootLayer
         }
         agentProxy?.invalidateSnapshots { _ in }
     }
