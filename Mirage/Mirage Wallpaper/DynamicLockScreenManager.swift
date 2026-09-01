@@ -208,7 +208,14 @@ final class DynamicLockScreenManager: ObservableObject {
         }
         guard let container = sharedContainerURL else { throw DynamicLockScreenError.appGroupUnavailable }
 
-        try FileManager.default.createDirectory(at: container, withIntermediateDirectories: true)
+        do {
+            try FileManager.default.createDirectory(at: container, withIntermediateDirectories: true)
+        } catch {
+            if Self.isSharedContainerPermissionError(error) {
+                throw DynamicLockScreenError.fullDiskAccessRequired
+            }
+            throw error
+        }
         let deployment = try deploy(wallpaper: wallpaper, in: container)
         var keepDeployment = false
         defer {
@@ -271,7 +278,14 @@ final class DynamicLockScreenManager: ObservableObject {
             })
         )
         let data = try JSONEncoder().encode(configuration)
-        try data.write(to: container.appendingPathComponent(configurationName), options: .atomic)
+        do {
+            try data.write(to: container.appendingPathComponent(configurationName), options: .atomic)
+        } catch {
+            if Self.isSharedContainerPermissionError(error) {
+                throw DynamicLockScreenError.fullDiskAccessRequired
+            }
+            throw error
+        }
         keepDeployment = true
         notifyConfigurationChanged()
         cleanupDeployments(except: deployment.root)
@@ -392,6 +406,14 @@ final class DynamicLockScreenManager: ObservableObject {
         NSWorkspace.shared.open(url)
     }
 
+    func openFullDiskAccessSettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"),
+           NSWorkspace.shared.open(url) {
+            return
+        }
+        NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/System Settings.app"))
+    }
+
     private var sharedContainerURL: URL? {
         FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupID)
     }
@@ -408,9 +430,16 @@ final class DynamicLockScreenManager: ObservableObject {
 
     private func deploy(wallpaper: WEWallpaper, in container: URL) throws -> (root: URL, renderDirectory: URL, entryURL: URL, previewURL: URL?) {
         let deployments = container.appendingPathComponent("DynamicLockScreen/Deployments", isDirectory: true)
-        try FileManager.default.createDirectory(at: deployments, withIntermediateDirectories: true)
         let root = deployments.appendingPathComponent(UUID().uuidString.lowercased(), isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        do {
+            try FileManager.default.createDirectory(at: deployments, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        } catch {
+            if Self.isSharedContainerPermissionError(error) {
+                throw DynamicLockScreenError.fullDiskAccessRequired
+            }
+            throw error
+        }
 
         let source = playableEntryURL(for: wallpaper)
         let renderDirectory = root.appendingPathComponent("render", isDirectory: true)
@@ -486,6 +515,23 @@ final class DynamicLockScreenManager: ObservableObject {
         } catch {
             try FileManager.default.copyItem(at: source, to: destination)
         }
+    }
+
+    private static func isSharedContainerPermissionError(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        if nsError.domain == NSCocoaErrorDomain,
+           nsError.code == CocoaError.fileReadNoPermission.rawValue
+            || nsError.code == CocoaError.fileWriteNoPermission.rawValue {
+            return true
+        }
+        if nsError.domain == NSPOSIXErrorDomain,
+           nsError.code == Int(EACCES) || nsError.code == Int(EPERM) {
+            return true
+        }
+        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? Error {
+            return isSharedContainerPermissionError(underlying)
+        }
+        return false
     }
 
     private func cleanupDeployments(except active: URL) {
@@ -801,6 +847,7 @@ enum DynamicLockScreenError: LocalizedError {
     case noWallpaper
     case unsupportedWallpaper
     case appGroupUnavailable
+    case fullDiskAccessRequired
 
     var errorDescription: String? {
         switch self {
@@ -808,6 +855,7 @@ enum DynamicLockScreenError: LocalizedError {
         case .noWallpaper: return L("请先播放一张壁纸")
         case .unsupportedWallpaper: return L("当前壁纸不能用作动态锁屏")
         case .appGroupUnavailable: return L("动态锁屏共享容器不可用")
+        case .fullDiskAccessRequired: return L("动态锁屏需要完全磁盘访问权限")
         }
     }
 }

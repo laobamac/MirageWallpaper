@@ -9,10 +9,22 @@ import UniformTypeIdentifiers
 import Combine
 import CoreGraphics
 
+enum ScreenSaverFeedbackAction: Equatable {
+    case dismiss
+    case openFullDiskAccess
+}
+
 struct ScreenSaverFeedback: Identifiable {
     let id = UUID()
     let title: String
     let message: String
+    let action: ScreenSaverFeedbackAction
+
+    init(title: String, message: String, action: ScreenSaverFeedbackAction = .dismiss) {
+        self.title = title
+        self.message = message
+        self.action = action
+    }
 }
 
 class ContentViewModel: ObservableObject, DropDelegate {

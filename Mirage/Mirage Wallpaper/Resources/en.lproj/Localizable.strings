@@ -910,6 +910,9 @@
 "已设为动态锁屏" = "Dynamic Lock Screen Set";
 "“%@”已部署到锁屏扩展。" = "“%@” was deployed to the lock screen extension.";
 "设置动态锁屏失败" = "Could Not Set Dynamic Lock Screen";
+"动态锁屏需要完全磁盘访问权限" = "Dynamic Lock Screen Requires Full Disk Access";
+"由于当前 Mirage 版本未使用开发者证书签名，macOS 不允许 Mirage 与动态锁屏扩展共享部署文件。请在“隐私与安全性 > 完全磁盘访问权限”中添加并启用 Mirage，然后重新打开 Mirage 并再次设置动态锁屏。" = "Because this Mirage build is not signed with a developer certificate, macOS does not allow Mirage and its Dynamic Lock Screen extension to share deployment files. Add and enable Mirage in Privacy & Security > Full Disk Access, then reopen Mirage and set the Dynamic Lock Screen again.";
+"打开完全磁盘访问权限设置" = "Open Full Disk Access Settings";
 "请先开启动态锁屏并完成确认" = "Enable Dynamic Lock Screen and complete confirmation first";
 "当前壁纸不能用作动态锁屏" = "The current wallpaper cannot be used as Dynamic Lock Screen";
 "动态锁屏共享容器不可用" = "Dynamic Lock Screen shared container is unavailable";

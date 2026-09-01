@@ -18,6 +18,7 @@ struct ScreenSaverPage: SettingsPage {
     @State private var status: Status
     @State private var message = ""
     @State private var showingError = false
+    @State private var showingFullDiskAccessPrompt = false
     @State private var isWorking = false
 
     init(globalSettings viewModel: GlobalSettingsViewModel) {
@@ -136,6 +137,14 @@ struct ScreenSaverPage: SettingsPage {
         } message: {
             Text(message)
         }
+        .alert("动态锁屏需要完全磁盘访问权限", isPresented: $showingFullDiskAccessPrompt) {
+            Button("打开完全磁盘访问权限设置") {
+                dynamicLockScreenManager.openFullDiskAccessSettings()
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("由于当前 Mirage 版本未使用开发者证书签名，macOS 不允许 Mirage 与动态锁屏扩展共享部署文件。请在“隐私与安全性 > 完全磁盘访问权限”中添加并启用 Mirage，然后重新打开 Mirage 并再次设置动态锁屏。")
+        }
         .sheet(isPresented: $dynamicLockScreenManager.isConfirmationPresented) {
             DynamicLockScreenConfirmationSheet(manager: dynamicLockScreenManager)
         }
@@ -200,6 +209,10 @@ struct ScreenSaverPage: SettingsPage {
     }
 
     private func show(_ error: Error) {
+        if case DynamicLockScreenError.fullDiskAccessRequired = error {
+            showingFullDiskAccessPrompt = true
+            return
+        }
         message = error.localizedDescription
         showingError = true
     }

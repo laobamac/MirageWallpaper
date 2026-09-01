@@ -243,7 +243,17 @@ struct ContentView: View {
         }
         .alert(isPresented: $viewModel.importAlertPresented, error: viewModel.importAlertError) { }
         .alert(item: $viewModel.screenSaverFeedback) { feedback in
-            Alert(
+            if feedback.action == .openFullDiskAccess {
+                return Alert(
+                    title: Text(feedback.title),
+                    message: Text(feedback.message),
+                    primaryButton: .default(Text("打开完全磁盘访问权限设置")) {
+                        dynamicLockScreenManager.openFullDiskAccessSettings()
+                    },
+                    secondaryButton: .cancel(Text("取消"))
+                )
+            }
+            return Alert(
                 title: Text(feedback.title),
                 message: Text(feedback.message),
                 dismissButton: .default(Text("好"))

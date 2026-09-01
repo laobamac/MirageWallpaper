@@ -321,6 +321,12 @@ struct ExplorerItemMenu: SubviewOfContentView {
                 title: L("已设为动态锁屏"),
                 message: L("“%@”已部署到锁屏扩展。", hoveredWallpaper.project.title)
             )
+        } catch DynamicLockScreenError.fullDiskAccessRequired {
+            viewModel.screenSaverFeedback = ScreenSaverFeedback(
+                title: L("动态锁屏需要完全磁盘访问权限"),
+                message: L("由于当前 Mirage 版本未使用开发者证书签名，macOS 不允许 Mirage 与动态锁屏扩展共享部署文件。请在“隐私与安全性 > 完全磁盘访问权限”中添加并启用 Mirage，然后重新打开 Mirage 并再次设置动态锁屏。"),
+                action: .openFullDiskAccess
+            )
         } catch {
             viewModel.screenSaverFeedback = ScreenSaverFeedback(
                 title: L("设置动态锁屏失败"),
