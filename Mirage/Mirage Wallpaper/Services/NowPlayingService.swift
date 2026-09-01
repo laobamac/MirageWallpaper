@@ -25,6 +25,7 @@ final class NowPlayingService {
     private var lastState = -1
     private var lastArtworkURL = ""
     private var previousArtworkURL = ""
+    private var lastMediaIdentity = ""
 
     private init() {}
 
@@ -41,6 +42,10 @@ final class NowPlayingService {
             } else {
                 timer?.cancel()
                 timer = nil
+                lastState = -1
+                lastArtworkURL = ""
+                previousArtworkURL = ""
+                lastMediaIdentity = ""
             }
         }
     }
@@ -56,6 +61,12 @@ final class NowPlayingService {
             return
         }
         let playing = (object["playing"] as? NSNumber)?.boolValue == true
+        let identity = mediaIdentity(object)
+        if identity != lastMediaIdentity {
+            previousArtworkURL = lastArtworkURL
+            lastArtworkURL = ""
+            lastMediaIdentity = identity
+        }
         var payload: [String: Any] = [
             "state": playing ? 1 : 2,
             "title": title,
@@ -69,7 +80,9 @@ final class NowPlayingService {
            let artwork = Data(base64Encoded: encoded), !artwork.isEmpty,
            let image = persistArtwork(artwork, mimeType: object["artworkMimeType"] as? String) {
             if image.url != lastArtworkURL {
-                previousArtworkURL = lastArtworkURL
+                if !lastArtworkURL.isEmpty {
+                    previousArtworkURL = lastArtworkURL
+                }
                 lastArtworkURL = image.url
             }
             payload["artURL"] = lastArtworkURL
@@ -124,7 +137,11 @@ final class NowPlayingService {
 
     private func publishStopped() {
         guard lastState != 0 else { return }
+        let previous = lastArtworkURL
         lastState = 0
+        lastArtworkURL = ""
+        previousArtworkURL = ""
+        lastMediaIdentity = ""
         onUpdate?([
             "state": 0,
             "title": "",
@@ -134,8 +151,17 @@ final class NowPlayingService {
             "position": 0,
             "duration": 0,
             "artURL": "",
-            "previousArtURL": lastArtworkURL
+            "previousArtURL": previous
         ])
+    }
+
+    private func mediaIdentity(_ object: [String: Any]) -> String {
+        let title = object["title"] as? String ?? ""
+        let artist = object["artist"] as? String ?? ""
+        let album = object["album"] as? String ?? ""
+        let albumArtist = object["albumArtist"] as? String ?? ""
+        return [title, artist, album, albumArtist]
+            .joined(separator: "\u{1f}")
     }
 
     private func persistArtwork(_ data: Data, mimeType: String?)

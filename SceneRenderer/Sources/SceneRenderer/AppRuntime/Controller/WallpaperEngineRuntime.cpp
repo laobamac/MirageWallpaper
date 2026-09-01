@@ -1069,6 +1069,7 @@ public:
 
 private:
     void rebuildRenderGraph(vulkan::RenderGraphResourceRetention retention, bool evict_meshes);
+    void applyMediaStatus(const MediaStatus& status);
     void consumeDirtyEventsCoveredByGraphRebuild();
     void refreshPreparedMeshDirtyEvents();
     void refreshPreparedMaterialDirtyEvents();
@@ -1093,6 +1094,7 @@ private:
 
     std::unique_ptr<vulkan::VulkanRender> m_render { std::make_unique<vulkan::VulkanRender>() };
     std::shared_ptr<Scene>                m_scene { nullptr };
+    std::optional<MediaStatus>            m_media_status;
     std::atomic<bool>                     m_scene_ready { false };
     RenderSceneSnapshot                   m_render_scene;
     std::unique_ptr<rg::RenderGraph>      m_rg { nullptr };
@@ -1363,6 +1365,7 @@ void SceneRenderController::on(RenderSetScene&& m) {
     m_scene_ready.store(false, std::memory_order_release);
     m_scene = std::move(m.scene);
     rebuildRenderGraph(vulkan::RenderGraphResourceRetention::ReleaseSceneTextures, true);
+    if (m_scene && m_media_status) applyMediaStatus(*m_media_status);
     m_scene_ready.store(m_scene != nullptr && m_render->readyToDraw(), std::memory_order_release);
 }
 
@@ -1435,31 +1438,29 @@ void SceneRenderController::on(RenderSetUserProperty&& m) {
 }
 
 void SceneRenderController::on(RenderSetMediaStatus&& m) {
+    m_media_status = std::move(m.status);
+    if (! m_scene) return;
+    applyMediaStatus(*m_media_status);
+}
+
+void SceneRenderController::applyMediaStatus(const MediaStatus& status) {
     if (! m_scene) return;
 
-    sr::script::SetSceneMediaStatus(*m_scene, ToScriptMediaStatus(m.status));
+    sr::script::SetSceneMediaStatus(*m_scene, ToScriptMediaStatus(status));
 
     std::vector<SceneMaterialId> texture_materials;
     for (auto material : ApplyUserPropertyToMaterialTextures(
-             *m_scene, "$mediaThumbnail", RuntimeTextureProperty(m.status.art_url))) {
+             *m_scene, "$mediaThumbnail", RuntimeTextureProperty(status.art_url))) {
         PushUniqueMaterialId(texture_materials, material);
     }
     for (auto material :
          ApplyUserPropertyToMaterialTextures(*m_scene,
                                              "$mediaPreviousThumbnail",
-                                             RuntimeTextureProperty(m.status.previous_art_url))) {
+                                             RuntimeTextureProperty(status.previous_art_url))) {
         PushUniqueMaterialId(texture_materials, material);
     }
 
-    bool requires_graph_rebuild = false;
     if (! texture_materials.empty() && renderInited() && m_rg) {
-        m_render_scene = ExtractRenderSceneSnapshot(*m_scene);
-        if (! m_render->refreshPreparedMaterialTextures(
-                *m_scene, m_render_scene, texture_materials)) {
-            requires_graph_rebuild = true;
-        }
-    }
-    if (requires_graph_rebuild) {
         rebuildRenderGraph(vulkan::RenderGraphResourceRetention::KeepSceneTextures, false);
         return;
     }

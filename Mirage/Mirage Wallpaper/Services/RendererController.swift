@@ -626,6 +626,7 @@ final class RendererController {
     /// A renderer that never answers must not leak its completion handler, and
     /// the desktop-override caller must not wait forever for its still.
     private static let snapshotTimeout: TimeInterval = 8
+    private var latestMediaStatus: [String: Any]?
 
     init() {
         SystemAudioSpectrumService.shared.onSpectrum = { [weak self] spectrum in
@@ -1420,8 +1421,14 @@ final class RendererController {
         if candidate.wallpaper.kind == .web {
             candidate.send(Self.webPlaybackStateCommand(for: candidate))
         }
+        replayLatestMediaStatusLocked(to: candidate)
         candidate.send(["cmd": "activate"])
         scheduleCandidateActivationTimeoutLocked(transition)
+    }
+
+    private func replayLatestMediaStatusLocked(to process: RendererProcess) {
+        guard process.wallpaper.kind == .scene, let status = latestMediaStatus else { return }
+        process.send(["cmd": "mediaStatus", "data": status])
     }
 
     private func candidateActivatedLocked(_ transition: ReplacementTransition) {
@@ -2357,6 +2364,9 @@ final class RendererController {
             }
             return (spectrum, media)
         }
+        if !state.1 {
+            queue.sync { latestMediaStatus = nil }
+        }
         SystemAudioSpectrumService.shared.setEnabled(state.0)
         NowPlayingService.shared.setEnabled(state.1)
     }
@@ -2374,7 +2384,11 @@ final class RendererController {
 
     private func setMediaStatus(_ status: [String: Any]) {
         let processes = queue.sync {
-            targetsLocked(nil, includeCandidates: true).filter { $0.wallpaper.kind == .scene }
+            let targets = targetsLocked(nil, includeCandidates: true).filter {
+                $0.wallpaper.kind == .scene
+            }
+            latestMediaStatus = targets.isEmpty ? nil : status
+            return targets
         }
         for process in processes {
             process.send(["cmd": "mediaStatus", "data": status])

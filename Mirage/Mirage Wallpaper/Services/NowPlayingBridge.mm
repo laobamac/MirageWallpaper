@@ -62,8 +62,8 @@ id CurrentController() {
             [request setValue:@0 forKey:@"location"];
             [request setValue:@1 forKey:@"length"];
             [request setValue:@YES forKey:@"includeMetadata"];
-            [request setValue:@512 forKey:@"artworkWidth"];
-            [request setValue:@512 forKey:@"artworkHeight"];
+            [request setValue:@2048 forKey:@"artworkWidth"];
+            [request setValue:@2048 forKey:@"artworkHeight"];
             [configuration setValue:request forKey:@"playbackQueueRequest"];
         } @catch (NSException*) {
             return;
@@ -104,7 +104,8 @@ NSDictionary* NowPlayingPayload() {
         output[@"artworkData"] =
             [itemArtworkData base64EncodedStringWithOptions:0];
     id artworkData = Value(metadata, @"artworkData");
-    if ([artworkData isKindOfClass:[NSData class]])
+    if (![itemArtworkData isKindOfClass:[NSData class]] &&
+        [artworkData isKindOfClass:[NSData class]])
         output[@"artworkData"] = [artworkData base64EncodedStringWithOptions:0];
     Put(output, @"artworkMimeType", Value(metadata, @"artworkMIMEType"));
     NSNumber* playbackRate = Value(response, @"playbackRate");
@@ -123,10 +124,12 @@ NSDictionary* NowPlayingPayload() {
         };
         for (NSString* source in keys) Put(output, keys[source], extra[source]);
         id artwork = extra[@"kMRMediaRemoteNowPlayingInfoArtworkData"];
-        if ([artwork isKindOfClass:[NSData class]])
+        if (![output[@"artworkData"] isKindOfClass:[NSString class]] &&
+            [artwork isKindOfClass:[NSData class]])
             output[@"artworkData"] = [artwork base64EncodedStringWithOptions:0];
-        Put(output, @"artworkMimeType",
-            extra[@"kMRMediaRemoteNowPlayingInfoArtworkMIMEType"]);
+        if (![output[@"artworkMimeType"] isKindOfClass:[NSString class]])
+            Put(output, @"artworkMimeType",
+                extra[@"kMRMediaRemoteNowPlayingInfoArtworkMIMEType"]);
         NSDate* timestamp = extra[@"kMRMediaRemoteNowPlayingInfoTimestamp"];
         NSNumber* rate = extra[@"kMRMediaRemoteNowPlayingInfoPlaybackRate"];
         NSNumber* elapsed = extra[@"kMRMediaRemoteNowPlayingInfoElapsedTime"];
