@@ -71,24 +71,43 @@ if [ "$SIGN_IDENTITY" != "-" ]; then
     CODE_SIGNING_REQUIRED=YES
 fi
 
+APP="$BUILD_DIR/DD/Build/Products/$CONFIG/Mirage Wallpaper.app"
+
+if [ -d "$APP/Contents/Resources/Renderers" ]; then
+    echo "[build] 清理旧构建塞进产物里的渲染器残留..."
+    rm -rf "$APP"
+fi
+
+mkdir -p "$BUILD_DIR"
+BUILD_LOG="$BUILD_DIR/xcodebuild-$CONFIG.log"
+: > "$BUILD_LOG"
+chmod 600 "$BUILD_LOG"
+
 echo "[build] 编译 ($CONFIG)..."
-xcodebuild "${XCCONFIG_ARGS[@]}" -project "$PROJECT" -scheme "$SCHEME" -configuration "$CONFIG" \
+if ! xcodebuild "${XCCONFIG_ARGS[@]}" -project "$PROJECT" -scheme "$SCHEME" -configuration "$CONFIG" \
     -destination 'platform=macOS' \
     -derivedDataPath "$BUILD_DIR/DD" \
     ARCHS="$TARGET_ARCH" ONLY_ACTIVE_ARCH=YES \
     CODE_SIGN_IDENTITY="$SIGN_IDENTITY" CODE_SIGNING_REQUIRED="$CODE_SIGNING_REQUIRED" CODE_SIGNING_ALLOWED=YES \
-    build | tail -3
+    build > "$BUILD_LOG" 2>&1; then
+    echo "[build] 编译失败，错误摘要:" >&2
+    { grep -nE "error:|error extracting|not signed at all|In subcomponent:|failed with a nonzero|The following build commands failed" \
+        "$BUILD_LOG" | tail -20 >&2; } || true
+    echo "[build] 完整日志: $BUILD_LOG" >&2
+    exit 1
+fi
+tail -3 "$BUILD_LOG"
 
-APP="$BUILD_DIR/DD/Build/Products/$CONFIG/Mirage Wallpaper.app"
 [ -d "$APP" ] || { echo "[build] 未找到产物: $APP" >&2; exit 1; }
-
-echo "[build] 内嵌渲染器与依赖..."
-bash "$HERE/bundle_renderers.sh" "$APP" "$ROOT" "$SIGN_IDENTITY"
 
 OUT="$PROJ_DIR/dist"
 mkdir -p "$OUT"
 rm -rf "$OUT/Mirage.app"
-cp -R "$APP" "$OUT/Mirage.app"
+ditto "$APP" "$OUT/Mirage.app"
+
+echo "[build] 内嵌渲染器与依赖..."
+bash "$HERE/bundle_renderers.sh" "$OUT/Mirage.app" "$ROOT" "$SIGN_IDENTITY"
+
 codesign --verify --deep --strict --verbose=2 "$OUT/Mirage.app"
 
 if [ "$SIGN_IDENTITY" != "-" ] && [ -n "$NOTARY_PROFILE" ]; then
