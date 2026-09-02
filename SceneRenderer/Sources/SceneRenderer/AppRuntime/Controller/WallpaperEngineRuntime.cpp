@@ -399,6 +399,10 @@ vulkan::PassInvalidationFlags MaterialDirtyToPassInvalidationFlags(SceneMaterial
     return out;
 }
 
+void ApplySolidColorNeutralization(Scene&                                         scene,
+                                   const Scene::MaterialSolidColorNeutralization& neutralization,
+                                   SceneMaterial& material, bool texture_bound);
+
 std::vector<SceneMaterialId>
 ApplyUserPropertyToMaterialTextures(Scene& scene, const std::string& key, const Json& prop) {
     std::vector<SceneMaterialId> changed_materials;
@@ -414,6 +418,10 @@ ApplyUserPropertyToMaterialTextures(Scene& scene, const std::string& key, const 
         auto        mutation = scene.SetMaterialTextureSlot(*binding.material, binding.slot, next);
         if (mutation.changed && mutation.material.has_value()) {
             PushUniqueMaterialId(changed_materials, *mutation.material);
+        }
+        if (binding.solid_color.has_value()) {
+            ApplySolidColorNeutralization(
+                scene, *binding.solid_color, *binding.material, next != binding.fallback);
         }
     }
 
@@ -596,6 +604,25 @@ bool MaterialHasShaderUniform(const SceneMaterial& material, std::string_view un
         material.customShader.variant->default_uniforms.contains(name))
         return true;
     return false;
+}
+
+void ApplySolidColorNeutralization(Scene&                                         scene,
+                                   const Scene::MaterialSolidColorNeutralization& neutralization,
+                                   SceneMaterial& material, bool texture_bound) {
+    auto&                 node = *neutralization.node;
+    const Eigen::Vector3f color =
+        texture_bound ? Eigen::Vector3f(1.0f, 1.0f, 1.0f) : neutralization.authored_color;
+    node.SetBaseColor(color, node.BaseAlpha());
+    const bool  has_user_alpha = MaterialHasShaderUniform(material, G_USERALPHA);
+    const float alpha = has_user_alpha ? node.BaseAlpha() : CurrentImagePropertyAlpha(node);
+    if (MaterialHasShaderUniform(material, G_COLOR4)) {
+        scene.SetMaterialShaderValue(
+            material, G_COLOR4, std::array<float, 4> { color.x(), color.y(), color.z(), alpha });
+    }
+    if (MaterialHasShaderUniform(material, G_COLOR)) {
+        scene.SetMaterialShaderValue(
+            material, G_COLOR, std::array<float, 3> { color.x(), color.y(), color.z() });
+    }
 }
 
 void ApplyUserPropertyToImageColor(Scene& scene, const std::string& key, const Json& prop) {

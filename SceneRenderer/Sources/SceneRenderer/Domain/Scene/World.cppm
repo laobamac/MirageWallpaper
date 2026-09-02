@@ -2869,10 +2869,16 @@ public:
         return out;
     }
 
+    struct MaterialSolidColorNeutralization {
+        rstd::sync::Arc<SceneNode> node;
+        Eigen::Vector3f            authored_color { Eigen::Vector3f::Zero() };
+    };
+
     struct MaterialTextureUserBinding {
-        std::shared_ptr<SceneMaterial> material;
-        uint32_t                       slot { 0 };
-        std::string                    fallback;
+        std::shared_ptr<SceneMaterial>                  material;
+        uint32_t                                        slot { 0 };
+        std::string                                     fallback;
+        std::optional<MaterialSolidColorNeutralization> solid_color;
     };
     Map<std::string, std::vector<MaterialTextureUserBinding>> material_texture_user_index;
 

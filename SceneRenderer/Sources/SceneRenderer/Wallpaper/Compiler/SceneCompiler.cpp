@@ -2550,9 +2550,16 @@ bool IsSystemMediaTextureBinding(const Json& binding) {
     return UserTexturePropertyKey(binding).has_value() && binding.is_object();
 }
 
-void RegisterMaterialUserTextureIndex(Scene* pScene,
+struct SolidColorNeutralizationSource {
+    const rstd::sync::Arc<SceneNode>* node { nullptr };
+    usize                             slot { 0 };
+    std::array<float, 3>              color { 1.0f, 1.0f, 1.0f };
+};
+
+void RegisterMaterialUserTextureIndex(Scene*                                pScene,
                                       const std::shared_ptr<SceneMaterial>& stable_mat,
-                                      const wpscene::Material& fallback_material) {
+                                      const wpscene::Material&              fallback_material,
+                                      const SolidColorNeutralizationSource& neutralization = {}) {
     if (! pScene || ! stable_mat) return;
     for (usize i = 0; i < fallback_material.usertextures.len(); ++i) {
         auto key = UserTexturePropertyKey(fallback_material.usertextures[i]);
@@ -2563,10 +2570,16 @@ void RegisterMaterialUserTextureIndex(Scene* pScene,
             i < stable_mat->textures.size()) {
             fallback = stable_mat->textures[i];
         }
-        pScene->material_texture_user_index[*key].push_back(
-            Scene::MaterialTextureUserBinding { .material = stable_mat,
-                                                .slot     = static_cast<uint32_t>(i),
-                                                .fallback = std::move(fallback) });
+        Scene::MaterialTextureUserBinding binding { .material = stable_mat,
+                                                    .slot     = static_cast<uint32_t>(i),
+                                                    .fallback = std::move(fallback) };
+        if (neutralization.node != nullptr && i == neutralization.slot) {
+            binding.solid_color = Scene::MaterialSolidColorNeutralization {
+                .node           = neutralization.node->clone(),
+                .authored_color = Vector3f(neutralization.color.data())
+            };
+        }
+        pScene->material_texture_user_index[*key].push_back(std::move(binding));
     }
 }
 
@@ -3239,6 +3252,11 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj,
         wpimgobj.solid_layer && ! image_user_texture_fallback.textures.empty() &&
         ! image_wpmat.textures.empty() && image_user_texture_fallback.textures[0] == "util/white" &&
         image_wpmat.textures[0] != image_user_texture_fallback.textures[0];
+    const bool solid_color_media_slot =
+        wpimgobj.solid_layer && ! image_user_texture_fallback.textures.empty() &&
+        image_user_texture_fallback.textures[0] == "util/white" &&
+        image_user_texture_fallback.usertextures.len() > 0 &&
+        IsSystemMediaTextureBinding(image_user_texture_fallback.usertextures[0]);
     const std::array<float, 3> layer_color =
         replaced_solid_color ? std::array<float, 3> { 1.0f, 1.0f, 1.0f } : wpimgobj.color;
     spImgNode->SetBaseColor(Vector3f(layer_color.data()), wpimgobj.alpha);
@@ -3410,8 +3428,16 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj,
     track_image_property_material(mesh.MaterialSlots().back());
     RegisterShaderUserVarIndex(
         context, spImgNode.as_ptr(), mesh.MaterialSlots().back(), image_wpmat, shaderInfo);
-    RegisterMaterialUserTextureIndex(
-        context.scene.get(), mesh.MaterialSlots().back(), image_user_texture_fallback);
+    SolidColorNeutralizationSource solid_color_neutralization {};
+    if (solid_color_media_slot) {
+        solid_color_neutralization.node  = &spImgNode;
+        solid_color_neutralization.slot  = 0;
+        solid_color_neutralization.color = layer_color;
+    }
+    RegisterMaterialUserTextureIndex(context.scene.get(),
+                                     mesh.MaterialSlots().back(),
+                                     image_user_texture_fallback,
+                                     solid_color_neutralization);
 
     // Later puppet meshes can carry their own materials (for example a
     // texture-channel animation overlay). Render them in the source pass so
