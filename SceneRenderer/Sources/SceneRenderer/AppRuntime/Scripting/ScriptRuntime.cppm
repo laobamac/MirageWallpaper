@@ -199,6 +199,8 @@ public:
     void SetImplicitAnimation(FieldScript& script,
                               std::shared_ptr<sr::SceneAnimationPlayback> playback);
 
+    void SetFieldScriptEffectSelf(FieldScript& script, const sr::SceneImageEffectRef& ref);
+
     // Snapshot used by thisScene.getInitialLayerConfig(layer).
     void RegisterInitialLayerConfig(sr::SceneNode* node, Json config);
 

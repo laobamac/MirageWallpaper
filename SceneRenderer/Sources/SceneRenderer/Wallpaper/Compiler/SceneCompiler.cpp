@@ -2408,6 +2408,8 @@ void RegisterImageEffectVisibilityScript(
                                                             owner);
     RegisterFieldScriptMetadata(context, owner, field_script);
     if (! field_script) return;
+    scripts.runtime().SetFieldScriptEffectSelf(
+        *field_script, { .layer = effect_layer.get(), .effect = effect });
     auto* scene = context.scene.get();
     scripts.AddActuator({
         field_script,

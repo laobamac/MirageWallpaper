@@ -435,6 +435,7 @@ struct DeferredCb {
     JSValue  fn;         // owned
     bool     repeating;
     bool     dead;
+    FieldScript* owner;
 };
 
 struct AudioBufferSlot {
@@ -703,6 +704,7 @@ struct FieldScript::Impl {
     // wrapper so per-frame swap doesn't reallocate.
     sr::SceneNode* node { nullptr };
     JSValue         wrapped_layer { JS_UNDEFINED };
+    JSValue         wrapped_object { JS_UNDEFINED };
     // Per-script cursor-inside-bbox state used to edge-detect
     // cursorEnter / cursorLeave between frames.
     bool cursor_inside { false };
@@ -953,6 +955,7 @@ JSValue EngineSetTimerImpl(JSContext* ctx, int argc, JSValueConst* argv, bool re
         .fn         = JS_DupValue(ctx, argv[0]),
         .repeating  = repeating,
         .dead       = false,
+        .owner      = host->active_field_script,
     });
     return MakeCancelFn(ctx, h);
 }
@@ -1447,6 +1450,8 @@ void InvokeEventCallback(JSContext* ctx, JSValue ns, const char* name, JSValue e
     JS_FreeValue(ctx, fn);
 }
 
+void BindScriptSelf(JSContext* ctx, FieldScript* fs, JSValueConst fallback);
+
 // Fire any deferred callbacks whose fire_at has passed. Called by TickAll
 // before the script update loop. Repeating callbacks reschedule against
 // their previous fire_at so steady-state drift is bounded.
@@ -1456,9 +1461,16 @@ void SweepDeferred(JSContext* ctx, EngineHostState* host) {
     for (size_t i = 0; i < host->deferred.size(); ++i) {
         if (host->deferred[i].dead) continue;
         while (! host->deferred[i].dead && host->deferred[i].fire_at <= now) {
+            FieldScript* owner    = host->deferred[i].owner;
+            FieldScript* previous = host->active_field_script;
+            if (owner != nullptr) {
+                BindScriptSelf(ctx, owner, host->default_layer);
+                host->active_field_script = owner;
+            }
             JSValue fn  = JS_DupValue(ctx, host->deferred[i].fn);
             JSValue ret = JS_Call(ctx, fn, JS_UNDEFINED, 0, nullptr);
             JS_FreeValue(ctx, fn);
+            if (owner != nullptr) host->active_field_script = previous;
             if (JS_IsException(ret)) {
                 JSValue     exc = JS_GetException(ctx);
                 const char* msg = JS_ToCString(ctx, exc);
@@ -3961,10 +3973,23 @@ void InitParticleInstanceClass(JSContext* ctx, JSRuntime* rt) {
     JS_SetClassProto(ctx, s_particle_instance_class_id, proto);
 }
 
+JSValue EffectGetAnimation(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* host     = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    auto  playback = host != nullptr && host->active_field_script != nullptr
+                         ? host->active_field_script->m_impl->implicit_animation
+                         : nullptr;
+    if (! playback) return NodeGetAnimationStub(ctx, this_val, argc, argv);
+    JSValue object = JS_NewObjectClass(ctx, s_animation_class_id);
+    if (JS_IsException(object)) return object;
+    JS_SetOpaque(object, new AnimationHandle { .playback = std::move(playback) });
+    return object;
+}
+
 const JSCFunctionListEntry s_effect_proto_funcs[] = {
     JS_CGETSET_DEF("visible", EffectGetVisible, EffectSetVisible),
     JS_CGETSET_DEF("name", EffectGetName, NodeSetIgnore),
     JS_CFUNC_DEF("getMaterial", 1, EffectGetMaterial),
+    JS_CFUNC_DEF("getAnimation", 1, EffectGetAnimation),
 };
 
 void InitEffectClass(JSContext* ctx, JSRuntime* rt) {
@@ -4002,6 +4027,20 @@ void BindThisLayer(JSContext* ctx, JSValueConst val) {
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
     JS_SetProperty(ctx, host->global_obj, host->atom_this_layer, JS_DupValue(ctx, val));
     JS_SetProperty(ctx, host->global_obj, host->atom_this_object, JS_DupValue(ctx, val));
+}
+void BindThisObject(JSContext* ctx, JSValueConst val) {
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    JS_SetProperty(ctx, host->global_obj, host->atom_this_object, JS_DupValue(ctx, val));
+}
+void BindScriptSelf(JSContext* ctx, FieldScript* fs, JSValueConst fallback) {
+    if (fs == nullptr || ! fs->m_impl) {
+        BindThisLayer(ctx, fallback);
+        return;
+    }
+    auto*   I     = fs->m_impl.get();
+    JSValue layer = JS_IsUndefined(I->wrapped_layer) ? fallback : I->wrapped_layer;
+    BindThisLayer(ctx, layer);
+    if (! JS_IsUndefined(I->wrapped_object)) BindThisObject(ctx, I->wrapped_object);
 }
 void BindThisScene(JSContext* ctx, JSValueConst val) {
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
@@ -4158,6 +4197,8 @@ JsRuntime::~JsRuntime() {
             JS_FreeValue(m_impl->ctx, fs->m_impl->current_value);
             if (! JS_IsUndefined(fs->m_impl->wrapped_layer))
                 JS_FreeValue(m_impl->ctx, fs->m_impl->wrapped_layer);
+            if (! JS_IsUndefined(fs->m_impl->wrapped_object))
+                JS_FreeValue(m_impl->ctx, fs->m_impl->wrapped_object);
         }
     }
     m_impl->scripts.clear();
@@ -4233,9 +4274,7 @@ void JsRuntime::SetUserProperty(std::string_view key, const Json& property) {
         if (! I->alive) continue;
         JSValue fn = JS_GetPropertyStr(ctx, I->module_ns, "applyUserProperties");
         if (JS_IsFunction(ctx, fn)) {
-            BindThisLayer(ctx,
-                          JS_IsUndefined(I->wrapped_layer) ? m_impl->host.default_layer
-                                                           : I->wrapped_layer);
+            BindScriptSelf(ctx, fs.get(), m_impl->host.default_layer);
             m_impl->host.active_field_script = fs.get();
             JSValue arg                      = JS_DupValue(ctx, changed);
             JSValue r                        = JS_Call(ctx, fn, JS_UNDEFINED, 1, &arg);
@@ -4279,8 +4318,7 @@ void JsRuntime::SetMediaStatus(const MediaStatus& status) {
     for (auto& fs : m_impl->scripts) {
         auto* I = fs->m_impl.get();
         if (! I->alive) continue;
-        BindThisLayer(
-            ctx, JS_IsUndefined(I->wrapped_layer) ? m_impl->host.default_layer : I->wrapped_layer);
+        BindScriptSelf(ctx, fs.get(), m_impl->host.default_layer);
         m_impl->host.active_field_script = fs.get();
         if (playback_changed) {
             JSValue ev = MakeMediaPlaybackEvent(ctx, status);
@@ -4425,8 +4463,7 @@ void JsRuntime::TickAll() {
         if (! I->alive || I->node == nullptr) continue;
         auto it = animation_events.find(I->node);
         if (it == animation_events.end() || it->second.empty()) continue;
-        BindThisLayer(
-            ctx, JS_IsUndefined(I->wrapped_layer) ? m_impl->host.default_layer : I->wrapped_layer);
+        BindScriptSelf(ctx, fs.get(), m_impl->host.default_layer);
         m_impl->host.active_field_script = fs.get();
         for (const auto& event : it->second) {
             JSValue value = MakeAnimationEvent(ctx, event);
@@ -4460,8 +4497,7 @@ void JsRuntime::TickAll() {
         // Captured buttons keep the node "engaged" for move/up even when the
         // cursor has moved off its bbox mid-drag.
         const bool now_inside  = over_node || I->captured_buttons != 0;
-        BindThisLayer(
-            ctx, JS_IsUndefined(I->wrapped_layer) ? m_impl->host.default_layer : I->wrapped_layer);
+        BindScriptSelf(ctx, fs.get(), m_impl->host.default_layer);
         m_impl->host.active_field_script = fs.get();
         auto invoke_cursor = [&](const char* name, int button) {
             JSValue    event  = MakeCursorEvent(ctx, current_cursor, button);
@@ -4511,8 +4547,7 @@ void JsRuntime::TickAll() {
         if (JS_IsUndefined(I->update_fn)) continue;
         // Swap `thisLayer` to this script's bound node before update. When
         // unbound, restore the original stub captured at bootstrap.
-        BindThisLayer(
-            ctx, JS_IsUndefined(I->wrapped_layer) ? m_impl->host.default_layer : I->wrapped_layer);
+        BindScriptSelf(ctx, fs.get(), m_impl->host.default_layer);
         m_impl->host.active_field_script = fs.get();
         JSValue ret;
         if (I->update_takes_arg) {
@@ -4626,8 +4661,7 @@ void RunFieldScriptInit(JSContext* ctx, JsRuntime::Impl* rt, FieldScript* fs) {
     // init() legitimately does heavy one-shot work, so it gets the eval budget
     // rather than the per-frame one.
     ScriptDeadlineGuard guard(&rt->host, kScriptEvalBudget);
-    BindThisLayer(ctx,
-                  JS_IsUndefined(I->wrapped_layer) ? rt->host.default_layer : I->wrapped_layer);
+    BindScriptSelf(ctx, fs, rt->host.default_layer);
     if (! JS_IsUndefined(rt->wrapped_scene)) BindThisScene(ctx, rt->wrapped_scene);
     rt->host.active_field_script = fs;
     JSValue arg                  = JS_DupValue(ctx, I->current_value);
@@ -4796,6 +4830,17 @@ FieldScript* JsRuntime::MakeFieldScript(
     m_impl->scripts.push_back(std::move(fs));
     if (m_impl->scene_root) RunFieldScriptInit(ctx, m_impl.get(), raw);
     return raw;
+}
+
+void JsRuntime::SetFieldScriptEffectSelf(FieldScript& script, const sr::SceneImageEffectRef& ref) {
+    JSContext* ctx = m_impl->ctx;
+    if (ctx == nullptr || ! script.m_impl) return;
+    auto* I = script.m_impl.get();
+    if (! JS_IsUndefined(I->wrapped_object)) {
+        JS_FreeValue(ctx, I->wrapped_object);
+        I->wrapped_object = JS_UNDEFINED;
+    }
+    I->wrapped_object = WrapEffect(ctx, ref);
 }
 
 // ---------------------------------------------------------------------------
