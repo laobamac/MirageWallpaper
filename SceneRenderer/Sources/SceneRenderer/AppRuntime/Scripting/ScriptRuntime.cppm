@@ -196,6 +196,8 @@ public:
     // Pending initializers run in authored layer order once the complete scene
     // graph is available.
     void SetInitializationOrder(FieldScript& script, std::uint64_t order);
+    void SetImplicitAnimation(FieldScript& script,
+                              std::shared_ptr<sr::SceneAnimationPlayback> playback);
 
     // Snapshot used by thisScene.getInitialLayerConfig(layer).
     void RegisterInitialLayerConfig(sr::SceneNode* node, Json config);

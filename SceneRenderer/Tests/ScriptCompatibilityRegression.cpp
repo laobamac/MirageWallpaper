@@ -94,6 +94,36 @@ void TestMediaCompatibilityFields() {
     Check(value && value->v == 1.0, "media event exposes albumTitle and complete color set");
 }
 
+void TestImplicitFieldAnimation() {
+    sr::script::JsRuntime runtime;
+    sr::SceneNode         node;
+    auto playback = std::make_shared<sr::SceneAnimationPlayback>(
+        "", 30.0f, 60, "single", false, true);
+    auto* script = runtime.MakeFieldScript(
+        R"JS(
+            export function mediaThumbnailChanged() {
+                thisObject.getAnimation().play();
+            }
+            export function update() {
+                return thisObject.getAnimation().isPlaying() ? 1 : 0;
+            }
+        )JS",
+        "test/implicit_field_animation",
+        sr::script::FieldKind::Scalar,
+        Parse("{}"),
+        Parse("0"),
+        &node);
+    Check(script != nullptr, "implicit field animation script compiles");
+    if (! script) return;
+    runtime.SetImplicitAnimation(*script, playback);
+    runtime.SetMediaStatus(sr::script::MediaStatus { .art_url = "/tmp/current.png",
+                                                      .previous_art_url = "/tmp/previous.png" });
+    runtime.TickAll();
+    const auto* value = std::get_if<sr::script::ScalarValue>(&script->last_value());
+    Check(playback->IsPlaying() && value && value->v == 1.0,
+          "getAnimation without a name controls the active field animation");
+}
+
 void TestColorScaleHelpers() {
     sr::script::JsRuntime runtime;
     auto* script = runtime.MakeFieldScript(
@@ -1534,6 +1564,7 @@ void TestUserShortcutOpening() {
 int main() {
     TestVectorAngle2();
     TestMediaCompatibilityFields();
+    TestImplicitFieldAnimation();
     TestColorScaleHelpers();
     TestMathConversionConstants();
     TestVec4Compatibility();

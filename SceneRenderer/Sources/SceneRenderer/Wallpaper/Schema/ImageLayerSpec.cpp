@@ -115,6 +115,7 @@ bool ImageEffect::FromJson(const sr::Json& json, fs::VFS& vfs, SceneVersion v) {
     sr::GetJsonValue(json, "name", name, false);
     sr::GetJsonValue(json, "username", username, false);
     sr::GetJsonValue(json, "id", id, false);
+    AbsorbAllFieldBindings(json, field_bindings);
     auto instance_name = name;
     auto parsed_effect = sr::ParseJson(fs::GetFileContent(vfs, "/assets/" + filePath));
     if (parsed_effect.is_err()) {

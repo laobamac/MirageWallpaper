@@ -67,6 +67,7 @@ public:
     std::vector<MaterialPass>  passes;
     std::vector<EffectCommand> commands;
     std::vector<EffectFbo>     fbos;
+    FieldBindings              field_bindings;
 };
 
 class ImageObject {

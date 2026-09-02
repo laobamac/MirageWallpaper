@@ -1623,7 +1623,15 @@ void TestScriptedInvisibleCompositeElision() {
     Check(vfs.Mount("/assets", sr::fs::CreatePhysicalFs(assets_root)),
           "scripted visibility regression mounts the shared assets");
     if (! vfs.Open("/assets/models/util/composelayer.json")) return;
-
+    const auto tint_root = std::filesystem::path(assets_root) / "effects/tint";
+    if (std::filesystem::exists(tint_root / "materials/effects"))
+        Check(vfs.Mount("/assets/materials/effects",
+                        sr::fs::CreatePhysicalFs((tint_root / "materials/effects").string())),
+              "scripted visibility regression mounts the tint materials");
+    if (std::filesystem::exists(tint_root / "shaders/effects"))
+        Check(vfs.Mount("/assets/shaders/effects",
+                        sr::fs::CreatePhysicalFs((tint_root / "shaders/effects").string())),
+              "scripted visibility regression mounts the tint shaders");
     auto document = sr::wpscene::ParseSceneDocumentJson(
         R"JSON({
             "camera": {},
@@ -1672,6 +1680,38 @@ void TestScriptedInvisibleCompositeElision() {
                 "size": [100.0, 100.0],
                 "instance": {"textures": ["_rt_imageLayerComposite_932_a"]},
                 "visible": true
+            }, {
+                "id": 934,
+                "name": "Hidden Effect Controller",
+                "image": "models/util/solidlayer.json",
+                "origin": [100.0, 100.0, 0.0],
+                "scale": [1.0, 1.0, 1.0],
+                "size": [10.0, 10.0],
+                "visible": false,
+                "effects": [{
+                    "file": "effects/tint/effect.json",
+                    "name": "Controller",
+                    "visible": {
+                        "value": false,
+                        "script": "export function update() { shared.enabled = true; return false; }"
+                    }
+                }]
+            }, {
+                "id": 935,
+                "name": "Scripted Effect Consumer",
+                "image": "models/util/solidlayer.json",
+                "origin": [120.0, 120.0, 0.0],
+                "scale": [1.0, 1.0, 1.0],
+                "size": [10.0, 10.0],
+                "visible": true,
+                "effects": [{
+                    "file": "effects/tint/effect.json",
+                    "name": "Consumer",
+                    "visible": {
+                        "value": false,
+                        "script": "export function update() { return shared.enabled === true; }"
+                    }
+                }]
             }]
         })JSON",
         sr::wpscene::kSceneVersionUnknown);
@@ -1690,6 +1730,21 @@ void TestScriptedInvisibleCompositeElision() {
     Check(scene->visibility_elidable_layer_ids.count(931) == 0 &&
               scene->RuntimeLayerVisibilityEnabled(sr::WallpaperLayerId { .value = 931 }),
           "a visible binding with update keeps its hidden layer in the graph");
+    auto* effect_consumer = FindWallpaperNode(scene->sceneGraph.as_ptr(), 935);
+    auto* effect_controller = FindWallpaperNode(scene->sceneGraph.as_ptr(), 934);
+    auto controller_effect = effect_controller != nullptr
+                                  ? scene->FindNodeImageEffect(*effect_controller, "Controller")
+                                  : std::nullopt;
+    auto consumer_effect = effect_consumer != nullptr
+                                ? scene->FindNodeImageEffect(*effect_consumer, "Consumer")
+                                : std::nullopt;
+    Check(controller_effect.has_value(),
+          "the hidden controller effect compiles");
+    Check(consumer_effect.has_value(),
+          "a hidden effect with a visibility script remains compiled");
+    sr::script::TickSceneScripts(*scene, {});
+    Check(consumer_effect && scene->ImageEffectRuntimeVisible(*consumer_effect),
+          "an invisible controller effect can drive another effect through shared state");
 
     auto snapshot = sr::ExtractRenderSceneSnapshot(*scene);
     auto graph    = sr::sceneToRenderGraph(*scene, snapshot);

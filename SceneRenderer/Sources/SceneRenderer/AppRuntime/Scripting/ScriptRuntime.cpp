@@ -719,6 +719,7 @@ struct FieldScript::Impl {
     std::unordered_map<sr::SceneNode*, std::string>              clone_asset_keys;
     std::vector<std::string>                                     registered_assets;
     std::string                                                  workshop_id;
+    std::shared_ptr<sr::SceneAnimationPlayback>                  implicit_animation;
 };
 
 FieldScript::FieldScript(): m_impl(std::make_unique<Impl>()) {}
@@ -3502,7 +3503,17 @@ FindSceneAnimation(sr::SceneNode* node, std::string_view name) {
 JSValue NodeGetAnimation(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
     auto* node = GetLayerNode(this_val);
-    if (node == nullptr || argc < 1) return NodeGetAnimationStub(ctx, this_val, argc, argv);
+    if (node == nullptr) return NodeGetAnimationStub(ctx, this_val, argc, argv);
+    if (argc < 1) {
+        auto playback = host != nullptr && host->active_field_script != nullptr
+                            ? host->active_field_script->m_impl->implicit_animation
+                            : nullptr;
+        if (! playback) return NodeGetAnimationStub(ctx, this_val, argc, argv);
+        JSValue object = JS_NewObjectClass(ctx, s_animation_class_id);
+        if (JS_IsException(object)) return object;
+        JS_SetOpaque(object, new AnimationHandle { .playback = std::move(playback) });
+        return object;
+    }
     const char* name = JS_ToCString(ctx, argv[0]);
     if (name == nullptr) return NodeGetAnimationStub(ctx, this_val, argc, argv);
     auto playback = node->FindAnimation(name);
@@ -4350,6 +4361,12 @@ void JsRuntime::SetCanvasSize(float width, float height) {
 void JsRuntime::SetInitializationOrder(FieldScript& script, std::uint64_t order) {
     if (! script.m_impl || script.m_impl->rt != m_impl.get() || script.m_impl->init_done) return;
     script.m_impl->initialization_order = order;
+}
+
+void JsRuntime::SetImplicitAnimation(
+    FieldScript& script, std::shared_ptr<sr::SceneAnimationPlayback> playback) {
+    if (! script.m_impl || script.m_impl->rt != m_impl.get()) return;
+    script.m_impl->implicit_animation = std::move(playback);
 }
 
 void JsRuntime::RegisterInitialLayerConfig(sr::SceneNode* node, Json config) {

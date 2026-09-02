@@ -1803,7 +1803,9 @@ ShaderValueMap NeutralColorUniforms(ShaderValueMap values) {
 i32 CountVisibleImageEffects(std::span<const wpscene::ImageEffect> effects) {
     i32 count = 0;
     for (const auto& effect : effects) {
-        if (effect.visible || ! effect.visible_user.empty()) ++count;
+        if (effect.visible || ! effect.visible_user.empty() ||
+            effect.field_bindings.scripts.contains("visible"))
+            ++count;
     }
     return count;
 }
@@ -2389,6 +2391,35 @@ script::FieldScript* RegisterMaterialValueScript(ParseContext&                  
     return field_script;
 }
 
+void RegisterImageEffectVisibilityScript(
+    ParseContext& context, SceneNode* owner,
+    const std::shared_ptr<SceneImageEffectLayer>& effect_layer,
+    const std::shared_ptr<SceneImageEffect>& effect,
+    const wpscene::FieldBindings& bindings) {
+    auto binding = bindings.scripts.find("visible");
+    if (binding == bindings.scripts.end() || ! owner || ! effect_layer || ! effect) return;
+    auto& scripts = EnsureScriptScene(context);
+    auto  sha     = utils::genSha1(std::span<const char>(binding->second.source));
+    auto* field_script = scripts.runtime().MakeFieldScript(binding->second.source,
+                                                            sha,
+                                                            script::FieldKind::Bool,
+                                                            binding->second.properties,
+                                                            binding->second.initial_value,
+                                                            owner);
+    RegisterFieldScriptMetadata(context, owner, field_script);
+    if (! field_script) return;
+    auto* scene = context.scene.get();
+    scripts.AddActuator({
+        field_script,
+        [scene, effect_layer, effect](const script::ScriptValue& value) {
+            auto visible = std::get_if<script::BoolValue>(&value);
+            if (! visible) return;
+            scene->SetImageEffectRuntimeVisible(
+                { .layer = effect_layer.get(), .effect = effect }, visible->v);
+        },
+    });
+}
+
 void RegisterHiddenTextEffectScripts(ParseContext&                         context,
                                      SceneNode*                            owner,
                                      std::span<const wpscene::ImageEffect> effects) {
@@ -2477,6 +2508,12 @@ void RegisterShaderUserVarIndex(ParseContext& context, SceneNode* owner,
         auto* field_script =
             RegisterMaterialValueScript(context, owner, wpmat, material_key, binding);
         if (! field_script) continue;
+        if (auto animation = stable_mat->customShader.valueAnimations.find(uniform_name);
+            animation != stable_mat->customShader.valueAnimations.end() &&
+            animation->second.curve && animation->second.curve->playback) {
+            scripts.runtime().SetImplicitAnimation(*field_script,
+                                                    animation->second.curve->playback);
+        }
         scripts.AddActuator({
             field_script,
             [pScene, stable_mat, uniform_name = std::move(uniform_name)](
@@ -3654,6 +3691,7 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj,
         for (const auto& wpeffobj : wpimgobj.effects) {
             i_eff++;
             if (! wpeffobj.visible && wpeffobj.visible_user.empty() &&
+                ! wpeffobj.field_bindings.scripts.contains("visible") &&
                 ! context.scene_accesses_effects) {
                 i_eff--;
                 continue;
@@ -3914,9 +3952,12 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj,
                 });
             }
 
-            if (eff_mat_ok)
+            if (eff_mat_ok) {
                 imgEffectLayer->AddEffect(imgEffect);
-            else {
+                RegisterImageEffectVisibilityScript(
+                    context, spImgNode.as_ptr(), imgEffectLayer, imgEffect,
+                    wpeffobj.field_bindings);
+            } else {
                 rstd_error("effect \'{}\' failed to load", wpeffobj.name);
             }
         }
@@ -4800,7 +4841,8 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
                               ! obj.text_user_key.empty() || ! obj.pointsize_user_key.empty();
     bool has_text_effect    = false;
     for (const auto& effect : obj.effects) {
-        if (effect.visible || ! effect.visible_user.empty()) {
+        if (effect.visible || ! effect.visible_user.empty() ||
+            effect.field_bindings.scripts.contains("visible")) {
             has_text_effect = true;
             break;
         }
@@ -5248,7 +5290,9 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
             layer->SetFinalMaterialState(final_state);
 
             for (const auto& wpeffobj : obj.effects) {
-                if (! wpeffobj.visible && wpeffobj.visible_user.empty()) continue;
+                if (! wpeffobj.visible && wpeffobj.visible_user.empty() &&
+                    ! wpeffobj.field_bindings.scripts.contains("visible"))
+                    continue;
 
                 auto effect             = std::make_shared<SceneImageEffect>();
                 effect->name            = wpeffobj.name;
@@ -5375,9 +5419,12 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
                     });
                 }
 
-                if (effect_ok)
+                if (effect_ok) {
                     layer->AddEffect(effect);
-                else
+                    RegisterImageEffectVisibilityScript(
+                        context, compose_node.as_ptr(), layer, effect,
+                        wpeffobj.field_bindings);
+                } else
                     rstd_error("effect '{}' failed to load", wpeffobj.name);
             }
             auto resolve_node = rstd::sync::Arc<SceneNode>::make();
