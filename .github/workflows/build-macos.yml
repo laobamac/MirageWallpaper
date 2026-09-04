@@ -90,11 +90,13 @@ jobs:
       - name: Install build dependencies
         shell: bash
         run: |
-          brew install cmake ninja pkg-config llvm molten-vk vulkan-loader \
+          brew install cmake ninja pkg-config llvm@22 molten-vk vulkan-loader \
             vulkan-headers glslang glfw freetype fontconfig lz4 ffmpeg
 
       - name: Build renderers
         shell: bash
+        env:
+          LLVM_FORMULA: llvm@22
         run: |
           ./SceneRenderer/scripts/build.sh release
           ./WebRenderer/scripts/build.sh release
