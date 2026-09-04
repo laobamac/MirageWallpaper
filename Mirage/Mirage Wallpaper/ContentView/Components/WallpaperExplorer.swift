@@ -9,15 +9,27 @@ import SwiftUI
 struct WallpaperExplorer: SubviewOfContentView {
     @ObservedObject var viewModel: ContentViewModel
     @ObservedObject var wallpaperViewModel: WallpaperViewModel
+    let creatorStore: WorkshopCreatorStore
+    let interactionStore: WorkshopInteractionStore
+    let libraryStore: WorkshopLibraryStore
+    let selectionCoordinator: WorkshopSelectionCoordinator
     let isActive: Bool
     let animatedPreviewMode: GSAnimatedPreviewPlayback
 
     init(contentViewModel viewModel: ContentViewModel,
          wallpaperViewModel: WallpaperViewModel,
+         creatorStore: WorkshopCreatorStore,
+         interactionStore: WorkshopInteractionStore,
+         libraryStore: WorkshopLibraryStore,
+         selectionCoordinator: WorkshopSelectionCoordinator,
          isActive: Bool = true,
          animatedPreviewMode: GSAnimatedPreviewPlayback = .hover) {
         self.viewModel = viewModel
         self.wallpaperViewModel = wallpaperViewModel
+        self.creatorStore = creatorStore
+        self.interactionStore = interactionStore
+        self.libraryStore = libraryStore
+        self.selectionCoordinator = selectionCoordinator
         self.isActive = isActive
         self.animatedPreviewMode = animatedPreviewMode
     }
@@ -62,6 +74,7 @@ struct WallpaperExplorer: SubviewOfContentView {
                             ForEach(page.items) { wallpaper in
                                 ExplorerItem(
                                     wallpaper: wallpaper,
+                                    selectionCoordinator: selectionCoordinator,
                                     isSelected: wallpaper.wallpaperDirectory == selectedDirectory,
                                     isActive: isActive,
                                     animatedPreviewMode: animatedPreviewMode
@@ -70,6 +83,10 @@ struct WallpaperExplorer: SubviewOfContentView {
                                     ExplorerItemMenu(
                                         contentViewModel: viewModel,
                                         wallpaperViewModel: wallpaperViewModel,
+                                        creatorStore: creatorStore,
+                                        interactionStore: interactionStore,
+                                        libraryStore: libraryStore,
+                                        selectionCoordinator: selectionCoordinator,
                                         current: wallpaper
                                     )
                                     ExplorerGlobalMenu(

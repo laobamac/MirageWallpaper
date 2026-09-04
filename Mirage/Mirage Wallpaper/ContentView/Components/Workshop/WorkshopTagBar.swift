@@ -7,7 +7,7 @@
 import SwiftUI
 
 struct WorkshopTagBar: View {
-    @ObservedObject var workshopViewModel: WorkshopViewModel
+    let browseStore: WorkshopBrowseStore
 
     private let displayTags: [WorkshopTag] = [
         .anime, .nature, .abstract, .landscape, .sciFi, .cartoon,
@@ -19,9 +19,9 @@ struct WorkshopTagBar: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
                 ForEach(displayTags) { tag in
-                    let isSelected = workshopViewModel.selectedTags.contains(tag.rawValue)
+                    let isSelected = browseStore.selectedTags.contains(tag.rawValue)
                     Button {
-                        workshopViewModel.applyTagFilter(tag.rawValue)
+                        browseStore.applyTagFilter(tag.rawValue)
                     } label: {
                         HStack(spacing: 4) {
                             Image(systemName: tag.sfSymbol)
@@ -39,11 +39,9 @@ struct WorkshopTagBar: View {
                     .animation(.spring(response: 0.25, dampingFraction: 0.8), value: isSelected)
                 }
 
-                if !workshopViewModel.selectedTags.isEmpty {
+                if !browseStore.selectedTags.isEmpty {
                     Button {
-                        workshopViewModel.selectedTags.removeAll()
-                        workshopViewModel.currentPage = 1
-                        workshopViewModel.search()
+                        browseStore.clearTags()
                     } label: {
                         HStack(spacing: 4) {
                             Image(systemName: "xmark")

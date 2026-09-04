@@ -9,7 +9,12 @@ import SwiftUI
 struct WallpaperPreview: SubviewOfContentView {
     @ObservedObject var viewModel: ContentViewModel
     @ObservedObject var wallpaperViewModel: WallpaperViewModel
-    @ObservedObject var workshopViewModel: WorkshopViewModel
+    let creatorStore: WorkshopCreatorStore
+    let interactionStore: WorkshopInteractionStore
+    let libraryStore: WorkshopLibraryStore
+    let selectionCoordinator: WorkshopSelectionCoordinator
+    let sessionStore: SteamSessionStore
+    let subscriptionStore: SubscriptionStore
     let isActive: Bool
     
     @Environment(\.undoManager) var undoManager
@@ -28,11 +33,21 @@ struct WallpaperPreview: SubviewOfContentView {
 
     init(contentViewModel viewModel: ContentViewModel,
          wallpaperViewModel: WallpaperViewModel,
-         workshopViewModel: WorkshopViewModel = AppDelegate.shared.workshopViewModel,
+         creatorStore: WorkshopCreatorStore,
+         interactionStore: WorkshopInteractionStore,
+         libraryStore: WorkshopLibraryStore,
+         selectionCoordinator: WorkshopSelectionCoordinator,
+         sessionStore: SteamSessionStore,
+         subscriptionStore: SubscriptionStore,
          isActive: Bool = true) {
         self.viewModel = viewModel
         self.wallpaperViewModel = wallpaperViewModel
-        self.workshopViewModel = workshopViewModel
+        self.creatorStore = creatorStore
+        self.interactionStore = interactionStore
+        self.libraryStore = libraryStore
+        self.selectionCoordinator = selectionCoordinator
+        self.sessionStore = sessionStore
+        self.subscriptionStore = subscriptionStore
         self.isActive = isActive
     }
 
@@ -327,20 +342,26 @@ struct WallpaperPreview: SubviewOfContentView {
             .padding()
         }
         .onAppear {
-            workshopViewModel.loadInstalledMetadata(for: wallpaperViewModel.currentWallpaper)
+            libraryStore.loadInstalledMetadata(
+                for: wallpaperViewModel.currentWallpaper
+            )
             recomputeSize(for: wallpaperViewModel.currentWallpaper)
         }
         .onChange(of: wallpaperViewModel.currentWallpaper.id) { _, _ in
-            workshopViewModel.loadInstalledMetadata(for: wallpaperViewModel.currentWallpaper)
+            libraryStore.loadInstalledMetadata(
+                for: wallpaperViewModel.currentWallpaper
+            )
             recomputeSize(for: wallpaperViewModel.currentWallpaper)
         }
         .confirmationDialog(
             "取消订阅",
             isPresented: $isConfirmingUnsubscribe,
-            presenting: workshopViewModel.installedWorkshopItem(for: wallpaperViewModel.currentWallpaper)
+            presenting: libraryStore.installedWorkshopItem(
+                for: wallpaperViewModel.currentWallpaper
+            )
         ) { item in
             Button("取消订阅", role: .destructive) {
-                workshopViewModel.unsubscribe(item)
+                subscriptionStore.unsubscribe(item)
             }
             Button("取消", role: .cancel) { }
         } message: { _ in
@@ -350,24 +371,24 @@ struct WallpaperPreview: SubviewOfContentView {
 
     @ViewBuilder
     private var workshopActions: some View {
-        if let item = workshopViewModel.installedWorkshopItem(for: wallpaperViewModel.currentWallpaper) {
+        if let item = libraryStore.installedWorkshopItem(
+            for: wallpaperViewModel.currentWallpaper
+        ) {
             let id = item.publishedFileId
-            let state = workshopViewModel.subscriptionState(for: id)
-            let isChecking = workshopViewModel.checkingSubscriptionIDs.contains(id)
-            let isChanging = workshopViewModel.changingSubscriptionIDs.contains(id)
+            let subscriptionStatus = subscriptionStore.status(for: id)
 
             VStack(spacing: 3) {
-                if workshopViewModel.steamSetupState == .checking {
+                if sessionStore.setupState == .checking {
                     HStack(spacing: 6) {
                         ProgressView()
                             .controlSize(.small)
-                        Text(workshopViewModel.steamCheckingMessage)
+                        Text(sessionStore.checkingMessage)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 6)
-                } else if workshopViewModel.steamSetupState != .ready {
+                } else if sessionStore.setupState != .ready {
                     Button {
                         AppDelegate.shared.openSteamSetup()
                     } label: {
@@ -375,24 +396,24 @@ struct WallpaperPreview: SubviewOfContentView {
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
-                } else if isChecking || isChanging {
+                } else if subscriptionStatus.isChecking || subscriptionStatus.isChanging {
                     HStack(spacing: 6) {
                         ProgressView()
                             .controlSize(.small)
-                        Text(LocalizedStringKey(isChanging ? "正在同步订阅状态…" : "正在检查订阅状态…"))
+                        Text(LocalizedStringKey(subscriptionStatus.isChanging ? "正在同步订阅状态…" : "正在检查订阅状态…"))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 6)
-                } else if state == .unknown {
+                } else if subscriptionStatus.state == .unknown {
                     Button {
-                        workshopViewModel.refreshSubscriptionStates(for: [item])
+                        subscriptionStore.refreshStates(for: [item])
                     } label: {
                         Label("重新检查订阅状态", systemImage: "arrow.clockwise")
                             .frame(maxWidth: .infinity)
                     }
-                } else if state == .subscribed {
+                } else if subscriptionStatus.state == .subscribed {
                     Button {
                         isConfirmingUnsubscribe = true
                     } label: {
@@ -403,7 +424,7 @@ struct WallpaperPreview: SubviewOfContentView {
                     .tint(.red)
                 } else {
                     Button {
-                        workshopViewModel.subscribe(item)
+                        subscriptionStore.subscribe(item)
                     } label: {
                         Label("订阅并下载", systemImage: "plus.circle.fill")
                             .frame(maxWidth: .infinity)
@@ -432,7 +453,7 @@ struct WallpaperPreview: SubviewOfContentView {
                     .help(L("在 Steam 中查看或举报"))
                 }
 
-                if let error = workshopViewModel.subscriptionActionError(for: id) {
+                if let error = subscriptionStatus.actionError {
                     Text(error)
                         .font(.caption2)
                         .foregroundStyle(.red)
@@ -443,10 +464,7 @@ struct WallpaperPreview: SubviewOfContentView {
     }
 
     private func openWorkshopItem(_ item: WorkshopItem) {
-        workshopViewModel.selectedItem = item
-        workshopViewModel.showCustomization = false
-        workshopViewModel.showCreatorProfile = false
-        workshopViewModel.prepareWorkshopInteractions(for: item)
+        selectionCoordinator.showDetail(item)
         AppDelegate.shared.navigationModel.selection = .workshop
     }
 
@@ -467,18 +485,20 @@ struct WallpaperPreview: SubviewOfContentView {
 
     private var isCurrentFavorite: Bool {
         if let currentWorkshopID {
-            return workshopViewModel.isWorkshopFavorite(currentWorkshopID)
+            return interactionStore.isFavorite(currentWorkshopID)
         }
         return FavoritesManager.shared.isFavorite(wallpaperViewModel.currentWallpaper.id)
     }
 
     private var isChangingCurrentFavorite: Bool {
-        currentWorkshopID.map { workshopViewModel.changingFavoriteIDs.contains($0) } == true
+        currentWorkshopID.map {
+            interactionStore.changingFavoriteIDs.contains($0)
+        } == true
     }
 
     private func toggleCurrentFavorite() {
         if let currentWorkshopID {
-            workshopViewModel.toggleWorkshopFavorite(workshopId: currentWorkshopID)
+            interactionStore.toggleFavorite(workshopID: currentWorkshopID)
         } else {
             FavoritesManager.shared.toggle(wallpaperViewModel.currentWallpaper.id)
             NotificationCenter.default.post(name: .favoritesChanged, object: nil)
@@ -487,11 +507,12 @@ struct WallpaperPreview: SubviewOfContentView {
 
     private var authorSection: some View {
         let wallpaper = wallpaperViewModel.currentWallpaper
-        let creator = workshopViewModel.installedCreator(for: wallpaper)
-        let name = workshopViewModel.installedAuthorName(for: wallpaper) ?? L("佚名作者")
+        let creator = libraryStore.installedCreator(for: wallpaper)
+        let name = libraryStore.installedAuthorName(for: wallpaper)
+            ?? L("佚名作者")
         return Button {
             if let creator {
-                workshopViewModel.openCreatorProfile(creator)
+                creatorStore.open(creator)
             }
         } label: {
             HStack(spacing: 8) {

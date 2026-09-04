@@ -8,7 +8,14 @@ import SwiftUI
 
 struct WorkshopView: View {
     @EnvironmentObject private var globalSettingsViewModel: GlobalSettingsViewModel
-    @ObservedObject var workshopViewModel: WorkshopViewModel
+    let browseStore: WorkshopBrowseStore
+    let creatorStore: WorkshopCreatorStore
+    let downloadStore: WorkshopDownloadStore
+    let interactionStore: WorkshopInteractionStore
+    let libraryStore: WorkshopLibraryStore
+    let selectionCoordinator: WorkshopSelectionCoordinator
+    let sessionStore: SteamSessionStore
+    let subscriptionStore: SubscriptionStore
     @ObservedObject var viewModel: ContentViewModel
     @ObservedObject var wallpaperViewModel: WallpaperViewModel
     let isActive: Bool
@@ -31,15 +38,15 @@ struct WorkshopView: View {
                 }
                 .buttonStyle(.borderedProminent)
 
-                WorkshopSearchBar(workshopViewModel: workshopViewModel)
+                WorkshopSearchBar(browseStore: browseStore)
 
                 Spacer()
 
                 Button {
-                    workshopViewModel.refreshSearch()
+                    browseStore.refresh()
                 } label: {
                     Group {
-                        if workshopViewModel.isLoading {
+                        if browseStore.isLoading {
                             ProgressView()
                                 .controlSize(.small)
                         } else {
@@ -48,7 +55,7 @@ struct WorkshopView: View {
                     }
                     .frame(width: 16, height: 16)
                 }
-                .disabled(workshopViewModel.isLoading)
+                .disabled(browseStore.isLoading)
                 .help("刷新创意工坊")
 
                 WallpaperGridViewMenu(viewModel: viewModel)
@@ -59,8 +66,8 @@ struct WorkshopView: View {
                     ZStack(alignment: .topTrailing) {
                         Image(systemName: "arrow.down.circle")
                             .font(.title3)
-                        if workshopViewModel.activeDownloadCount > 0 {
-                            Text("\(workshopViewModel.activeDownloadCount)")
+                        if downloadStore.activeDownloadCount > 0 {
+                            Text("\(downloadStore.activeDownloadCount)")
                                 .font(.system(size: 9))
                                 .bold()
                                 .foregroundStyle(.white)
@@ -73,17 +80,21 @@ struct WorkshopView: View {
                 }
                 .buttonStyle(.plain)
                 .popover(isPresented: $isDownloadPopoverPresented) {
-                    DownloadPopover(workshopViewModel: workshopViewModel)
+                    DownloadPopover(
+                        downloadStore: downloadStore,
+                        onCancel: selectionCoordinator.cancelDownload,
+                        onRetry: downloadStore.retry
+                    )
                 }
 
                 steamAccountSection
             }
 
-            if workshopViewModel.steamSetupState != .ready {
+            if sessionStore.setupState != .ready {
                 steamSetupBanner
             }
 
-            if let message = workshopViewModel.pageNavigationMessage {
+            if let message = browseStore.pageNavigationMessage {
                 HStack(spacing: 8) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundStyle(.orange)
@@ -91,7 +102,7 @@ struct WorkshopView: View {
                         .font(.caption)
                     Spacer()
                     Button {
-                        workshopViewModel.pageNavigationMessage = nil
+                        browseStore.pageNavigationMessage = nil
                     } label: {
                         Image(systemName: "xmark")
                     }
@@ -103,7 +114,7 @@ struct WorkshopView: View {
                 .background(Color.orange.opacity(0.1))
             }
 
-            if workshopViewModel.isLoading && workshopViewModel.items.isEmpty {
+            if browseStore.isLoading && browseStore.items.isEmpty {
                 ZStack(alignment: .bottom) {
                     VStack(spacing: 16) {
                         ProgressView()
@@ -113,30 +124,30 @@ struct WorkshopView: View {
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                    if workshopViewModel.totalPages > 1 {
+                    if browseStore.totalPages > 1 {
                         PageNavigator(
-                            currentPage: workshopViewModel.currentPage,
-                            pageCount: workshopViewModel.totalPages,
-                            onSelect: workshopViewModel.goToPage
+                            currentPage: browseStore.currentPage,
+                            pageCount: browseStore.totalPages,
+                            onSelect: browseStore.goToPage
                         )
                         .padding(.bottom, 12)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if workshopViewModel.items.isEmpty && !workshopViewModel.isLoading {
+            } else if browseStore.items.isEmpty && !browseStore.isLoading {
                 ZStack(alignment: .bottom) {
                     VStack(spacing: 12) {
                         Image(systemName: "magnifyingglass")
                             .font(.system(size: 40))
                             .foregroundStyle(.tertiary)
-                        if let error = workshopViewModel.error {
+                        if let error = browseStore.error {
                             Text("加载失败")
                                 .font(.title3)
                                 .foregroundStyle(.secondary)
                             Text(error)
                                 .font(.caption)
                                 .foregroundStyle(.red)
-                            Button("重试") { workshopViewModel.search() }
+                            Button("重试") { browseStore.search() }
                                 .buttonStyle(.borderedProminent)
                         } else {
                             Text("没有找到壁纸")
@@ -149,11 +160,11 @@ struct WorkshopView: View {
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                    if workshopViewModel.totalPages > 1 {
+                    if browseStore.totalPages > 1 {
                         PageNavigator(
-                            currentPage: workshopViewModel.currentPage,
-                            pageCount: workshopViewModel.totalPages,
-                            onSelect: workshopViewModel.goToPage
+                            currentPage: browseStore.currentPage,
+                            pageCount: browseStore.totalPages,
+                            onSelect: browseStore.goToPage
                         )
                         .padding(.bottom, 12)
                     }
@@ -175,15 +186,20 @@ struct WorkshopView: View {
                                 alignment: .leading,
                                 spacing: 14
                             ) {
-                                ForEach(workshopViewModel.items) { item in
+                                ForEach(browseStore.items) { item in
                                     WorkshopItemCard(
                                         item: item,
                                         isHovered: hoveredId == item.id,
-                                        isSelected: workshopViewModel.selectedItem?.id == item.id,
-                                        isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
-                                        presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
-                                        downloadState: workshopViewModel.downloadState(for: item.publishedFileId),
-                                        isFavorite: workshopViewModel.isWorkshopFavorite(item.publishedFileId),
+                                        isSelected: selectionCoordinator.selectedItem?.id == item.id,
+                                        libraryStatus: libraryStore.status(
+                                            for: item.publishedFileId
+                                        ),
+                                        downloadStatus: downloadStore.status(
+                                            for: item.publishedFileId
+                                        ),
+                                        isFavorite: interactionStore.isFavorite(
+                                            item.publishedFileId
+                                        ),
                                         isActive: isActive,
                                         animatedPreviewMode: globalSettingsViewModel.settings.animatedPreviewPlaybackMode
                                     )
@@ -191,16 +207,19 @@ struct WorkshopView: View {
                                         hoveredId = hovered ? item.id : nil
                                     }
                                     .onTapGesture {
-                                        workshopViewModel.selectWorkshopItem(item)
+                                        selectionCoordinator.selectWorkshopItem(item)
                                     }
                                     .contextMenu {
-                                        if let wallpaper = workshopViewModel.installedItem(
-                                            workshopId: item.publishedFileId
+                                        if let wallpaper = libraryStore.installedItem(
+                                            id: item.publishedFileId
                                         ) {
                                             ExplorerItemMenu(
                                                 contentViewModel: viewModel,
                                                 wallpaperViewModel: wallpaperViewModel,
-                                                workshopViewModel: workshopViewModel,
+                                                creatorStore: creatorStore,
+                                                interactionStore: interactionStore,
+                                                libraryStore: libraryStore,
+                                                selectionCoordinator: selectionCoordinator,
                                                 current: wallpaper
                                             )
                                             ExplorerGlobalMenu(
@@ -210,7 +229,11 @@ struct WorkshopView: View {
                                         } else {
                                             WorkshopCardContextMenu(
                                                 item: item,
-                                                workshopViewModel: workshopViewModel
+                                                creatorStore: creatorStore,
+                                                downloadStore: downloadStore,
+                                                interactionStore: interactionStore,
+                                                selectionCoordinator: selectionCoordinator,
+                                                subscriptionStore: subscriptionStore
                                             )
                                             WallpaperGridViewMenu(viewModel: viewModel)
                                         }
@@ -221,12 +244,12 @@ struct WorkshopView: View {
                             .padding(.trailing)
                             #endif
 
-                            if workshopViewModel.isLoading {
+                            if browseStore.isLoading {
                                 ProgressView()
                                     .padding()
                             }
 
-                            if workshopViewModel.totalPages > 1 {
+                            if browseStore.totalPages > 1 {
                                 Color.clear.frame(height: 58)
                             }
                         }
@@ -234,16 +257,16 @@ struct WorkshopView: View {
                             WallpaperGridViewMenu(viewModel: viewModel)
                         }
 
-                        if workshopViewModel.totalPages > 1 {
+                        if browseStore.totalPages > 1 {
                             PageNavigator(
-                                currentPage: workshopViewModel.currentPage,
-                                pageCount: workshopViewModel.totalPages,
-                                onSelect: workshopViewModel.goToPage
+                                currentPage: browseStore.currentPage,
+                                pageCount: browseStore.totalPages,
+                                onSelect: browseStore.goToPage
                             )
                             .padding(.bottom, 12)
                         }
                     }
-                    .onChange(of: workshopViewModel.currentPage) { _, _ in
+                    .onChange(of: browseStore.currentPage) { _, _ in
                         withAnimation(.easeOut(duration: 0.2)) {
                             proxy.scrollTo("workshopTop", anchor: .top)
                         }
@@ -253,9 +276,9 @@ struct WorkshopView: View {
         }
         .onAppear {
             presentAPIKeyReminderIfNeeded()
-            workshopViewModel.checkSteamSetup()
-            if workshopViewModel.items.isEmpty {
-                workshopViewModel.search()
+            sessionStore.checkSetup()
+            if browseStore.items.isEmpty {
+                browseStore.search()
             }
         }
         .alert("建议设置专属 Steam API Key", isPresented: $showAPIKeyReminder) {
@@ -265,12 +288,14 @@ struct WorkshopView: View {
             Text("内置 Key 由所有 Mirage 用户共享，繁忙时可能导致创意工坊无法加载。设置您自己的免费 API Key 后将不再提醒。此 Key 只影响浏览，不影响登录和下载。")
         }
         .alert("Steam 登录", isPresented: Binding(
-            get: { workshopViewModel.logoutResultMessage != nil },
-            set: { if !$0 { workshopViewModel.logoutResultMessage = nil } }
+            get: { sessionStore.logoutResultMessage != nil },
+            set: { if !$0 { sessionStore.logoutResultMessage = nil } }
         )) {
-            Button("确定", role: .cancel) { workshopViewModel.logoutResultMessage = nil }
+            Button("确定", role: .cancel) {
+                sessionStore.logoutResultMessage = nil
+            }
         } message: {
-            Text(workshopViewModel.logoutResultMessage ?? "")
+            Text(sessionStore.logoutResultMessage ?? "")
         }
     }
 
@@ -278,7 +303,7 @@ struct WorkshopView: View {
 
     @ViewBuilder
     var steamAccountSection: some View {
-        switch workshopViewModel.steamSetupState {
+        switch sessionStore.setupState {
         case .ready:
             HStack(spacing: 8) {
                 HStack(spacing: 4) {
@@ -290,7 +315,7 @@ struct WorkshopView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                if workshopViewModel.isLoggingOut {
+                if sessionStore.isLoggingOut {
                     HStack(spacing: 5) {
                         ProgressView()
                             .controlSize(.small)
@@ -300,7 +325,7 @@ struct WorkshopView: View {
                     }
                 } else {
                     Button {
-                        workshopViewModel.logout()
+                        sessionStore.logout()
                     } label: {
                         Image(systemName: "rectangle.portrait.and.arrow.right")
                             .font(.caption)
@@ -314,7 +339,7 @@ struct WorkshopView: View {
             HStack(spacing: 6) {
                 ProgressView()
                     .controlSize(.small)
-                Text(workshopViewModel.steamCheckingMessage)
+                Text(sessionStore.checkingMessage)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -331,13 +356,13 @@ struct WorkshopView: View {
 
     @ViewBuilder
     var steamSetupBanner: some View {
-        switch workshopViewModel.steamSetupState {
+        switch sessionStore.setupState {
         case .checking:
             HStack(spacing: 12) {
                 ProgressView()
                     .controlSize(.regular)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(workshopViewModel.steamCheckingMessage)
+                    Text(sessionStore.checkingMessage)
                         .font(.callout)
                         .bold()
                     Text("正在确认 Steam 登录状态，请稍候。")
@@ -355,10 +380,10 @@ struct WorkshopView: View {
                     .font(.title2)
                     .foregroundStyle(.blue)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(workshopViewModel.steamSetupState == .serviceUnavailable ? "Steam 服务不可用" : "连接 Steam 以下载壁纸")
+                    Text(sessionStore.setupState == .serviceUnavailable ? "Steam 服务不可用" : "连接 Steam 以下载壁纸")
                         .font(.callout)
                         .bold()
-                    Text(workshopViewModel.steamSetupState == .serviceUnavailable
+                    Text(sessionStore.setupState == .serviceUnavailable
                          ? "检查内置 Steam 服务后重试。"
                          : "登录 Steam 后可直接从创意工坊下载壁纸到本地（需拥有 Wallpaper Engine）")
                         .font(.caption)
@@ -368,7 +393,7 @@ struct WorkshopView: View {
                 Button {
                     AppDelegate.shared.openSteamSetup()
                 } label: {
-                    Text(workshopViewModel.steamSetupState == .serviceUnavailable ? "检查服务" : "立即设置")
+                    Text(sessionStore.setupState == .serviceUnavailable ? "检查服务" : "立即设置")
                 }
                 .buttonStyle(.borderedProminent)
             }

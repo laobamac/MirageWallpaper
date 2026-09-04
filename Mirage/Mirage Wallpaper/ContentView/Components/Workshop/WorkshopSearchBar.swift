@@ -7,23 +7,21 @@
 import SwiftUI
 
 struct WorkshopSearchBar: View {
-    @ObservedObject var workshopViewModel: WorkshopViewModel
+    @Bindable var browseStore: WorkshopBrowseStore
 
     var body: some View {
         HStack(spacing: 10) {
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
-                TextField("搜索作品、作者或作品 ID...", text: $workshopViewModel.searchText)
+                TextField("搜索作品、作者或作品 ID...", text: $browseStore.searchText)
                     .textFieldStyle(.plain)
                     .onSubmit {
-                        workshopViewModel.submitSearch()
+                        browseStore.submitSearch()
                     }
-                if !workshopViewModel.searchText.isEmpty {
+                if !browseStore.searchText.isEmpty {
                     Button {
-                        workshopViewModel.searchText = ""
-                        workshopViewModel.currentPage = 1
-                        workshopViewModel.search()
+                        browseStore.clearSearch()
                     } label: {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundStyle(.secondary)
@@ -50,13 +48,13 @@ struct WorkshopSearchBar: View {
                     sortOption(.lastUpdated)
                     sortOption(.recentlyReleased)
                     sortOption(.mostSubscribed)
-                    if !workshopViewModel.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    if !browseStore.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         Divider()
                         sortOption(.textRelevance)
                     }
                 } label: {
-                    Text(workshopViewModel.sortOrder.workshopLabel(
-                        period: workshopViewModel.trendPeriod
+                    Text(browseStore.sortOrder.workshopLabel(
+                        period: browseStore.trendPeriod
                     ))
                     .lineLimit(1)
                 }
@@ -69,11 +67,11 @@ struct WorkshopSearchBar: View {
         _ order: WorkshopSortOrder,
         period: WorkshopTrendPeriod? = nil
     ) -> some View {
-        let activePeriod = period ?? workshopViewModel.trendPeriod
-        let isSelected = workshopViewModel.sortOrder == order
-            && (period == nil || workshopViewModel.trendPeriod == period)
+        let activePeriod = period ?? browseStore.trendPeriod
+        let isSelected = browseStore.sortOrder == order
+            && (period == nil || browseStore.trendPeriod == period)
         return Button {
-            workshopViewModel.selectWorkshopSort(order, period: period)
+            browseStore.selectSort(order, period: period)
         } label: {
             HStack {
                 Text(order.workshopLabel(period: activePeriod))

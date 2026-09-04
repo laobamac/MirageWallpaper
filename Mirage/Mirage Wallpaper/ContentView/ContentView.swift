@@ -63,7 +63,7 @@ struct ContentView: View {
 
     @ObservedObject var viewModel: ContentViewModel
     @ObservedObject var wallpaperViewModel: WallpaperViewModel
-    @ObservedObject var workshopViewModel: WorkshopViewModel
+    let workshopFeature: WorkshopFeature
     @ObservedObject var navigationModel: MainNavigationModel
     @ObservedObject private var shortcutManager = WallpaperShortcutManager.shared
     @ObservedObject private var dynamicLockScreenManager = DynamicLockScreenManager.shared
@@ -74,12 +74,12 @@ struct ContentView: View {
     init(
         viewModel: ContentViewModel,
         wallpaperViewModel: WallpaperViewModel,
-        workshopViewModel: WorkshopViewModel = AppDelegate.shared.workshopViewModel,
+        workshopFeature: WorkshopFeature? = nil,
         navigationModel: MainNavigationModel = AppDelegate.shared.navigationModel
     ) {
         self.viewModel = viewModel
         self.wallpaperViewModel = wallpaperViewModel
-        self.workshopViewModel = workshopViewModel
+        self.workshopFeature = workshopFeature ?? AppDelegate.shared.workshopFeature
         self.navigationModel = navigationModel
         _loadedSections = State(initialValue: [navigationModel.selection])
     }
@@ -89,8 +89,11 @@ struct ContentView: View {
             HSplitView {
                 if viewModel.isStaging {
                     VStack(spacing: 5) {
-                        TopTabBar(navigationModel: navigationModel,
-                                  wallpaperViewModel: wallpaperViewModel)
+                        TopTabBar(
+                            navigationModel: navigationModel,
+                            wallpaperViewModel: wallpaperViewModel,
+                            downloadStore: workshopFeature.downloadStore
+                        )
                         ProjectFeedbackBanner()
                         ZStack {
                             if loadedSections.contains(.installed) {
@@ -103,6 +106,10 @@ struct ContentView: View {
                                         WallpaperExplorer(
                                             contentViewModel: viewModel,
                                             wallpaperViewModel: wallpaperViewModel,
+                                            creatorStore: workshopFeature.creatorStore,
+                                            interactionStore: workshopFeature.interactionStore,
+                                            libraryStore: workshopFeature.libraryStore,
+                                            selectionCoordinator: workshopFeature.selectionCoordinator,
                                             isActive: navigationModel.selection == .installed,
                                             animatedPreviewMode: globalSettingsViewModel.settings.animatedPreviewPlaybackMode
                                         )
@@ -122,7 +129,13 @@ struct ContentView: View {
 
                             if loadedSections.contains(.discover) {
                                 DiscoverView(
-                                    workshopViewModel: workshopViewModel,
+                                    discoverStore: workshopFeature.discoverStore,
+                                    creatorStore: workshopFeature.creatorStore,
+                                    downloadStore: workshopFeature.downloadStore,
+                                    interactionStore: workshopFeature.interactionStore,
+                                    libraryStore: workshopFeature.libraryStore,
+                                    selectionCoordinator: workshopFeature.selectionCoordinator,
+                                    subscriptionStore: workshopFeature.subscriptionStore,
                                     viewModel: viewModel,
                                     wallpaperViewModel: wallpaperViewModel,
                                     navigationModel: navigationModel,
@@ -133,10 +146,19 @@ struct ContentView: View {
 
                             if loadedSections.contains(.workshop) {
                                 FilterSidebarLayout(isPresented: viewModel.isFilterReveal, sidebar: {
-                                    WorkshopFilterSidebar(workshopViewModel: workshopViewModel)
+                                    WorkshopFilterSidebar(
+                                        browseStore: workshopFeature.browseStore
+                                    )
                                 }, content: {
                                     WorkshopView(
-                                        workshopViewModel: workshopViewModel,
+                                        browseStore: workshopFeature.browseStore,
+                                        creatorStore: workshopFeature.creatorStore,
+                                        downloadStore: workshopFeature.downloadStore,
+                                        interactionStore: workshopFeature.interactionStore,
+                                        libraryStore: workshopFeature.libraryStore,
+                                        selectionCoordinator: workshopFeature.selectionCoordinator,
+                                        sessionStore: workshopFeature.sessionStore,
+                                        subscriptionStore: workshopFeature.subscriptionStore,
                                         viewModel: viewModel,
                                         wallpaperViewModel: wallpaperViewModel,
                                         isActive: navigationModel.selection == .workshop
@@ -147,10 +169,18 @@ struct ContentView: View {
 
                             if loadedSections.contains(.subscriptions) {
                                 FilterSidebarLayout(isPresented: viewModel.isFilterReveal, sidebar: {
-                                    SubscribedWorkshopFilterSidebar(workshopViewModel: workshopViewModel)
+                                    SubscribedWorkshopFilterSidebar(
+                                        subscriptionStore: workshopFeature.subscriptionStore
+                                    )
                                 }, content: {
                                     SubscribedWorkshopView(
-                                        workshopViewModel: workshopViewModel,
+                                        subscriptionStore: workshopFeature.subscriptionStore,
+                                        creatorStore: workshopFeature.creatorStore,
+                                        downloadStore: workshopFeature.downloadStore,
+                                        interactionStore: workshopFeature.interactionStore,
+                                        libraryStore: workshopFeature.libraryStore,
+                                        selectionCoordinator: workshopFeature.selectionCoordinator,
+                                        sessionStore: workshopFeature.sessionStore,
                                         viewModel: viewModel,
                                         wallpaperViewModel: wallpaperViewModel,
                                         isActive: navigationModel.selection == .subscriptions
@@ -168,40 +198,58 @@ struct ContentView: View {
                     ZStack {
                         WallpaperPreview(contentViewModel: viewModel,
                                         wallpaperViewModel: wallpaperViewModel,
-                                        workshopViewModel: workshopViewModel,
-                                        isActive: navigationModel.selection == .installed || workshopViewModel.showCustomization)
+                                        creatorStore: workshopFeature.creatorStore,
+                                        interactionStore: workshopFeature.interactionStore,
+                                        libraryStore: workshopFeature.libraryStore,
+                                        selectionCoordinator: workshopFeature.selectionCoordinator,
+                                        sessionStore: workshopFeature.sessionStore,
+                                        subscriptionStore: workshopFeature.subscriptionStore,
+                                        isActive: navigationModel.selection == .installed || workshopFeature.selectionCoordinator.showCustomization)
                             .frame(maxWidth: 320)
                             .sectionVisibility(
-                                workshopViewModel.showCreatorProfile == false &&
-                                    (navigationModel.selection == .installed || workshopViewModel.showCustomization)
+                                workshopFeature.creatorStore.selectedCreator == nil &&
+                                    (navigationModel.selection == .installed || workshopFeature.selectionCoordinator.showCustomization)
                             )
 
                         WorkshopItemDetail(
-                            item: workshopViewModel.selectedItem,
-                            workshopViewModel: workshopViewModel,
-                            isActive: navigationModel.selection != .installed && workshopViewModel.showCustomization == false
+                            item: workshopFeature.selectionCoordinator.selectedItem,
+                            browseStore: workshopFeature.browseStore,
+                            creatorStore: workshopFeature.creatorStore,
+                            downloadStore: workshopFeature.downloadStore,
+                            interactionStore: workshopFeature.interactionStore,
+                            libraryStore: workshopFeature.libraryStore,
+                            selectionCoordinator: workshopFeature.selectionCoordinator,
+                            sessionStore: workshopFeature.sessionStore,
+                            subscriptionStore: workshopFeature.subscriptionStore,
+                            isActive: navigationModel.selection != .installed && workshopFeature.selectionCoordinator.showCustomization == false
                         )
                             .frame(maxWidth: 320)
                             .sectionVisibility(
-                                workshopViewModel.showCreatorProfile == false &&
+                                    workshopFeature.creatorStore.selectedCreator == nil &&
                                     navigationModel.selection != .installed &&
-                                    workshopViewModel.showCustomization == false
+                                    workshopFeature.selectionCoordinator.showCustomization == false
                             )
 
-                        if workshopViewModel.showCreatorProfile,
-                           let creator = workshopViewModel.selectedCreator {
+                        if let creator = workshopFeature.creatorStore.selectedCreator {
                             CreatorProfileView(
                                 creator: creator,
-                                workshopViewModel: workshopViewModel,
+                                browseStore: workshopFeature.browseStore,
+                                creatorStore: workshopFeature.creatorStore,
+                                downloadStore: workshopFeature.downloadStore,
+                                interactionStore: workshopFeature.interactionStore,
+                                libraryStore: workshopFeature.libraryStore,
+                                selectionCoordinator: workshopFeature.selectionCoordinator,
+                                sessionStore: workshopFeature.sessionStore,
+                                subscriptionStore: workshopFeature.subscriptionStore,
                                 animatedPreviewMode: globalSettingsViewModel.settings.animatedPreviewPlaybackMode
                             )
                             .frame(maxWidth: 420)
                         }
                     }
                     .frame(
-                        minWidth: workshopViewModel.showCreatorProfile ? 360 : 320,
-                        idealWidth: workshopViewModel.showCreatorProfile ? 420 : 320,
-                        maxWidth: workshopViewModel.showCreatorProfile ? 420 : 360
+                        minWidth: workshopFeature.creatorStore.selectedCreator != nil ? 360 : 320,
+                        idealWidth: workshopFeature.creatorStore.selectedCreator != nil ? 420 : 320,
+                        maxWidth: workshopFeature.creatorStore.selectedCreator != nil ? 420 : 360
                     )
                     .layoutPriority(1)
                 }
@@ -268,29 +316,29 @@ struct ContentView: View {
         .alert(
             "Steam 收藏",
             isPresented: Binding(
-                get: { workshopViewModel.favoriteActionError != nil },
-                set: { if !$0 { workshopViewModel.dismissFavoriteActionError() } }
+                get: { workshopFeature.interactionStore.favoriteActionError != nil },
+                set: { if !$0 { workshopFeature.interactionStore.dismissFavoriteError() } }
             )
         ) {
             Button("确定", role: .cancel) {
-                workshopViewModel.dismissFavoriteActionError()
+                workshopFeature.interactionStore.dismissFavoriteError()
             }
         } message: {
-            Text(workshopViewModel.favoriteActionError ?? "")
+            Text(workshopFeature.interactionStore.favoriteActionError ?? "")
         }
         .alert(
             "需要基础壁纸",
             isPresented: Binding(
-                get: { workshopViewModel.presetDependencyPrompt != nil },
-                set: { if !$0 { workshopViewModel.dismissPresetDependencyPrompt() } }
+                get: { workshopFeature.selectionCoordinator.presetDependencyPrompt != nil },
+                set: { if !$0 { workshopFeature.selectionCoordinator.dismissPresetDependencyPrompt() } }
             ),
-            presenting: workshopViewModel.presetDependencyPrompt
+            presenting: workshopFeature.selectionCoordinator.presetDependencyPrompt
         ) { prompt in
             Button("一起下载") {
-                workshopViewModel.confirmPresetDependencyDownload(prompt)
+                workshopFeature.selectionCoordinator.confirmPresetDependencyDownload(prompt)
             }
             Button("暂不", role: .cancel) {
-                workshopViewModel.dismissPresetDependencyPrompt()
+                workshopFeature.selectionCoordinator.dismissPresetDependencyPrompt()
             }
         } message: { prompt in
             Text(prompt.message)

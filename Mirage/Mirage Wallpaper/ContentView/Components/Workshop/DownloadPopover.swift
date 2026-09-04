@@ -7,7 +7,9 @@
 import SwiftUI
 
 struct DownloadPopover: View {
-    @ObservedObject var workshopViewModel: WorkshopViewModel
+    let downloadStore: WorkshopDownloadStore
+    let onCancel: (WorkshopItem) -> Void
+    let onRetry: (DownloadTask) -> Void
     @State private var revealError: String?
 
     var body: some View {
@@ -18,7 +20,7 @@ struct DownloadPopover: View {
                 Spacer()
                 if hasCompleted {
                     Button {
-                        workshopViewModel.clearCompletedDownloads()
+                        downloadStore.clearCompleted()
                     } label: {
                         Text("清除记录")
                             .font(.caption)
@@ -32,7 +34,7 @@ struct DownloadPopover: View {
 
             Divider()
 
-            if workshopViewModel.downloadQueue.isEmpty {
+            if downloadStore.queue.isEmpty {
                 VStack(spacing: 10) {
                     Image(systemName: "arrow.down.doc")
                         .font(.system(size: 36))
@@ -49,12 +51,21 @@ struct DownloadPopover: View {
             } else {
                 ScrollView {
                     VStack(spacing: 1) {
-                        ForEach(workshopViewModel.downloadQueue) { task in
+                        ForEach(downloadStore.queue) { status in
                             DownloadRow(
-                                task: task,
-                                onCancel: { workshopViewModel.cancelDownload(task.workshopItem) },
-                                onRetry: { workshopViewModel.retryDownload(task) },
-                                onReveal: { revealInFinder(task) }
+                                downloadStatus: status,
+                                onCancel: {
+                                    guard let task = status.task else { return }
+                                    onCancel(task.workshopItem)
+                                },
+                                onRetry: {
+                                    guard let task = status.task else { return }
+                                    onRetry(task)
+                                },
+                                onReveal: {
+                                    guard let task = status.task else { return }
+                                    revealInFinder(task)
+                                }
                             )
                         }
                     }
@@ -65,24 +76,19 @@ struct DownloadPopover: View {
             Divider()
 
             HStack {
-                let active = workshopViewModel.downloadQueue.filter {
-                    if case .downloading = $0.state { return true }
-                    if case .resolving = $0.state { return true }
-                    if case .validating = $0.state { return true }
-                    return false
-                }.count
-                let completed = workshopViewModel.downloadQueue.filter {
-                    if case .completed = $0.state { return true }
-                    return false
-                }.count
-
-                Label("\(active) 下载中", systemImage: "arrow.down.circle.fill")
+                Label(
+                    "\(downloadStore.activeDownloadCount) 下载中",
+                    systemImage: "arrow.down.circle.fill"
+                )
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
                 Spacer()
 
-                Label("\(completed) 已完成", systemImage: "checkmark.circle.fill")
+                Label(
+                    "\(downloadStore.completedDownloadCount) 已完成",
+                    systemImage: "checkmark.circle.fill"
+                )
                     .font(.caption)
                     .foregroundStyle(.green)
             }
@@ -101,11 +107,7 @@ struct DownloadPopover: View {
     }
 
     private var hasCompleted: Bool {
-        workshopViewModel.downloadQueue.contains {
-            if case .completed = $0.state { return true }
-            if case .failed = $0.state { return true }
-            return false
-        }
+        downloadStore.clearableDownloadCount > 0
     }
 
     private func revealInFinder(_ task: DownloadTask) {
@@ -122,12 +124,19 @@ struct DownloadPopover: View {
 }
 
 struct DownloadRow: View {
-    var task: DownloadTask
+    var downloadStatus: WorkshopDownloadStatus
     var onCancel: () -> Void
     var onRetry: () -> Void
     var onReveal: () -> Void
 
+    @ViewBuilder
     var body: some View {
+        if let task = downloadStatus.task {
+            row(for: task)
+        }
+    }
+
+    private func row(for task: DownloadTask) -> some View {
         HStack(spacing: 10) {
             WorkshopImage(url: task.workshopItem.previewImageURL, contentMode: .fill)
                 .frame(width: 64, height: 64)

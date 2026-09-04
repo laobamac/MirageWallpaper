@@ -10,9 +10,8 @@ struct WorkshopItemCard: View {
     var item: WorkshopItem
     var isHovered: Bool
     var isSelected: Bool
-    var isDownloaded: Bool
-    var presetNeedsDependency: Bool
-    var downloadState: DownloadState?
+    var libraryStatus: WorkshopLibraryItemStatus
+    var downloadStatus: WorkshopDownloadStatus
     var isFavorite: Bool = false
     var isActive: Bool = true
     var animatedPreviewMode: GSAnimatedPreviewPlayback = .hover
@@ -152,19 +151,20 @@ struct WorkshopItemCard: View {
 
     @ViewBuilder
     private var statusBadge: some View {
-        if let state = downloadState, !(presetNeedsDependency && state == .completed) {
+        if let state = downloadStatus.state,
+           !(libraryStatus.needsPresetDependency && state == .completed) {
             downloadBadge(state)
                 .fixedSize()
-        } else if isDownloaded {
+        } else if libraryStatus.isInstalled {
             HStack(spacing: 3) {
-                Image(systemName: presetNeedsDependency ? "exclamationmark.triangle.fill" : "checkmark")
+                Image(systemName: libraryStatus.needsPresetDependency ? "exclamationmark.triangle.fill" : "checkmark")
                     .font(.caption2).bold()
-                Text(LocalizedStringKey(presetNeedsDependency ? "缺少基础壁纸" : "已下载"))
+                Text(LocalizedStringKey(libraryStatus.needsPresetDependency ? "缺少基础壁纸" : "已下载"))
                     .font(.caption2)
             }
             .padding(.horizontal, 7)
             .padding(.vertical, 3)
-            .background(presetNeedsDependency ? .orange : .green, in: Capsule())
+            .background(libraryStatus.needsPresetDependency ? .orange : .green, in: Capsule())
             .foregroundStyle(.white)
             .lineLimit(2)
             .minimumScaleFactor(0.75)

@@ -8,7 +8,13 @@ import SwiftUI
 
 struct DiscoverSectionView: View {
     var row: DiscoverRow
-    @ObservedObject var workshopViewModel: WorkshopViewModel
+    let discoverStore: DiscoverStore
+    let creatorStore: WorkshopCreatorStore
+    let downloadStore: WorkshopDownloadStore
+    let interactionStore: WorkshopInteractionStore
+    let libraryStore: WorkshopLibraryStore
+    let selectionCoordinator: WorkshopSelectionCoordinator
+    let subscriptionStore: SubscriptionStore
     @ObservedObject var contentViewModel: ContentViewModel
     @ObservedObject var wallpaperViewModel: WallpaperViewModel
     let isActive: Bool
@@ -37,7 +43,7 @@ struct DiscoverSectionView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                     Button("重试") {
-                        workshopViewModel.loadDiscoverRow(id: row.id)
+                        discoverStore.loadRow(id: row.id)
                     }
                 }
                 .frame(height: cardWidth, alignment: .center)
@@ -70,7 +76,7 @@ struct DiscoverSectionView: View {
             }
         }
         .onAppear {
-            workshopViewModel.loadDiscoverRow(id: row.id)
+            discoverStore.loadRow(id: row.id)
         }
     }
 
@@ -96,10 +102,13 @@ struct DiscoverSectionView: View {
                             DiscoverCard(
                                 item: item,
                                 isHovered: hoveredID == item.id,
-                                isSelected: workshopViewModel.discoverSelectedItemID == item.id,
-                                isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
-                                presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
-                                downloadState: workshopViewModel.downloadState(for: item.publishedFileId),
+                                isSelected: discoverStore.selectedItemID == item.id,
+                                libraryStatus: libraryStore.status(
+                                    for: item.publishedFileId
+                                ),
+                                downloadStatus: downloadStore.status(
+                                    for: item.publishedFileId
+                                ),
                                 cardWidth: cardWidth,
                                 isActive: isActive,
                                 animatedPreviewMode: animatedPreviewMode
@@ -109,14 +118,19 @@ struct DiscoverSectionView: View {
                                 hoveredID = hovered ? item.id : nil
                             }
                             .onTapGesture {
-                                workshopViewModel.selectDiscoverItem(item)
+                                discoverStore.select(item)
                             }
                             .contextMenu {
-                                if let wallpaper = workshopViewModel.installedItem(workshopId: item.publishedFileId) {
+                                if let wallpaper = libraryStore.installedItem(
+                                    id: item.publishedFileId
+                                ) {
                                     ExplorerItemMenu(
                                         contentViewModel: contentViewModel,
                                         wallpaperViewModel: wallpaperViewModel,
-                                        workshopViewModel: workshopViewModel,
+                                        creatorStore: creatorStore,
+                                        interactionStore: interactionStore,
+                                        libraryStore: libraryStore,
+                                        selectionCoordinator: selectionCoordinator,
                                         current: wallpaper
                                     )
                                     ExplorerGlobalMenu(
@@ -126,7 +140,11 @@ struct DiscoverSectionView: View {
                                 } else {
                                     WorkshopCardContextMenu(
                                         item: item,
-                                        workshopViewModel: workshopViewModel
+                                        creatorStore: creatorStore,
+                                        downloadStore: downloadStore,
+                                        interactionStore: interactionStore,
+                                        selectionCoordinator: selectionCoordinator,
+                                        subscriptionStore: subscriptionStore
                                     )
                                     WallpaperGridViewMenu(viewModel: contentViewModel)
                                 }
@@ -188,9 +206,8 @@ struct DiscoverCard: View {
     var item: WorkshopItem
     var isHovered: Bool
     var isSelected: Bool
-    var isDownloaded: Bool
-    var presetNeedsDependency: Bool
-    var downloadState: DownloadState?
+    var libraryStatus: WorkshopLibraryItemStatus
+    var downloadStatus: WorkshopDownloadStatus
     var cardWidth: CGFloat
     var isActive: Bool
     var animatedPreviewMode: GSAnimatedPreviewPlayback
@@ -206,14 +223,14 @@ struct DiscoverCard: View {
             .frame(width: cardWidth, height: cardWidth)
             .clipped()
 
-            if isDownloaded {
-                Image(systemName: presetNeedsDependency ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                    .foregroundStyle(.white, presetNeedsDependency ? .orange : .green)
+            if libraryStatus.isInstalled {
+                Image(systemName: libraryStatus.needsPresetDependency ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                    .foregroundStyle(.white, libraryStatus.needsPresetDependency ? .orange : .green)
                     .symbolRenderingMode(.palette)
                     .font(.body)
                     .padding(7)
-            } else if let downloadState {
-                downloadStateIndicator(downloadState)
+            } else if let state = downloadStatus.state {
+                downloadStateIndicator(state)
                     .padding(7)
             }
         }

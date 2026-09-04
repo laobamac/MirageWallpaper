@@ -8,6 +8,7 @@ import SwiftUI
 
 struct ExplorerItem: View {
     let wallpaper: WEWallpaper
+    let selectionCoordinator: WorkshopSelectionCoordinator
     // Selection is passed in as a plain value so the cell no longer observes the
     // shared view models. Hovering or selecting one cell then cannot force every
     // other cell in the grid to rebuild.
@@ -75,7 +76,7 @@ struct ExplorerItem: View {
         .shadow(color: .black.opacity(hovering ? 0.25 : 0), radius: hovering ? 8 : 0, y: 2)
         .animation(.easeOut(duration: 0.15), value: hovering)
         .onTapGesture {
-            AppDelegate.shared.workshopViewModel.openInstalledWallpaper(wallpaper)
+            selectionCoordinator.openInstalledWallpaper(wallpaper)
         }
         .onHover { hovering = $0 }
     }
