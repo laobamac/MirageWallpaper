@@ -107,12 +107,12 @@ private:
 };
 
 struct ExtraInfo {
-    rg::RenderGraph*                  rgraph { nullptr };
-    Scene*                            scene { nullptr };
-    Set<std::string>                  depth_initialized_outputs {};
-    std::optional<rg::TextureNodeRef> mip_framebuffer_snapshot;
-    const RenderSceneSnapshot*        render_scene { nullptr };
-    GraphLinkFinalizer                link_finalizer;
+    rg::RenderGraph*                rgraph { nullptr };
+    Scene*                          scene { nullptr };
+    Set<std::string>                depth_initialized_outputs {};
+    Map<usize, rg::TextureNodeRef>  mip_framebuffer_snapshots {};
+    const RenderSceneSnapshot*      render_scene { nullptr };
+    GraphLinkFinalizer              link_finalizer;
 };
 
 static std::optional<vulkan::TextureRequest> BuildGraphTextureRequest(ExtraInfo&       extra,
@@ -242,16 +242,20 @@ void GraphLinkFinalizer::apply(ExtraInfo& extra) {
 }
 
 static rg::TextureNodeRef AddMipFramebufferCopy(ExtraInfo& extra, rg::RenderGraphBuilder& builder) {
-    if (extra.mip_framebuffer_snapshot) {
-        return *extra.mip_framebuffer_snapshot;
+    auto  source  = builder.createTexture(MakeTextureDesc(SpecTex_Default));
+    usize version = 0;
+    if (auto state = builder.textureState(source)) version = state->version;
+
+    if (auto it = extra.mip_framebuffer_snapshots.find(version);
+        it != extra.mip_framebuffer_snapshots.end()) {
+        return it->second;
     }
 
-    auto source                    = builder.createTexture(MakeTextureDesc(SpecTex_Default));
-    auto copy_desc                 = rg::TextureDesc { .name = WE_MIP_MAPPED_FRAME_BUFFER.data(),
-                                                       .key  = WE_MIP_MAPPED_FRAME_BUFFER.data(),
-                                                       .kind = rg::TextureKind::Temp };
-    auto snapshot                  = AddCopyPass(extra, source, copy_desc);
-    extra.mip_framebuffer_snapshot = snapshot;
+    auto copy_desc = rg::TextureDesc { .name = WE_MIP_MAPPED_FRAME_BUFFER.data(),
+                                       .key  = WE_MIP_MAPPED_FRAME_BUFFER.data(),
+                                       .kind = rg::TextureKind::Temp };
+    auto snapshot  = AddCopyPass(extra, source, copy_desc);
+    extra.mip_framebuffer_snapshots.emplace(version, snapshot);
     return snapshot;
 }
 

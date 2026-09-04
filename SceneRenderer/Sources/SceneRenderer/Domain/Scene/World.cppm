@@ -204,6 +204,7 @@ struct SceneRenderTarget {
     // Later graph versions of this RT keep earlier color content. Use this
     // for composition targets, not transient effect outputs.
     bool preserve_on_write { false };
+    bool hdr_format { false };
 
     i32 PhysicalWidth() const { return physical_width > 0 ? physical_width : width; }
     i32 PhysicalHeight() const { return physical_height > 0 ? physical_height : height; }
@@ -2947,6 +2948,8 @@ public:
     bool uses_audio_spectrum { false };
     bool fog_distance_enabled { false };
     bool fog_height_enabled { false };
+    bool hdr_enabled { false };
+    bool hdr_render_targets { false };
 
     SceneMesh default_effect_mesh;
 
@@ -3005,6 +3008,7 @@ public:
     void        TickMaterialShaderAnimations();
     void        CaptureCameraPathViewports();
     void        EnablePlanarReflection();
+    void        EnsurePlanarReflectionRenderTarget();
     bool        PlanarReflectionEnabled() const { return m_planar_reflection_enabled; }
     std::string EnsureLinkRenderTarget(WallpaperLayerId source_layer, const SceneNode& source_node);
     bool        EnsureTextureDescriptor(std::string_view key);

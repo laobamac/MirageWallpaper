@@ -1848,7 +1848,7 @@ void ParseSpecTexName(std::string& name, const wpscene::Material& wpmat, const W
         } else if (sstart_with(name, SR_BLOOM_MIP_PREFIX)) {
         } else if (sstart_with(name, WE_REFLECTION_PREFIX)) {
             name = std::string(WE_REFLECTION_PREFIX);
-            scene.EnablePlanarReflection();
+            scene.EnsurePlanarReflectionRenderTarget();
         } else if (sstart_with(name, SR_EFFECT_PPONG_PREFIX)) {
         } else if (sstart_with(name, WE_HALF_COMPO_BUFFER_PREFIX)) {
         } else if (sstart_with(name, WE_QUARTER_COMPO_BUFFER_PREFIX)) {
@@ -1902,6 +1902,13 @@ void ApplySceneFogCombos(const Scene& scene, WPShaderInfo& info) {
     if (scene.fog_distance_enabled) info.combos["FOG_DIST"] = "1";
     if (scene.fog_height_enabled) info.combos["FOG_HEIGHT"] = "1";
     if (scene.fog_distance_enabled || scene.fog_height_enabled) info.combos["FOG_COMPUTED"] = "1";
+}
+
+void ApplySceneHdrCombo(const Scene& scene, const wpscene::Material& material,
+                        WPShaderInfo& info) {
+    if (! scene.hdr_enabled) return;
+    if (material.combos.contains("HDR")) return;
+    info.combos["HDR"] = "1";
 }
 
 void ApplyLegacyAtmosphereUniformAliases(const wpscene::Material& material, WPShaderInfo& info) {
@@ -2115,6 +2122,7 @@ bool LoadMaterial(fs::VFS& vfs, const wpscene::Material& wpmat, Scene* pScene, S
         pWPShaderInfo->combos["ALPHATOCOVERAGE"] = "1";
     }
     ApplySceneFogCombos(*pScene, *pWPShaderInfo);
+    ApplySceneHdrCombo(*pScene, wpmat, *pWPShaderInfo);
     ApplyLegacyAtmosphereLightCombo(wpmat, *pWPShaderInfo);
 
     auto textures = wpmat.textures;
@@ -2241,9 +2249,17 @@ bool LoadMaterial(fs::VFS& vfs, const wpscene::Material& wpmat, Scene* pScene, S
     material.cull_mode   = ParseCullMode(wpmat.cullmode);
 
     // FS is always the last unit (VS may be followed by optional GS, then FS).
-    const auto& fs_active = sd_units.back().preprocess_info.active_tex_slots;
+    const auto& fs_active     = sd_units.back().preprocess_info.active_tex_slots;
+    const auto& fs_referenced = sd_units.back().preprocess_info.referenced_tex_slots;
     for (unsigned i = 0; i < material.textures.size(); i++) {
         if (! exists(fs_active, i)) material.textures[i].clear();
+    }
+    for (unsigned i = 0; i < material.textures.size(); i++) {
+        if (material.textures[i] != WE_REFLECTION_PREFIX) continue;
+        if (exists(fs_referenced, i))
+            pScene->EnablePlanarReflection();
+        else
+            material.textures[i].clear();
     }
 
     for (const auto& el : pWPShaderInfo->baseConstSvs) {
@@ -2992,6 +3008,8 @@ void InitContext(ParseContext& context, fs::VFS& vfs, const wpscene::SceneMetada
     }
     scene.ortho[0]  = ortho_extent[0];
     scene.ortho[1]  = ortho_extent[1];
+    scene.hdr_enabled        = sc.general.hdr;
+    scene.hdr_render_targets = sc.general.hdr;
     scene.SetProjectionKind(sc.general.isOrtho ? SceneProjectionKind::OrthographicCanvas
                                                 : SceneProjectionKind::Perspective3D);
     scene.SetViewportScale(sc.general.zoom);
@@ -6662,6 +6680,9 @@ std::shared_ptr<Scene> FinalizeScene(ParseContext& context) {
         runtime.SetSceneRoot(scene->sceneGraph.as_ptr());
         scene->CommitDynamicTopology();
         sr::script::InstallScriptScene(*scene, std::move(scripts));
+    }
+    if (scene->hdr_render_targets) {
+        for (auto& [key, rt] : scene->renderTargets) rt.hdr_format = true;
     }
     return scene;
 }

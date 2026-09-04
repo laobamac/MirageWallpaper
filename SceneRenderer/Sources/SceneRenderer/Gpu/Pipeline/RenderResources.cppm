@@ -174,12 +174,16 @@ inline VkSampleCountFlagBits TextureSampleCount(unsigned sample_count) {
     }
 }
 
+inline sr::TextureFormat RenderTargetColorFormat(const sr::SceneRenderTarget& rt) {
+    return rt.hdr_format ? sr::TextureFormat::RGBA16F : sr::TextureFormat::RGBA8;
+}
+
 inline TextureKey RenderTargetTextureKey(sr::SceneRenderTarget rt) {
     return TextureKey {
         .width        = rt.PhysicalWidth(),
         .height       = rt.PhysicalHeight(),
         .usage        = {},
-        .format       = sr::TextureFormat::RGBA8,
+        .format       = RenderTargetColorFormat(rt),
         .sample       = rt.sample,
         .mipmap_level = rt.mipmap_level,
     };
@@ -190,7 +194,7 @@ inline TextureKey RenderTargetTextureKeyNoMip(sr::SceneRenderTarget rt) {
         .width  = rt.PhysicalWidth(),
         .height = rt.PhysicalHeight(),
         .usage  = {},
-        .format = sr::TextureFormat::RGBA8,
+        .format = RenderTargetColorFormat(rt),
         .sample = rt.sample,
     };
 }

@@ -243,22 +243,42 @@ CustomShaderPass::refreshMaterialTextureBindings(const RenderSceneSnapshot& rend
     return result;
 }
 
-static std::span<uint8_t> MakeUniformUploadBytes(const sr::ShaderValue& value, size_t refl_size,
+static std::span<uint8_t> MakeUniformUploadBytes(const sr::ShaderValue&                 value,
+                                                 const ShaderReflected::BlockedUniform& uni,
                                                  std::vector<sr::ShaderValue::value_type>& resized,
                                                  bool& compatible) {
     compatible                    = true;
+    const size_t       refl_size  = uni.size;
     const size_t       value_size = value.size() * sizeof(sr::ShaderValue::value_type);
     std::span<uint8_t> value_u8 {
         const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(value.data())),
         value_size,
     };
 
-    if (refl_size != value_size && refl_size % sizeof(sr::ShaderValue::value_type) == 0) {
+    if (refl_size == value_size) return value_u8;
+
+    if (uni.slot_count > 1 && uni.slot_payload > 0 && uni.slot_payload < uni.slot_stride &&
+        uni.slot_count * uni.slot_stride <= refl_size &&
+        value_size == uni.slot_count * uni.slot_payload) {
+        resized.assign((refl_size + sizeof(sr::ShaderValue::value_type) - 1) /
+                           sizeof(sr::ShaderValue::value_type),
+                       0.0f);
+        auto* dst = reinterpret_cast<uint8_t*>(resized.data());
+        for (size_t slot = 0; slot < uni.slot_count; ++slot) {
+            std::memcpy(dst + slot * uni.slot_stride,
+                        value_u8.data() + slot * uni.slot_payload,
+                        uni.slot_payload);
+        }
+        return { dst, refl_size };
+    }
+
+    if (refl_size % sizeof(sr::ShaderValue::value_type) == 0) {
+        if (uni.slot_payload > 0 && uni.slot_payload < uni.slot_stride) compatible = false;
         const size_t refl_count = refl_size / sizeof(sr::ShaderValue::value_type);
         resized.assign(refl_count, 0.0f);
         std::copy_n(value.data(), std::min(value.size(), refl_count), resized.begin());
         value_u8 = { reinterpret_cast<uint8_t*>(resized.data()), refl_size };
-    } else if (refl_size != value_size) {
+    } else {
         compatible = false;
         value_u8   = value_u8.first(std::min(refl_size, value_u8.size()));
     }
@@ -301,11 +321,15 @@ static void UpdateUniform(StagingBuffer* buf, const StagingBufferRef& bufref,
     // the buffer is free to be overwritten by the next uniform. thread_local
     // keeps that true even if uniforms are ever updated off the render thread.
     static thread_local std::vector<ShaderValue::value_type> resized;
-    auto value_u8 = MakeUniformUploadBytes(value, refl_size, resized, compatible);
+    auto value_u8 = MakeUniformUploadBytes(value, *uni, resized, compatible);
     if (! compatible) {
-        rstd_warn("uniform \"{}\" size mismatch: reflected {} bytes, uploader {} bytes",
+        rstd_warn("uniform \"{}\" size mismatch: reflected {} bytes ({}x{} stride {}), uploader {} "
+                  "bytes",
                   name,
                   refl_size,
+                  uni->slot_count,
+                  uni->slot_payload,
+                  uni->slot_stride,
                   value.size() * sizeof(ShaderValue::value_type));
     }
     buf->writeToBuf(bufref, value_u8, offset);
@@ -535,8 +559,10 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
             if (m_desc.clear_output) loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
             if (out_force_clear) loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
         }
-        m_desc.color_load_op                       = loadOp;
-        constexpr VkFormat      color_format       = VK_FORMAT_R8G8B8A8_UNORM;
+        m_desc.color_load_op = loadOp;
+        const VkFormat          color_format       = output_rt.hdr_format
+                                                         ? VK_FORMAT_R16G16B16A16_SFLOAT
+                                                         : VK_FORMAT_R8G8B8A8_UNORM;
         constexpr VkImageLayout color_final_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
         descriptor_info.push_descriptor = true;

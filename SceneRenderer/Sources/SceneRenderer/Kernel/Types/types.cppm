@@ -67,6 +67,7 @@ enum class TextureFormat
     RGBA8,
     RG8,
     R8,
+    RGBA16F,
     D32F
 };
 std::string ToString(const TextureFormat&);

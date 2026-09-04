@@ -294,6 +294,7 @@ u64 MinMipmapBytes(TextureFormat format, i32 width, i32 height) {
     case TextureFormat::RGB8: return w * h * 3ull;
     case TextureFormat::RGBA8:
     case TextureFormat::D32F: return w * h * 4ull;
+    case TextureFormat::RGBA16F: return w * h * 8ull;
     }
     return 0;
 }

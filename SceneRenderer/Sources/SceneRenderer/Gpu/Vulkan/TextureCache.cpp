@@ -38,6 +38,7 @@ VkFormat ToVkType(TextureFormat tf) {
     case TextureFormat::RG8: return VK_FORMAT_R8G8_UNORM;
     case TextureFormat::RGB8: return VK_FORMAT_R8G8B8_UNORM;
     case TextureFormat::RGBA8: return VK_FORMAT_R8G8B8A8_UNORM;
+    case TextureFormat::RGBA16F: return VK_FORMAT_R16G16B16A16_SFLOAT;
     case TextureFormat::D32F: return VK_FORMAT_D32_SFLOAT;
     default: rstd_assert(false); return VK_FORMAT_R8G8B8A8_UNORM;
     }
@@ -80,7 +81,7 @@ VkSamplerCreateInfo GenSamplerInfo(TextureKey key) {
                                        .compareEnable    = (false),
                                        .compareOp        = VK_COMPARE_OP_NEVER,
                                        .minLod           = (0.0f),
-                                       .maxLod           = (1.0f),
+                                       .maxLod = (float)std::max(1u, key.mipmap_level),
                                        .borderColor      = VK_BORDER_COLOR_INT_OPAQUE_BLACK,
                                        .unnormalizedCoordinates = (false) };
     return sampler_info;

@@ -10,9 +10,10 @@ using namespace sr::vulkan;
 namespace
 {
 std::optional<vvk::RenderPass> CreateMsaaClearPass(const vvk::Device&    device,
-                                                   VkSampleCountFlagBits samples) {
+                                                   VkSampleCountFlagBits samples,
+                                                   VkFormat              color_format) {
     VkAttachmentDescription color {
-        .format         = VK_FORMAT_R8G8B8A8_UNORM,
+        .format         = color_format,
         .samples        = samples,
         .loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR,
         .storeOp        = VK_ATTACHMENT_STORE_OP_STORE,
@@ -124,7 +125,10 @@ void PrePass::prepare(Scene& scene, const Device& device, RenderingResources&) {
             if (! opt.has_value()) return;
             m_desc.vk_result_msaa = opt.value();
 
-            auto pass = CreateMsaaClearPass(device.handle(), m_desc.samples);
+            auto pass = CreateMsaaClearPass(device.handle(),
+                                            m_desc.samples,
+                                            rt.hdr_format ? VK_FORMAT_R16G16B16A16_SFLOAT
+                                                          : VK_FORMAT_R8G8B8A8_UNORM);
             if (! pass.has_value()) return;
             m_desc.msaa_clear_pass = std::move(*pass);
 

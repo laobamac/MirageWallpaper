@@ -1619,8 +1619,7 @@ void Scene::CaptureCameraPathViewports() {
     }
 }
 
-void Scene::EnablePlanarReflection() {
-    m_planar_reflection_enabled = true;
+void Scene::EnsurePlanarReflectionRenderTarget() {
     const std::string key(WE_REFLECTION_PREFIX);
     if (renderTargets.count(key) != 0) return;
 
@@ -1637,7 +1636,13 @@ void Scene::EnablePlanarReflection() {
         .withDepth         = true,
         .bind              = { .enable = true, .screen = true },
         .preserve_on_write = true,
+        .hdr_format        = hdr_render_targets,
     };
+}
+
+void Scene::EnablePlanarReflection() {
+    m_planar_reflection_enabled = true;
+    EnsurePlanarReflectionRenderTarget();
 }
 
 std::string Scene::EnsureLinkRenderTarget(WallpaperLayerId source_layer,
@@ -1649,6 +1654,7 @@ std::string Scene::EnsureLinkRenderTarget(WallpaperLayerId source_layer,
             .width      = sz.x() > 0 ? static_cast<i32>(sz.x()) : ortho[0],
             .height     = sz.y() > 0 ? static_cast<i32>(sz.y()) : ortho[1],
             .allowReuse = false,
+            .hdr_format = hdr_render_targets,
         };
     }
     return link_key;

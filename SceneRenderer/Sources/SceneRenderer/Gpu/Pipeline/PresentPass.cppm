@@ -34,6 +34,7 @@ public:
         // Format of the present image. Used to pick copy vs blit; UNDEFINED
         // forces blit (the safe default for unknown formats).
         VkFormat present_format { VK_FORMAT_UNDEFINED };
+        VkFormat result_format { VK_FORMAT_R8G8B8A8_UNORM };
         bool     present_can_transfer_src { false };
         std::function<void(void* mtl_texture, void* mtl_command_queue, uint32_t width,
                            uint32_t height)> metal_frame_callback;
@@ -67,6 +68,7 @@ private:
     std::size_t    m_dump_size { 0 };
     uint32_t       m_dump_width { 0 };
     uint32_t       m_dump_height { 0 };
+    std::vector<uint8_t> m_dump_rgba;
     bool           m_dump_pending { false };
     bool           m_dump_done { false };
     uint32_t       m_dump_frame_index { 0 };

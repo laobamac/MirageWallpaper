@@ -136,6 +136,36 @@ inline bool IsSamplerType(std::string_view t) {
            t == "sampler2DComparison" || t == "sampler2DShadow";
 }
 
+inline Set<unsigned> ScanReferencedTexSlots(std::string_view                              src,
+                                            std::span<const std::pair<unsigned, DeclMatch>> decls) {
+    Set<unsigned> referenced;
+    if (decls.empty()) return referenced;
+
+    constexpr std::string_view kTex { "g_Texture" };
+    for (std::size_t pos = 0; (pos = src.find(kTex, pos)) != std::string_view::npos;
+         pos += kTex.size()) {
+        if (pos > 0) {
+            const char prev = src[pos - 1];
+            if (std::isalnum(static_cast<unsigned char>(prev)) != 0 || prev == '_') continue;
+        }
+        std::string_view rest   = src.substr(pos + kTex.size());
+        std::size_t      digits = 0;
+        while (digits < rest.size() && std::isdigit(static_cast<unsigned char>(rest[digits])) != 0)
+            ++digits;
+        if (digits == 0) continue;
+        unsigned slot  = 0;
+        auto [ptr, ec] = std::from_chars(rest.data(), rest.data() + digits, slot);
+        if (ec != std::errc()) continue;
+        for (const auto& [decl_slot, decl] : decls) {
+            if (decl_slot != slot) continue;
+            if (pos >= decl.start && pos < decl.end) break;
+            referenced.insert(slot);
+            break;
+        }
+    }
+    return referenced;
+}
+
 // Replace every occurrence of `needle` in `body` with `repl`. The placeholder
 // names used by the shader synth pipeline are unique tokens
 // (`__SHADER_PLACEHOLD__`), so naive substring substitution is safe.
@@ -1191,6 +1221,7 @@ inline std::string Preprocessor(const std::string& in_src, ShaderType type, cons
     // Non-sampler uniform decls feed Finalprocessor's shared cbuffer.
     // Sampler-typed uniforms are emitted as Texture/SamplerState pairs and
     // captured in active_tex_slots instead.
+    std::vector<std::pair<unsigned, DeclMatch>> sampler_decls;
     ForEachDeclLine(src, { "uniform" }, [&](const DeclMatch& m) {
         if (IsSamplerType(m.type)) {
             // Track active sampler slot if it's a `g_TextureN`.
@@ -1199,12 +1230,16 @@ inline std::string Preprocessor(const std::string& in_src, ShaderType type, cons
                 std::string_view num  = m.name.substr(kTex.size());
                 unsigned         slot = 0;
                 auto [ptr, ec]        = std::from_chars(num.data(), num.data() + num.size(), slot);
-                if (ec == std::errc()) process_info.active_tex_slots.insert(slot);
+                if (ec == std::errc()) {
+                    process_info.active_tex_slots.insert(slot);
+                    sampler_decls.emplace_back(slot, m);
+                }
             }
             return;
         }
         process_info.uniforms[std::string(m.name)] = std::string(m.type) + std::string(m.array);
     });
+    process_info.referenced_tex_slots = ScanReferencedTexSlots(src, sampler_decls);
     return src;
 }
 
