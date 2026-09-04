@@ -5,264 +5,193 @@
 //
 
 import AppKit
-import CryptoKit
-import ImageIO
 import SwiftUI
 
-final class WorkshopImageLoader {
-    static let shared = WorkshopImageLoader()
-
-    private let memory: NSCache<NSString, NSImage> = {
-        let cache = NSCache<NSString, NSImage>()
-        cache.countLimit = 400
-        cache.totalCostLimit = 160 * 1024 * 1024
-        return cache
-    }()
-
-    private let dataMemory: NSCache<NSString, NSData> = {
-        let cache = NSCache<NSString, NSData>()
-        cache.countLimit = 400
-        cache.totalCostLimit = 160 * 1024 * 1024
-        return cache
-    }()
-
-    private let animatedFlags: NSCache<NSString, NSNumber> = {
-        let cache = NSCache<NSString, NSNumber>()
-        cache.countLimit = 4000
-        return cache
-    }()
-
-    private let ioQueue = DispatchQueue(
-        label: "cn.laobamac.Mirage.workshopImage", qos: .userInitiated, attributes: .concurrent)
-    private let ioLimiter = DispatchSemaphore(value: 4)
-
-    private let session: URLSession = {
-        let configuration = URLSessionConfiguration.default
-        configuration.timeoutIntervalForRequest = 20
-        configuration.timeoutIntervalForResource = 40
-        configuration.httpMaximumConnectionsPerHost = 6
-        return URLSession(configuration: configuration)
-    }()
-
-    private let diskDirectory: URL = {
-        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appending(path: "Mirage/WorkshopImageCache")
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
-    }()
-
-    private func maxPixel(for size: CGSize, scale: CGFloat) -> Int {
-        let raw = Double(max(size.width, size.height)) * Double(max(scale, 1))
-        let bucket = (raw / 64).rounded(.up) * 64
-        return max(64, min(Int(bucket), 2048))
+@MainActor
+private final class WorkshopImageStaticState: ObservableObject {
+    enum Phase {
+        case loading
+        case success(URL, NSImage)
+        case failure(URL?)
     }
 
-    private func memoryKey(_ url: URL, _ px: Int) -> NSString {
-        "\(url.absoluteString)#\(px)" as NSString
+    @Published private(set) var phase: Phase = .loading
+
+    func showLoading() {
+        if case .loading = phase { return }
+        phase = .loading
     }
 
-    private func diskURL(for url: URL) -> URL {
-        let digest = SHA256.hash(data: Data(url.absoluteString.utf8))
-            .map { String(format: "%02x", $0) }.joined()
-        return diskDirectory.appending(path: digest)
+    func showLoadingIfFailed(for url: URL) {
+        guard case .failure(let currentURL) = phase, currentURL == url else { return }
+        phase = .loading
     }
 
-    private func cost(_ image: NSImage) -> Int {
-        guard let rep = image.representations.first else { return 1 }
-        return max(1, rep.pixelsWide * rep.pixelsHigh * 4)
+    func show(_ image: NSImage, for url: URL) {
+        if case .success(let currentURL, let currentImage) = phase,
+           currentURL == url, currentImage === image {
+            return
+        }
+        phase = .success(url, image)
     }
 
-    func cachedImage(url: URL, targetSize: CGSize, scale: CGFloat) -> NSImage? {
-        memory.object(forKey: memoryKey(url, maxPixel(for: targetSize, scale: scale)))
+    func showFailure(for url: URL?) {
+        if case .success(let currentURL, _) = phase, currentURL == url { return }
+        if case .failure(let currentURL) = phase, currentURL == url { return }
+        phase = .failure(url)
+    }
+}
+
+@MainActor
+private final class WorkshopImageAnimationState: ObservableObject {
+    struct Snapshot {
+        let descriptor: WorkshopImageAnimationDescriptor?
+        let payload: WorkshopImageAnimation?
     }
 
-    private func cachedAnimatedFlag(_ url: URL) -> Bool? {
-        animatedFlags.object(forKey: url.absoluteString as NSString)?.boolValue
+    @Published private(set) var snapshot = Snapshot(
+        descriptor: nil,
+        payload: nil
+    )
+
+    func setDescriptor(_ descriptor: WorkshopImageAnimationDescriptor?) {
+        if snapshot.descriptor?.identity != descriptor?.identity {
+            publish(descriptor: descriptor, payload: nil)
+        } else {
+            publish(descriptor: descriptor, payload: snapshot.payload)
+        }
     }
 
-    private func setAnimatedFlag(_ value: Bool, for url: URL) {
-        animatedFlags.setObject(NSNumber(value: value), forKey: url.absoluteString as NSString)
+    func show(
+        _ payload: WorkshopImageAnimation,
+        for descriptor: WorkshopImageAnimationDescriptor
+    ) {
+        guard snapshot.descriptor?.identity == descriptor.identity,
+              payload.identity == descriptor.identity else { return }
+        publish(descriptor: descriptor, payload: payload)
     }
 
-    func load(url: URL, targetSize: CGSize, scale: CGFloat,
-              completion: @escaping (NSImage?, Data?) -> Void) {
-        let px = maxPixel(for: targetSize, scale: scale)
-        let key = memoryKey(url, px)
-        let dataKey = url.absoluteString as NSString
-        if let image = memory.object(forKey: key), let animated = cachedAnimatedFlag(url) {
-            guard animated else {
-                completion(image, nil)
+    func hidePayload() {
+        publish(descriptor: snapshot.descriptor, payload: nil)
+    }
+
+    func fail(_ descriptor: WorkshopImageAnimationDescriptor) {
+        guard snapshot.descriptor?.identity == descriptor.identity else { return }
+        hidePayload()
+    }
+
+    func reset() {
+        publish(descriptor: nil, payload: nil)
+    }
+
+    private func publish(
+        descriptor: WorkshopImageAnimationDescriptor?,
+        payload: WorkshopImageAnimation?
+    ) {
+        guard snapshot.descriptor != descriptor || snapshot.payload != payload else { return }
+        snapshot = Snapshot(descriptor: descriptor, payload: payload)
+    }
+}
+
+@MainActor
+private final class WorkshopImageController: ObservableObject {
+    struct ImageRequest: Equatable {
+        let url: URL?
+        let maxPixel: Int
+        let isSizeReady: Bool
+        let isLoadingEnabled: Bool
+    }
+
+    struct AnimationRequest: Equatable {
+        let expectedURL: URL?
+        let descriptor: WorkshopImageAnimationDescriptor?
+        let isAnimating: Bool
+        let isLoadingEnabled: Bool
+    }
+
+    let staticState = WorkshopImageStaticState()
+    let animationState = WorkshopImageAnimationState()
+
+    private let loader: WorkshopImageLoader
+    private var sourceURL: URL?
+
+    init(loader: WorkshopImageLoader = WorkshopImageLoader.shared) {
+        self.loader = loader
+    }
+
+    func loadImage(_ request: ImageRequest) async {
+        guard !Task.isCancelled else { return }
+
+        if sourceURL != request.url {
+            sourceURL = request.url
+            staticState.showLoading()
+            animationState.reset()
+        }
+
+        guard request.isSizeReady else { return }
+        guard request.isLoadingEnabled else {
+            animationState.reset()
+            return
+        }
+        guard let url = request.url else {
+            staticState.showFailure(for: nil)
+            animationState.reset()
+            return
+        }
+
+        staticState.showLoadingIfFailed(for: url)
+        do {
+            let loaded = try await loader.load(url: url, maxPixel: request.maxPixel)
+            try Task.checkCancellation()
+            guard sourceURL == url else { return }
+            staticState.show(loaded.image, for: url)
+            animationState.setDescriptor(loaded.animationDescriptor)
+        } catch is CancellationError {
+            return
+        } catch {
+            guard !Task.isCancelled, sourceURL == url else { return }
+            staticState.showFailure(for: url)
+            animationState.reset()
+        }
+    }
+
+    func loadAnimation(_ request: AnimationRequest) async {
+        guard !Task.isCancelled else { return }
+
+        guard request.isLoadingEnabled else {
+            animationState.reset()
+            return
+        }
+        guard request.isAnimating else {
+            animationState.hidePayload()
+            return
+        }
+        guard let expectedURL = request.expectedURL,
+              sourceURL == expectedURL,
+              let descriptor = request.descriptor,
+              descriptor.url == expectedURL,
+              animationState.snapshot.descriptor?.identity == descriptor.identity else {
+            animationState.reset()
+            return
+        }
+        do {
+            let payload = try await loader.loadAnimation(descriptor)
+            try Task.checkCancellation()
+            guard sourceURL == expectedURL,
+                  animationState.snapshot.descriptor?.identity == descriptor.identity else {
                 return
             }
-            if let cachedData = dataMemory.object(forKey: dataKey) {
-                completion(image, cachedData as Data)
-                return
-            }
-        }
-        ioQueue.async { [weak self] in
-            guard let self else { return }
-            self.ioLimiter.wait()
-            defer { self.ioLimiter.signal() }
-            if url.isFileURL {
-                guard let data = try? Data(contentsOf: url, options: .mappedIfSafe),
-                      !data.isEmpty,
-                      let image = Self.downsample(data, maxPixel: px) else {
-                    DispatchQueue.main.async { completion(nil, nil) }
-                    return
-                }
-                let animatedData = Self.safeAnimationData(data)
-                let animated = animatedData != nil
-                self.setAnimatedFlag(animated, for: url)
-                self.store(data: data, image: image, dataKey: dataKey,
-                           imageKey: key, animated: animated)
-                DispatchQueue.main.async {
-                    completion(image, animatedData)
-                }
-                return
-            }
-            let disk = self.diskURL(for: url)
-            if let data = try? Data(contentsOf: disk), !data.isEmpty,
-               let image = Self.downsample(data, maxPixel: px) {
-                let animatedData = Self.safeAnimationData(data)
-                let animated = animatedData != nil
-                self.setAnimatedFlag(animated, for: url)
-                self.store(data: data, image: image, dataKey: dataKey,
-                           imageKey: key, animated: animated)
-                DispatchQueue.main.async {
-                    completion(image, animatedData)
-                }
-                return
-            }
-            let semaphore = DispatchSemaphore(value: 0)
-            self.session.dataTask(with: URLRequest(url: url)) { [weak self] data, response, _ in
-                defer { semaphore.signal() }
-                guard let self else { return }
-                let ok = (response as? HTTPURLResponse).map { (200..<300).contains($0.statusCode) } ?? true
-                guard ok, let data, !data.isEmpty else {
-                    DispatchQueue.main.async { completion(nil, nil) }
-                    return
-                }
-                try? data.write(to: disk, options: .atomic)
-                let image = Self.downsample(data, maxPixel: px)
-                let animatedData = Self.safeAnimationData(data)
-                let animated = animatedData != nil
-                self.setAnimatedFlag(animated, for: url)
-                if let image {
-                    self.store(data: data, image: image, dataKey: dataKey,
-                               imageKey: key, animated: animated)
-                }
-                DispatchQueue.main.async {
-                    completion(image, animatedData)
-                }
-            }.resume()
-            semaphore.wait()
+            animationState.show(payload, for: descriptor)
+        } catch is CancellationError {
+            return
+        } catch {
+            guard !Task.isCancelled else { return }
+            animationState.fail(descriptor)
         }
     }
 
-    private func store(data: Data, image: NSImage, dataKey: NSString,
-                       imageKey: NSString, animated: Bool) {
-        if animated {
-            dataMemory.setObject(data as NSData, forKey: dataKey, cost: data.count)
-        }
-        memory.setObject(image, forKey: imageKey, cost: cost(image))
-    }
-
-    private static func safeAnimationData(_ data: Data) -> Data? {
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
-        let frameCount = CGImageSourceGetCount(source)
-        guard frameCount > 1,
-              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
-              let width = (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue,
-              let height = (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue,
-              width > 0, height > 0 else { return nil }
-        let (pixels, pixelOverflow) = width.multipliedReportingOverflow(by: height)
-        let (framePixels, frameOverflow) = pixels.multipliedReportingOverflow(by: frameCount)
-        let (decodedBytes, byteOverflow) = framePixels.multipliedReportingOverflow(by: 4)
-        guard !pixelOverflow, !frameOverflow, !byteOverflow,
-              decodedBytes <= 64 * 1024 * 1024 else { return nil }
-        return data
-    }
-
-    private static func downsample(_ data: Data, maxPixel: Int) -> NSImage? {
-        let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
-        guard let source = CGImageSourceCreateWithData(data as CFData, sourceOptions) else {
-            return NSImage(data: data)
-        }
-        let frameIndex = representativeFrameIndex(in: source)
-        let options: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceShouldCacheImmediately: true,
-            kCGImageSourceThumbnailMaxPixelSize: maxPixel
-        ]
-        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, frameIndex, options as CFDictionary) else {
-            return NSImage(data: data)
-        }
-        return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
-    }
-
-    private static func representativeFrameIndex(in source: CGImageSource) -> Int {
-        let count = CGImageSourceGetCount(source)
-        guard count > 1 else { return 0 }
-
-        let sampleCount = min(count, 6)
-        let indexes = Set((0..<sampleCount).map { sample in
-            sampleCount == 1 ? 0 : sample * (count - 1) / (sampleCount - 1)
-        }).sorted()
-        let options: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceShouldCacheImmediately: true,
-            kCGImageSourceThumbnailMaxPixelSize: 64
-        ]
-
-        for index in indexes {
-            guard let frame = CGImageSourceCreateThumbnailAtIndex(source, index, options as CFDictionary) else {
-                continue
-            }
-            if !isNearBlack(frame) {
-                return index
-            }
-        }
-        return 0
-    }
-
-    private static func isNearBlack(_ image: CGImage) -> Bool {
-        let width = min(image.width, 64)
-        let height = min(image.height, 64)
-        guard width > 0, height > 0 else { return true }
-
-        var pixels = [UInt8](repeating: 0, count: width * height * 4)
-        let rendered = pixels.withUnsafeMutableBytes { bytes -> Bool in
-            guard let context = CGContext(
-                data: bytes.baseAddress,
-                width: width,
-                height: height,
-                bitsPerComponent: 8,
-                bytesPerRow: width * 4,
-                space: CGColorSpaceCreateDeviceRGB(),
-                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-                    | CGBitmapInfo.byteOrder32Big.rawValue
-            ) else { return false }
-            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
-            return true
-        }
-        guard rendered else { return true }
-
-        var visiblePixels = 0
-        var litPixels = 0
-        var brightnessTotal = 0
-        for offset in stride(from: 0, to: pixels.count, by: 4) {
-            guard pixels[offset + 3] > 8 else { continue }
-            visiblePixels += 1
-            let brightness = max(pixels[offset], pixels[offset + 1], pixels[offset + 2])
-            brightnessTotal += Int(brightness)
-            if brightness > 18 {
-                litPixels += 1
-            }
-        }
-        guard visiblePixels > 0 else { return true }
-        return litPixels * 50 < visiblePixels && brightnessTotal < visiblePixels * 10
+    func disappear() {
+        animationState.reset()
     }
 }
 
@@ -273,121 +202,147 @@ struct WorkshopImage: View {
     var isLoadingEnabled = true
 
     @Environment(\.displayScale) private var displayScale
-    @State private var image: NSImage?
-    @State private var animationData: Data?
-    @State private var failed = false
-    @State private var boxSize: CGSize = .zero
-    @State private var loadToken: UInt64 = 0
-    @State private var pendingLoad = false
+    @StateObject private var controller = WorkshopImageController()
+    @State private var sizing = WorkshopImageSizing.pending
+
+    private var imageRequest: WorkshopImageController.ImageRequest {
+        WorkshopImageController.ImageRequest(
+            url: url,
+            maxPixel: sizing.maxPixel,
+            isSizeReady: sizing.isSizeReady,
+            isLoadingEnabled: isLoadingEnabled
+        )
+    }
 
     var body: some View {
         Rectangle()
             .fill(Color.secondary.opacity(0.10))
             .overlay {
-                if let image {
-                    Image(nsImage: image)
-                        .resizable()
-                        .interpolation(.high)
-                        .aspectRatio(contentMode: contentMode)
-                    if isAnimating, let animationData, let url {
-                        WorkshopAnimatedImage(
-                            data: animationData,
-                            identity: url.absoluteString,
-                            contentMode: contentMode
-                        )
-                    }
-                } else if failed {
-                    Image(systemName: "photo")
-                        .font(.title2)
-                        .foregroundStyle(.tertiary)
-                } else {
-                    ProgressView()
-                        .controlSize(.small)
+                ZStack {
+                    WorkshopImageStaticLayer(
+                        state: controller.staticState,
+                        expectedURL: url,
+                        contentMode: contentMode
+                    )
+                    WorkshopImageAnimationLayer(
+                        controller: controller,
+                        state: controller.animationState,
+                        expectedURL: url,
+                        contentMode: contentMode,
+                        isAnimating: isAnimating,
+                        isLoadingEnabled: isLoadingEnabled
+                    )
                 }
             }
             .clipped()
-            .onAppear {
-                load()
+            .background {
+                WorkshopImageSizeReader(sizing: $sizing, scale: displayScale)
             }
-            .background(
-                GeometryReader { proxy in
-                    Color.clear
-                        .onAppear {
-                            boxSize = proxy.size
-                            load()
-                        }
-                        .onChange(of: proxy.size) { _, newValue in
-                            guard abs(newValue.width - boxSize.width) > 1 ||
-                                  abs(newValue.height - boxSize.height) > 1 else { return }
-                            boxSize = newValue
-                            load()
-                        }
-                }
-            )
-            .onChange(of: url) { _, _ in
-                image = nil
-                animationData = nil
-                failed = false
-                load()
-            }
-            .onChange(of: isLoadingEnabled) { _, enabled in
-                if enabled && pendingLoad {
-                    load()
-                }
-            }
-            .onChange(of: isAnimating) { _, animating in
-                if animating {
-                    load()
-                } else {
-                    animationData = nil
-                }
+            .task(id: imageRequest) {
+                await controller.loadImage(imageRequest)
             }
             .onDisappear {
-                loadToken &+= 1
-                animationData = nil
-                pendingLoad = isAnimating
+                controller.disappear()
             }
     }
+}
 
-    private func load() {
-        guard boxSize.width > 1, boxSize.height > 1 else { return }
-        guard let url else {
-            image = nil
-            animationData = nil
-            failed = true
-            pendingLoad = false
-            return
+private struct WorkshopImageStaticLayer: View {
+    @ObservedObject var state: WorkshopImageStaticState
+    let expectedURL: URL?
+    let contentMode: ContentMode
+
+    var body: some View {
+        switch state.phase {
+        case .loading:
+            ProgressView()
+                .controlSize(.small)
+        case .success(let url, let image) where url == expectedURL:
+            Image(nsImage: image)
+                .resizable()
+                .interpolation(.high)
+                .aspectRatio(contentMode: contentMode)
+        case .failure(let url) where url == expectedURL:
+            Image(systemName: "photo")
+                .font(.title2)
+                .foregroundStyle(.tertiary)
+        default:
+            ProgressView()
+                .controlSize(.small)
         }
-        let scale = displayScale
-        if let cached = WorkshopImageLoader.shared.cachedImage(url: url, targetSize: boxSize, scale: scale) {
-            image = cached
-            failed = false
-            pendingLoad = false
-            if !isAnimating { return }
-        }
-        guard isLoadingEnabled else {
-            pendingLoad = true
-            return
-        }
-        pendingLoad = false
-        loadToken &+= 1
-        let token = loadToken
-        let requestedURL = url
-        WorkshopImageLoader.shared.load(url: requestedURL, targetSize: boxSize, scale: scale) { loaded, animatedData in
-            guard token == loadToken, requestedURL == url else { return }
-            if let loaded {
-                image = loaded
-                animationData = animatedData
-                failed = false
-            } else {
-                failed = true
+    }
+}
+
+private struct WorkshopImageAnimationLayer: View {
+    let controller: WorkshopImageController
+    @ObservedObject var state: WorkshopImageAnimationState
+    let expectedURL: URL?
+    let contentMode: ContentMode
+    let isAnimating: Bool
+    let isLoadingEnabled: Bool
+
+    private var request: WorkshopImageController.AnimationRequest {
+        WorkshopImageController.AnimationRequest(
+            expectedURL: expectedURL,
+            descriptor: isAnimating && isLoadingEnabled ? state.snapshot.descriptor : nil,
+            isAnimating: isAnimating,
+            isLoadingEnabled: isLoadingEnabled
+        )
+    }
+
+    var body: some View {
+        Group {
+            if isLoadingEnabled, isAnimating,
+               state.snapshot.descriptor?.url == expectedURL,
+               let payload = state.snapshot.payload {
+                WorkshopAnimatedImage(
+                    image: payload.image,
+                    identity: payload.identity,
+                    contentMode: contentMode
+                )
             }
+        }
+        .task(id: request) {
+            await controller.loadAnimation(request)
+        }
+    }
+}
+
+private struct WorkshopImageSizing: Equatable {
+    static let pending = WorkshopImageSizing(maxPixel: 64, isSizeReady: false)
+
+    let maxPixel: Int
+    let isSizeReady: Bool
+
+    init(size: CGSize, scale: CGFloat) {
+        maxPixel = WorkshopImageLoader.maxPixel(for: size, scale: scale)
+        isSizeReady = size.width > 1 && size.height > 1
+    }
+
+    private init(maxPixel: Int, isSizeReady: Bool) {
+        self.maxPixel = maxPixel
+        self.isSizeReady = isSizeReady
+    }
+}
+
+private struct WorkshopImageSizeReader: View {
+    @Binding var sizing: WorkshopImageSizing
+    let scale: CGFloat
+
+    var body: some View {
+        GeometryReader { proxy in
+            let newSizing = WorkshopImageSizing(size: proxy.size, scale: scale)
+            Color.clear
+                .task(id: newSizing) {
+                    guard !Task.isCancelled, sizing != newSizing else { return }
+                    sizing = newSizing
+                }
         }
     }
 }
 
 private struct WorkshopAnimatedImage: NSViewRepresentable {
-    let data: Data
+    let image: NSImage
     let identity: String
     let contentMode: ContentMode
 
@@ -409,7 +364,7 @@ private struct WorkshopAnimatedImage: NSViewRepresentable {
         view.contentMode = contentMode
         if context.coordinator.identity != identity {
             context.coordinator.identity = identity
-            view.image = NSImage(data: data)
+            view.image = image
         }
     }
 

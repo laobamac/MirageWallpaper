@@ -179,7 +179,9 @@ struct ContentView: View {
                         WorkshopItemDetail(
                             item: workshopViewModel.selectedItem,
                             workshopViewModel: workshopViewModel,
-                            isActive: navigationModel.selection != .installed && workshopViewModel.showCustomization == false
+                            isActive: workshopViewModel.showCreatorProfile == false &&
+                                navigationModel.selection != .installed &&
+                                workshopViewModel.showCustomization == false
                         )
                             .frame(maxWidth: 320)
                             .sectionVisibility(

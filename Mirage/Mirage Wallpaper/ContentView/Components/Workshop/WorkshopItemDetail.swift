@@ -56,7 +56,8 @@ struct WorkshopItemDetail: View {
                 WorkshopImage(
                     url: item.previewImageURL,
                     contentMode: .fill,
-                    isAnimating: isActive
+                    isAnimating: isActive,
+                    isLoadingEnabled: isActive
                 )
                     .frame(width: 280, height: 280)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
