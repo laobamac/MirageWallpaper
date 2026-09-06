@@ -871,6 +871,66 @@ bool ApplyUserPropertyToNodeVisibility(Scene& scene, const std::string& key, con
     return scene.ApplyUserNodeVisibilityBindings(key, prop);
 }
 
+bool ApplyUserPropertyToNodeScale(Scene& scene, const std::string& key, const Json& prop) {
+    auto it = scene.node_scale_user_index.find(key);
+    if (it == scene.node_scale_user_index.end()) return false;
+
+    auto coerced = CoerceUserPropertyValue(prop);
+    if (! coerced.ok) return false;
+    const auto components = coerced.value.size();
+    if (components == 0) return false;
+
+    bool changed = false;
+    for (const auto& binding : it->second) {
+        Eigen::Vector3f next = binding.authored;
+        if (components >= 3) {
+            next = Eigen::Vector3f(coerced.value[0], coerced.value[1], coerced.value[2]);
+        } else {
+            const float factor = coerced.value[0];
+            if (! std::isfinite(factor)) continue;
+            next = Eigen::Vector3f(factor, factor, factor);
+        }
+        if (! next.allFinite()) continue;
+        binding.node->SetScale(next);
+        if (binding.on_changed) binding.on_changed();
+        changed = true;
+    }
+    return changed;
+}
+
+void ApplyUserPropertyToTextMaxWidth(Scene& scene, const std::string& key, const Json& prop) {
+    auto it = scene.text_maxwidth_user_index.find(key);
+    if (it == scene.text_maxwidth_user_index.end()) return;
+
+    auto coerced = CoerceUserPropertyValue(prop);
+    if (! coerced.ok || coerced.value.size() < 1) return;
+    const float max_width = coerced.value[0];
+    if (! std::isfinite(max_width) || max_width < 0.0f) return;
+    for (const auto& setter : it->second) {
+        if (setter) setter(max_width);
+    }
+}
+
+bool ApplyUserPropertyToPostProcessEnable(Scene& scene, const std::string& key, const Json& prop) {
+    auto it = scene.post_process_enable_user_index.find(key);
+    if (it == scene.post_process_enable_user_index.end()) return false;
+
+    auto coerced = CoerceUserPropertyValue(prop);
+    if (! coerced.ok || coerced.value.size() == 0) return false;
+    const bool enabled = coerced.value[0] != 0.0f;
+
+    bool changed = false;
+    for (auto& weak_pp : it->second) {
+        if (auto pp = weak_pp.lock()) {
+            if (pp->enabled != enabled) {
+                pp->enabled = enabled;
+                changed     = true;
+            }
+        }
+    }
+    return changed;
+}
+
 void ApplyUserPropertyBeforeFirstGraph(Scene& scene, const std::string& key, const Json& prop) {
     sr::script::SetSceneUserProperty(scene, key, prop);
     ApplyUserPropertyToClear(scene, key, prop);
@@ -883,6 +943,8 @@ void ApplyUserPropertyBeforeFirstGraph(Scene& scene, const std::string& key, con
     ApplyUserPropertyToPointSize(scene, key, prop);
     ApplyUserPropertyToTextColor(scene, key, prop);
     ApplyUserPropertyToTextAlpha(scene, key, prop);
+    ApplyUserPropertyToTextMaxWidth(scene, key, prop);
+    (void)ApplyUserPropertyToNodeScale(scene, key, prop);
     ApplyUserPropertyToParticles(scene, key, prop);
     ApplyUserPropertyToSoundVolume(scene, key, prop);
     ApplyUserPropertyToCameraParallax(scene, key, prop);
@@ -890,6 +952,7 @@ void ApplyUserPropertyBeforeFirstGraph(Scene& scene, const std::string& key, con
     ApplyUserPropertyToCameraPath(scene, key, prop);
     (void)ApplyUserPropertyToNodeVisibility(scene, key, prop);
     (void)scene.ApplyUserImageEffectVisibilityBindings(key, prop);
+    (void)ApplyUserPropertyToPostProcessEnable(scene, key, prop);
 }
 
 void MergeProjectUserProperties(const std::filesystem::path& project_dir, rstd::json::Map& out) {
@@ -1421,6 +1484,8 @@ void SceneRenderController::on(RenderSetUserProperty&& m) {
     ApplyUserPropertyToPointSize(*m_scene, key, m.property);
     ApplyUserPropertyToTextColor(*m_scene, key, m.property);
     ApplyUserPropertyToTextAlpha(*m_scene, key, m.property);
+    ApplyUserPropertyToTextMaxWidth(*m_scene, key, m.property);
+    (void)ApplyUserPropertyToNodeScale(*m_scene, key, m.property);
     ApplyUserPropertyToParticles(*m_scene, key, m.property);
     ApplyUserPropertyToSoundVolume(*m_scene, key, m.property);
     ApplyUserPropertyToCameraParallax(*m_scene, key, m.property);
@@ -1430,6 +1495,8 @@ void SceneRenderController::on(RenderSetUserProperty&& m) {
     requires_graph_rebuild =
         m_scene->ApplyUserImageEffectVisibilityBindings(key, m.property) || requires_graph_rebuild;
     requires_graph_rebuild = requires_graph_rebuild || shader_combo_requires_graph;
+    requires_graph_rebuild =
+        ApplyUserPropertyToPostProcessEnable(*m_scene, key, m.property) || requires_graph_rebuild;
 
     // Pointsize edits swap the text atlas (new FontFace → new atlas texture);
     // fold those materials into the texture-refresh set so the new atlas binds.

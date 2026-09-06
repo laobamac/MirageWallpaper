@@ -298,6 +298,7 @@ public:
     // user properties take effect without a scene reload.
     void SetColor(float r, float g, float b);
     void SetAlpha(float alpha);
+    void SetMaxWidth(float max_width);
 
     // For ParseTextObj's initial-bbox log; reflects the most recent layout.
     float             TextWidth() const noexcept;

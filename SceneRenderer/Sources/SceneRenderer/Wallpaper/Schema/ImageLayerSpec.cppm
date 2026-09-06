@@ -144,6 +144,8 @@ public:
     std::string        color_user_key;
     UserValueBinding   alpha_user;
     std::string        alpha_user_key;
+    UserValueBinding   scale_user;
+    std::string        scale_user_key;
 };
 
 // Direct-draw scene layer. Wallpaper Engine represents authored vector shapes

@@ -73,6 +73,10 @@ struct TextObject {
     std::string        color_user_key;
     UserValueBinding   alpha_user;
     std::string        alpha_user_key;
+    UserValueBinding   scale_user;
+    std::string        scale_user_key;
+    UserValueBinding   maxwidth_user;
+    std::string        maxwidth_user_key;
 
     // Visual/material overlap with image kind.
     std::array<float, 3>     color { 1.0f, 1.0f, 1.0f };
@@ -121,6 +125,10 @@ struct TextObject {
         color_user_key = color_user.name;
         ReadUserValueBinding(json, "alpha", alpha_user);
         alpha_user_key = alpha_user.name;
+        ReadUserValueBinding(json, "scale", scale_user);
+        scale_user_key = scale_user.name;
+        ReadUserValueBinding(json, "maxwidth", maxwidth_user);
+        maxwidth_user_key = maxwidth_user.name;
         sr::GetJsonValue(json, "padding", padding, false);
         sr::GetJsonValue(json, "horizontalalign", horizontalalign, false);
         sr::GetJsonValue(json, "verticalalign", verticalalign, false);

@@ -595,6 +595,7 @@ std::unique_ptr<rg::RenderGraph> sr::sceneToRenderGraph(Scene&                  
     // Each step is either a CustomShaderPass (built on the synthetic node's
     // mesh+material) or a CopyPass (RT-to-RT blit).
     for (auto& pp : scene.post_processes) {
+        if (! pp || ! pp->enabled) continue;
         for (auto& step : pp->steps) {
             if (auto* sp = std::get_if<ScenePostProcessPass>(&step)) {
                 std::string_view target =

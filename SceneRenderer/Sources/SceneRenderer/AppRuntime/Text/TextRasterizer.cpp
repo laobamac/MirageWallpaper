@@ -996,6 +996,16 @@ void TextLayouter::SetAlpha(float alpha) {
     SetText(im.current_text);
 }
 
+void TextLayouter::SetMaxWidth(float max_width) {
+    auto& im = *m_impl;
+    if (! std::isfinite(max_width) || max_width < 0.0f) return;
+    if (im.style.max_width == max_width) return;
+    im.style.max_width  = max_width;
+    im.style.limit_width = max_width > 0.0f;
+    im.truncate_logged   = false;
+    SetText(im.current_text);
+}
+
 TextGeometry ResolveTextGeometry(const TextGeometryPolicy& policy,
                                  const TextLayoutMetrics&  metrics) {
     auto positive = [](float value, float fallback) {

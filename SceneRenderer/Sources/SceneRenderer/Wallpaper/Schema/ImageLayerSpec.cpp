@@ -295,6 +295,8 @@ bool ImageObject::FromJson(const sr::Json& json, fs::VFS& vfs, SceneVersion v) {
         sr::GetJsonValue(json, "origin", origin);
         sr::GetJsonValue(json, "angles", angles);
         sr::GetJsonValue(json, "scale", scale);
+        ReadUserValueBinding(json, "scale", scale_user);
+        scale_user_key = scale_user.name;
         if (! sr::GetJsonValue(json, "parallaxDepth", parallaxDepth, false) && composite_layer) {
             // WE gives composite containers the regular layer depth when the field is omitted.
             parallaxDepth = { 1.0f, 1.0f };

@@ -515,6 +515,7 @@ struct EngineHostState {
     // TextLayouter::SetText. Missing entry means the layer is not text-
     // capable; writes silently no-op.
     std::unordered_map<sr::SceneNode*, std::function<void(std::string_view)>> text_setters;
+    std::unordered_map<sr::SceneNode*, JSValue> layer_wrappers;
     struct TextAlignHooks {
         std::string                           horizontal { "center" };
         std::string                           vertical { "center" };
@@ -530,6 +531,11 @@ struct EngineHostState {
         std::function<void(std::string_view)> setter;
     };
     std::unordered_map<sr::SceneNode*, ImageAlignmentHook> image_alignment_hooks;
+    struct TextFontHook {
+        std::function<std::string()>          get_font;
+        std::function<void(std::string_view)> set_font;
+    };
+    std::unordered_map<sr::SceneNode*, TextFontHook> text_font_hooks;
     std::unordered_map<sr::SceneNode*, Json> initial_layer_configs;
     // SceneNode -> text-layer origin getter/setter. Text compose nodes derive
     // their world translate from a logical `origin` plus alignment offsets, and
@@ -2331,17 +2337,27 @@ inline sr::SceneNode* GetLayerNode(JSValueConst v) {
 }
 
 JSValue WrapLayerNode(JSContext* ctx, sr::SceneNode* node) {
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    if (host != nullptr && node != nullptr) {
+        auto it = host->layer_wrappers.find(node);
+        if (it != host->layer_wrappers.end()) return JS_DupValue(ctx, it->second);
+    }
     JSValue obj = JS_NewObjectClass(ctx, s_layer_class_id);
     if (JS_IsException(obj)) return obj;
-    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
     JS_SetOpaque(obj, new LayerHandle { .host = host, .node = node });
+    if (host != nullptr && node != nullptr)
+        host->layer_wrappers.emplace(node, JS_DupValue(ctx, obj));
     return obj;
 }
 
 JSValue WrapLayerName(JSContext* ctx, std::string name) {
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    if (host != nullptr && host->scene_root != nullptr && ! name.empty()) {
+        if (auto* node = host->scene_root->FindByName(name); node != nullptr)
+            return WrapLayerNode(ctx, node);
+    }
     JSValue obj = JS_NewObjectClass(ctx, s_layer_class_id);
     if (JS_IsException(obj)) return obj;
-    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
     JS_SetOpaque(obj, new LayerHandle { .host = host, .node = nullptr, .name = std::move(name) });
     return obj;
 }
@@ -2781,6 +2797,27 @@ JSValue NodeSetText(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
     const char* s = JS_ToCString(ctx, val);
     if (s == nullptr) return JS_UNDEFINED;
     it->second(std::string_view(s));
+    JS_FreeCString(ctx, s);
+    return JS_UNDEFINED;
+}
+JSValue NodeGetFont(JSContext* ctx, JSValueConst this_val) {
+    auto* n = GetLayerNode(this_val);
+    if (! n) return JS_NewString(ctx, "");
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    auto  it   = host->text_font_hooks.find(n);
+    if (it == host->text_font_hooks.end() || ! it->second.get_font) return JS_NewString(ctx, "");
+    const std::string font = it->second.get_font();
+    return JS_NewStringLen(ctx, font.data(), font.size());
+}
+JSValue NodeSetFont(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+    auto* n = GetLayerNode(this_val);
+    if (! n) return JS_UNDEFINED;
+    auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(ctx));
+    auto  it   = host->text_font_hooks.find(n);
+    if (it == host->text_font_hooks.end() || ! it->second.set_font) return JS_UNDEFINED;
+    const char* s = JS_ToCString(ctx, val);
+    if (s == nullptr) return JS_UNDEFINED;
+    it->second.set_font(std::string_view(s));
     JS_FreeCString(ctx, s);
     return JS_UNDEFINED;
 }
@@ -3906,6 +3943,7 @@ const JSCFunctionListEntry s_layer_proto_funcs[] = {
     JS_CGETSET_DEF("verticalalign", NodeGetVAlign, NodeSetVAlign),
     JS_CGETSET_DEF("horizontalalign", NodeGetHAlign, NodeSetHAlign),
     JS_CGETSET_DEF("pointsize", NodeGetPointSize, NodeSetPointSize),
+    JS_CGETSET_DEF("font", NodeGetFont, NodeSetFont),
     JS_CFUNC_DEF("getParent", 0, NodeGetParent),
     JS_CFUNC_DEF("getTransformMatrix", 0, NodeGetTransformMatrix),
     JS_CFUNC_DEF("rotateObjectSpace", 1, NodeRotateObjectSpace),
@@ -4202,6 +4240,9 @@ JsRuntime::~JsRuntime() {
         }
     }
     m_impl->scripts.clear();
+    for (auto& [_node, wrapper] : m_impl->host.layer_wrappers)
+        JS_FreeValue(m_impl->ctx, wrapper);
+    m_impl->host.layer_wrappers.clear();
     for (auto& [_sha, ns] : m_impl->ns_by_sha) JS_FreeValue(m_impl->ctx, ns);
     m_impl->ns_by_sha.clear();
     if (! JS_IsUndefined(m_impl->wrapped_scene)) JS_FreeValue(m_impl->ctx, m_impl->wrapped_scene);
@@ -4619,6 +4660,16 @@ void JsRuntime::RegisterImageAlignmentSetter(sr::SceneNode* node, std::string al
     m_impl->host.image_alignment_hooks[node] = {
         .alignment = std::move(alignment),
         .setter    = std::move(setter),
+    };
+}
+
+void JsRuntime::RegisterTextFontSetter(sr::SceneNode*                        node,
+                                       std::function<std::string()>          get_font,
+                                       std::function<void(std::string_view)> set_font) {
+    if (node == nullptr) return;
+    m_impl->host.text_font_hooks[node] = EngineHostState::TextFontHook {
+        .get_font = std::move(get_font),
+        .set_font = std::move(set_font),
     };
 }
 

@@ -1827,6 +1827,7 @@ struct ScenePostProcess {
     using Step = std::variant<ScenePostProcessPass, ScenePostProcessCopy>;
     std::string       name;
     std::vector<Step> steps;
+    bool              enabled { true };
 };
 
 // SceneLight + SceneLightType live in the `sr.scene:lighting` partition
@@ -2845,6 +2846,18 @@ public:
     // push live sidebar edits without a scene reload.
     Map<std::string, std::vector<std::function<void(const std::string&)>>> text_user_index;
     Map<std::string, std::vector<std::function<void(double)>>>             pointsize_user_index;
+
+    struct NodeScaleUserBinding {
+        rstd::sync::Arc<SceneNode> node;
+        Eigen::Vector3f            authored { Eigen::Vector3f::Ones() };
+        std::function<void()>      on_changed;
+    };
+    Map<std::string, std::vector<NodeScaleUserBinding>> node_scale_user_index;
+
+    Map<std::string, std::vector<std::function<void(float)>>> text_maxwidth_user_index;
+
+    Map<std::string, std::vector<std::weak_ptr<struct ScenePostProcess>>>
+        post_process_enable_user_index;
 
     // user-property key → setter closures for text layers whose `color` /
     // `alpha` field was authored as `{user:"<key>"}`. Text color/alpha are

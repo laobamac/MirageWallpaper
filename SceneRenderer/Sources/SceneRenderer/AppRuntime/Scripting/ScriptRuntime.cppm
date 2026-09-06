@@ -284,6 +284,8 @@ public:
                                   std::function<void(double)>           set_point_size = {});
     void RegisterImageAlignmentSetter(sr::SceneNode* node, std::string alignment,
                                       std::function<void(std::string_view)> setter);
+    void RegisterTextFontSetter(sr::SceneNode* node, std::function<std::string()> get_font,
+                                std::function<void(std::string_view)> set_font);
 
     using LayerFactory = std::function<std::optional<rstd::sync::Arc<sr::SceneNode>>(
         sr::SceneNode*, LayerAssetReference)>;

@@ -185,6 +185,42 @@ bool SceneAccessesEffects(std::span<const SceneObjectVar> scene_objs) {
     return false;
 }
 
+template<typename Predicate>
+bool AnyObjectFieldBindings(const Json& json, Predicate&& predicate) {
+    auto objects = json.get("objects");
+    if (objects.is_none()) return false;
+    auto object_array = (*objects)->as_array();
+    if (object_array.is_none()) return false;
+    for (const auto& o : **object_array) {
+        if (! o.is_object()) continue;
+        wpscene::FieldBindings fb;
+        if (wpscene::AbsorbAllFieldBindings(o, fb) == 0) continue;
+        if (predicate(fb)) return true;
+    }
+    return false;
+}
+
+bool FieldBindingsMatchSource(const wpscene::FieldBindings& fb, std::string_view needle) {
+    for (const auto& [_, binding] : fb.scripts) {
+        if (binding.source.find(needle) != std::string::npos) return true;
+    }
+    return false;
+}
+
+bool SceneWritesLayerText(const Json& json, std::span<const SceneObjectVar> scene_objs) {
+    if (SceneWritesLayerText(scene_objs)) return true;
+    return AnyObjectFieldBindings(json, [](const wpscene::FieldBindings& fb) {
+        return FieldBindingsWriteLayerText(fb);
+    });
+}
+
+bool SceneAccessesEffects(const Json& json, std::span<const SceneObjectVar> scene_objs) {
+    if (SceneAccessesEffects(scene_objs)) return true;
+    return AnyObjectFieldBindings(json, [](const wpscene::FieldBindings& fb) {
+        return FieldBindingsMatchSource(fb, "getEffect");
+    });
+}
+
 bool SceneUsesAudioScripts(std::span<const SceneObjectVar> scene_objs) {
     for (const auto& obj : scene_objs) {
         bool found = false;
@@ -205,9 +241,22 @@ bool SceneUsesAudioScripts(std::span<const SceneObjectVar> scene_objs) {
     return false;
 }
 
+bool SceneHasScripts(const Json& json, std::span<const SceneObjectVar> scene_objs) {
+    if (SceneHasScripts(scene_objs)) return true;
+    return AnyObjectFieldBindings(json, [](const wpscene::FieldBindings& fb) {
+        return ! fb.scripts.empty();
+    });
+}
+
+bool SceneUsesAudioScripts(const Json& json, std::span<const SceneObjectVar> scene_objs) {
+    if (SceneUsesAudioScripts(scene_objs)) return true;
+    return AnyObjectFieldBindings(json, [](const wpscene::FieldBindings& fb) {
+        return FieldBindingsMatchSource(fb, "registerAudioBuffers");
+    });
+}
+
 std::optional<std::array<float, 2>> ResolveImageAssetSize(ParseContext&    context,
-                                                          std::string_view image_path) {
-    auto info = wpscene::LoadImageAssetInfo(*context.vfs, image_path);
+                                                          std::string_view image_path) {    auto info = wpscene::LoadImageAssetInfo(*context.vfs, image_path);
     if (! info) return std::nullopt;
     if (info->size) return info->size;
     if (info->first_texture.empty()) return std::nullopt;
@@ -4110,6 +4159,12 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj,
         context.scene->image_alpha_user_index[wpimgobj.alpha_user_key].push_back(
             { spImgNode.clone(), image_property_materials });
     }
+    if (! wpimgobj.scale_user_key.empty()) {
+        context.scene->node_scale_user_index[wpimgobj.scale_user_key].push_back({
+            spImgNode.clone(),
+            Vector3f(wpimgobj.scale.data()),
+        });
+    }
     context.node_id_map[wpimgobj.id] = {
         wpimgobj.parent,
         rstd::Some(spImgNode.clone()),
@@ -5093,6 +5148,9 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
     auto current_text       = std::make_shared<std::string>(s_text);
     auto current_point_size = std::make_shared<double>(obj.pointsize);
     auto raster_px          = std::make_shared<std::uint32_t>(px);
+    auto current_font_blob  = std::make_shared<std::shared_ptr<std::vector<std::byte>>>(
+        resolved.bytes);
+    auto current_font_name = std::make_shared<std::string>(font_name);
 
     auto  initial_metrics = layouter->Metrics();
     float text_w          = initial_metrics.text_width;
@@ -5640,7 +5698,7 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
     };
     auto set_pointsize = [scene          = context.scene.get(),
                           font_cache_ptr = &font_cache,
-                          font_blob      = resolved.bytes,
+                          current_font_blob,
                           sp_mesh,
                           layouter,
                           rebuild_compose,
@@ -5657,7 +5715,7 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
             use_px = std::clamp<std::uint32_t>(std::max(want_px, use_px * 2u), 1u, 1024u);
         }
         if (use_px != *raster_px) {
-            auto* next_face = font_cache_ptr->GetFace(font_blob, use_px);
+            auto* next_face = font_cache_ptr->GetFace(*current_font_blob, use_px);
             if (next_face == nullptr) return;
             next_face->Populate(text::DecodeUtf8(*current_text));
             if (! EnsureTextAtlas(*scene, *next_face)) return;
@@ -5678,10 +5736,59 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
         layouter->SetLayoutScale(static_cast<float>(want_px) / static_cast<float>(*raster_px));
         rebuild_compose(layouter->Metrics());
     };
+    auto set_font = [scene          = context.scene.get(),
+                     font_cache_ptr = &font_cache,
+                     current_font_blob,
+                     current_font_name,
+                     sp_mesh,
+                     layouter,
+                     rebuild_compose,
+                     current_text,
+                     raster_px](std::string_view next_font) {
+        if (scene == nullptr || font_cache_ptr == nullptr || next_font.empty()) return;
+        if (next_font == *current_font_name) return;
+
+        text::FontCache::ResolvedBlob resolved_next;
+        if (auto* vfs = static_cast<fs::VFS*>(scene->vfs.get()); vfs != nullptr) {
+            resolved_next = text::FontCache::ResolveFont(*vfs, next_font);
+        } else {
+            resolved_next = text::FontCache::ResolveSystemFont(next_font);
+        }
+        if (! resolved_next.bytes) {
+            rstd_error("layer.font: could not resolve font '{}'", next_font);
+            return;
+        }
+
+        auto* next_face = font_cache_ptr->GetFace(resolved_next.bytes, *raster_px);
+        if (next_face == nullptr) {
+            rstd_error("layer.font: FreeType failed to open '{}'", resolved_next.source);
+            return;
+        }
+        next_face->Populate(text::DecodeUtf8(*current_text));
+        if (! EnsureTextAtlas(*scene, *next_face)) return;
+
+        if (auto* mat = sp_mesh->Material()) {
+            auto mutation = scene->SetMaterialTextureSlot(*mat, 0, next_face->AtlasUrl());
+            if (mutation.changed && mutation.material.has_value()) {
+                scene->QueueTextTextureRefresh(*mutation.material);
+            }
+        }
+        layouter->SetFace(next_face);
+        *current_font_blob = resolved_next.bytes;
+        *current_font_name = std::string(next_font);
+        layouter->SetText(*current_text);
+        rebuild_compose(layouter->Metrics());
+    };
 
     // Must go through EnsureScriptScene: it is the only place that seeds
     // engine.userProperties and the bone resolvers into a fresh JS runtime.
     EnsureScriptScene(context);
+    context.script_scene->runtime().RegisterTextFontSetter(
+        compose_node.as_ptr(),
+        [current_font_name]() {
+            return *current_font_name;
+        },
+        set_font);
     context.script_scene->runtime().RegisterTextAlignSetters(
         compose_node.as_ptr(),
         anchor_state->horizontal,
@@ -5806,6 +5913,20 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
                 layouter->SetAlpha(a);
                 rebuild_compose(layouter->Metrics());
             });
+    }
+    if (! obj.maxwidth_user_key.empty() && obj.limitwidth) {
+        context.scene->text_maxwidth_user_index[obj.maxwidth_user_key].push_back(
+            [layouter, rebuild_compose](float w) {
+                layouter->SetMaxWidth(w);
+                rebuild_compose(layouter->Metrics());
+            });
+    }
+    if (! obj.scale_user_key.empty()) {
+        context.scene->node_scale_user_index[obj.scale_user_key].push_back({
+            compose_node.clone(),
+            Vector3f(obj.scale.data()),
+            apply_text_anchor,
+        });
     }
 
     std::vector<rstd::sync::Arc<SceneNode>> text_before_nodes;
@@ -6714,6 +6835,7 @@ void BuildBloomPostProcess(ParseContext& context, fs::VFS& vfs, const wpscene::S
 
     auto pp  = std::make_shared<ScenePostProcess>();
     pp->name = "__bloom";
+    pp->enabled = g.bloom;
 
     auto add_pass = [&](const char* mat_relpath,
                         std::vector<wpscene::MaterialPassBindItem>
@@ -6872,6 +6994,37 @@ void BuildBloomPostProcess(ParseContext& context, fs::VFS& vfs, const wpscene::S
         .dst = std::string(SpecTex_Default),
     });
 
+    if (! g.user_bindings.empty()) {
+        auto bloom_key = g.user_bindings.find("bloom");
+        if (bloom_key != g.user_bindings.end()) {
+            context.scene->post_process_enable_user_index[bloom_key->second].push_back(pp);
+        }
+
+        auto register_bloom_uniform = [&](const char* field) {
+            auto it = g.user_bindings.find(field);
+            if (it == g.user_bindings.end()) return;
+            const std::string& key = it->second;
+            for (auto& step : pp->steps) {
+                if (auto* sp = std::get_if<ScenePostProcessPass>(&step)) {
+                    if (auto* mesh = sp->node->Mesh()) {
+                        for (const auto& mat : mesh->MaterialSlots()) {
+                            context.scene->shader_user_var_index[key].push_back({ mat, field });
+                        }
+                    }
+                }
+            }
+        };
+
+        if (g.hdr) {
+            register_bloom_uniform("bloomstrength");
+            register_bloom_uniform("bloomtint");
+        } else {
+            register_bloom_uniform("bloomstrength");
+            register_bloom_uniform("bloomthreshold");
+            register_bloom_uniform("bloomtint");
+        }
+    }
+
     scene.post_processes.push_back(std::move(pp));
 }
 
@@ -6899,10 +7052,10 @@ std::shared_ptr<Scene> WPSceneParser::Parse(std::string_view              scene_
         ExpandObjects(json, vfs, sc.pkg_version, m_user_properties, &linked_source_ids);
     const auto ortho_extent = ResolveOrthoProjectionExtent(sc, scene_objs);
     auto       context      = BuildContext(vfs, scene_id, sc, ortho_extent, m_user_properties);
-    context.scene_has_scripts       = SceneHasScripts(scene_objs);
-    context.scene_accesses_effects  = SceneAccessesEffects(scene_objs);
-    context.scene_layer_text_writes = SceneWritesLayerText(scene_objs);
-    context.scene->uses_audio_spectrum = SceneUsesAudioScripts(scene_objs);
+    context.scene_has_scripts       = SceneHasScripts(json, scene_objs);
+    context.scene_accesses_effects  = SceneAccessesEffects(json, scene_objs);
+    context.scene_layer_text_writes = SceneWritesLayerText(json, scene_objs);
+    context.scene->uses_audio_spectrum = SceneUsesAudioScripts(json, scene_objs);
     context.hidden_link_source_ids =
         CollectHiddenLinkedSourceIds(json, linked_source_ids, m_user_properties);
     context.linked_source_ids = std::move(linked_source_ids);
@@ -6986,6 +7139,14 @@ std::shared_ptr<Scene> WPSceneParser::Parse(std::string_view              scene_
             wpscene::ReadVisibleUserBinding(o, visible_user);
             if (! visible_user.empty())
                 node->SetVisibleUserBinding(ToSceneUserVisibilityBinding(visible_user));
+            wpscene::UserValueBinding scale_user;
+            wpscene::ReadUserValueBinding(o, "scale", scale_user);
+            if (! scale_user.name.empty()) {
+                context.scene->node_scale_user_index[scale_user.name].push_back({
+                    node.clone(),
+                    Vector3f(scale.data()),
+                });
+            }
             wpscene::FieldBindings fb;
             wpscene::AbsorbAllFieldBindings(o, fb);
             WireFieldScripts(context, node, fb);
@@ -6999,7 +7160,9 @@ std::shared_ptr<Scene> WPSceneParser::Parse(std::string_view              scene_
 
     ProcessObjects(context, scene_objs, &sm);
 
-    if (sc.general.bloom) {
+    const bool bloom_user_bound =
+        sc.general.user_bindings.find("bloom") != sc.general.user_bindings.end();
+    if (sc.general.bloom || bloom_user_bound) {
         BuildBloomPostProcess(context, vfs, sc.general);
     }
     return FinalizeScene(context);
