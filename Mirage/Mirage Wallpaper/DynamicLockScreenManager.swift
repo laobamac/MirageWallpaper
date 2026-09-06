@@ -235,6 +235,16 @@ final class DynamicLockScreenManager: ObservableObject {
                 rawPropertyValues[key] = ["type": "scenetexture", "value": value]
             case .combo:
                 rawPropertyValues[key] = property.value.jsonObjectValue
+            case .usershortcut:
+                var value: [String: Any] = [
+                    "type": "usershortcut",
+                    "value": property.value.stringValue
+                ]
+                if let icon = property.mirageShortcutIcon {
+                    value["icon"] = try deployPropertyAsset(
+                        icon, key: "\(key)-icon", in: deployment.root)
+                }
+                rawPropertyValues[key] = value
             default:
                 rawPropertyValues[key] = property.value.stringValue
             }

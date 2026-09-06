@@ -55,6 +55,7 @@ struct SceneWallpaperConfig {
     std::string                             source_pkg_path;
     std::string                             assets_dir;
     std::string                             cache_dir;
+    std::string                             script_storage_dir;
     std::shared_ptr<wpscene::SceneDocument> scene_document;
     rstd::json::Map                         user_properties;
     uint32_t                                fps { 30 };

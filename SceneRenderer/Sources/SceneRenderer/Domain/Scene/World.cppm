@@ -2890,9 +2890,16 @@ public:
     };
 
     struct MaterialTextureUserBinding {
+        enum class Kind
+        {
+            SceneTexture,
+            System,
+            UserShortcut,
+        };
         std::shared_ptr<SceneMaterial>                  material;
         uint32_t                                        slot { 0 };
         std::string                                     fallback;
+        Kind                                            kind { Kind::SceneTexture };
         std::optional<MaterialSolidColorNeutralization> solid_color;
     };
     Map<std::string, std::vector<MaterialTextureUserBinding>> material_texture_user_index;

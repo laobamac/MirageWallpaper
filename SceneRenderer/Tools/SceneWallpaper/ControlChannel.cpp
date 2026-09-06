@@ -69,6 +69,10 @@ void SceneControlChannel::dispatchLine(const char* line) {
                           (*type)->clone());
             object.insert(::alloc::string::String::make(rstd::cppstd::as_str("value")),
                           value.is_some() ? (*value)->clone() : sr::Json::Null());
+            auto icon = msg.get("icon");
+            if (icon.is_some())
+                object.insert(::alloc::string::String::make(rstd::cppstd::as_str("icon")),
+                              (*icon)->clone());
             prop = sr::Json::Object(rstd::move(object));
         } else if (value.is_some()) {
             prop = (*value)->clone();

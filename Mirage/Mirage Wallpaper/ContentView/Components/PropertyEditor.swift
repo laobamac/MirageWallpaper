@@ -89,6 +89,7 @@ struct PropertyRow: View {
     let key: String
     let property: WEProjectProperty
     @ObservedObject var conditions: ConditionStore
+    @State private var pickerError: String?
 
     private var currentValue: WEPropertyValue {
         wallpaperViewModel.runtime.propertyOverrides[key] ?? property.value
@@ -111,7 +112,8 @@ struct PropertyRow: View {
     }
 
     var body: some View {
-        switch property.propertyType {
+        Group {
+            switch property.propertyType {
         case .bool:
             Toggle(isOn: Binding(
                 get: { currentValue.boolValue },
@@ -205,10 +207,26 @@ struct PropertyRow: View {
                     set: { wallpaperViewModel.setProperty(key: key, value: .string($0)) }))
                     .textFieldStyle(.roundedBorder)
                     .frame(maxWidth: 170)
+                Button {
+                    pickUserShortcut()
+                } label: {
+                    Image(systemName: "folder")
+                }
+                .buttonStyle(.borderless)
+                .help(L("选择快捷方式"))
             }
 
         case .unknown:
             EmptyView()
+            }
+        }
+        .alert(L("无法使用所选文件"), isPresented: Binding(
+            get: { pickerError != nil },
+            set: { if !$0 { pickerError = nil } }
+        )) {
+            Button(L("好"), role: .cancel) { pickerError = nil }
+        } message: {
+            Text(pickerError ?? "")
         }
     }
 
@@ -259,7 +277,29 @@ struct PropertyRow: View {
             panel.allowedContentTypes = [.image] // scenetexture: images only
         }
         if panel.runModal() == .OK, let url = panel.url {
-            wallpaperViewModel.setProperty(key: key, value: .string(url.path))
+            if property.propertyType == .scenetexture {
+                do {
+                    let cached = try UserTextureCache.shared.importImage(at: url)
+                    wallpaperViewModel.setProperty(key: key, value: .string(cached.path))
+                } catch {
+                    pickerError = error.localizedDescription
+                }
+            } else {
+                wallpaperViewModel.setProperty(key: key, value: .string(url.path))
+            }
+        }
+    }
+
+    private func pickUserShortcut() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.treatsFilePackagesAsDirectories = false
+        panel.allowsMultipleSelection = false
+        if panel.runModal() == .OK, let url = panel.url {
+            wallpaperViewModel.setProperty(
+                key: key,
+                value: .string(url.standardizedFileURL.path))
         }
     }
 

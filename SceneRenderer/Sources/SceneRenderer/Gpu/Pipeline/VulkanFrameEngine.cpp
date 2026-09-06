@@ -329,17 +329,17 @@ struct RenderProgram {
         }
     }
 
-    bool refreshMaterialTextureBindings(const sr::RenderSceneSnapshot&    render_scene,
-                                        std::span<const sr::RenderItemId> render_items) {
-        if (render_items.empty()) return false;
+    bool refreshMaterialTextureBindings(const sr::RenderSceneSnapshot&       render_scene,
+                                        std::span<const sr::SceneDrawItemId> draw_items) {
+        if (draw_items.empty()) return false;
 
         bool requires_graph_rebuild = false;
         for (auto& record : pass_records) {
             if (record.pass == nullptr) continue;
-            auto pass_render_item = record.pass->renderItemId();
-            if (! pass_render_item.has_value()) continue;
-            auto matched = std::any_of(render_items.begin(), render_items.end(), [&](auto id) {
-                return SameRenderItemId(*pass_render_item, id);
+            auto pass_draw_item = record.pass->sceneDrawItemId();
+            if (! pass_draw_item.has_value()) continue;
+            auto matched = std::any_of(draw_items.begin(), draw_items.end(), [&](auto id) {
+                return id.index == pass_draw_item->index && id.generation == pass_draw_item->generation;
             });
             if (! matched) continue;
 
@@ -1777,9 +1777,15 @@ bool VulkanRender::Impl::refreshPreparedMaterialTextures(
     Scene& scene, const RenderSceneSnapshot& render_scene,
     std::span<const sr::SceneMaterialId> materials) {
     if (! m_inited || m_program.pass_records.empty()) return true;
-    auto render_items = RenderItemsForMaterials(render_scene, materials);
+    std::vector<SceneDrawItemId> draw_items;
+    for (auto material : materials) {
+        for (auto item : render_scene.renderItemsFor(material)) {
+            if (auto* record = render_scene.renderItem(item))
+                draw_items.push_back(record->scene_draw_item);
+        }
+    }
     bool requires_graph_rebuild =
-        m_program.refreshMaterialTextureBindings(render_scene, render_items);
+        m_program.refreshMaterialTextureBindings(render_scene, draw_items);
     if (requires_graph_rebuild) return false;
     refreshPreparedResources(scene, render_scene);
     return true;

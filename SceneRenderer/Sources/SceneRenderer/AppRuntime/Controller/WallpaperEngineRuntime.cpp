@@ -6,6 +6,7 @@ module;
 #include <atomic>
 #include <chrono>
 #include <ctime>
+#include <filesystem>
 #include <mutex>
 
 module sr.scene_wallpaper;
@@ -376,6 +377,14 @@ std::optional<std::string> ResolveRuntimeSceneTextureProperty(const Json& prop) 
                             : std::nullopt;
 }
 
+std::string ResolveRuntimeUserShortcutTextureProperty(const Json& prop) {
+    if (! prop.is_object()) return {};
+    auto icon = prop.get("icon");
+    if (icon.is_none()) return {};
+    auto string = (*icon)->as_str();
+    return string.is_some() ? rstd::cppstd::to_string(*string) : std::string {};
+}
+
 bool SameSceneMaterialId(SceneMaterialId lhs, SceneMaterialId rhs) {
     return lhs.index == rhs.index && lhs.generation == rhs.generation;
 }
@@ -409,11 +418,14 @@ ApplyUserPropertyToMaterialTextures(Scene& scene, const std::string& key, const 
     auto                         it = scene.material_texture_user_index.find(key);
     if (it == scene.material_texture_user_index.end()) return changed_materials;
 
-    auto texture_value = ResolveRuntimeSceneTextureProperty(prop);
-    if (! texture_value.has_value()) return changed_materials;
-
     for (const auto& binding : it->second) {
         if (! binding.material) continue;
+        std::optional<std::string> texture_value;
+        if (binding.kind == Scene::MaterialTextureUserBinding::Kind::UserShortcut)
+            texture_value = ResolveRuntimeUserShortcutTextureProperty(prop);
+        else
+            texture_value = ResolveRuntimeSceneTextureProperty(prop);
+        if (! texture_value.has_value()) continue;
         std::string next     = texture_value->empty() ? binding.fallback : *texture_value;
         auto        mutation = scene.SetMaterialTextureSlot(*binding.material, binding.slot, next);
         if (mutation.changed && mutation.material.has_value()) {
@@ -1812,6 +1824,34 @@ void SceneRuntimeController::loadScene() {
     std::string scene_id = pkgPath_fs.parent_path().filename().native();
     MergeProjectUserProperties(pkgPath_fs.parent_path(), m_user_properties);
 
+    std::filesystem::path script_storage_dir;
+    if (! m_config.script_storage_dir.empty()) {
+        script_storage_dir = m_config.script_storage_dir;
+    } else {
+#if defined(__APPLE__)
+        const char* home = std::getenv("HOME");
+        if (home != nullptr && home[0] != '\0')
+            script_storage_dir = std::filesystem::path(home) /
+                                 "Library/Application Support/Mirage/SceneStorage";
+#endif
+        if (script_storage_dir.empty())
+            script_storage_dir = std::filesystem::path(m_config.cache_dir) / "script_localstorage";
+    }
+    std::error_code storage_ec;
+    std::filesystem::create_directories(script_storage_dir, storage_ec);
+    const auto script_storage_file = script_storage_dir / (scene_id + ".json");
+    const auto legacy_storage_file = std::filesystem::path(m_config.cache_dir) /
+                                     "script_localstorage" / (scene_id + ".json");
+    if (! std::filesystem::exists(script_storage_file) &&
+        legacy_storage_file != script_storage_file &&
+        std::filesystem::is_regular_file(legacy_storage_file)) {
+        std::filesystem::copy_file(legacy_storage_file,
+                                    script_storage_file,
+                                    std::filesystem::copy_options::skip_existing,
+                                    storage_ec);
+    }
+    m_scene_parser.SetScriptPersistencePath(script_storage_file.native());
+
     // load pkgfile. Read pkg version stamp before move-mounting so we can
     // pass it to the scene parser; on fallback (loose dir) we have no
     // version info and use kSceneVersionUnknown.
@@ -1871,14 +1911,6 @@ void SceneRuntimeController::loadScene() {
             const auto& prop               = *entry_value;
             ApplyUserPropertyBeforeFirstGraph(*scene, key, prop);
         });
-        if (! m_config.cache_dir.empty() && scene) {
-            std::filesystem::path ls_dir =
-                std::filesystem::path(m_config.cache_dir) / "script_localstorage";
-            std::error_code ec;
-            std::filesystem::create_directories(ls_dir, ec);
-            std::string ls_file = (ls_dir / (scene_id + ".json")).native();
-            sr::script::SetScenePersistence(*scene, std::move(ls_file));
-        }
         if (m_user_shortcut_cb) {
             sr::script::SetSceneUserShortcutOpener(
                 *scene,

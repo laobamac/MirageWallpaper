@@ -1040,6 +1040,11 @@ class WallpaperViewModel: ObservableObject {
                 result[key] = prop
             }
         }
+        for (key, var property) in result where property.propertyType == .usershortcut {
+            property.mirageShortcutIcon = UserTextureCache.shared.shortcutIconPath(
+                for: property.value.stringValue)
+            result[key] = property
+        }
         if !w.assetOverlayDirectories.isEmpty {
             let baseProperties = loadBaseProperties(for: w)
             let presetKeys = Set(w.project.preset?.keys.map { $0 } ?? [])
@@ -1113,6 +1118,10 @@ class WallpaperViewModel: ObservableObject {
               var prop = state.wallpaper.project.general?.properties?.items[propertyKey] else { return }
         let normalizedValue = prop.normalizedComboValue(value)
         prop.value = normalizedValue
+        if prop.propertyType == .usershortcut {
+            prop.mirageShortcutIcon = UserTextureCache.shared.shortcutIconPath(
+                for: normalizedValue.stringValue)
+        }
         mutateRuntime(for: displayKey) { $0.propertyOverrides[propertyKey] = normalizedValue }
 
         switch state.wallpaper.kind {

@@ -938,3 +938,7 @@
 "无法向系统注册 Mirage，请重试或重启 Mirage 后重新开启动态锁屏" = "Mirage could not be registered with the system. Please retry, or restart Mirage and re-enable the dynamic lock screen.";
 "动态锁屏扩展注册失败，请重试；若仍失败请重启 Mirage 后重新开启动态锁屏" = "Failed to register the dynamic lock screen extension. Please retry; if the problem persists, restart Mirage and re-enable the dynamic lock screen.";
 "动态锁屏扩展注册失败：无法重启系统墙纸服务，请重试" = "Failed to register the dynamic lock screen extension: the system wallpaper service could not be restarted. Please retry.";
+"选择快捷方式" = "Choose Shortcut";
+"无法使用所选文件" = "Could Not Use Selected File";
+"无法读取所选图片" = "The selected image could not be read";
+"无法保存所选图片" = "The selected image could not be saved";

@@ -84,6 +84,7 @@ public:
 
     PassInvalidationFlags                     finalizeResourceRequests(Scene&) override;
     std::optional<RenderItemId>               renderItemId() const override;
+    std::optional<SceneDrawItemId>            sceneDrawItemId() const override;
     std::optional<PipelineCacheKey>           pipelineCacheKey() const override;
     bool                                      pipelineCacheHit() const override;
     uint64_t                                  pipelineCacheObservedCount() const override;

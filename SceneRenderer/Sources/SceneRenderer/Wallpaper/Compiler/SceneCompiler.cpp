@@ -546,6 +546,8 @@ std::vector<sr::SceneNode*> SpawnLayerClones(ParseContext& context, SceneNode* t
 script::ScriptScene& EnsureScriptScene(ParseContext& context) {
     if (! context.script_scene) {
         context.script_scene = std::make_unique<script::ScriptScene>();
+        if (! context.script_persistence_path.empty())
+            context.script_scene->runtime().SetPersistence(context.script_persistence_path);
         context.script_scene->runtime().SetCanvasSize(static_cast<float>(context.ortho_w),
                                                       static_cast<float>(context.ortho_h));
         auto layers          = context.puppet_layers;
@@ -2627,16 +2629,29 @@ std::optional<std::string> UserTexturePropertyKey(const Json& binding) {
     if (type.is_none() || value.is_none()) return std::nullopt;
     auto type_string  = (*type)->as_str();
     auto value_string = (*value)->as_str();
-    if (type_string.is_none() || value_string.is_none() ||
-        rstd::cppstd::as_string_view(*type_string) != "system")
-        return std::nullopt;
+    if (type_string.is_none() || value_string.is_none()) return std::nullopt;
+    auto binding_type = rstd::cppstd::as_string_view(*type_string);
     auto name = rstd::cppstd::as_string_view(*value_string);
+    if (binding_type == "usershortcut") return std::string(name);
+    if (binding_type != "system") return std::nullopt;
     if (name != "$mediaThumbnail" && name != "$mediaPreviousThumbnail") return std::nullopt;
     return std::string(name);
 }
 
 bool IsSystemMediaTextureBinding(const Json& binding) {
-    return UserTexturePropertyKey(binding).has_value() && binding.is_object();
+    if (! binding.is_object()) return false;
+    auto type = binding.get("type");
+    if (type.is_none()) return false;
+    auto value = (*type)->as_str();
+    return value.is_some() && rstd::cppstd::as_string_view(*value) == "system";
+}
+
+bool IsUserShortcutTextureBinding(const Json& binding) {
+    if (! binding.is_object()) return false;
+    auto type = binding.get("type");
+    if (type.is_none()) return false;
+    auto value = (*type)->as_str();
+    return value.is_some() && rstd::cppstd::as_string_view(*value) == "usershortcut";
 }
 
 struct SolidColorNeutralizationSource {
@@ -2662,6 +2677,10 @@ void RegisterMaterialUserTextureIndex(Scene*                                pSce
         Scene::MaterialTextureUserBinding binding { .material = stable_mat,
                                                     .slot     = static_cast<uint32_t>(i),
                                                     .fallback = std::move(fallback) };
+        if (IsSystemMediaTextureBinding(fallback_material.usertextures[i]))
+            binding.kind = Scene::MaterialTextureUserBinding::Kind::System;
+        if (IsUserShortcutTextureBinding(fallback_material.usertextures[i]))
+            binding.kind = Scene::MaterialTextureUserBinding::Kind::UserShortcut;
         if (neutralization.node != nullptr && i == neutralization.slot) {
             binding.solid_color = Scene::MaterialSolidColorNeutralization {
                 .node           = neutralization.node->clone(),
@@ -2737,10 +2756,22 @@ std::string ResolveSceneTextureProperty(const ParseContext& context, std::string
     return string.is_none() ? std::string {} : rstd::cppstd::to_string(*string);
 }
 
+std::string ResolveUserShortcutTextureProperty(const ParseContext& context, std::string_view key) {
+    if (context.user_properties.is_none()) return {};
+    auto prop = (*context.user_properties)->get(rstd::cppstd::as_str(key));
+    if (prop.is_none() || ! (**prop).is_object()) return {};
+    auto icon = (**prop).get("icon");
+    if (icon.is_none()) return {};
+    auto string = (*icon)->as_str();
+    return string.is_none() ? std::string {} : rstd::cppstd::to_string(*string);
+}
+
 std::string ResolveUserTextureProperty(const ParseContext& context, const Json& binding) {
-    if (! binding.is_string()) return {};
-    auto key = rstd::cppstd::to_string(*binding.as_str());
-    return ResolveSceneTextureProperty(context, key);
+    auto key = UserTexturePropertyKey(binding);
+    if (! key.has_value()) return {};
+    if (IsUserShortcutTextureBinding(binding))
+        return ResolveUserShortcutTextureProperty(context, *key);
+    return ResolveSceneTextureProperty(context, *key);
 }
 
 std::string ResolveMaterialTextureSlot(const ParseContext&      context,
@@ -6177,12 +6208,14 @@ std::array<i32, 2> ResolveOrthoProjectionExtent(const wpscene::SceneMetadata&   
 
 ParseContext BuildContext(fs::VFS& vfs, std::string_view scene_id, const wpscene::SceneMetadata& sc,
                           std::array<i32, 2>                       ortho_extent,
-                          rstd::Option<rstd::ref<rstd::json::Map>> user_properties) {
+                          rstd::Option<rstd::ref<rstd::json::Map>> user_properties,
+                          std::string script_persistence_path) {
     ParseContext context;
     InitContext(context, vfs, sc, ortho_extent);
     ParseCamera(context, sc);
     context.user_properties = user_properties;
     context.pkg_version     = sc.pkg_version;
+    context.script_persistence_path = std::move(script_persistence_path);
 
     context.scene->renderTargets[SpecTex_Default.data()] = {
         .width             = context.ortho_w,
@@ -7079,7 +7112,12 @@ std::shared_ptr<Scene> WPSceneParser::Parse(std::string_view              scene_
     auto scene_objs =
         ExpandObjects(json, vfs, sc.pkg_version, m_user_properties, &linked_source_ids);
     const auto ortho_extent = ResolveOrthoProjectionExtent(sc, scene_objs);
-    auto       context      = BuildContext(vfs, scene_id, sc, ortho_extent, m_user_properties);
+    auto       context      = BuildContext(vfs,
+                                            scene_id,
+                                            sc,
+                                            ortho_extent,
+                                            m_user_properties,
+                                            m_script_persistence_path);
     context.scene_has_scripts       = SceneHasScripts(json, scene_objs);
     context.scene_accesses_effects  = SceneAccessesEffects(json, scene_objs);
     context.scene_layer_text_writes = SceneWritesLayerText(json, scene_objs);

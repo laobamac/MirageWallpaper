@@ -56,6 +56,7 @@ public:
     virtual void                  destory(const Device&, RenderingResources&)         = 0;
     virtual PassInvalidationFlags finalizeResourceRequests(Scene&) { return PassInvalidationNone; }
     virtual std::optional<RenderItemId>        renderItemId() const { return std::nullopt; }
+    virtual std::optional<SceneDrawItemId>     sceneDrawItemId() const { return std::nullopt; }
     virtual std::optional<PipelineCacheKey>    pipelineCacheKey() const { return std::nullopt; }
     virtual bool                               pipelineCacheHit() const { return false; }
     virtual uint64_t                           pipelineCacheObservedCount() const { return 0; }

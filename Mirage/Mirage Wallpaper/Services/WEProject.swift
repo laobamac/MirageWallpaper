@@ -137,6 +137,7 @@ struct WEProjectProperty: Codable, Equatable, Hashable {
     var fraction: Bool?
     var mode: String?
     var isPresetOnly: Bool
+    var mirageShortcutIcon: String?
 
     var text: String?
     var type: String
@@ -163,6 +164,7 @@ struct WEProjectProperty: Codable, Equatable, Hashable {
     enum CodingKeys: String, CodingKey {
         case condition, index, options, order, min, max, step, fraction, mode, text, type, value
         case isPresetOnly = "_miragePresetOnly"
+        case mirageShortcutIcon = "_mirageShortcutIcon"
     }
 
     init(from decoder: Decoder) throws {
@@ -177,6 +179,7 @@ struct WEProjectProperty: Codable, Equatable, Hashable {
         self.fraction = try? c.decode(Bool.self, forKey: .fraction)
         self.mode = try? c.decode(String.self, forKey: .mode)
         self.isPresetOnly = (try? c.decode(Bool.self, forKey: .isPresetOnly)) ?? false
+        self.mirageShortcutIcon = try? c.decode(String.self, forKey: .mirageShortcutIcon)
         self.text = try? c.decode(String.self, forKey: .text)
         self.type = (try? c.decode(String.self, forKey: .type)) ?? "text"
         self.value = (try? c.decode(WEPropertyValue.self, forKey: .value)) ?? .string("")

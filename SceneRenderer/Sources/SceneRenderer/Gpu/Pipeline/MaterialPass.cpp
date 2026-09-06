@@ -116,6 +116,10 @@ std::optional<sr::RenderItemId> CustomShaderPass::renderItemId() const {
     return m_desc.render_item;
 }
 
+std::optional<sr::SceneDrawItemId> CustomShaderPass::sceneDrawItemId() const {
+    return m_desc.draw_item;
+}
+
 std::optional<PipelineCacheKey> CustomShaderPass::pipelineCacheKey() const {
     return m_desc.pipeline_cache_key;
 }
@@ -593,6 +597,7 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
             .raster               = pipeline_state.raster,
             .multisample          = pipeline_state.multisample,
             .topology             = topology,
+            .primitive_restart_enable = topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP,
             .color_format         = color_format,
             .color_final_layout   = color_final_layout,
             .color_load_op        = loadOp,

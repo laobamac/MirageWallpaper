@@ -2712,7 +2712,11 @@ final class RendererController {
             cmd["value"] = property.value.stringValue
         case .combo:
             cmd["value"] = property.value.jsonObjectValue
-        case .textinput, .text, .group, .directory, .usershortcut, .unknown:
+        case .usershortcut:
+            cmd["type"] = "usershortcut"
+            cmd["value"] = property.value.stringValue
+            if let icon = property.mirageShortcutIcon { cmd["icon"] = icon }
+        case .textinput, .text, .group, .directory, .unknown:
             cmd["value"] = property.value.stringValue
         }
         return cmd
@@ -2733,6 +2737,13 @@ final class RendererController {
                 obj[key] = ["type": "scenetexture", "value": prop.value.stringValue]
             case .combo:
                 obj[key] = prop.value.jsonObjectValue
+            case .usershortcut:
+                var value: [String: Any] = [
+                    "type": "usershortcut",
+                    "value": prop.value.stringValue
+                ]
+                if let icon = prop.mirageShortcutIcon { value["icon"] = icon }
+                obj[key] = value
             default:
                 obj[key] = prop.value.stringValue
             }

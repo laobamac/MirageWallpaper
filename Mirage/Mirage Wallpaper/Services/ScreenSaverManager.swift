@@ -336,6 +336,13 @@ final class ScreenSaverManager {
                 rawPropertyValues[key] = ["type": "scenetexture", "value": property.value.stringValue]
             case .combo:
                 rawPropertyValues[key] = property.value.jsonObjectValue
+            case .usershortcut:
+                var value: [String: Any] = [
+                    "type": "usershortcut",
+                    "value": property.value.stringValue
+                ]
+                if let icon = property.mirageShortcutIcon { value["icon"] = icon }
+                rawPropertyValues[key] = value
             default:
                 rawPropertyValues[key] = property.value.stringValue
             }
