@@ -755,6 +755,72 @@ void TestEffectSelfCompositeStaysLocal() {
           "a self-composite does not allocate an external link target");
 }
 
+void TestExplicitEffectFboFormatSurvivesHdr() {
+    const char* assets_root = std::getenv("SCENERENDERER_ASSETS_DIR");
+    if (assets_root == nullptr || assets_root[0] == '\0') return;
+
+    sr::fs::VFS vfs;
+    Check(vfs.Mount("/assets", sr::fs::CreatePhysicalFs(assets_root)),
+          "effect FBO format regression mounts the shared assets");
+    const auto effect_root = std::filesystem::path(assets_root) / "effects/cursorripple";
+    Check(vfs.Mount("/assets/materials/effects",
+                    sr::fs::CreatePhysicalFs((effect_root / "materials/effects").string())),
+          "effect FBO format regression mounts cursor ripple materials");
+    Check(vfs.Mount("/assets/shaders/effects",
+                    sr::fs::CreatePhysicalFs((effect_root / "shaders/effects").string())),
+          "effect FBO format regression mounts cursor ripple shaders");
+
+    auto document = sr::wpscene::ParseSceneDocumentJson(
+        R"JSON({
+            "camera": {},
+            "general": {
+                "hdr": true,
+                "orthogonalprojection": {"width": 1920, "height": 1080}
+            },
+            "objects": [{
+                "id": 569,
+                "name": "HDR Cursor Ripple",
+                "image": "models/util/solidlayer.json",
+                "origin": [960.0, 540.0, 0.0],
+                "size": [1920.0, 1080.0],
+                "solid": true,
+                "effects": [{
+                    "file": "effects/cursorripple/effect.json",
+                    "visible": true
+                }],
+                "visible": true
+            }]
+        })JSON",
+        sr::wpscene::kSceneVersionUnknown);
+    Check(document.has_value(), "effect FBO format regression parses its scene document");
+    if (! document) return;
+
+    wavsen::audio::SoundManager sound_manager;
+    sr::WPSceneParser           parser;
+    auto scene = parser.Parse("hdr-cursor-ripple", *document, vfs, sound_manager);
+    Check(scene != nullptr, "effect FBO format regression compiles its scene");
+    if (! scene) return;
+
+    bool found_first  = false;
+    bool found_second = false;
+    for (const auto& [name, target] : scene->renderTargets) {
+        if (name.starts_with("_rt_EightBuffer1_")) {
+            found_first = true;
+            Check(! target.hdr_format && ! target.inherit_scene_format,
+                  "rgba8888 cursor ripple buffer 1 stays fixed at RGBA8 in HDR scenes");
+        }
+        if (name.starts_with("_rt_EightBuffer2_")) {
+            found_second = true;
+            Check(! target.hdr_format && ! target.inherit_scene_format,
+                  "rgba8888 cursor ripple buffer 2 stays fixed at RGBA8 in HDR scenes");
+        }
+    }
+    Check(found_first && found_second, "cursor ripple declares both simulation buffers");
+    const auto main_target = scene->renderTargets.find(std::string(sr::SpecTex_Default));
+    Check(main_target != scene->renderTargets.end() && main_target->second.hdr_format,
+          "the main render target remains HDR");
+}
+
 sr::SceneNode* FindWallpaperNode(sr::SceneNode* node, std::int32_t id) {
     if (node == nullptr) return nullptr;
     if (auto wallpaper = node->WallpaperIdentity(); wallpaper && wallpaper->value == id) return node;
@@ -1806,6 +1872,7 @@ int main() {
     TestDirectShapeLayerState();
     TestJsonArraysAndSceneDocumentMetadata();
     TestEffectSelfCompositeStaysLocal();
+    TestExplicitEffectFboFormatSurvivesHdr();
     TestCompositeLayerElisionAndPhysicalExtent();
     TestDynamicCopySnapshotMatchesSourceRequest();
     TestFinalResolvePrecedesLinkPublication();

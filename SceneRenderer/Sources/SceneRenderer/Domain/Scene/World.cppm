@@ -205,6 +205,7 @@ struct SceneRenderTarget {
     // for composition targets, not transient effect outputs.
     bool preserve_on_write { false };
     bool hdr_format { false };
+    bool inherit_scene_format { true };
 
     i32 PhysicalWidth() const { return physical_width > 0 ? physical_width : width; }
     i32 PhysicalHeight() const { return physical_height > 0 ? physical_height : height; }

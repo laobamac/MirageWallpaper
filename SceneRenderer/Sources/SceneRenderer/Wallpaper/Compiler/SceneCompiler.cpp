@@ -1561,6 +1561,28 @@ std::array<i32, 2> NonZeroRenderTargetExtent(float width, float height) {
     return { NonZeroRenderTargetDimension(width), NonZeroRenderTargetDimension(height) };
 }
 
+void ApplyEffectRenderTargetFormat(SceneRenderTarget& target, std::string_view format,
+                                   bool scene_hdr) {
+    if (format.empty() || format == "rgba_backbuffer") {
+        target.hdr_format           = scene_hdr;
+        target.inherit_scene_format = true;
+        return;
+    }
+    if (format == "rgba8888" || format == "r8") {
+        target.hdr_format           = false;
+        target.inherit_scene_format = false;
+        return;
+    }
+    if (format == "r16f" || format == "rg1616f") {
+        target.hdr_format           = true;
+        target.inherit_scene_format = false;
+        return;
+    }
+    rstd_warn("unknown effect render target format '{}', using scene format", format);
+    target.hdr_format           = scene_hdr;
+    target.inherit_scene_format = true;
+}
+
 std::array<float, 2> ImageEffectTargetSize(const ParseContext&         context,
                                            const wpscene::ImageObject& obj) {
     if (obj.fullscreen && context.scene && context.scene->activeCamera) {
@@ -3825,6 +3847,8 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj,
                             .allowReuse           = ! wpfbo.unique,
                             .clear_on_first_write = ! wpfbo.unique,
                         };
+                        ApplyEffectRenderTargetFormat(
+                            scene.renderTargets[rtname], wpfbo.format, scene.hdr_render_targets);
                         scene.renderTargets[rtname].bind = {
                             .enable = true,
                             .screen = true,
@@ -3857,6 +3881,8 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj,
                             .allowReuse           = ! wpfbo.unique,
                             .clear_on_first_write = ! wpfbo.unique,
                         };
+                        ApplyEffectRenderTargetFormat(
+                            scene.renderTargets[rtname], wpfbo.format, scene.hdr_render_targets);
                         if (composite_render_path && wpfbo.fit == 0) {
                             scene.renderTargets[rtname].bind = {
                                 .enable = true,
@@ -6803,7 +6829,9 @@ std::shared_ptr<Scene> FinalizeScene(ParseContext& context) {
         sr::script::InstallScriptScene(*scene, std::move(scripts));
     }
     if (scene->hdr_render_targets) {
-        for (auto& [key, rt] : scene->renderTargets) rt.hdr_format = true;
+        for (auto& [key, rt] : scene->renderTargets) {
+            if (rt.inherit_scene_format) rt.hdr_format = true;
+        }
     }
     return scene;
 }
