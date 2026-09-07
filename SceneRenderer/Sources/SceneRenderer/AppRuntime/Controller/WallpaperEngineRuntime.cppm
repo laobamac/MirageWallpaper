@@ -106,6 +106,7 @@ public:
     void setOnFirstFrame(FirstFrameCallback);
     void setOnUserPropertyDiagnostics(UserPropertyDiagnosticCallback);
     void requestPreparedPassDiagnostics(RenderPassDiagnosticCallback);
+    void resetScriptStorage();
 
     // Install (or clear, with `nullptr`) a callback invoked on the
     // main thread after each scene is parsed, carrying the scene's

@@ -68,6 +68,7 @@ struct RenderSwapchainReady {
 struct RenderRequestPreparedPassDiagnostics {
     RenderPassDiagnosticCallback cb;
 };
+struct RenderResetScriptStorage {};
 
 // Wrapped in a non-std struct so the rstd channel's internal `addressof`
 // calls don't fall into ADL ambiguity with std::addressof when the element
@@ -75,7 +76,8 @@ struct RenderRequestPreparedPassDiagnostics {
 struct RenderMsg {
     std::variant<RenderInit, RenderSetScene, RenderSetFillMode, RenderSetSpeed,
                  RenderSetUserProperty, RenderSetMediaStatus, RenderStop, RenderDraw,
-                 RenderSwapchainReady, RenderRequestPreparedPassDiagnostics>
+                 RenderSwapchainReady, RenderRequestPreparedPassDiagnostics,
+                 RenderResetScriptStorage>
         v;
 };
 
@@ -1104,6 +1106,7 @@ public:
     void on(RenderDraw&&);
     void on(RenderSwapchainReady&&);
     void on(RenderRequestPreparedPassDiagnostics&&);
+    void on(RenderResetScriptStorage&&);
 
     ExSwapchain* exSwapchain() const { return m_render->exSwapchain(); }
     vulkan::VulkanRender* render() const { return m_render.get(); }
@@ -1625,6 +1628,11 @@ void SceneRenderController::on(RenderRequestPreparedPassDiagnostics&& m) {
     } });
 }
 
+void SceneRenderController::on(RenderResetScriptStorage&&) {
+    if (! m_scene) return;
+    sr::script::ResetSceneLocalStorage(*m_scene);
+}
+
 // ---- SceneRuntimeController message handlers --------------------------------
 
 void SceneRuntimeController::on(MainLoadScene&&) {
@@ -2126,6 +2134,10 @@ void SceneWallpaper::setOnUserPropertyDiagnostics(UserPropertyDiagnosticCallback
 void SceneWallpaper::requestPreparedPassDiagnostics(RenderPassDiagnosticCallback cb) {
     (void)m_runtime->renderSender().send(
         RenderMsg { RenderRequestPreparedPassDiagnostics { std::move(cb) } });
+}
+
+void SceneWallpaper::resetScriptStorage() {
+    (void)m_runtime->renderSender().send(RenderMsg { RenderResetScriptStorage {} });
 }
 
 ExSwapchain* SceneWallpaper::exSwapchain() const {

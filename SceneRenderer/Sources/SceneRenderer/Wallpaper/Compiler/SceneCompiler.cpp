@@ -1115,7 +1115,8 @@ void WireFieldScripts(ParseContext& context, const rstd::sync::Arc<SceneNode>& n
                       const wpscene::FieldBindings&                   fb,
                       std::function<void(const script::ScriptValue&)> origin_apply = {},
                       std::function<void(const script::ScriptValue&)> scale_apply  = {},
-                      std::function<void(const script::ScriptValue&)> alpha_apply  = {}) {
+                      std::function<void(const script::ScriptValue&)> alpha_apply  = {},
+                      bool                                            is_container = false) {
     SceneNode* node = node_sp.as_ptr();
     if (fb.scripts.empty()) return;
     auto& ss = EnsureScriptScene(context);
@@ -1164,7 +1165,8 @@ void WireFieldScripts(ParseContext& context, const rstd::sync::Arc<SceneNode>& n
             rt.MakeFieldScript(sb.source, sha, kind, props, initial_value, node, std::move(clones));
         if (! fs) continue;
         RegisterFieldScriptMetadata(context, node, fs);
-        if (is_visible && node != nullptr && node->ID() >= 0 && fs->HasUpdate()) {
+        if (is_visible && ! is_container && node != nullptr && node->ID() >= 0 &&
+            fs->HasUpdate()) {
             context.scene->EnableRuntimeLayerVisibility(
                 WallpaperLayerId { .value = node->ID() });
         }
@@ -7215,7 +7217,7 @@ std::shared_ptr<Scene> WPSceneParser::Parse(std::string_view              scene_
             }
             wpscene::FieldBindings fb;
             wpscene::AbsorbAllFieldBindings(o, fb);
-            WireFieldScripts(context, node, fb);
+            WireFieldScripts(context, node, fb, {}, {}, {}, true);
             std::string attachment;
             sr::GetJsonValue(o, "attachment", attachment, false);
             context.node_id_map[id] = {

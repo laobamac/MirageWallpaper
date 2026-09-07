@@ -2679,6 +2679,15 @@ final class RendererController {
         }
     }
 
+    func resetScriptStorage(onDisplay displayID: CGDirectDisplayID?, assignmentID: UUID? = nil) {
+        let actives: [RendererProcess] = queue.sync {
+            liveRunningTargetsLocked(displayID, assignmentID: assignmentID)
+        }
+        for proc in actives {
+            proc.send(["cmd": "resetScriptStorage"])
+        }
+    }
+
     private static func openUserShortcut(name: String, target: String) {
         let expanded = (target as NSString).expandingTildeInPath
         if FileManager.default.fileExists(atPath: expanded) {

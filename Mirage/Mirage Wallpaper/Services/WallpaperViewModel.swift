@@ -1192,8 +1192,23 @@ class WallpaperViewModel: ObservableObject {
         persistStates()
         cancelRuntimeSave(for: key)
         persistRuntime(state.runtime, for: state.wallpaper)
+        if state.wallpaper.kind == .scene {
+            if let displayID = DisplayRegistry.shared.displayID(for: key) {
+                renderer.resetScriptStorage(onDisplay: displayID)
+            }
+            clearSceneScriptStorage(for: state.wallpaper)
+        }
         reapply(for: key)
         syncStatusItems()
+    }
+
+    private func clearSceneScriptStorage(for wallpaper: WEWallpaper) {
+        let sceneID = wallpaper.resolvedEntryURL.deletingLastPathComponent().lastPathComponent
+        guard !sceneID.isEmpty else { return }
+        let file = FileManager.default.homeDirectoryForCurrentUser
+            .appending(path: "Library/Application Support/Mirage/SceneStorage")
+            .appending(path: "\(sceneID).json")
+        try? FileManager.default.removeItem(at: file)
     }
 
     // MARK: 播放控制

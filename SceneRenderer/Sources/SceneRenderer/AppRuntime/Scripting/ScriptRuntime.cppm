@@ -216,6 +216,8 @@ public:
     // string to revert to in-memory-only behaviour.
     void SetPersistence(std::string path);
 
+    void ResetLocalStorage();
+
     // Push one frame's worth of host state into the runtime. The next
     // FieldScript::Update call will see these values via `engine.*`.
     void SetFrameInputs(const FrameInputs& fi);
@@ -397,6 +399,8 @@ void SetSceneUserProperty(sr::Scene& scene, std::string_view key, const Json& pr
 void SetSceneMediaStatus(sr::Scene& scene, const MediaStatus& status);
 
 void SetSceneUserShortcutOpener(sr::Scene& scene, UserShortcutOpener opener);
+
+void ResetSceneLocalStorage(sr::Scene& scene);
 
 // Forward `SetPersistence` to the ScriptScene attached to `scene`. No-op
 // when the scene has no script runtime.

@@ -4416,6 +4416,12 @@ void JsRuntime::SetPersistence(std::string path) {
     LoadLocalStorage(&m_impl->host);
 }
 
+void JsRuntime::ResetLocalStorage() {
+    m_impl->host.ls_data.clear();
+    m_impl->host.ls_bytes = 0;
+    FlushLocalStorage(&m_impl->host);
+}
+
 namespace
 {
 void RunFieldScriptInit(JSContext* ctx, JsRuntime::Impl* rt, FieldScript* fs);
@@ -5086,6 +5092,12 @@ void SetSceneUserShortcutOpener(sr::Scene& scene, UserShortcutOpener opener) {
     auto* ss = static_cast<ScriptScene*>(scene.script_scene.get());
     if (! ss) return;
     ss->runtime().SetUserShortcutOpener(std::move(opener));
+}
+
+void ResetSceneLocalStorage(sr::Scene& scene) {
+    auto* ss = static_cast<ScriptScene*>(scene.script_scene.get());
+    if (! ss) return;
+    ss->runtime().ResetLocalStorage();
 }
 
 } // namespace sr::script
