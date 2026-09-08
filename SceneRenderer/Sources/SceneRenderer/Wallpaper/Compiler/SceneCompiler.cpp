@@ -6096,7 +6096,7 @@ CollectHiddenLinkedSourceIds(const Json& json, const Set<std::int32_t>& linked_s
 template<typename T>
 void AddSceneObject(std::vector<SceneObjectVar>& objs, const Json& json_obj, fs::VFS& vfs,
                     wpscene::SceneVersion v, rstd::Option<rstd::ref<rstd::json::Map>> user_props,
-                    const Set<std::int32_t>* linked_source_ids, bool force_invisible) {
+                    const Set<std::int32_t>* linked_source_ids, bool force_invisible = false) {
     T scene_obj;
     if (! scene_obj.FromJson(json_obj, vfs, v)) {
         rstd_error("parse scene object failed, name: {}", scene_obj.name);
@@ -6146,14 +6146,14 @@ std::vector<SceneObjectVar> ExpandObjects(const Json& json, fs::VFS& vfs, wpscen
     if (array.is_none()) return scene_objs;
     auto visibility_info = BuildObjectVisibilityInfo(json, user_props);
     for (const auto& obj : **array) {
-        bool                       force_invisible = false;
+        bool                       force_sound_invisible = false;
         rstd::Option<std::int32_t> id;
         if (obj.is_object()) {
             std::int32_t value {};
             if (sr::GetJsonValue(obj, "id", value, false)) id = rstd::Some(value);
         }
         if (id.is_some()) {
-            force_invisible =
+            force_sound_invisible =
                 HasHiddenUserAncestor(static_cast<std::uint32_t>(*id), visibility_info);
         }
         // Order matters: text/model/camera kinds coexist with null
@@ -6162,28 +6162,28 @@ std::vector<SceneObjectVar> ExpandObjects(const Json& json, fs::VFS& vfs, wpscen
         // (no rendering yet) so the data stays absorbed.
         if (auto value = obj.get("image"); value.is_some() && ! (*value)->is_null()) {
             AddSceneObject<wpscene::ImageObject>(
-                scene_objs, obj, vfs, v, user_props, linked_source_ids, force_invisible);
+                scene_objs, obj, vfs, v, user_props, linked_source_ids);
         } else if (auto value = obj.get("shape"); value.is_some() && ! (*value)->is_null()) {
             AddSceneObject<wpscene::ShapeObject>(
-                scene_objs, obj, vfs, v, user_props, linked_source_ids, force_invisible);
+                scene_objs, obj, vfs, v, user_props, linked_source_ids);
         } else if (auto value = obj.get("particle"); value.is_some() && ! (*value)->is_null()) {
             AddSceneObject<wpscene::ParticleObject>(
-                scene_objs, obj, vfs, v, user_props, linked_source_ids, force_invisible);
+                scene_objs, obj, vfs, v, user_props, linked_source_ids);
         } else if (auto value = obj.get("sound"); value.is_some() && ! (*value)->is_null()) {
             AddSceneObject<wpscene::SoundObject>(
-                scene_objs, obj, vfs, v, user_props, linked_source_ids, force_invisible);
+                scene_objs, obj, vfs, v, user_props, linked_source_ids, force_sound_invisible);
         } else if (auto value = obj.get("light"); value.is_some() && ! (*value)->is_null()) {
             AddSceneObject<wpscene::LightObject>(
-                scene_objs, obj, vfs, v, user_props, linked_source_ids, force_invisible);
+                scene_objs, obj, vfs, v, user_props, linked_source_ids);
         } else if (auto value = obj.get("text"); value.is_some() && ! (*value)->is_null()) {
             AddSceneObject<wpscene::TextObject>(
-                scene_objs, obj, vfs, v, user_props, linked_source_ids, force_invisible);
+                scene_objs, obj, vfs, v, user_props, linked_source_ids);
         } else if (auto value = obj.get("model"); value.is_some() && ! (*value)->is_null()) {
             AddSceneObject<wpscene::ModelObject>(
-                scene_objs, obj, vfs, v, user_props, linked_source_ids, force_invisible);
+                scene_objs, obj, vfs, v, user_props, linked_source_ids);
         } else if (auto value = obj.get("camera"); value.is_some() && ! (*value)->is_null()) {
             AddSceneObject<wpscene::CameraObject>(
-                scene_objs, obj, vfs, v, user_props, linked_source_ids, force_invisible);
+                scene_objs, obj, vfs, v, user_props, linked_source_ids);
         }
     }
     return scene_objs;
@@ -7189,15 +7189,13 @@ std::shared_ptr<Scene> WPSceneParser::Parse(std::string_view              scene_
             }
             auto vit = visibility_info.find(id);
             if (vit != visibility_info.end()) {
-                const bool hidden_ancestor =
-                    HasHiddenUserAncestor(static_cast<std::uint32_t>(id), visibility_info);
-                if (! vit->second.visible || hidden_ancestor) {
+                if (! vit->second.visible) {
                     node->SetVisible(false);
                     // A container owns no mesh, so the render graph can only see
                     // this hide through the elision set; SceneNode::Visible() is
                     // never consulted during graph build. Without the mark the
                     // whole subtree keeps emitting passes.
-                    if (vit->second.user_bound || hidden_ancestor) {
+                    if (vit->second.user_bound) {
                         context.scene->MarkLayerVisibilityElidable(
                             WallpaperLayerId { .value = id });
                     }
