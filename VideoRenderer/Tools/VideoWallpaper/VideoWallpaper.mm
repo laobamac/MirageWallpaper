@@ -30,6 +30,8 @@ struct WallpaperArgs {
     BOOL muted = NO;
     int runSeconds = 0;
     VRVideoFillMode fillMode = VRVideoFillModeCover;
+    double positionX = 0.5;
+    double positionY = 0.5;
     BOOL controlStdin = NO;
     BOOL deferredShow = NO;
     BOOL loadFromMemory = NO;
@@ -164,6 +166,8 @@ static void PrintUsage(const char *argv0) {
         "  --volume 0..1          audio volume (default 1.0)\n"
         "  --muted                start muted\n"
         "  --fill MODE            cover | contain | stretch (default cover)\n"
+        "  --position-x N         horizontal crop position 0..1 (default 0.5)\n"
+        "  --position-y N         vertical crop position 0..1 (default 0.5)\n"
         "  --control-stdin        accept live JSON control commands on stdin\n"
         "  --deferred-show        keep the window hidden until an activate command\n"
         "  --load-from-memory     keep the video bytes in memory\n"
@@ -216,6 +220,12 @@ static BOOL ParseArgs(int argc, char **argv, WallpaperArgs &out) {
             out.muted = YES;
         } else if (strcmp(arg, "--fill") == 0) {
             const char *v = take(i, arg); if (!v || !ParseFillMode(v, out.fillMode)) return NO;
+        } else if (strcmp(arg, "--position-x") == 0 || strcmp(arg, "--position-y") == 0) {
+            const char *v = take(i, arg); if (!v) return NO;
+            char *end = nullptr;
+            double value = strtod(v, &end);
+            if (end == v || *end != '\0' || !std::isfinite(value)) return NO;
+            (strcmp(arg, "--position-x") == 0 ? out.positionX : out.positionY) = fmin(fmax(value, 0.0), 1.0);
         } else if (strcmp(arg, "--run-seconds") == 0) {
             const char *v = take(i, arg); if (!v) return NO; out.runSeconds = atoi(v);
         } else if (strcmp(arg, "--control-stdin") == 0) {
@@ -521,6 +531,8 @@ int main(int argc, char *argv[]) {
 
         VRVideoEngineConfig config = [VRVideoRendererEngine defaultConfig];
         config.fillMode = args.fillMode;
+        config.positionX = args.positionX;
+        config.positionY = args.positionY;
         config.initialVolume = args.volume;
         // A deferred candidate must decode while remaining inaudible. Mirage
         // replays the user's actual mute/volume policy only after activation.
@@ -537,6 +549,9 @@ int main(int argc, char *argv[]) {
         // asynchronously; install the handlers before opening the wallpaper.
         engine.videoDidEndBlock = ^{
             MirageEmitEvent(@{ @"event": @"video-did-end" });
+        };
+        engine.positionAvailabilityBlock = ^(BOOL x, BOOL y) {
+            MirageEmitEvent(@{ @"event": @"position-availability", @"x": @(x), @"y": @(y) });
         };
         engine.videoDidFailBlock = ^(NSString *message) {
             MirageEmitEvent(@{ @"event": @"video-error",
@@ -622,6 +637,12 @@ int main(int argc, char *argv[]) {
                         if ([value isKindOfClass:[NSNumber class]]) [eng setVolume:[value floatValue]];
                     } else if ([name isEqualToString:@"muted"]) {
                         if ([value isKindOfClass:[NSNumber class]]) [eng setMuted:[value boolValue]];
+                    } else if ([name isEqualToString:@"position"]) {
+                        NSNumber *x = cmd[@"x"];
+                        NSNumber *y = cmd[@"y"];
+                        if ([x isKindOfClass:NSNumber.class] && [y isKindOfClass:NSNumber.class]) {
+                            [eng setPositionX:x.doubleValue y:y.doubleValue];
+                        }
                     } else if ([name isEqualToString:@"fillmode"]) {
                         if ([value isKindOfClass:[NSString class]]) {
                             VRVideoFillMode mode;

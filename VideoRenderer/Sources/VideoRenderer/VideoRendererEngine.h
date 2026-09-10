@@ -17,6 +17,8 @@ typedef NS_ENUM(NSInteger, VRVideoFillMode) {
 
 typedef struct {
     VRVideoFillMode fillMode;
+    double positionX;
+    double positionY;
     float initialVolume;
     BOOL muted;
     BOOL autoplay;
@@ -39,6 +41,7 @@ typedef struct {
 - (void)setVolume:(float)volume;
 - (void)setMuted:(BOOL)muted;
 - (void)setFillMode:(VRVideoFillMode)fillMode;
+- (void)setPositionX:(double)x y:(double)y;
 - (void)setHDREnabled:(BOOL)enabled;
 - (void)updateDynamicRangeForScreen:(nullable NSScreen *)screen;
 
@@ -60,6 +63,7 @@ typedef struct {
                 completion:(void (^)(BOOL ok))completion;
 
 @property (nonatomic, copy, nullable) void (^videoDidEndBlock)(void);
+@property (nonatomic, copy, nullable) void (^positionAvailabilityBlock)(BOOL x, BOOL y);
 
 // Called once when the current AVPlayer item has yielded a decoded pixel buffer.
 // A hidden desktop candidate is not eligible for activation before this fires.

@@ -1,6 +1,7 @@
 #import "VideoRendererEngine.h"
 #import "VRMemoryAssetLoader.h"
 #import "VRTranscoder.h"
+#import "VRVideoLayout.h"
 
 #import <QuartzCore/QuartzCore.h>
 #import <CoreImage/CoreImage.h>
@@ -26,6 +27,7 @@ enum {
 // status would never fire.
 static void *kVRLooperStatusContext = &kVRLooperStatusContext;
 static void *kVRCurrentItemStatusContext = &kVRCurrentItemStatusContext;
+static void *kVRPresentationSizeContext = &kVRPresentationSizeContext;
 
 // AVPlayerLooper restarts the media continuously, so end-of-item fires once per
 // loop. The consumer writes a line to stdout for each one; rate-limit so a
@@ -111,6 +113,12 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
 @property (nonatomic, assign) float volume;
 @property (nonatomic, assign) BOOL muted;
 @property (nonatomic, assign) VRVideoFillMode fillMode;
+@property (nonatomic, assign) double positionX;
+@property (nonatomic, assign) double positionY;
+@property (nonatomic, assign) CGSize videoPresentationSize;
+@property (nonatomic, assign) BOOL positionAvailabilityReported;
+@property (nonatomic, assign) BOOL canMoveX;
+@property (nonatomic, assign) BOOL canMoveY;
 @property (nonatomic, assign) BOOL autoplay;
 @property (nonatomic, assign) BOOL loadFromMemory;
 @property (nonatomic, assign) BOOL hdrEnabled;
@@ -156,6 +164,7 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
                                 attemptsLeft:(NSInteger)attemptsLeft;
 - (void)checkPlaybackHealth;
 - (void)clearSnapshotOutput;
+- (void)updateVideoLayout;
 @end
 
 @implementation VRVideoRendererEngine
@@ -163,6 +172,8 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
 + (VRVideoEngineConfig)defaultConfig {
     VRVideoEngineConfig config;
     config.fillMode = VRVideoFillModeCover;
+    config.positionX = 0.5;
+    config.positionY = 0.5;
     config.initialVolume = 1.0f;
     config.muted = NO;
     config.autoplay = YES;
@@ -177,6 +188,7 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
         self.wantsLayer = YES;
         self.layer = [CALayer layer];
         self.layer.backgroundColor = NSColor.blackColor.CGColor;
+        self.layer.masksToBounds = YES;
         self.layerContentsRedrawPolicy = NSViewLayerContentsRedrawNever;
 
         _player = [AVQueuePlayer queuePlayerWithItems:@[]];
@@ -187,7 +199,7 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
 
         _playerLayer = [AVPlayerLayer playerLayerWithPlayer:_player];
         _playerLayer.frame = self.bounds;
-        _playerLayer.autoresizingMask = kCALayerWidthSizable | kCALayerHeightSizable;
+        _playerLayer.autoresizingMask = 0;
         _playerLayer.backgroundColor = NSColor.blackColor.CGColor;
         _playerLayer.needsDisplayOnBoundsChange = NO;
         [self.layer addSublayer:_playerLayer];
@@ -207,7 +219,12 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
                                                 DISPATCH_QUEUE_SERIAL);
         dispatch_set_target_queue(_transcodeQueue,
             dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
+        _positionX = VRClampPosition(config.positionX);
+        _positionY = VRClampPosition(config.positionY);
         [self setFillMode:config.fillMode];
+        [_player addObserver:self forKeyPath:@"currentItem.presentationSize"
+                     options:NSKeyValueObservingOptionInitial | NSKeyValueObservingOptionNew
+                     context:kVRPresentationSizeContext];
         [self updateDynamicRangeForScreen:NSScreen.mainScreen];
 
         // The player outlives every wallpaper this engine opens, so these two
@@ -249,12 +266,37 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
 
 - (void)layout {
     [super layout];
-    self.playerLayer.frame = self.bounds;
+    [self updateVideoLayout];
+}
+
+- (void)updateVideoLayout {
+    CGSize source = self.player.currentItem.presentationSize;
+    if (source.width > 0 && source.height > 0) self.videoPresentationSize = source;
+    source = self.videoPresentationSize;
+    VRVideoLayout layout = VRCalculateVideoLayout(source, self.bounds, (int)self.fillMode,
+                                                   self.positionX, self.positionY,
+                                                   self.layer.geometryFlipped);
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    self.playerLayer.videoGravity = self.fillMode == VRVideoFillModeStretch
+        ? AVLayerVideoGravityResize : AVLayerVideoGravityResizeAspect;
+    self.playerLayer.frame = layout.frame;
+    [CATransaction commit];
+    if (source.width <= 0 || source.height <= 0) return;
+    if (!self.positionAvailabilityReported || self.canMoveX != layout.canMoveX ||
+        self.canMoveY != layout.canMoveY) {
+        self.canMoveX = layout.canMoveX;
+        self.canMoveY = layout.canMoveY;
+        self.positionAvailabilityReported = self.positionAvailabilityBlock != nil;
+        if (self.positionAvailabilityBlock) self.positionAvailabilityBlock(layout.canMoveX, layout.canMoveY);
+    }
 }
 
 // KVO and NSNotification registrations that survive -dealloc crash the process,
 // so every one of them is undone here. Ivars only, no property accessors.
 - (void)dealloc {
+    [_player removeObserver:self forKeyPath:@"currentItem.presentationSize"
+                   context:kVRPresentationSizeContext];
     [_player removeObserver:self
                  forKeyPath:@"currentItem.status"
                     context:kVRCurrentItemStatusContext];
@@ -474,6 +516,11 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
                       ofObject:(id)object
                         change:(NSDictionary<NSKeyValueChangeKey, id> *)change
                        context:(void *)context {
+    if (context == kVRPresentationSizeContext) {
+        __weak __typeof__(self) weakSelf = self;
+        dispatch_async(dispatch_get_main_queue(), ^{ [weakSelf updateVideoLayout]; });
+        return;
+    }
     if (context == kVRCurrentItemStatusContext) {
         AVPlayerItem *current = self.player.currentItem;
         if (current != nil && current.status == AVPlayerItemStatusFailed) {
@@ -858,6 +905,34 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
     if (buffer == NULL) return NO;
 
     CIImage *ciImage = [CIImage imageWithCVPixelBuffer:buffer];
+    AVAssetTrack *track = [item.asset tracksWithMediaType:AVMediaTypeVideo].firstObject;
+    if (track != nil) {
+        const CGAffineTransform transform = track.preferredTransform;
+        const CGAffineTransform imageTransform = CGAffineTransformMake(
+            transform.a, -transform.b, -transform.c, transform.d, transform.tx, -transform.ty);
+        ciImage = [ciImage imageByApplyingTransform:imageTransform];
+    }
+    CGRect extent = ciImage.extent;
+    CGRect target = [self convertRectToBacking:self.bounds];
+    target.origin = CGPointZero;
+    target.size.width = round(target.size.width);
+    target.size.height = round(target.size.height);
+    CGSize source = item.presentationSize;
+    if (extent.size.width <= 0 || extent.size.height <= 0 || source.width <= 0 ||
+        source.height <= 0 || target.size.width <= 0 || target.size.height <= 0) {
+        CVPixelBufferRelease(buffer);
+        return NO;
+    }
+    VRVideoLayout layout = VRCalculateVideoLayout(source, target, (int)self.fillMode,
+                                                   self.positionX, self.positionY, false);
+    ciImage = [ciImage imageByApplyingTransform:CGAffineTransformMakeTranslation(-extent.origin.x, -extent.origin.y)];
+    ciImage = [ciImage imageByApplyingTransform:CGAffineTransformMakeScale(
+        layout.frame.size.width / extent.size.width, layout.frame.size.height / extent.size.height)];
+    ciImage = [ciImage imageByApplyingTransform:CGAffineTransformMakeTranslation(
+        layout.frame.origin.x, layout.frame.origin.y)];
+    CIImage *background = [[CIImage imageWithColor:[CIColor colorWithRed:0 green:0 blue:0 alpha:1]]
+        imageByCroppingToRect:target];
+    ciImage = [[ciImage imageByCompositingOverImage:background] imageByCroppingToRect:target];
     CIContext *context = [CIContext contextWithOptions:nil];
     CGImageRef cgImage = [context createCGImage:ciImage fromRect:ciImage.extent];
     CVPixelBufferRelease(buffer);
@@ -879,7 +954,13 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
 
 - (void)setFillMode:(VRVideoFillMode)fillMode {
     _fillMode = fillMode;
-    self.playerLayer.videoGravity = VRLayerGravityForFillMode(fillMode);
+    [self updateVideoLayout];
+}
+
+- (void)setPositionX:(double)x y:(double)y {
+    _positionX = VRClampPosition(x);
+    _positionY = VRClampPosition(y);
+    [self updateVideoLayout];
 }
 
 - (void)setHDREnabled:(BOOL)enabled {
