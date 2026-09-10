@@ -102,6 +102,11 @@
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		E20000010000000000000000 = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = WallpaperLayout;
+			sourceTree = "<group>";
+		};
 		A10000020000000000000000 /* Mirage Screen Saver */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
@@ -166,6 +171,7 @@
 		5EC47E6D2A2DB2E600120CCC = {
 			isa = PBXGroup;
 			children = (
+				E20000010000000000000000,
 				BB52C0202FFC254D00C34DE3 /* Mirage Wallpaper */,
 				A10000020000000000000000 /* Mirage Screen Saver */,
 				B10000020000000000000000 /* Mirage Login Item */,
@@ -220,6 +226,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				BB52C0202FFC254D00C34DE3 /* Mirage Wallpaper */,
+				E20000010000000000000000,
 			);
 			name = "Mirage Wallpaper";
 			packageProductDependencies = (
@@ -243,6 +250,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				A10000020000000000000000 /* Mirage Screen Saver */,
+				E20000010000000000000000,
 			);
 			name = MirageScreenSaver;
 			productName = MirageScreenSaver;
@@ -283,6 +291,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				D10000020000000000000000 /* Mirage Wallpaper Extension */,
+				E20000010000000000000000,
 			);
 			name = MirageWallpaperExtension;
 			productName = MirageWallpaperExtension;

@@ -240,6 +240,12 @@ struct WallpaperPreview: SubviewOfContentView {
                         }
                     }
 
+                    if wallpaperViewModel.currentWallpaper.kind == .scene ||
+                        wallpaperViewModel.currentWallpaper.kind == .video {
+                        sectionHeader("画面位置")
+                        positionControls
+                    }
+
                     sectionHeader("壁纸属性")
                     PropertyEditor(wallpaper: wallpaperViewModel.currentWallpaper)
                         .environmentObject(wallpaperViewModel)
@@ -346,6 +352,67 @@ struct WallpaperPreview: SubviewOfContentView {
         } message: { _ in
             Text("取消订阅后，Mirage 会停止下载并删除 Mirage 下载目录中的副本。Steam 内容目录中的文件不会被删除。")
         }
+    }
+
+    private var positionControls: some View {
+        let availability = wallpaperViewModel.positionAvailability
+        let cover = wallpaperViewModel.runtime.fillMode == .cover
+        return VStack(spacing: 12) {
+            positionRow("水平位置（X）", horizontal: true, enabled: cover && availability.x)
+            positionRow("垂直位置（Y）", horizontal: false, enabled: cover && availability.y)
+            if !cover {
+                Text("位置调整适用于填充模式")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else if !availability.known {
+                Text("壁纸运行后可调整画面位置")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                Text("仅可调整被裁切的方向，50% 为居中")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Button("恢复居中") {
+                wallpaperViewModel.setPosition(.center)
+            }
+            .disabled(wallpaperViewModel.runtime.position == .center)
+        }
+        .id("\(wallpaperViewModel.selectedDisplayKey.rawValue):\(wallpaperViewModel.currentWallpaper.id)")
+    }
+
+    private func positionRow(_ title: LocalizedStringKey, horizontal: Bool,
+                             enabled: Bool) -> some View {
+        let value = Binding<Double>(
+            get: {
+                let position = wallpaperViewModel.runtime.position
+                return horizontal ? position.x : position.y
+            },
+            set: { value in
+                let position = wallpaperViewModel.runtime.position
+                wallpaperViewModel.setPosition(WallpaperPosition(
+                    x: horizontal ? value : position.x,
+                    y: horizontal ? position.y : value))
+            })
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(title)
+                Spacer()
+                Text(value.wrappedValue, format: .percent.precision(.fractionLength(1)))
+                    .monospacedDigit()
+            }
+            MirageSlider(value: value, in: 0...1, step: 0.001)
+                .accessibilityLabel(Text(title))
+                .accessibilityValue(Text(value.wrappedValue, format: .percent.precision(.fractionLength(1))))
+                .accessibilityAdjustableAction { direction in
+                    guard enabled else { return }
+                    switch direction {
+                    case .increment: value.wrappedValue = min(1, value.wrappedValue + 0.01)
+                    case .decrement: value.wrappedValue = max(0, value.wrappedValue - 0.01)
+                    @unknown default: break
+                    }
+                }
+        }
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.5)
+        .help(L(horizontal ? "选择壁纸从左到右的展示区域" : "选择壁纸从上到下的展示区域"))
     }
 
     @ViewBuilder

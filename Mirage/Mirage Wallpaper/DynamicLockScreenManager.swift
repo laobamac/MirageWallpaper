@@ -21,7 +21,8 @@ struct DynamicLockScreenDisplayConfiguration: Codable {
     var systemFallbackPath: String?
     let rawProperties: [String: AnyCodableValue]
     let fps: Int
-    let fillMode: String
+    var fillMode: String
+    var position: WallpaperPosition? = nil
     var loadFromMemory: Bool?
 }
 
@@ -282,6 +283,9 @@ final class DynamicLockScreenManager: ObservableObject {
                     rawProperties: rawPropertyValues.mapValues(AnyCodableValue.init),
                     fps: min(max(fps, 10), 60),
                     fillMode: runtime.fillMode.rawValue,
+                    position: DisplayRegistry.shared.info(forDisplay: displayID).flatMap {
+                        AppDelegate.shared.wallpaperViewModel.positions(for: wallpaper.id)[$0.key.rawValue]
+                    } ?? .center,
                     loadFromMemory: (AppDelegate.shared.globalSettingsViewModel.settings.wallpaperLoadSource ?? .disk) == .memory
                 )
                 return ("display-\(displayID)", record)
@@ -301,6 +305,24 @@ final class DynamicLockScreenManager: ObservableObject {
         cleanupDeployments(except: deployment.root)
         cleanupDesktopFallbacks()
         registerExtension()
+    }
+
+    func updatePosition(_ position: WallpaperPosition, fillMode: FillMode,
+                        wallpaperID: String, displayID: UInt32) {
+        guard let configurationURL,
+              let data = try? Data(contentsOf: configurationURL),
+              var configuration = try? JSONDecoder().decode(DynamicLockScreenConfiguration.self, from: data),
+              let key = configuration.displays.first(where: {
+                  $0.value.displayID == displayID && $0.value.wallpaperID == wallpaperID
+              })?.key,
+              var display = configuration.displays[key],
+              (display.position ?? .center) != position || display.fillMode != fillMode.rawValue else { return }
+        display.position = position
+        display.fillMode = fillMode.rawValue
+        configuration.displays[key] = display
+        guard let updated = try? JSONEncoder().encode(configuration),
+              (try? updated.write(to: configurationURL, options: .atomic)) != nil else { return }
+        notifyConfigurationChanged()
     }
 
     func updateLoadFromMemory(_ enabled: Bool) {

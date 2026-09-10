@@ -52,6 +52,8 @@ final class RendererProcess {
     var desiredFps: Int
     var desiredSpeed: Float
     var desiredFillMode: FillMode
+    var desiredPosition: WallpaperPosition
+    var positionAvailability = WallpaperPositionAvailability()
     var desiredHDRVideo: Bool
     var desiredUserProperties: [String: WEProjectProperty]
     /// Scene renderers receive their initial properties through the launch-time
@@ -124,6 +126,7 @@ final class RendererProcess {
         self.desiredFps = options.fps
         self.desiredSpeed = options.speed
         self.desiredFillMode = options.fillMode
+        self.desiredPosition = options.position
         self.desiredHDRVideo = options.enableHDRVideo
         self.desiredUserProperties = options.userProperties
         self.spectrumEnabled = spectrumEnabled
@@ -491,6 +494,7 @@ struct RenderOptions: Equatable {
     var muted: Bool = false
     var speed: Float = 1.0
     var fillMode: FillMode = .cover
+    var position: WallpaperPosition = .center
     var enableSpectrum: Bool = true
     var renderScale: Double = 1.0
     var enableMetalFX: Bool = false
@@ -508,6 +512,7 @@ struct RenderOptions: Equatable {
 
 // Subprocess control: the renderer receives JSON-line commands via stdin.
 final class RendererController {
+    var onPositionAvailabilityChanged: ((CGDirectDisplayID) -> Void)?
     private enum TransitionPhase: String {
         case preparing
         case waitingForVisibilityBlockers
@@ -1048,6 +1053,12 @@ final class RendererController {
             return false
         }
 
+        if wallpaper.kind == .scene || wallpaper.kind == .video {
+            args += ["--position-x", String(options.position.x),
+                     "--position-y", String(options.position.y)]
+            if wallpaper.kind == .scene { args += ["--fill", options.fillMode.rawValue] }
+        }
+
         let stdinPipe = Pipe()
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
@@ -1195,6 +1206,7 @@ final class RendererController {
         handle.desiredFps = options.fps
         handle.desiredSpeed = options.speed
         handle.desiredFillMode = options.fillMode
+        handle.desiredPosition = options.position
         handle.desiredHDRVideo = options.enableHDRVideo
         handle.desiredUserProperties = options.userProperties
     }
@@ -1238,6 +1250,20 @@ final class RendererController {
             guard isActive, let token = message["token"] as? String else { return }
             completeSnapshot(token: token,
                              ok: (message["ok"] as? NSNumber)?.boolValue ?? false)
+            return
+        }
+
+        if event == "position-availability" {
+            guard isActive || isCandidate,
+                  let x = message["x"] as? Bool, let y = message["y"] as? Bool else { return }
+            let availability = WallpaperPositionAvailability(known: true, x: x, y: y)
+            guard availability != handle.positionAvailability else { return }
+            handle.positionAvailability = availability
+            if isActive {
+                DispatchQueue.main.async { [weak self] in
+                    self?.onPositionAvailabilityChanged?(displayID)
+                }
+            }
             return
         }
 
@@ -1414,6 +1440,7 @@ final class RendererController {
         transition.candidateKnownHidden = false
         candidate.send(["cmd": "fps", "value": candidate.desiredFps])
         candidate.send(["cmd": "fillmode", "value": candidate.desiredFillMode.rawValue])
+        sendPosition(candidate.desiredPosition, to: candidate)
         candidate.send(["cmd": "speed", "value": candidate.desiredSpeed])
         if candidate.wallpaper.kind == .video {
             candidate.send(["cmd": "hdr", "value": candidate.desiredHDRVideo])
@@ -1625,6 +1652,7 @@ final class RendererController {
     private func replayDesiredStateLocked(to handle: RendererProcess) {
         handle.send(["cmd": "fps", "value": handle.desiredFps])
         handle.send(["cmd": "fillmode", "value": handle.desiredFillMode.rawValue])
+        sendPosition(handle.desiredPosition, to: handle)
         handle.send(["cmd": "speed", "value": handle.desiredSpeed])
         if handle.wallpaper.kind == .video {
             handle.send(["cmd": "hdr", "value": handle.desiredHDRVideo])
@@ -2402,6 +2430,7 @@ final class RendererController {
         target.muted = source.muted
         target.speed = source.speed
         target.fillMode = source.fillMode
+        target.position = source.position
         target.userProperties = source.userProperties
         target.powerState = source.powerState
         target.powerFps = source.powerFps
@@ -2413,6 +2442,7 @@ final class RendererController {
                                      to handle: RendererProcess) {
         handle.send(["cmd": "fps", "value": options.fps])
         handle.send(["cmd": "fillmode", "value": options.fillMode.rawValue])
+        sendPosition(options.position, to: handle)
         handle.send(["cmd": "speed", "value": options.speed])
         if handle.wallpaper.kind == .video {
             handle.send(["cmd": "hdr", "value": options.enableHDRVideo])
@@ -2646,6 +2676,35 @@ final class RendererController {
             return liveRunningTargetsLocked(displayID, assignmentID: assignmentID)
         }
         actives.forEach { $0.send(["cmd": "fillmode", "value": mode.rawValue]) }
+    }
+
+    func positionAvailability(onDisplay displayID: CGDirectDisplayID,
+                              wallpaperID: String) -> WallpaperPositionAvailability {
+        queue.sync {
+            guard let handle = running[displayID], handle.wallpaper.id == wallpaperID else {
+                return .init()
+            }
+            return handle.positionAvailability
+        }
+    }
+
+    private func sendPosition(_ position: WallpaperPosition, to handle: RendererProcess) {
+        guard handle.wallpaper.kind == .scene || handle.wallpaper.kind == .video else { return }
+        handle.send(["cmd": "position", "x": position.x, "y": position.y])
+    }
+
+    func setPosition(_ position: WallpaperPosition, onDisplay displayID: CGDirectDisplayID,
+                     assignmentID: UUID) {
+        let actives: [RendererProcess] = queue.sync {
+            targetsLocked(displayID, includeCandidates: true, assignmentID: assignmentID).forEach {
+                $0.desiredPosition = position
+            }
+            updatePendingOptionsLocked(displayID, assignmentID: assignmentID) {
+                $0.position = position
+            }
+            return liveRunningTargetsLocked(displayID, assignmentID: assignmentID)
+        }
+        actives.forEach { sendPosition(position, to: $0) }
     }
 
     func setProperty(key: String, property: WEProjectProperty,

@@ -66,6 +66,7 @@ struct MirageLockDisplayConfiguration: Codable {
     let rawProperties: [String: MirageLockAnyValue]
     let fps: Int
     let fillMode: String
+    var position: WallpaperPosition? = nil
     let loadFromMemory: Bool?
 }
 
@@ -76,7 +77,7 @@ struct MirageLockConfiguration: Codable {
 }
 
 private final class MirageSceneLibrary {
-    typealias Create = @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<CChar>?, UnsafePointer<CChar>?, UnsafePointer<CChar>?, UInt32, UInt32, UInt32) -> UnsafeMutableRawPointer?
+    typealias Create = @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<CChar>?, UnsafePointer<CChar>?, UnsafePointer<CChar>?, UInt32, UInt32, UInt32, UnsafePointer<CChar>?, Double, Double) -> UnsafeMutableRawPointer?
     typealias SetPaused = @convention(c) (UnsafeMutableRawPointer?, Int32) -> Void
     typealias FirstFrameCallback = @convention(c) (UnsafeMutableRawPointer?) -> Void
     typealias SetFirstFrame = @convention(c) (UnsafeMutableRawPointer?, FirstFrameCallback?, UnsafeMutableRawPointer?) -> Void
@@ -95,7 +96,7 @@ private final class MirageSceneLibrary {
         ].compactMap { $0 }
         for url in candidates where FileManager.default.fileExists(atPath: url.path) {
             guard let handle = dlopen(url.path, RTLD_NOW | RTLD_LOCAL),
-                  let create = dlsym(handle, "MirageSceneDesktopCreate"),
+                  let create = dlsym(handle, "MirageSceneDesktopCreateWithPosition"),
                   let pause = dlsym(handle, "MirageSceneDesktopSetPaused"),
                   let firstFrame = dlsym(handle, "MirageSceneDesktopSetFirstFrameCallback"),
                   let destroy = dlsym(handle, "MirageSceneDesktopDestroy") else { continue }
@@ -120,6 +121,7 @@ final class MirageLockRenderer {
     private var looper: AVPlayerLooper?
     private var memoryAssetLoader: MirageMemoryVideoAssetLoader?
     private var playerLayer: AVPlayerLayer?
+    private var videoLayout: WallpaperVideoLayout?
     private var desktopLayer: AVSampleBufferDisplayLayer?
     private var desktopFallbackPath: String?
     private var readyObservation: NSKeyValueObservation?
@@ -206,8 +208,10 @@ final class MirageLockRenderer {
                 let looper = AVPlayerLooper(player: player, templateItem: item)
                 let layer = AVPlayerLayer(player: player)
                 layer.frame = self.rootLayer.bounds
-                layer.videoGravity = fillMode == "contain" ? .resizeAspect : fillMode == "stretch" ? .resize : .resizeAspectFill
                 self.rootLayer.addSublayer(layer)
+                self.videoLayout = WallpaperVideoLayout(layer: layer, bounds: self.rootLayer.bounds,
+                                                        fillMode: fillMode,
+                                                        position: configuration.position ?? .center)
                 self.player = player
                 self.looper = looper
                 self.memoryAssetLoader = loader
@@ -248,10 +252,14 @@ final class MirageLockRenderer {
         let width = UInt32(max(1, min(size.width * rootLayer.contentsScale, 8192)))
         let height = UInt32(max(1, min(size.height * rootLayer.contentsScale, 8192)))
         let pointer = Unmanaged.passUnretained(rootLayer).toOpaque()
+        let position = configuration.position ?? .center
         let engine = assetsURL.path.withCString { assets in
             configuration.entryPath.withCString { pkg in
                 json.withCString { props in
-                    library.create(pointer, assets, pkg, props, width, height, UInt32(max(10, min(configuration.fps, 60))))
+                    configuration.fillMode.withCString { fill in
+                        library.create(pointer, assets, pkg, props, width, height,
+                                       UInt32(max(10, min(configuration.fps, 60))), fill, position.x, position.y)
+                    }
                 }
             }
         }

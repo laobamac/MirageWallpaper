@@ -348,6 +348,9 @@ final class ScreenSaverManager {
             }
         }
 
+        let positions = AppDelegate.shared.wallpaperViewModel.positions(for: wallpaper.id)
+        let selectedPosition = positions[AppDelegate.shared.wallpaperViewModel.selectedDisplayKey.rawValue]
+            ?? runtime.position
         let object: [String: Any] = [
             "version": 1,
             "wallpaperID": wallpaper.id,
@@ -358,6 +361,8 @@ final class ScreenSaverManager {
             "rawProperties": rawPropertyValues,
             "fps": min(max(fps, 10), 60),
             "fillMode": runtime.fillMode.rawValue,
+            "position": selectedPosition.dictionary,
+            "positionsByDisplay": positions.mapValues(\.dictionary),
             "enableHDRVideo": AppDelegate.shared.globalSettingsViewModel.settings.shouldEnableHDRVideo,
             "loadFromMemory": (AppDelegate.shared.globalSettingsViewModel.settings.wallpaperLoadSource ?? .disk) == .memory,
             "language": MirageLocalization.shared.locale.identifier

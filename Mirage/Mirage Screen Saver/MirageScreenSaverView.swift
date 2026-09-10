@@ -18,6 +18,8 @@ private struct MirageSaverConfiguration {
     let rawProperties: [String: Any]
     let fps: Int
     let fillMode: String
+    let position: WallpaperPosition
+    let positionsByDisplay: [String: WallpaperPosition]
     let enableHDRVideo: Bool
     let loadFromMemory: Bool
     let language: String
@@ -61,6 +63,9 @@ private struct MirageSaverConfiguration {
             rawProperties: object["rawProperties"] as? [String: Any] ?? [:],
             fps: max(10, min(object["fps"] as? Int ?? 30, 60)),
             fillMode: object["fillMode"] as? String ?? "cover",
+            position: WallpaperPosition(dictionary: object["position"] as? [String: Any]),
+            positionsByDisplay: (object["positionsByDisplay"] as? [String: [String: Any]] ?? [:])
+                .mapValues { WallpaperPosition(dictionary: $0) },
             enableHDRVideo: object["enableHDRVideo"] as? Bool ?? false,
             loadFromMemory: object["loadFromMemory"] as? Bool ?? false,
             language: object["language"] as? String ?? Locale.preferredLanguages.first ?? "en"
@@ -96,7 +101,7 @@ private enum MirageSaverLocalization {
 private final class MirageSceneLibrary {
     typealias Create = @convention(c) (
         UnsafeMutableRawPointer?, UnsafePointer<CChar>?, UnsafePointer<CChar>?, UnsafePointer<CChar>?,
-        UInt32, UInt32, UInt32, UInt32, UInt32
+        UInt32, UInt32, UInt32, UInt32, UInt32, UnsafePointer<CChar>?, Double, Double
     ) -> UnsafeMutableRawPointer?
     typealias SetPaused = @convention(c) (UnsafeMutableRawPointer?, Int32) -> Void
     typealias Destroy = @convention(c) (UnsafeMutableRawPointer?) -> Void
@@ -110,7 +115,7 @@ private final class MirageSceneLibrary {
         guard let frameworkDirectory = bundle.privateFrameworksURL else { return nil }
         let libraryURL = frameworkDirectory.appendingPathComponent("libMirageSceneSaver.dylib")
         guard let handle = dlopen(libraryURL.path, RTLD_NOW | RTLD_LOCAL),
-              let createSymbol = dlsym(handle, "MirageSceneSaverCreate"),
+              let createSymbol = dlsym(handle, "MirageSceneSaverCreateWithPosition"),
               let pauseSymbol = dlsym(handle, "MirageSceneSaverSetPaused"),
               let destroySymbol = dlsym(handle, "MirageSceneSaverDestroy") else {
             return nil
@@ -130,6 +135,7 @@ final class MirageScreenSaverView: ScreenSaverView {
     private var looper: AVPlayerLooper?
     private var memoryAssetLoader: MirageMemoryVideoAssetLoader?
     private var playerLayer: AVPlayerLayer?
+    private var videoLayout: WallpaperVideoLayout?
     private var messageLabel: NSTextField?
     private var configuration: MirageSaverConfiguration?
     private var sceneLibrary: MirageSceneLibrary?
@@ -145,6 +151,7 @@ final class MirageScreenSaverView: ScreenSaverView {
         autoresizingMask = [.width, .height]
         wantsLayer = true
         layer?.backgroundColor = NSColor.black.cgColor
+        layer?.masksToBounds = true
     }
 
     required init?(coder: NSCoder) {
@@ -199,6 +206,14 @@ final class MirageScreenSaverView: ScreenSaverView {
         }
     }
 
+    private func position(for configuration: MirageSaverConfiguration) -> WallpaperPosition {
+        guard !isPreview,
+              let screen = window?.screen,
+              let displayID = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value,
+              let key = wallpaperDisplayKey(displayID) else { return configuration.position }
+        return configuration.positionsByDisplay[key] ?? .center
+    }
+
     private func loadScene(_ configuration: MirageSaverConfiguration) {
         let bundle = Bundle(for: MirageScreenSaverView.self)
         guard let resources = bundle.resourceURL,
@@ -236,13 +251,16 @@ final class MirageScreenSaverView: ScreenSaverView {
             "MirageScreenSaver build=\(build, privacy: .public) preview=\(self.isPreview, privacy: .public) host=\(Int(self.hostReportedSize.width), privacy: .public)x\(Int(self.hostReportedSize.height), privacy: .public) points=\(Int(self.bounds.width), privacy: .public)x\(Int(self.bounds.height), privacy: .public) backing=\(Int(backingSize.width), privacy: .public)x\(Int(backingSize.height), privacy: .public) drawable=\(drawableWidth, privacy: .public)x\(drawableHeight, privacy: .public) render=\(renderWidth, privacy: .public)x\(renderHeight, privacy: .public)"
         )
         let viewPointer = Unmanaged.passUnretained(self).toOpaque()
+        let position = position(for: configuration)
         let engine = assets.path.withCString { assetsPath in
             configuration.entryURL.path.withCString { packagePath in
                 json.withCString { properties in
-                    library.create(viewPointer, assetsPath, packagePath, properties,
-                                   renderWidth, renderHeight,
-                                   fixedDrawableWidth, fixedDrawableHeight,
-                                   UInt32(configuration.fps))
+                    configuration.fillMode.withCString { fill in
+                        library.create(viewPointer, assetsPath, packagePath, properties,
+                                       renderWidth, renderHeight,
+                                       fixedDrawableWidth, fixedDrawableHeight,
+                                       UInt32(configuration.fps), fill, position.x, position.y)
+                    }
                 }
             }
         }
@@ -353,14 +371,11 @@ final class MirageScreenSaverView: ScreenSaverView {
                 let looper = AVPlayerLooper(player: player, templateItem: item)
                 let playerLayer = AVPlayerLayer(player: player)
                 playerLayer.frame = self.presentationBounds
-                playerLayer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
-                switch configuration.fillMode {
-                case "contain": playerLayer.videoGravity = .resizeAspect
-                case "stretch": playerLayer.videoGravity = .resize
-                default: playerLayer.videoGravity = .resizeAspectFill
-                }
                 self.applyVideoDynamicRange(to: playerLayer, enabled: configuration.enableHDRVideo)
                 self.layer?.addSublayer(playerLayer)
+                self.videoLayout = WallpaperVideoLayout(
+                    layer: playerLayer, bounds: self.presentationBounds,
+                    fillMode: configuration.fillMode, position: self.position(for: configuration))
                 self.player = player
                 self.looper = looper
                 self.memoryAssetLoader = playableLoader
@@ -375,7 +390,7 @@ final class MirageScreenSaverView: ScreenSaverView {
         normalizeFullScreenBoundsIfNeeded()
         guard let rootLayer = layer else { return }
         rootLayer.contentsScale = window?.backingScaleFactor ?? rootLayer.contentsScale
-        playerLayer?.frame = videoPresentationBounds
+        videoLayout?.update(bounds: videoPresentationBounds)
         playerLayer?.contentsScale = rootLayer.contentsScale
         if let playerLayer, let configuration {
             applyVideoDynamicRange(to: playerLayer, enabled: configuration.enableHDRVideo)
@@ -436,7 +451,7 @@ final class MirageScreenSaverView: ScreenSaverView {
 
     override func animateOneFrame() {
         normalizeFullScreenBoundsIfNeeded()
-        playerLayer?.frame = presentationBounds
+        videoLayout?.update(bounds: presentationBounds)
     }
 
     override var hasConfigureSheet: Bool { false }

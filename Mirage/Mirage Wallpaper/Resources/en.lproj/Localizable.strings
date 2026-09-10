@@ -942,3 +942,21 @@
 "无法使用所选文件" = "Could Not Use Selected File";
 "无法读取所选图片" = "The selected image could not be read";
 "无法保存所选图片" = "The selected image could not be saved";
+
+"画面位置" = "Picture position";
+
+"水平位置（X）" = "Horizontal position (X)";
+
+"垂直位置（Y）" = "Vertical position (Y)";
+
+"位置调整适用于填充模式" = "Position adjustment is available in Fill mode";
+
+"壁纸运行后可调整画面位置" = "Position can be adjusted while the wallpaper is running";
+
+"仅可调整被裁切的方向，50% 为居中" = "Adjust the cropped directions. 50% is centered.";
+
+"恢复居中" = "Center picture";
+
+"选择壁纸从左到右的展示区域" = "Choose the visible region from left to right";
+
+"选择壁纸从上到下的展示区域" = "Choose the visible region from top to bottom";
