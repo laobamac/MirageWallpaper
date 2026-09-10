@@ -480,6 +480,7 @@ struct EngineHostState {
         float    cursor_x { 0.0f }, cursor_y { 0.0f };
         float    screen_w { 0.0f }, screen_h { 0.0f };
         float    canvas_w { 0.0f }, canvas_h { 0.0f };
+        std::optional<std::array<double, 2>> cursor_world;
         uint32_t buttons_down { 0 }, buttons_pressed { 0 }, buttons_released { 0 };
         bool     in_window { false };
         bool     valid { false };
@@ -1179,6 +1180,7 @@ struct CursorNodePoint {
 };
 
 CursorWorld CursorToWorld(const FrameInputs& fi) {
+    if (fi.cursor_world) return { .x = (*fi.cursor_world)[0], .y = (*fi.cursor_world)[1] };
     return CursorWorld {
         .x = double(fi.cursor_x) * double(fi.canvas_w),
         .y = (1.0 - double(fi.cursor_y)) * double(fi.canvas_h),
@@ -1211,6 +1213,7 @@ void UpdateInputObject(JSContext* ctx) {
         .screen_h         = fi.screen_h,
         .canvas_w         = fi.canvas_w,
         .canvas_h         = fi.canvas_h,
+        .cursor_world     = fi.cursor_world,
         .buttons_down     = fi.mouse_buttons_down,
         .buttons_pressed  = fi.mouse_buttons_pressed,
         .buttons_released = fi.mouse_buttons_released,

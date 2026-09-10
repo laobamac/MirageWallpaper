@@ -129,6 +129,14 @@ void SceneControlChannel::dispatchLine(const char* line) {
                 m_wallpaper.setFillMode(mode);
             }
         }
+    } else if (cmd == "position") {
+        auto x = msg.get("x");
+        auto y = msg.get("y");
+        if (x.is_some() && y.is_some() && (*x)->is_number() && (*y)->is_number()) {
+            auto px = (*x)->as_f64();
+            auto py = (*y)->as_f64();
+            if (px.is_some() && py.is_some()) m_wallpaper.setPosition({ *px, *py });
+        }
     } else if (cmd == "speed") {
         auto value = msg.get("value");
         if (value.is_some() && (*value)->is_number()) {

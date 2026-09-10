@@ -947,6 +947,10 @@ public:
     }
     void SetAspect(double aspect) { m_aspect = aspect; }
     void SetFov(double value) { m_fov = value; }
+    void SetProjectionOffset(double x, double y) {
+        m_projection_offset = { std::isfinite(x) ? x : 0.0, std::isfinite(y) ? y : 0.0 };
+    }
+    std::array<double, 2> ProjectionOffset() const { return m_projection_offset; }
 
     // Explicit eye/center/up view, used by perspective scenes (general
     // isOrtho==false) whose camera is given in WE world units rather than the
@@ -990,6 +994,7 @@ public:
         m_nearClip         = cam.m_nearClip;
         m_farClip          = cam.m_farClip;
         m_fov              = cam.m_fov;
+        m_projection_offset = cam.m_projection_offset;
         m_perspective      = cam.m_perspective;
         m_allowCameraShake = cam.m_allowCameraShake;
         m_lookat           = cam.m_lookat;
@@ -1014,6 +1019,7 @@ private:
     explicit SceneCamera(PerspectiveTag, double aspect, double near, double far, double fov)
         : m_aspect(aspect), m_nearClip(near), m_farClip(far), m_fov(fov), m_perspective(true) {}
     void            CalculateViewProjectionMatrix();
+    Eigen::Matrix4d ProjectionMatrix() const;
     Eigen::Matrix4d CalculateReflectionViewProjectionMatrix();
 
     double m_width { 1.0f };
@@ -1022,6 +1028,7 @@ private:
     double m_nearClip { 0.01f };
     double m_farClip { 1000.0f };
     double m_fov { 45.0f };
+    std::array<double, 2> m_projection_offset {};
     bool   m_perspective { false };
     bool   m_allowCameraShake { true };
 
@@ -3026,6 +3033,7 @@ public:
     void        TickCameraPaths();
     std::optional<SceneCameraTransforms> ActiveCameraTransforms() const;
     bool SetActiveCameraTransforms(const SceneCameraTransforms& transforms);
+    std::optional<std::array<double, 2>> CursorPositionOnCanvas(double x, double y) const;
     void        TickMaterialShaderAnimations();
     void        CaptureCameraPathViewports();
     void        EnablePlanarReflection();

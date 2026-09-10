@@ -1231,6 +1231,37 @@ void TestAnimationEventDispatch() {
     Check(after && after->v == 30.0, "animation event fires when a frame step crosses its marker");
 }
 
+void TestCanvasCursorPosition() {
+    sr::SceneNode node;
+    sr::script::JsRuntime runtime;
+    auto* script = runtime.MakeFieldScript(
+        R"JS(export function update() {
+            return new Vec3(input.cursorWorldPosition.x, input.cursorWorldPosition.y,
+                            input.cursorScreenPosition.x);
+        })JS",
+        "test/canvas_cursor_position", sr::script::FieldKind::Vec3,
+        Parse("{}"), Parse("\"0 0 0\""), &node);
+    Check(script != nullptr, "canvas cursor script compiles");
+    if (!script) return;
+    sr::script::FrameInputs input;
+    input.cursor_x = 0.25f;
+    input.cursor_y = 0.5f;
+    input.screen_w = 100;
+    input.cursor_world = std::array<double, 2> { 1312.5, 540 };
+    runtime.SetFrameInputs(input);
+    runtime.TickAll();
+    auto result = std::get_if<sr::script::Vec3Value>(&script->last_value());
+    Check(result && std::abs(result->x - 1312.5) < 0.001 &&
+              result->y == 540 && result->z == 25,
+          "canvas cursor position is independent of screen cursor position");
+    input.cursor_world = std::array<double, 2> { 656.25, 540 };
+    runtime.SetFrameInputs(input);
+    runtime.TickAll();
+    result = std::get_if<sr::script::Vec3Value>(&script->last_value());
+    Check(result && std::abs(result->x - 656.25) < 0.001 && result->z == 25,
+          "moving the crop updates the script input even while the mouse is stationary");
+}
+
 void TestProjectedCursorHit() {
     sr::SceneNode node;
     node.SetSize({ 100.0f, 100.0f });
@@ -1586,6 +1617,7 @@ int main() {
     TestPuppetAnimationCompatibility();
     TestAnimationEventDispatch();
     TestProjectedCursorHit();
+    TestCanvasCursorPosition();
     TestDegenerateProjectedCursorMisses();
     TestPrimitiveEngineUserPropertyValues();
     TestMixedAudioBufferResolutions();

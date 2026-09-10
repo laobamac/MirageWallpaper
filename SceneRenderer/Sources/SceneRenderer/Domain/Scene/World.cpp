@@ -979,6 +979,25 @@ Scene::Scene()
 }
 Scene::~Scene() = default;
 
+std::optional<std::array<double, 2>> Scene::CursorPositionOnCanvas(double x, double y) const {
+    if (!UsesSyntheticPerspectiveCamera() || activeCamera == nullptr ||
+        !std::isfinite(x) || !std::isfinite(y)) return std::nullopt;
+    const Eigen::Matrix4d matrix = activeCamera->GetViewProjectionMatrix();
+    if (!matrix.allFinite() || std::abs(matrix.determinant()) < 1e-20) return std::nullopt;
+    const Eigen::Matrix4d inverse = matrix.inverse();
+    Eigen::Vector4d near = inverse * Eigen::Vector4d(2 * x - 1, 1 - 2 * y, 0, 1);
+    Eigen::Vector4d far = inverse * Eigen::Vector4d(2 * x - 1, 1 - 2 * y, 1, 1);
+    if (!near.allFinite() || !far.allFinite() || std::abs(near.w()) < 1e-12 ||
+        std::abs(far.w()) < 1e-12) return std::nullopt;
+    near /= near.w();
+    far /= far.w();
+    const double depth = far.z() - near.z();
+    if (std::abs(depth) < 1e-12) return std::nullopt;
+    const Eigen::Vector4d point = near + (far - near) * (-near.z() / depth);
+    if (!point.allFinite()) return std::nullopt;
+    return std::array { point.x(), point.y() };
+}
+
 std::optional<SceneCameraTransforms> Scene::ActiveCameraTransforms() const {
     if (! activeCamera) return std::nullopt;
     return activeCamera->Transforms();

@@ -1,6 +1,7 @@
 module;
 
 #include <atomic>
+#include <algorithm>
 #include <cmath>
 
 export module sr.types;
@@ -111,6 +112,18 @@ enum class FillMode
     STRETCH,
     ASPECTFIT,
     ASPECTCROP
+};
+
+struct WallpaperPosition {
+    double x { 0.5 };
+    double y { 0.5 };
+
+    WallpaperPosition Normalized() const {
+        return { std::isfinite(x) ? std::clamp(x, 0.0, 1.0) : 0.5,
+                 std::isfinite(y) ? std::clamp(y, 0.0, 1.0) : 0.5 };
+    }
+
+    bool operator==(const WallpaperPosition&) const = default;
 };
 
 enum class TextureWrap

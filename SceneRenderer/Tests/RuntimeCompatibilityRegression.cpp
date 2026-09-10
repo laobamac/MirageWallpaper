@@ -136,6 +136,120 @@ void TestOrthographicFillModeDerivesPerspectiveFov() {
           "orthographic scene fill mode derives embedded perspective field of view");
 }
 
+void TestWallpaperCropPosition() {
+    sr::Scene scene;
+    scene.SetProjectionKind(sr::SceneProjectionKind::OrthographicCanvas);
+    scene.ortho[0] = 1920;
+    scene.ortho[1] = 1080;
+    sr::SceneNode camera_node;
+    camera_node.SetTranslate({ 960.0f, 540.0f, 0.0f });
+    auto camera = std::make_shared<sr::SceneCamera>(
+        sr::SceneCamera::MakeOrthographic(1920, 1080, -5000, 5000));
+    camera->AttatchNode(&camera_node);
+    scene.cameras["global"] = camera;
+    scene.cameras["global_perspective"] = std::make_shared<sr::SceneCamera>(
+        sr::SceneCamera::MakePerspective(16.0 / 9.0, 5, 15000, 50));
+    scene.cameras["linked"] = std::make_shared<sr::SceneCamera>(*camera);
+    scene.cameras["effect"] = std::make_shared<sr::SceneCamera>(
+        sr::SceneCamera::MakeOrthographic(2, 2, -1, 1));
+    scene.linkedCameras["global"].push_back("linked");
+    scene.activeCamera = camera.get();
+    sr::vulkan::UpdateCameraFillModeForExtent(scene, sr::FillMode::ASPECTCROP, 1080, 1920);
+    const Eigen::Matrix4d centered = camera->GetViewProjectionMatrix();
+    const Eigen::Matrix4d view = camera->GetViewMatrix();
+    for (double x : { 0.0, 0.25, 0.5, 0.75, 1.0 }) {
+        auto axes = sr::vulkan::UpdateCameraPositionForExtent(
+            scene, sr::FillMode::ASPECTCROP, { x, 1.0 }, 1080, 1920);
+        Check(axes[0] && !axes[1], "portrait cover only exposes horizontal overflow");
+        const double left = x * (1920.0 - 607.5);
+        Eigen::Vector4d clip = camera->GetViewProjectionMatrix() * Eigen::Vector4d(left, 540, 0, 1);
+        Check(std::abs(clip.x() / clip.w() + 1.0) < 1e-9,
+              "crop position selects the expected source left edge");
+        Check(camera->GetViewMatrix().isApprox(view), "crop position preserves the authored camera view");
+        Check(scene.cameras["linked"]->GetViewProjectionMatrix().isApprox(camera->GetViewProjectionMatrix()),
+              "linked cameras receive the same projection offset");
+        Check(scene.cameras["effect"]->ProjectionOffset() == std::array<double, 2> {},
+              "private effect cameras remain in layer coordinates");
+    }
+    sr::vulkan::UpdateCameraPositionForExtent(scene, sr::FillMode::ASPECTCROP, {}, 1080, 1920);
+    Check(centered.isApprox(camera->GetViewProjectionMatrix()), "center restores the original projection");
+    sr::vulkan::UpdateCameraPositionForExtent(scene, sr::FillMode::ASPECTCROP, { 1, 0 }, 1080, 1920);
+    const auto cursor = scene.CursorPositionOnCanvas(0, 0.5);
+    Check(cursor && std::abs((*cursor)[0] - 1312.5) < 1e-9 && std::abs((*cursor)[1] - 540) < 1e-9,
+          "script canvas cursor coordinates include the crop offset");
+    sr::SceneUniformUpdater updater(&scene);
+    sr::SceneNode node;
+    node.SetTranslate({ 1600.0f, 540.0f, 0.0f });
+    auto transform = updater.NodeScreenTransform(&node);
+    Check(transform.has_value(), "positioned layers expose their screen transform for cursor picking");
+    if (transform) {
+        const Eigen::Vector4d clip = transform->model_view_projection * Eigen::Vector4d(0, 0, 0, 1);
+        Check(std::abs(clip.x() / clip.w()) < 1,
+              "a layer hidden by center cropping becomes hittable after moving the crop");
+        const Eigen::Vector4d local = transform->model_view_projection.inverse() * clip;
+        Check(local.head<3>().norm() < 1e-9, "cursor inverse projection retains the positioned layer coordinates");
+    }
+    auto path = std::make_shared<sr::SceneCameraPath>();
+    path->camera_name = "global";
+    path->camera = camera;
+    path->node = &camera_node;
+    path->origin_base = { 960, 540, 0 };
+    scene.camera_paths.push_back(path);
+    scene.CaptureCameraPathViewports();
+    const auto offset = camera->ProjectionOffset();
+    scene.TickCameraPaths();
+    scene.TickCameraPaths();
+    Check(camera->ProjectionOffset() == offset, "camera path ticks retain the user crop without accumulation");
+    for (auto mode : { sr::FillMode::ASPECTFIT, sr::FillMode::STRETCH }) {
+        auto axes = sr::vulkan::UpdateCameraPositionForExtent(scene, mode, { 1, 1 }, 1080, 1920);
+        Check(!axes[0] && !axes[1] && camera->ProjectionOffset() == std::array<double, 2> {},
+              "non-cover modes clear the effective crop offset");
+    }
+    scene.camera_paths.clear();
+    scene.ortho[0] = 1080;
+    scene.ortho[1] = 1920;
+    camera_node.SetTranslate({ 540, 960, 0 });
+    sr::vulkan::UpdateCameraFillModeForExtent(scene, sr::FillMode::ASPECTCROP, 1920, 1080);
+    auto axes = sr::vulkan::UpdateCameraPositionForExtent(scene, sr::FillMode::ASPECTCROP, { 0, 0 }, 1920, 1080);
+    Eigen::Vector4d top = camera->GetViewProjectionMatrix() * Eigen::Vector4d(540, 1920, 0, 1);
+    Check(!axes[0] && axes[1] && std::abs(top.y() / top.w() - 1) < 1e-9,
+          "zero vertical position reveals the source top edge");
+    sr::vulkan::UpdateCameraPositionForExtent(scene, sr::FillMode::ASPECTCROP, { 1, 1 }, 1920, 1080);
+    Eigen::Vector4d bottom = camera->GetViewProjectionMatrix() * Eigen::Vector4d(540, 0, 0, 1);
+    Check(std::abs(bottom.y() / bottom.w() + 1) < 1e-9,
+          "full vertical position reveals the source bottom edge");
+    const auto invalid = sr::WallpaperPosition { std::numeric_limits<double>::quiet_NaN(),
+                                                  std::numeric_limits<double>::infinity() }.Normalized();
+    Check(invalid == sr::WallpaperPosition {}, "non-finite positions recover to center");
+}
+
+void TestPerspectiveWallpaperPosition() {
+    sr::Scene scene;
+    scene.SetProjectionKind(sr::SceneProjectionKind::Perspective3D);
+    scene.cameras["global"] = std::make_shared<sr::SceneCamera>(
+        sr::SceneCamera::MakeOrthographic(1920, 1080, -5000, 5000));
+    auto camera = std::make_shared<sr::SceneCamera>(
+        sr::SceneCamera::MakePerspective(16.0 / 9.0, 0.1, 1000, 50));
+    camera->SetLookAt({ 0, 0, 3 }, { 0, 0, 0 }, { 0, 1, 0 });
+    scene.cameras["global_perspective"] = camera;
+    scene.activeCamera = camera.get();
+    sr::vulkan::UpdateCameraFillModeForExtent(scene, sr::FillMode::ASPECTCROP, 1080, 1920);
+    const Eigen::Matrix4d original = camera->GetViewProjectionMatrix();
+    const auto eye = camera->GetPosition();
+    sr::vulkan::UpdateCameraPositionForExtent(scene, sr::FillMode::ASPECTCROP, { 1, 0.5 }, 1080, 1920);
+    for (double depth : { 0.0, -5.0, -50.0 }) {
+        const Eigen::Vector4d point(0, 0, depth, 1);
+        const Eigen::Vector4d a = original * point;
+        const Eigen::Vector4d b = camera->GetViewProjectionMatrix() * point;
+        Check(std::abs((b.x() / b.w() - a.x() / a.w()) - camera->ProjectionOffset()[0]) < 1e-9,
+              "perspective crop shifts every depth by the same screen distance");
+    }
+    Check(camera->Fov() == 50 && camera->GetPosition().isApprox(eye),
+          "perspective crop preserves authored field of view and eye position");
+    auto axes = sr::vulkan::UpdateCameraPositionForExtent(scene, sr::FillMode::ASPECTCROP, { 1, 1 }, 2560, 1080);
+    Check(!axes[0] && !axes[1], "native perspective preserves its existing wider-screen field of view");
+}
+
 void TestAuthoredSceneZoom() {
     sr::Scene scene;
     scene.ortho[0] = 1920;
@@ -1852,6 +1966,8 @@ int main() {
     TestExplicitCameraFactories();
     TestPerspectiveFillModePreservesFov();
     TestOrthographicFillModeDerivesPerspectiveFov();
+    TestWallpaperCropPosition();
+    TestPerspectiveWallpaperPosition();
     TestAuthoredSceneZoom();
     TestAnimatedSceneZoom();
     TestAnimatedSceneZoomWithCameraPath();

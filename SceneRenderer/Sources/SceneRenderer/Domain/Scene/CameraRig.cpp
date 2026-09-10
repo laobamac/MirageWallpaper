@@ -111,16 +111,19 @@ Matrix4d SceneCamera::CalculateReflectionViewProjectionMatrix() {
     // Wallpaper Engine keeps camera-up unchanged so the reflected image is
     // screen-upright while the eye and look-at point mirror across Y=0.
     const Matrix4d view = LookAt(eye, center, up);
-    if (m_perspective) {
-        return Perspective(Radians(m_fov), m_aspect, m_nearClip, m_farClip) * view;
-    }
-    return Ortho(-m_width / 2.0,
-                 m_width / 2.0,
-                 -m_height / 2.0,
-                 m_height / 2.0,
-                 m_nearClip,
-                 m_farClip) *
-           view;
+    return ProjectionMatrix() * view;
+}
+
+Matrix4d SceneCamera::ProjectionMatrix() const {
+    Matrix4d projection = m_perspective
+        ? Perspective(Radians(m_fov), m_aspect, m_nearClip, m_farClip)
+        : Ortho(-m_width / 2.0, m_width / 2.0, -m_height / 2.0,
+                m_height / 2.0, m_nearClip, m_farClip);
+    if (m_projection_offset[0] != 0.0)
+        projection.row(0) += m_projection_offset[0] * projection.row(3);
+    if (m_projection_offset[1] != 0.0)
+        projection.row(1) += m_projection_offset[1] * projection.row(3);
+    return projection;
 }
 
 void SceneCamera::CalculateViewProjectionMatrix() {
@@ -136,16 +139,7 @@ void SceneCamera::CalculateViewProjectionMatrix() {
     } else
         m_viewMat = Matrix4d::Identity();
 
-    if (m_perspective) {
-        m_viewProjectionMat =
-            Perspective(Radians(m_fov), m_aspect, m_nearClip, m_farClip) * m_viewMat;
-    } else {
-        double left         = -m_width / 2.0f;
-        double right        = m_width / 2.0f;
-        double bottom       = -m_height / 2.0f;
-        double up           = m_height / 2.0f;
-        m_viewProjectionMat = Ortho(left, right, bottom, up, m_nearClip, m_farClip) * m_viewMat;
-    }
+    m_viewProjectionMat = ProjectionMatrix() * m_viewMat;
 }
 
 void SceneCamera::Update() { CalculateViewProjectionMatrix(); }

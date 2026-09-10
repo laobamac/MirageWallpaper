@@ -624,6 +624,7 @@ struct VulkanRender::Impl {
                              PassInvalidationFlags);
     std::vector<PreparedPassDiagnostic> preparedPassDiagnostics() const;
     void                                UpdateCameraFillMode(Scene&, sr::FillMode);
+    std::array<bool, 2> UpdateCameraPosition(Scene&, sr::FillMode, WallpaperPosition);
 
     bool                       initRes();
     bool                       acquireUploadCommandSlot(RenderingResources&, std::size_t&);
@@ -851,6 +852,11 @@ void VulkanRender::evictUnusedMeshes() {
 void VulkanRender::UpdateCameraFillMode(Scene& scene, sr::FillMode fill) {
     pImpl->UpdateCameraFillMode(scene, fill);
 };
+
+std::array<bool, 2> VulkanRender::UpdateCameraPosition(Scene& scene, sr::FillMode fill,
+                                                     WallpaperPosition position) {
+    return pImpl->UpdateCameraPosition(scene, fill, position);
+}
 
 bool VulkanRender::onSwapchainReady(unsigned width, unsigned height) {
     return pImpl->onSwapchainReady(width, height);
@@ -1665,6 +1671,38 @@ void sr::vulkan::UpdateCameraFillModeForExtent(sr::Scene& scene, sr::FillMode fi
     scene.UpdateLinkedCamera("global");
     scene.CaptureCameraPathViewports();
     scene.TickCameraPaths();
+}
+
+std::array<bool, 2> sr::vulkan::UpdateCameraPositionForExtent(
+    sr::Scene& scene, sr::FillMode fillmode, WallpaperPosition position,
+    unsigned width, unsigned height) {
+    position = position.Normalized();
+    const auto extent = scene.OrthographicProjectionExtent();
+    double overflow_x = 0.0, overflow_y = 0.0;
+    if (fillmode == FillMode::ASPECTCROP && width > 0 && height > 0 &&
+        std::isfinite(extent[0]) && std::isfinite(extent[1]) && extent[0] > 0 && extent[1] > 0) {
+        const double source_aspect = extent[0] / extent[1];
+        const double target_aspect = static_cast<double>(width) / height;
+        overflow_x = std::max(0.0, source_aspect / target_aspect - 1.0);
+        if (scene.UsesSyntheticPerspectiveCamera())
+            overflow_y = std::max(0.0, target_aspect / source_aspect - 1.0);
+    }
+    const double x = (1.0 - 2.0 * position.x) * overflow_x;
+    const double y = (2.0 * position.y - 1.0) * overflow_y;
+    for (const auto* name : { "global", "global_perspective" }) {
+        auto it = scene.cameras.find(name);
+        if (it == scene.cameras.end() || !it->second) continue;
+        it->second->SetProjectionOffset(x, y);
+        it->second->Update();
+        scene.UpdateLinkedCamera(name);
+    }
+    return { overflow_x > 0.000001, overflow_y > 0.000001 };
+}
+
+std::array<bool, 2> VulkanRender::Impl::UpdateCameraPosition(
+    sr::Scene& scene, sr::FillMode fillmode, WallpaperPosition position) {
+    const auto extent = m_device->out_extent();
+    return UpdateCameraPositionForExtent(scene, fillmode, position, extent.width, extent.height);
 }
 
 void VulkanRender::Impl::UpdateCameraFillMode(sr::Scene& scene, sr::FillMode fillmode) {

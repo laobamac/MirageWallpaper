@@ -114,6 +114,7 @@ struct FrameInputs {
     // GLFW numbering (left=0, right=1, middle=2). down is held-state,
     // pressed/released are edge events for this frame only.
     float    cursor_x { 0.0f }, cursor_y { 0.0f };
+    std::optional<std::array<double, 2>> cursor_world;
     bool     cursor_in_window { false };
     uint32_t mouse_buttons_down { 0 };
     uint32_t mouse_buttons_pressed { 0 };

@@ -46,6 +46,9 @@ struct RenderSetScene {
 struct RenderSetFillMode {
     FillMode mode;
 };
+struct RenderSetPosition {
+    WallpaperPosition position;
+};
 struct RenderSetSpeed {
     float speed;
 };
@@ -74,7 +77,7 @@ struct RenderResetScriptStorage {};
 // calls don't fall into ADL ambiguity with std::addressof when the element
 // type sits in namespace std.
 struct RenderMsg {
-    std::variant<RenderInit, RenderSetScene, RenderSetFillMode, RenderSetSpeed,
+    std::variant<RenderInit, RenderSetScene, RenderSetFillMode, RenderSetPosition, RenderSetSpeed,
                  RenderSetUserProperty, RenderSetMediaStatus, RenderStop, RenderDraw,
                  RenderSwapchainReady, RenderRequestPreparedPassDiagnostics,
                  RenderResetScriptStorage>
@@ -112,6 +115,12 @@ struct MainSetMuted {
 struct MainSetFillMode {
     FillMode mode { FillMode::ASPECTCROP };
 };
+struct MainSetPosition {
+    WallpaperPosition position;
+};
+struct MainPositionAvailability {
+    std::array<bool, 2> axes;
+};
 struct MainSetSpeed {
     float speed { 1.0f };
 };
@@ -140,7 +149,8 @@ struct MainPreparedPassDiagnostics {
 
 struct MainMsg {
     std::variant<MainLoadScene, MainConfigure, MainSetFps, MainSetVolume, MainSetVolumeScale,
-                 MainSetMuted, MainSetFillMode, MainSetSpeed, MainSetUserProperty,
+                 MainSetMuted, MainSetFillMode, MainSetPosition, MainPositionAvailability,
+                 MainSetSpeed, MainSetUserProperty,
                  MainSetFirstFrameCallback, MainSetUserPropertyDiagnosticCallback,
                  MainUserPropertyDiagnostics, MainSceneClearColorChanged,
                  MainPreparedPassDiagnostics, MainStop, MainPauseAudio, MainFirstFrame>
@@ -1041,6 +1051,8 @@ public:
     void on(MainSetVolumeScale&&);
     void on(MainSetMuted&&);
     void on(MainSetFillMode&&);
+    void on(MainSetPosition&&);
+    void on(MainPositionAvailability&&);
     void on(MainSetSpeed&&);
     void on(MainSetUserProperty&&);
     void on(MainSetFirstFrameCallback&&);
@@ -1056,6 +1068,7 @@ public:
 
     void setOnClearColor(ClearColorCallback cb) { m_clear_color_cb = std::move(cb); }
     void setOnAudioDemand(AudioDemandCallback cb) { m_audio_demand_cb = std::move(cb); }
+    void setOnPositionAvailability(PositionAvailabilityCallback cb) { m_position_cb = std::move(cb); }
     void setOnUserShortcut(UserShortcutCallback cb) { m_user_shortcut_cb = std::move(cb); }
 
 private:
@@ -1075,6 +1088,7 @@ private:
     UserPropertyDiagnosticCallback               m_user_property_diagnostic_cb;
     ClearColorCallback                           m_clear_color_cb;
     AudioDemandCallback                          m_audio_demand_cb;
+    PositionAvailabilityCallback                 m_position_cb;
     UserShortcutCallback                         m_user_shortcut_cb;
     uint64_t                                     m_audio_pause_generation { 0 };
     uint64_t                                     m_config_generation { 0 };
@@ -1099,6 +1113,9 @@ public:
     void on(RenderInit&&);
     void on(RenderSetScene&&);
     void on(RenderSetFillMode&&);
+    void on(RenderSetPosition&&);
+    void updatePosition();
+    void redrawStoppedFrame();
     void on(RenderSetSpeed&&);
     void on(RenderSetUserProperty&&);
     void on(RenderSetMediaStatus&&);
@@ -1205,6 +1222,9 @@ private:
     std::unique_ptr<rg::RenderGraph>      m_rg { nullptr };
     float                                 m_speed { 1.0f };
     FillMode                              m_fillmode { FillMode::ASPECTCROP };
+    WallpaperPosition                     m_position;
+    std::optional<std::array<bool, 2>>      m_position_axes;
+    std::optional<double>                  m_last_render_time;
     bool                                  m_stopped { false };
 
     std::atomic<std::array<float, 2>> m_mouse_pos { std::array { 0.5f, 0.5f } };
@@ -1275,6 +1295,7 @@ void SceneRenderController::on(RenderDraw&&) {
                 auto pos    = m_mouse_pos.load();
                 fi.cursor_x = pos[0];
                 fi.cursor_y = pos[1];
+                fi.cursor_world = m_scene->CursorPositionOnCanvas(pos[0], pos[1]);
             }
             fi.cursor_in_window       = cursorInWindow();
             fi.mouse_buttons_down     = buttonsDown();
@@ -1363,6 +1384,7 @@ void SceneRenderController::on(RenderDraw&&) {
         m_render->pumpFontAtlases(*m_scene);
 
         const bool rendered = m_render->drawFrame(*m_scene);
+        if (rendered) m_last_render_time = m_scene->elapsingTime;
         if (m_render->failed()) {
             frame_timer.Stop();
             frame_timer.FrameEnd();
@@ -1386,8 +1408,39 @@ void SceneRenderController::on(RenderSetFillMode&& m) {
     m_fillmode = m.mode;
     if (m_scene && renderInited()) {
         m_render->UpdateCameraFillMode(*m_scene, m_fillmode);
+        updatePosition();
         if (m_rg) m_render->refreshPreparedResources(*m_scene, m_render_scene);
+        redrawStoppedFrame();
     }
+}
+
+void SceneRenderController::updatePosition() {
+    if (!m_scene || !renderInited()) return;
+    const auto axes = m_render->UpdateCameraPosition(*m_scene, m_fillmode, m_position);
+    if (axes != m_position_axes && m_main_tx) {
+        m_position_axes = axes;
+        (void)m_main_tx->send(MainMsg { MainPositionAvailability { axes } });
+    }
+}
+
+void SceneRenderController::redrawStoppedFrame() {
+    if (!m_stopped || !m_scene || !m_rg || !m_render->readyToDraw()) return;
+    const double runtime = m_scene->elapsingTime;
+    const double frame_time = m_scene->frameTime;
+    m_scene->elapsingTime = m_last_render_time.value_or(runtime);
+    m_scene->frameTime = 0;
+    m_render->drawFrame(*m_scene);
+    m_render->flushPendingFrame();
+    m_scene->elapsingTime = runtime;
+    m_scene->frameTime = frame_time;
+}
+
+void SceneRenderController::on(RenderSetPosition&& m) {
+    const auto position = m.position.Normalized();
+    if (m_position == position) return;
+    m_position = position;
+    updatePosition();
+    redrawStoppedFrame();
 }
 
 void SceneRenderController::rebuildRenderGraph(vulkan::RenderGraphResourceRetention retention,
@@ -1396,6 +1449,7 @@ void SceneRenderController::rebuildRenderGraph(vulkan::RenderGraphResourceRetent
     if (m_rg) m_render->clearLastRenderGraph(retention);
     if (evict_meshes) m_render->evictUnusedMeshes();
     m_render->UpdateCameraFillMode(*m_scene, m_fillmode);
+    updatePosition();
     m_render_scene = ExtractRenderSceneSnapshot(*m_scene);
     m_rg           = sceneToRenderGraph(*m_scene, m_render_scene);
 
@@ -1469,6 +1523,7 @@ void SceneRenderController::refreshPreparedMaterialDirtyEvents() {
 void SceneRenderController::on(RenderSetScene&& m) {
     m_scene_ready.store(false, std::memory_order_release);
     m_scene = std::move(m.scene);
+    m_last_render_time.reset();
     rebuildRenderGraph(vulkan::RenderGraphResourceRetention::ReleaseSceneTextures, true);
     if (m_scene && m_media_status) applyMediaStatus(*m_media_status);
     m_scene_ready.store(m_scene != nullptr && m_render->readyToDraw(), std::memory_order_release);
@@ -1611,7 +1666,9 @@ void SceneRenderController::on(RenderSwapchainReady&& m) {
     bool extent_changed = m_render->onSwapchainReady(m.width, m.height);
     if (extent_changed && m_scene && m_rg) {
         m_render->UpdateCameraFillMode(*m_scene, m_fillmode);
+        updatePosition();
         m_render->refreshPreparedResources(*m_scene, m_render_scene);
+        redrawStoppedFrame();
     }
     if (m_stopped)
         frame_timer.Stop();
@@ -1667,6 +1724,7 @@ void SceneRuntimeController::on(MainConfigure&& m) {
     on(MainSetVolumeScale { 1.0f });
     on(MainSetMuted { m_config.muted });
     on(MainSetFillMode { m_config.fill_mode });
+    on(MainSetPosition { m_config.position });
     on(MainSetSpeed { m_config.speed });
 
     // MainConfigure and RenderInit run on separate message loops. Start the
@@ -1697,6 +1755,15 @@ void SceneRuntimeController::on(MainSetMuted&& m) {
 void SceneRuntimeController::on(MainSetFillMode&& m) {
     m_config.fill_mode = m.mode;
     (void)m_render_loop.sender().send(RenderMsg { RenderSetFillMode { m.mode } });
+}
+
+void SceneRuntimeController::on(MainSetPosition&& m) {
+    m_config.position = m.position.Normalized();
+    (void)m_render_loop.sender().send(RenderMsg { RenderSetPosition { m_config.position } });
+}
+
+void SceneRuntimeController::on(MainPositionAvailability&& m) {
+    if (m_position_cb) m_position_cb(m.axes[0], m.axes[1]);
 }
 
 void SceneRuntimeController::on(MainSetSpeed&& m) {
@@ -2086,6 +2153,10 @@ void SceneWallpaper::setFillMode(FillMode mode) {
     (void)m_runtime->mainSender().send(MainMsg { MainSetFillMode { mode } });
 }
 
+void SceneWallpaper::setPosition(WallpaperPosition position) {
+    (void)m_runtime->mainSender().send(MainMsg { MainSetPosition { position.Normalized() } });
+}
+
 void SceneWallpaper::setSpeed(float speed) {
     (void)m_runtime->mainSender().send(MainMsg { MainSetSpeed { speed } });
 }
@@ -2116,6 +2187,10 @@ void SceneWallpaper::setOnClearColor(ClearColorCallback cb) {
 
 void SceneWallpaper::setOnAudioDemand(AudioDemandCallback cb) {
     m_runtime->setOnAudioDemand(std::move(cb));
+}
+
+void SceneWallpaper::setOnPositionAvailability(PositionAvailabilityCallback cb) {
+    m_runtime->setOnPositionAvailability(std::move(cb));
 }
 
 void SceneWallpaper::setOnUserShortcut(UserShortcutCallback cb) {

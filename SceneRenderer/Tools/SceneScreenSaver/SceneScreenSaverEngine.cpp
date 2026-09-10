@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <bit>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -65,10 +66,22 @@ bool LoadProperties(const char* json, sr::SceneWallpaperConfig& config) {
     return true;
 }
 
+sr::FillMode ParseFillMode(const char* value) {
+    const std::string mode = value == nullptr ? "cover" : value;
+    if (mode == "contain") return sr::FillMode::ASPECTFIT;
+    if (mode == "stretch") return sr::FillMode::STRETCH;
+    return sr::FillMode::ASPECTCROP;
+}
+
 void* CreateInstance(void* host, const char* assets_dir, const char* scene_pkg,
                      const char* properties_json, std::uint32_t width,
-                     std::uint32_t height, std::uint32_t fps) {
+                     std::uint32_t height, std::uint32_t fps,
+                     sr::FillMode fill_mode = sr::FillMode::ASPECTCROP,
+                     sr::WallpaperPosition position = {}) {
     if (host == nullptr || assets_dir == nullptr || scene_pkg == nullptr) return nullptr;
+    position = position.Normalized();
+    width = std::clamp<std::uint32_t>(width, 500u, 8192u);
+    height = std::clamp<std::uint32_t>(height, 500u, 8192u);
     static rstd::log::EnvLogger logger;
     static bool logger_set = false;
     if (!logger_set) {
@@ -78,7 +91,11 @@ void* CreateInstance(void* host, const char* assets_dir, const char* scene_pkg,
     }
     const std::string configuration_key =
         std::string(assets_dir) + "\n" + scene_pkg + "\n" +
-        (properties_json == nullptr ? "" : properties_json) + "\n" + std::to_string(fps);
+        (properties_json == nullptr ? "" : properties_json) + "\n" + std::to_string(fps) + "\n" +
+        std::to_string(width) + "x" + std::to_string(height) + "\n" +
+        std::to_string(static_cast<int>(fill_mode)) + "\n" +
+        std::to_string(std::bit_cast<std::uint64_t>(position.x)) + "\n" +
+        std::to_string(std::bit_cast<std::uint64_t>(position.y));
     std::unique_lock lock(g_engine_mutex);
     auto existing = std::find_if(g_engines.begin(), g_engines.end(), [&](auto* candidate) {
         return candidate->configuration_key == configuration_key;
@@ -127,6 +144,8 @@ void* CreateInstance(void* host, const char* assets_dir, const char* scene_pkg,
     config.cache_dir = sr::platform::GetCachePath("MirageDynamicWallpaper");
     config.fps = std::clamp<std::uint32_t>(fps, 10u, 60u);
     config.muted = true;
+    config.fill_mode = fill_mode;
+    config.position = position;
     if (!LoadProperties(properties_json, config)) {
         {
             std::scoped_lock instance_lock(g_engine_mutex);
@@ -137,8 +156,8 @@ void* CreateInstance(void* host, const char* assets_dir, const char* scene_pkg,
     }
     sr::RenderInitInfo info;
     info.offscreen = true;
-    info.width = std::clamp<std::uint32_t>(width, 500u, 8192u);
-    info.height = std::clamp<std::uint32_t>(height, 500u, 8192u);
+    info.width = width;
+    info.height = height;
     info.msaa_samples = 1;
     info.metal_frame_callback = [engine = engine.get()](void* texture, void*, std::uint32_t frame_width,
                                                         std::uint32_t frame_height) {
@@ -180,6 +199,24 @@ extern "C" void* MirageSceneDesktopCreate(void* ca_layer, const char* assets_dir
                                             std::uint32_t fps) {
     void* host = MirageSceneDesktopHostCreate(ca_layer, width, height);
     return CreateInstance(host, assets_dir, scene_pkg, properties_json, width, height, fps);
+}
+
+extern "C" void* MirageSceneSaverCreateWithPosition(
+    void* ns_view, const char* assets_dir, const char* scene_pkg, const char* properties_json,
+    std::uint32_t width, std::uint32_t height, std::uint32_t drawable_width,
+    std::uint32_t drawable_height, std::uint32_t fps, const char* fill_mode, double x, double y) {
+    void* host = MirageSceneSaverHostCreate(ns_view, drawable_width, drawable_height);
+    return CreateInstance(host, assets_dir, scene_pkg, properties_json, width, height, fps,
+                          ParseFillMode(fill_mode), { x, y });
+}
+
+extern "C" void* MirageSceneDesktopCreateWithPosition(
+    void* ca_layer, const char* assets_dir, const char* scene_pkg, const char* properties_json,
+    std::uint32_t width, std::uint32_t height, std::uint32_t fps,
+    const char* fill_mode, double x, double y) {
+    void* host = MirageSceneDesktopHostCreate(ca_layer, width, height);
+    return CreateInstance(host, assets_dir, scene_pkg, properties_json, width, height, fps,
+                          ParseFillMode(fill_mode), { x, y });
 }
 
 extern "C" void MirageSceneSaverSetPaused(void* handle, int paused) {

@@ -28,6 +28,7 @@ using RenderPassDiagnosticCallback =
 // rendered frame is always opaque.
 using ClearColorCallback = std::function<void(float r, float g, float b)>;
 using AudioDemandCallback = std::function<void(bool needed)>;
+using PositionAvailabilityCallback = std::function<void(bool x, bool y)>;
 using UserShortcutCallback = std::function<void(std::string_view name, std::string_view target)>;
 
 inline bool IsValidScenePlaybackSpeed(float speed) noexcept {
@@ -62,6 +63,7 @@ struct SceneWallpaperConfig {
     float                                   volume { 1.0f };
     bool                                    muted { false };
     FillMode                                fill_mode { FillMode::ASPECTCROP };
+    WallpaperPosition                       position;
     float                                   speed { 1.0f };
     bool                                    graphviz { false };
     bool                                    spectrum_enabled { true };
@@ -98,6 +100,7 @@ public:
     void setVolumeScale(float, uint32_t fade_ms);
     void setMuted(bool);
     void setFillMode(FillMode);
+    void setPosition(WallpaperPosition);
     void setSpeed(float);
     void setMediaStatus(MediaStatus);
     void setAudioSpectrum(std::array<float, 64>, std::array<float, 64>);
@@ -113,6 +116,7 @@ public:
     // `general.clearcolor`. Set once before initVulkan.
     void setOnClearColor(ClearColorCallback);
     void setOnAudioDemand(AudioDemandCallback);
+    void setOnPositionAvailability(PositionAvailabilityCallback);
     void setOnUserShortcut(UserShortcutCallback);
 
     ExSwapchain* exSwapchain() const;
