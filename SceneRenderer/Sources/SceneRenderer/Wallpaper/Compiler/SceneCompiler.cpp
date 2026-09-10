@@ -5165,6 +5165,7 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
         material.blenmode = direct_text || copy_background_seed ? BlendMode::Translucent
                                                                  : BlendMode::Normal;
         material.customShader.shader = shader;
+        material.customShader.constValues[std::string(G_ALPHA)] = 1.0f;
         sp_mesh->AddMaterial(std::move(material));
     }
 

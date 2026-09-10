@@ -724,6 +724,7 @@ namespace
 constexpr const char* kTextShaderHlsl = R"hlsl(
 [[vk::binding(0, 0)]] cbuffer ww_Uniforms {
     column_major float4x4 g_ModelViewProjectionMatrix;
+    float g_Alpha;
 };
 
 struct VSInput {
@@ -752,7 +753,7 @@ SamplerState g_Texture0_sampler;
 
 float4 main_ps(PSInput i) : SV_Target {
     float a = g_Texture0.Sample(g_Texture0_sampler, i.v_uv).r;
-    return float4(i.v_col.rgb, i.v_col.a * a);
+    return float4(i.v_col.rgb, i.v_col.a * a * g_Alpha);
 }
 )hlsl";
 
