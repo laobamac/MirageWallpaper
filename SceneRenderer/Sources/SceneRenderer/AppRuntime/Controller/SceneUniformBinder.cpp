@@ -427,9 +427,12 @@ void SceneUniformUpdater::UpdateUniforms(SceneNode* pNode, sprite_map_t& sprites
             if (reqMVPI) updateOp(G_MVPI, ShaderValue::fromMatrix(mvpTrans.inverse()));
         }
         if (reqEffectModel) {
+            const bool composites_to_screen =
+                cam_name.empty() && camera == m_scene->activeCamera;
             Matrix4d layerModel  = modelTrans;
             Matrix4d effectModel = modelTrans;
-            if (hasNodeData && nodeDataPtr->effect_projection_node != nullptr) {
+            if (! composites_to_screen && hasNodeData &&
+                nodeDataPtr->effect_projection_node != nullptr) {
                 const auto& nodeData = *nodeDataPtr;
                 auto*       source   = nodeData.effect_projection_node;
                 source->UpdateTrans();
@@ -451,9 +454,14 @@ void SceneUniformUpdater::UpdateUniforms(SceneNode* pNode, sprite_map_t& sprites
             if (info.has_EFFECTMODELMATRIX)
                 updateOp(G_EFFECTMODELMATRIX, ShaderValue::fromMatrix(effectModel));
             if (reqEMVP || reqEMVPI) {
-                SceneCamera* effect_camera = m_scene->activeCamera ? m_scene->activeCamera : camera;
-                const Matrix4d effect_mvp =
-                    effect_camera->GetViewProjectionMatrix(render_view) * effectModel;
+                const Matrix4d effect_mvp = composites_to_screen
+                                                ? viewProTrans * effectModel
+                                                : m_scene->activeCamera
+                                                      ? m_scene->activeCamera->GetViewProjectionMatrix(
+                                                            render_view) *
+                                                            effectModel
+                                                      : camera->GetViewProjectionMatrix(render_view) *
+                                                            effectModel;
                 if (reqEMVP) updateOp(G_EMVP, ShaderValue::fromMatrix(effect_mvp));
                 if (reqEMVPI)
                     updateOp(G_EFFECTMODELVIEWPROJECTIONMATRIXINVERSE,
