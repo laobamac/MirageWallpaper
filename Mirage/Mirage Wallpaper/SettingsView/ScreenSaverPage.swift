@@ -101,9 +101,9 @@ struct ScreenSaverPage: SettingsPage {
                 } else {
                     LabeledContent("方案 A 锁屏壁纸", value: dynamicLockScreenManager.configuredWallpaperTitle ?? L("尚未设置"))
                     Button("将正在播放的壁纸设为动态锁屏") {
-                        perform { try configureCurrentDynamicLockScreen() }
+                        performLockScreenConfiguration { try await configureCurrentDynamicLockScreen() }
                     }
-                    .disabled(!dynamicLockScreenManager.canUse || !wallpaper.presentationIsValid || (wallpaper.kind != .video && wallpaper.kind != .scene))
+                    .disabled(isWorking || !dynamicLockScreenManager.canUse || !wallpaper.presentationIsValid || (wallpaper.kind != .video && wallpaper.kind != .scene))
                     Button("打开系统墙纸设置") {
                         dynamicLockScreenManager.openSystemSettings()
                     }
@@ -115,15 +115,18 @@ struct ScreenSaverPage: SettingsPage {
                     set: { screenSaverDynamicLockScreenManager.setEnabled($0) }
                 ))
                 .disabled(!screenSaverDynamicLockScreenManager.isAvailable)
+                if let recoveryErrorMessage = screenSaverDynamicLockScreenManager.recoveryErrorMessage {
+                    Text(recoveryErrorMessage).foregroundStyle(.red)
+                }
                 if !screenSaverDynamicLockScreenManager.isAvailable {
                     Text(LocalizedStringKey("动态锁屏方案 B 需要 macOS 14.2 或更高版本。"))
                         .foregroundStyle(.secondary)
                 } else {
                     LabeledContent("方案 B 锁屏壁纸", value: screenSaverDynamicLockScreenManager.configuredWallpaperTitle ?? L("尚未设置"))
                     Button("将正在播放的壁纸设为方案 B 锁屏") {
-                        perform { try configureCurrentScreenSaverDynamicLockScreen() }
+                        performLockScreenConfiguration { try await configureCurrentScreenSaverDynamicLockScreen() }
                     }
-                    .disabled(!screenSaverDynamicLockScreenManager.isEnabled || !wallpaper.presentationIsValid || (wallpaper.kind != .video && wallpaper.kind != .scene))
+                    .disabled(isWorking || !screenSaverDynamicLockScreenManager.isEnabled || !wallpaper.presentationIsValid || (wallpaper.kind != .video && wallpaper.kind != .scene))
                     Text(LocalizedStringKey("方案 B 使用 Mirage 屏保组件，仅在锁屏时临时接管系统墙纸槽位，解锁后恢复原桌面配置。"))
                         .foregroundStyle(.secondary)
                 }
@@ -162,12 +165,12 @@ struct ScreenSaverPage: SettingsPage {
         )
     }
 
-    private func configureCurrentDynamicLockScreen() throws {
+    private func configureCurrentDynamicLockScreen() async throws {
         guard wallpaper.kind == .video || wallpaper.kind == .scene else {
             throw DynamicLockScreenError.unsupportedWallpaper
         }
         let displayIDs = wallpaperViewModel.connectedDisplays.compactMap { DisplayRegistry.shared.displayID(for: $0.key) }
-        try dynamicLockScreenManager.configureCurrentWallpaper(
+        try await dynamicLockScreenManager.configureCurrentWallpaper(
             wallpaperViewModel.currentWallpaper,
             runtime: wallpaperViewModel.runtime,
             properties: wallpaperViewModel.effectiveProperties(for: wallpaperViewModel.currentWallpaper),
@@ -176,8 +179,8 @@ struct ScreenSaverPage: SettingsPage {
         )
     }
 
-    private func configureCurrentScreenSaverDynamicLockScreen() throws {
-        try screenSaverDynamicLockScreenManager.configureCurrentWallpaper(
+    private func configureCurrentScreenSaverDynamicLockScreen() async throws {
+        try await screenSaverDynamicLockScreenManager.configureCurrentWallpaper(
             wallpaperViewModel.currentWallpaper,
             runtime: wallpaperViewModel.runtime,
             properties: wallpaperViewModel.effectiveProperties(for: wallpaperViewModel.currentWallpaper),
@@ -191,6 +194,22 @@ struct ScreenSaverPage: SettingsPage {
             refreshStatus()
         } catch {
             show(error)
+        }
+    }
+
+    private func performLockScreenConfiguration(_ operation: @escaping @MainActor () async throws -> Void) {
+        guard !isWorking else { return }
+        isWorking = true
+        Task { @MainActor in
+            defer { isWorking = false }
+            do {
+                try await operation()
+                refreshStatus()
+            } catch is CancellationError {
+                return
+            } catch {
+                show(error)
+            }
         }
     }
 

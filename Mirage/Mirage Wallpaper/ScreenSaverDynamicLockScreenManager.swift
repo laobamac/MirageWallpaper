@@ -38,6 +38,7 @@ final class ScreenSaverDynamicLockScreenManager: ObservableObject {
 
     @Published private(set) var isEnabled: Bool
     @Published var isConfirmationPresented = false
+    @Published private(set) var recoveryErrorMessage: String?
 
     private let enabledKey = "Mirage.ScreenSaverDynamicLockScreen.Enabled"
     private let confirmationKey = "Mirage.ScreenSaverDynamicLockScreen.Confirmed"
@@ -46,6 +47,9 @@ final class ScreenSaverDynamicLockScreenManager: ObservableObject {
     private let storeURL: URL
     private let saverProvider = "com.apple.wallpaper.choice.screen-saver"
     private let lockedKey = "Mirage.ScreenSaverDynamicLockScreen.Locked"
+    private let deploymentQueue = DispatchQueue(label: "cn.laobamac.Mirage.screenSaverLockScreen.deployment", qos: .userInitiated)
+    private var configurationRequestID: UUID?
+    private var recoveryTask: Task<Void, Never>?
 
     private init() {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -109,14 +113,11 @@ final class ScreenSaverDynamicLockScreenManager: ObservableObject {
 
     func setEnabled(_ enabled: Bool) {
         if !enabled {
+            configurationRequestID = nil
             isEnabled = false
             UserDefaults.standard.set(false, forKey: enabledKey)
             DynamicLockScreenModeStore.deactivate(.screenSaver)
-            do {
-                try deactivate()
-                UserDefaults.standard.set(false, forKey: lockedKey)
-                UserDefaults.standard.synchronize()
-            } catch { NSLog("[Mirage] 屏保动态锁屏关闭失败: %@", error.localizedDescription) }
+            leaveLockedState()
             return
         }
         guard isAvailable else { return }
@@ -142,29 +143,57 @@ final class ScreenSaverDynamicLockScreenManager: ObservableObject {
 
     func disableForModeSwitch() {
         guard isEnabled || DynamicLockScreenModeStore.active == .screenSaver else { return }
+        configurationRequestID = nil
         isEnabled = false
         UserDefaults.standard.set(false, forKey: enabledKey)
         DynamicLockScreenModeStore.deactivate(.screenSaver)
-        do {
-            try deactivate()
-            UserDefaults.standard.set(false, forKey: lockedKey)
-            UserDefaults.standard.synchronize()
-        } catch { NSLog("[Mirage] 屏保动态锁屏切换失败: %@", error.localizedDescription) }
+        leaveLockedState()
     }
 
     func configureCurrentWallpaper(_ wallpaper: WEWallpaper,
                                    runtime: WallpaperRuntimeState,
                                    properties: [String: WEProjectProperty],
-                                   fps: Int) throws {
-        guard canUse || isEnabled else { throw ScreenSaverDynamicLockScreenError.notEnabled }
+                                   fps: Int) async throws {
+        guard isAvailable, isEnabled, hasConfirmedWarning,
+              DynamicLockScreenModeStore.active == .screenSaver else {
+            throw ScreenSaverDynamicLockScreenError.notEnabled
+        }
         guard wallpaper.isValid else { throw ScreenSaverDynamicLockScreenError.noWallpaper }
         guard wallpaper.kind == .video || wallpaper.kind == .scene else {
             throw ScreenSaverDynamicLockScreenError.unsupportedWallpaper
         }
-        try ScreenSaverManager.shared.installDynamicLockScreen()
-        try ScreenSaverManager.shared.configure(
-            with: wallpaper, runtime: runtime, properties: properties, fps: fps,
-            forDynamicLockScreen: true)
+        let manager = ScreenSaverManager.shared
+        let context = ScreenSaverManager.ConfigurationContext(
+            wallpaperID: wallpaper.id, runtime: runtime, fps: fps)
+        let requestID = UUID()
+        configurationRequestID = requestID
+        defer {
+            if configurationRequestID == requestID { configurationRequestID = nil }
+        }
+        let data: Data
+        do {
+            data = try await withCheckedThrowingContinuation { continuation in
+                deploymentQueue.async {
+                    continuation.resume(with: Result {
+                        let data = try ScreenSaverManager.prepareConfiguration(
+                            with: wallpaper, runtime: runtime, properties: properties, context: context)
+                        try ScreenSaverManager.shared.installDynamicLockScreen()
+                        return data
+                    })
+                }
+            }
+        } catch {
+            guard configurationRequestID == requestID, isEnabled,
+                  DynamicLockScreenModeStore.active == .screenSaver, !Task.isCancelled else {
+                throw CancellationError()
+            }
+            throw error
+        }
+        guard configurationRequestID == requestID, isEnabled,
+              DynamicLockScreenModeStore.active == .screenSaver, !Task.isCancelled else {
+            throw CancellationError()
+        }
+        try manager.configure(with: data, forDynamicLockScreen: true)
         reassertIfEnabled()
     }
 
@@ -189,6 +218,8 @@ final class ScreenSaverDynamicLockScreenManager: ObservableObject {
     func enterLockedState() -> Bool {
         guard isEnabled, DynamicLockScreenModeStore.active == .screenSaver,
               ScreenSaverManager.shared.configuredDynamicLockScreenWallpaperID() != nil else { return false }
+        recoveryTask?.cancel()
+        recoveryTask = nil
         do {
             if !ScreenSaverManager.shared.isDynamicLockScreenInstalled {
                 try ScreenSaverManager.shared.installDynamicLockScreen()
@@ -199,29 +230,54 @@ final class ScreenSaverDynamicLockScreenManager: ObservableObject {
             UserDefaults.standard.synchronize()
             return true
         } catch {
-            UserDefaults.standard.set(false, forKey: lockedKey)
-            UserDefaults.standard.synchronize()
             NSLog("[Mirage] 屏保动态锁屏进入失败: %@", error.localizedDescription)
+            leaveLockedState()
             return false
         }
     }
 
     @discardableResult
     func leaveLockedState() -> Bool {
+        recoveryTask?.cancel()
+        recoveryTask = nil
+        UserDefaults.standard.set(false, forKey: lockedKey)
+        UserDefaults.standard.synchronize()
         do {
             try deactivate()
-            UserDefaults.standard.set(false, forKey: lockedKey)
-            UserDefaults.standard.synchronize()
+            recoveryErrorMessage = nil
             return true
         } catch {
+            recoveryErrorMessage = error.localizedDescription
             NSLog("[Mirage] 屏保动态锁屏恢复失败: %@", error.localizedDescription)
+            scheduleRecovery()
             return false
+        }
+    }
+
+    private func scheduleRecovery() {
+        recoveryTask = Task { @MainActor [weak self] in
+            for delay in [1, 2, 4] {
+                do { try await Task.sleep(for: .seconds(delay)) } catch { return }
+                guard let self, !self.isScreenLocked() else { return }
+                do {
+                    try self.deactivate()
+                    self.recoveryErrorMessage = nil
+                    self.recoveryTask = nil
+                    return
+                } catch {
+                    self.recoveryErrorMessage = error.localizedDescription
+                    NSLog("[Mirage] 屏保动态锁屏恢复重试失败: %@", error.localizedDescription)
+                }
+            }
+            self?.recoveryTask = nil
         }
     }
 
     func applicationWillTerminate() {
         guard FileManager.default.fileExists(atPath: stateURL.path) else { return }
         _ = leaveLockedState()
+        recoveryTask?.cancel()
+        recoveryTask = nil
     }
 
     private func deactivate() throws {
@@ -234,15 +290,14 @@ final class ScreenSaverDynamicLockScreenManager: ObservableObject {
         let current = try readStore()
         let backupObject = try decodeStore(backup)
         let restored = restoreMirageDesktopChoices(in: current, from: backupObject)
-        guard restored.replacements > 0 else {
-            try? fm.removeItem(at: backupURL)
-            try? fm.removeItem(at: stateURL)
+        if restored.replacements > 0 {
+            try writeStore(try encodeStore(restored.value))
+        } else if storeContainsMirageDesktopChoice(current) {
             throw ScreenSaverDynamicLockScreenError.restoreConflict
         }
-        try writeStore(try encodeStore(restored.value))
+        try ScreenSaverManager.shared.restartForWallpaperStoreChange()
         try? fm.removeItem(at: backupURL)
         try? fm.removeItem(at: stateURL)
-        try ScreenSaverManager.shared.restartForWallpaperStoreChange()
     }
 
     private func activateStore() throws {

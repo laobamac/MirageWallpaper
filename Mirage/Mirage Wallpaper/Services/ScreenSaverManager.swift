@@ -360,6 +360,12 @@ final class ScreenSaverManager {
         }
     }
 
+    func configure(with data: Data, forDynamicLockScreen: Bool) throws {
+        try configurationQueue.sync {
+            try commitConfiguration(data, forDynamicLockScreen: forDynamicLockScreen)
+        }
+    }
+
     func updateRuntimeIfConfigured(wallpaper: WEWallpaper, runtime: WallpaperRuntimeState,
                                    properties: [String: WEProjectProperty], context: ConfigurationContext) {
         configurationQueue.sync {
@@ -383,6 +389,14 @@ final class ScreenSaverManager {
                                     properties: [String: WEProjectProperty], context: ConfigurationContext,
                                     forDynamicLockScreen: Bool,
                                     preservingSettingsFrom existing: [String: Any]? = nil) throws {
+        let data = try Self.prepareConfiguration(with: wallpaper, runtime: runtime, properties: properties,
+                                                 context: context, preservingSettingsFrom: existing)
+        try commitConfiguration(data, forDynamicLockScreen: forDynamicLockScreen)
+    }
+
+    static func prepareConfiguration(with wallpaper: WEWallpaper, runtime: WallpaperRuntimeState,
+                                     properties: [String: WEProjectProperty], context: ConfigurationContext,
+                                     preservingSettingsFrom existing: [String: Any]? = nil) throws -> Data {
         guard wallpaper.isValid else { throw MirageScreenSaverError.noWallpaper }
         guard wallpaper.kind == .video || wallpaper.kind == .scene else {
             throw MirageScreenSaverError.unsupportedWallpaper
@@ -435,7 +449,10 @@ final class ScreenSaverManager {
             }
         }
         guard JSONSerialization.isValidJSONObject(object) else { throw MirageScreenSaverError.invalidConfiguration }
-        let data = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
+        return try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
+    }
+
+    private func commitConfiguration(_ data: Data, forDynamicLockScreen: Bool) throws {
         let targetURL = forDynamicLockScreen
             ? dynamicLockScreenConfigurationURL
             : configurationURL
@@ -510,11 +527,11 @@ final class ScreenSaverManager {
         }
     }
 
-    private func playableVideoCacheURL(for source: URL) -> URL {
+    private static func playableVideoCacheURL(for source: URL) -> URL {
         let path = source.resolvingSymlinksInPath().path
         let digest = SHA256.hash(data: Data(path.utf8))
         let name = digest.map { String(format: "%02x", $0) }.joined() + ".mp4"
-        return fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appending(path: "Mirage/VideoCache", directoryHint: .isDirectory)
             .appending(path: name)
     }
