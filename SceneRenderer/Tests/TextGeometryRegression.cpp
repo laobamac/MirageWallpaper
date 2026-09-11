@@ -132,7 +132,7 @@ int main() {
         ok = false;
     } else {
         sr::text::FontCache cache;
-        auto*               face = cache.GetFace(font.bytes, 64);
+        auto*               face = cache.GetFace(font.bytes, 64, font.face_index);
         const std::array<std::uint32_t, 1> tabs { '\t' };
         if (face == nullptr) {
             std::cerr << "failed to load system font for tab regression\n";
@@ -269,7 +269,7 @@ int main() {
 
     if (font.bytes) {
         sr::text::FontCache large_cache;
-        auto* large_face = large_cache.GetFace(font.bytes, 128);
+        auto* large_face = large_cache.GetFace(font.bytes, 128, font.face_index);
         if (large_face == nullptr) {
             std::cerr << "failed to load exact-256-raster font\n";
             ok = false;
@@ -290,7 +290,7 @@ int main() {
         }
 
         sr::text::FontCache style_cache;
-        auto* style_face = style_cache.GetFace(font.bytes, 32);
+        auto* style_face = style_cache.GetFace(font.bytes, 32, font.face_index);
         if (style_face == nullptr) {
             std::cerr << "failed to load text style font\n";
             ok = false;

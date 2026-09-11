@@ -5082,7 +5082,7 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
     std::uint32_t px = TextPointSizeToPx(obj.pointsize);
 
     auto& font_cache = text::EnsureSceneFontCache(*context.scene);
-    auto* face       = font_cache.GetFace(resolved.bytes, px);
+    auto* face       = font_cache.GetFace(resolved.bytes, px, resolved.face_index);
     if (face == nullptr) {
         rstd_error("text '{}': FreeType failed to open '{}'", obj.name, resolved.source);
         return;
@@ -5210,6 +5210,7 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
     auto raster_px          = std::make_shared<std::uint32_t>(px);
     auto current_font_blob  = std::make_shared<std::shared_ptr<std::vector<std::byte>>>(
         resolved.bytes);
+    auto current_font_index = std::make_shared<std::int32_t>(resolved.face_index);
     auto current_font_name = std::make_shared<std::string>(font_name);
 
     auto  initial_metrics = layouter->Metrics();
@@ -5759,6 +5760,7 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
     auto set_pointsize = [scene          = context.scene.get(),
                           font_cache_ptr = &font_cache,
                           current_font_blob,
+                          current_font_index,
                           sp_mesh,
                           layouter,
                           rebuild_compose,
@@ -5775,7 +5777,8 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
             use_px = std::clamp<std::uint32_t>(std::max(want_px, use_px * 2u), 1u, 1024u);
         }
         if (use_px != *raster_px) {
-            auto* next_face = font_cache_ptr->GetFace(*current_font_blob, use_px);
+            auto* next_face =
+                font_cache_ptr->GetFace(*current_font_blob, use_px, *current_font_index);
             if (next_face == nullptr) return;
             next_face->Populate(text::DecodeUtf8(*current_text));
             if (! EnsureTextAtlas(*scene, *next_face)) return;
@@ -5799,6 +5802,7 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
     auto set_font = [scene          = context.scene.get(),
                      font_cache_ptr = &font_cache,
                      current_font_blob,
+                     current_font_index,
                      current_font_name,
                      sp_mesh,
                      layouter,
@@ -5819,7 +5823,8 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
             return;
         }
 
-        auto* next_face = font_cache_ptr->GetFace(resolved_next.bytes, *raster_px);
+        auto* next_face =
+            font_cache_ptr->GetFace(resolved_next.bytes, *raster_px, resolved_next.face_index);
         if (next_face == nullptr) {
             rstd_error("layer.font: FreeType failed to open '{}'", resolved_next.source);
             return;
@@ -5835,6 +5840,7 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
         }
         layouter->SetFace(next_face);
         *current_font_blob = resolved_next.bytes;
+        *current_font_index = resolved_next.face_index;
         *current_font_name = std::string(next_font);
         layouter->SetText(*current_text);
         rebuild_compose(layouter->Metrics());

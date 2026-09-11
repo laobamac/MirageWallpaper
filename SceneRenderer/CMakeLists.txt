@@ -89,6 +89,16 @@ if(SCENERENDERER_BUILD_ENGINE AND SCENERENDERER_BUILD_TESTS)
     set_property(TARGET SceneRendererTextGeometryTests PROPERTY CXX_SCAN_FOR_MODULES ON)
     add_test(NAME SceneRendererTextGeometry COMMAND SceneRendererTextGeometryTests)
 
+    find_package(Freetype REQUIRED)
+    pkg_check_modules(FONTCONFIG REQUIRED IMPORTED_TARGET fontconfig)
+    add_executable(SceneRendererTextFontFallbackTests Tests/TextFontFallbackRegression.cpp)
+    target_link_libraries(SceneRendererTextFontFallbackTests
+        PRIVATE SceneRenderer::Import Freetype::Freetype PkgConfig::FONTCONFIG)
+    set_property(TARGET SceneRendererTextFontFallbackTests PROPERTY CXX_SCAN_FOR_MODULES ON)
+    add_test(NAME SceneRendererTextFontFallback COMMAND SceneRendererTextFontFallbackTests
+        "${CMAKE_CURRENT_SOURCE_DIR}/../assets/fonts")
+    set_tests_properties(SceneRendererTextFontFallback PROPERTIES SKIP_RETURN_CODE 77)
+
     add_executable(SceneRendererLayerVisibilityTests Tests/LayerVisibilityRegression.cpp)
     target_link_libraries(SceneRendererLayerVisibilityTests PRIVATE SceneRenderer::Import)
     set_property(TARGET SceneRendererLayerVisibilityTests PROPERTY CXX_SCAN_FOR_MODULES ON)

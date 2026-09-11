@@ -4,6 +4,7 @@ module;
 
 #include <ft2build.h>
 #include FT_FREETYPE_H
+#include FT_TRUETYPE_TABLES_H
 
 #include <fontconfig/fontconfig.h>
 module sr.text;
@@ -127,7 +128,98 @@ std::shared_ptr<std::vector<std::byte>> ReadAll(const std::filesystem::path& pat
     return buf;
 }
 
-std::filesystem::path ResolveFontconfigCodepoint(std::uint32_t codepoint) {
+struct FontCandidate {
+    std::filesystem::path path;
+    std::int32_t          face_index { 0 };
+};
+
+bool IsLastResortName(std::string_view name) {
+    std::string normalized(name);
+    for (auto& c : normalized) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return normalized == "lastresort" || normalized == ".lastresort";
+}
+
+bool IsLastResortFace(FT_Face face) {
+    if (face == nullptr) return true;
+    if (face->family_name && IsLastResortName(face->family_name)) return true;
+    const auto* name = FT_Get_Postscript_Name(face);
+    if (name && IsLastResortName(name)) return true;
+    const auto* header = static_cast<const TT_Header*>(FT_Get_Sfnt_Table(face, ft_sfnt_head));
+    return header && (header->Flags & (1u << 14)) != 0;
+}
+
+bool SetFontPixelSize(FT_Face face, std::uint32_t size) {
+    if (FT_Set_Pixel_Sizes(face, 0, size) == 0) return true;
+    if (face->num_fixed_sizes <= 0) return false;
+    int best = 0;
+    for (int i = 1; i < face->num_fixed_sizes; ++i) {
+        const auto distance = std::abs(static_cast<double>(face->available_sizes[i].y_ppem) -
+                                       static_cast<double>(size) * 64.0);
+        const auto best_distance =
+            std::abs(static_cast<double>(face->available_sizes[best].y_ppem) -
+                     static_cast<double>(size) * 64.0);
+        if (distance < best_distance) best = i;
+    }
+    return FT_Select_Size(face, best) == 0;
+}
+
+float FontLayoutScale(FT_Face face, std::uint32_t raster_size) {
+    const auto actual_size = face->size->metrics.y_ppem;
+    return actual_size > 0
+               ? static_cast<float>(raster_size) /
+                     (static_cast<float>(actual_size) * static_cast<float>(kGlyphRasterScale))
+               : 1.0f / static_cast<float>(kGlyphRasterScale);
+}
+
+bool LoadRenderableGlyph(FT_Face face, std::uint32_t codepoint) {
+    if (IsLastResortFace(face)) return false;
+    const auto index = FT_Get_Char_Index(face, codepoint);
+    if (index == 0 ||
+        FT_Load_Glyph(face, index, FT_LOAD_RENDER | FT_LOAD_TARGET_NORMAL | FT_LOAD_COLOR) != 0)
+        return false;
+    const auto& bitmap = face->glyph->bitmap;
+    if (bitmap.width == 0 || bitmap.rows == 0) return true;
+    if (bitmap.buffer == nullptr) return false;
+    switch (bitmap.pixel_mode) {
+    case FT_PIXEL_MODE_GRAY: return bitmap.num_grays > 1;
+    case FT_PIXEL_MODE_MONO:
+    case FT_PIXEL_MODE_GRAY2:
+    case FT_PIXEL_MODE_GRAY4:
+    case FT_PIXEL_MODE_BGRA: return true;
+    default: return false;
+    }
+}
+
+std::vector<FontCandidate> FontconfigCandidates(FcPattern*                   pattern,
+                                                std::optional<std::uint32_t> codepoint = {}) {
+    FcConfigSubstitute(nullptr, pattern, FcMatchPattern);
+    FcDefaultSubstitute(pattern);
+    FcResult                   result = FcResultNoMatch;
+    FcFontSet*                 fonts  = FcFontSort(nullptr, pattern, FcFalse, nullptr, &result);
+    std::vector<FontCandidate> candidates;
+    if (fonts == nullptr) return candidates;
+    for (int i = 0; i < fonts->nfont; ++i) {
+        FcPattern* font = fonts->fonts[i];
+        if (codepoint) {
+            FcCharSet* charset = nullptr;
+            if (FcPatternGetCharSet(font, FC_CHARSET, 0, &charset) != FcResultMatch ||
+                charset == nullptr || ! FcCharSetHasChar(charset, *codepoint))
+                continue;
+        }
+        FcChar8* file  = nullptr;
+        int      index = 0;
+        if (FcPatternGetString(font, FC_FILE, 0, &file) != FcResultMatch || file == nullptr)
+            continue;
+        (void)FcPatternGetInteger(font, FC_INDEX, 0, &index);
+        std::filesystem::path path(reinterpret_cast<const char*>(file));
+        if (index < 0 || IsLastResortName(path.stem().string())) continue;
+        candidates.push_back({ std::move(path), index });
+    }
+    FcFontSetDestroy(fonts);
+    return candidates;
+}
+
+std::vector<FontCandidate> ResolveFontconfigCodepoint(std::uint32_t codepoint) {
     if (! FcInit()) return {};
 
     FcPattern* pat = FcPatternCreate();
@@ -140,26 +232,10 @@ std::filesystem::path ResolveFontconfigCodepoint(std::uint32_t codepoint) {
     FcCharSetAddChar(charset, static_cast<FcChar32>(codepoint));
     FcPatternAddCharSet(pat, FC_CHARSET, charset);
     FcPatternAddBool(pat, FC_SCALABLE, FcTrue);
-    FcConfigSubstitute(nullptr, pat, FcMatchPattern);
-    FcDefaultSubstitute(pat);
-
-    FcResult   res   = FcResultNoMatch;
-    FcPattern* match = FcFontMatch(nullptr, pat, &res);
+    auto candidates = FontconfigCandidates(pat, codepoint);
     FcCharSetDestroy(charset);
     FcPatternDestroy(pat);
-
-    if (match == nullptr || res != FcResultMatch) {
-        if (match != nullptr) FcPatternDestroy(match);
-        return {};
-    }
-
-    FcChar8*              file = nullptr;
-    std::filesystem::path out;
-    if (FcPatternGetString(match, FC_FILE, 0, &file) == FcResultMatch && file != nullptr) {
-        out = std::filesystem::path(reinterpret_cast<const char*>(file));
-    }
-    FcPatternDestroy(match);
-    return out;
+    return candidates;
 }
 
 } // namespace
@@ -193,6 +269,7 @@ struct FontFace::Impl {
 
     std::unordered_map<std::uint32_t, GlyphInfo>                   glyphs;
     std::unordered_map<std::string, std::unique_ptr<FallbackFace>> fallback_faces;
+    std::unordered_map<std::string, std::shared_ptr<std::vector<std::byte>>> fallback_blobs;
     std::unordered_map<std::uint32_t, FT_Face>                     fallback_by_codepoint;
     std::unordered_set<std::uint32_t>                              fallback_misses;
 
@@ -253,54 +330,71 @@ struct FontFace::Impl {
 
     FT_Face ResolveFallbackFace(std::uint32_t codepoint) {
         if (auto it = fallback_by_codepoint.find(codepoint); it != fallback_by_codepoint.end()) {
-            return it->second;
+            if (LoadRenderableGlyph(it->second, codepoint)) return it->second;
+            fallback_by_codepoint.erase(it);
         }
         if (fallback_misses.count(codepoint) != 0) return nullptr;
 
-        auto path = ResolveFontconfigCodepoint(codepoint);
-        if (path.empty()) {
-            fallback_misses.insert(codepoint);
-            return nullptr;
-        }
-
-        std::string key = path.string();
-        auto        it  = fallback_faces.find(key);
-        if (it == fallback_faces.end()) {
-            auto bytes = ReadAll(path);
-            if (! bytes) {
-                fallback_misses.insert(codepoint);
-                return nullptr;
+        for (const auto& candidate : ResolveFontconfigCodepoint(codepoint)) {
+            const auto path     = candidate.path.string();
+            const auto key      = path + '\0' + std::to_string(candidate.face_index);
+            auto [it, inserted] = fallback_faces.try_emplace(key);
+            if (inserted) {
+                auto [blob_it, new_blob] = fallback_blobs.try_emplace(path);
+                if (new_blob) blob_it->second = ReadAll(candidate.path);
+                auto bytes = blob_it->second;
+                if (! bytes) continue;
+                auto       fallback = std::make_unique<FallbackFace>();
+                FT_Library lib      = FtLibrary::Get().handle();
+                if (lib == nullptr ||
+                    FT_New_Memory_Face(lib,
+                                       reinterpret_cast<const FT_Byte*>(bytes->data()),
+                                       static_cast<FT_Long>(bytes->size()),
+                                       candidate.face_index,
+                                       &fallback->face) != 0 ||
+                    IsLastResortFace(fallback->face) ||
+                    ! SetFontPixelSize(fallback->face, raster_pixel_size))
+                    continue;
+                fallback->blob = std::move(bytes);
+                it->second     = std::move(fallback);
             }
-
-            auto       fallback = std::make_unique<FallbackFace>();
-            FT_Library lib      = FtLibrary::Get().handle();
-            if (lib == nullptr ||
-                FT_New_Memory_Face(lib,
-                                   reinterpret_cast<const FT_Byte*>(bytes->data()),
-                                   static_cast<FT_Long>(bytes->size()),
-                                   0,
-                                   &fallback->face) != 0 ||
-                FT_Set_Pixel_Sizes(fallback->face, 0, raster_pixel_size) != 0) {
-                fallback_misses.insert(codepoint);
-                return nullptr;
-            }
-            fallback->blob = std::move(bytes);
-            it             = fallback_faces.emplace(std::move(key), std::move(fallback)).first;
+            if (! it->second || ! LoadRenderableGlyph(it->second->face, codepoint)) continue;
+            fallback_by_codepoint.emplace(codepoint, it->second->face);
+            return it->second->face;
         }
-
-        FT_Face fallback_face = it->second->face;
-        if (fallback_face == nullptr || FT_Get_Char_Index(fallback_face, codepoint) == 0) {
-            fallback_misses.insert(codepoint);
-            return nullptr;
-        }
-        fallback_by_codepoint.emplace(codepoint, fallback_face);
-        return fallback_face;
+        fallback_misses.insert(codepoint);
+        return nullptr;
     }
 
-    void Blit(std::uint32_t x, std::uint32_t y, std::uint32_t w, std::uint32_t h,
-              const std::uint8_t* src, std::uint32_t pitch) {
-        for (std::uint32_t row = 0; row < h; ++row) {
-            std::memcpy(&atlas[(y + row) * atlas_w + x], src + row * pitch, w);
+    void Blit(std::uint32_t x, std::uint32_t y, const FT_Bitmap& bitmap) {
+        for (std::uint32_t row = 0; row < bitmap.rows; ++row) {
+            const auto* src = bitmap.buffer + static_cast<std::ptrdiff_t>(row) * bitmap.pitch;
+            auto*       dst = &atlas[(y + row) * atlas_w + x];
+            if (bitmap.pixel_mode == FT_PIXEL_MODE_GRAY && bitmap.num_grays == 256) {
+                std::memcpy(dst, src, bitmap.width);
+                continue;
+            }
+            for (std::uint32_t col = 0; col < bitmap.width; ++col) {
+                switch (bitmap.pixel_mode) {
+                case FT_PIXEL_MODE_GRAY:
+                    dst[col] = static_cast<std::uint8_t>(static_cast<unsigned>(src[col]) * 255u /
+                                                         (bitmap.num_grays - 1u));
+                    break;
+                case FT_PIXEL_MODE_MONO:
+                    dst[col] = (src[col / 8] & (0x80u >> (col % 8))) ? 255 : 0;
+                    break;
+                case FT_PIXEL_MODE_GRAY2:
+                    dst[col] = static_cast<std::uint8_t>(
+                        ((src[col / 4] >> (6u - (col % 4) * 2u)) & 3u) * 85u);
+                    break;
+                case FT_PIXEL_MODE_GRAY4:
+                    dst[col] = static_cast<std::uint8_t>(
+                        ((src[col / 2] >> (4u - (col % 2) * 4u)) & 15u) * 17u);
+                    break;
+                case FT_PIXEL_MODE_BGRA: dst[col] = src[col * 4 + 3]; break;
+                default: dst[col] = 0; break;
+                }
+            }
         }
     }
 };
@@ -314,10 +408,10 @@ FontMetrics FontFace::Metrics() const {
     FontMetrics m {};
     if (m_impl->face != nullptr && m_impl->face->size != nullptr) {
         const auto& sm = m_impl->face->size->metrics;
-        constexpr float kMetricScale = 64.0f * static_cast<float>(kGlyphRasterScale);
-        m.ascender     = static_cast<float>(sm.ascender) / kMetricScale;
-        m.descender    = static_cast<float>(sm.descender) / kMetricScale;
-        m.line_height  = static_cast<float>(sm.height) / kMetricScale;
+        const float scale = FontLayoutScale(m_impl->face, m_impl->raster_pixel_size) / 64.0f;
+        m.ascender        = static_cast<float>(sm.ascender) * scale;
+        m.descender       = static_cast<float>(sm.descender) * scale;
+        m.line_height     = static_cast<float>(sm.height) * scale;
         m.pixel_size   = m_impl->pixel_size;
     }
     m.atlas_w = m_impl->atlas_w;
@@ -358,12 +452,11 @@ void FontFace::Populate(std::span<const std::uint32_t> codepoints) {
         }
 
         FT_Face render_face = impl.face;
-        FT_UInt glyph_index = FT_Get_Char_Index(render_face, codepoint);
-        if (glyph_index == 0 && ! IsLayoutWhitespace(codepoint)) {
-            render_face = impl.ResolveFallbackFace(codepoint);
-            glyph_index = render_face != nullptr ? FT_Get_Char_Index(render_face, codepoint) : 0;
+        if (! LoadRenderableGlyph(render_face, codepoint)) {
+            render_face =
+                IsLayoutWhitespace(codepoint) ? nullptr : impl.ResolveFallbackFace(codepoint);
         }
-        if (glyph_index == 0) {
+        if (render_face == nullptr) {
             // No renderable glyph (whitespace the primary face lacks, or a
             // codepoint no fallback face covers). Reserve the primary face's
             // .notdef (glyph 0) advance so the codepoint still occupies layout
@@ -371,21 +464,18 @@ void FontFace::Populate(std::span<const std::uint32_t> codepoints) {
             // rasterize a tofu box for it.
             GlyphInfo gi {};
             if (FT_Load_Glyph(impl.face, 0, FT_LOAD_DEFAULT) == 0) {
-                gi.advance_x = static_cast<float>(impl.face->glyph->advance.x) /
-                               (64.0f * static_cast<float>(kGlyphRasterScale));
+                gi.advance_x = static_cast<float>(impl.face->glyph->advance.x) *
+                               FontLayoutScale(impl.face, impl.raster_pixel_size) / 64.0f;
             }
             impl.glyphs.emplace(codepoint, gi);
             continue;
         }
 
-        if (FT_Load_Glyph(render_face, glyph_index, FT_LOAD_RENDER | FT_LOAD_TARGET_NORMAL) != 0) {
-            continue;
-        }
         FT_GlyphSlot g = render_face->glyph;
         GlyphInfo    gi {};
         gi.pixel_w   = g->bitmap.width;
         gi.pixel_h   = g->bitmap.rows;
-        constexpr float kInvRasterScale = 1.0f / static_cast<float>(kGlyphRasterScale);
+        const float kInvRasterScale = FontLayoutScale(render_face, impl.raster_pixel_size);
         gi.layout_w  = static_cast<float>(gi.pixel_w) * kInvRasterScale;
         gi.layout_h  = static_cast<float>(gi.pixel_h) * kInvRasterScale;
         gi.bearing_x = static_cast<float>(g->bitmap_left) * kInvRasterScale;
@@ -409,12 +499,7 @@ void FontFace::Populate(std::span<const std::uint32_t> codepoints) {
             continue;
         }
 
-        impl.Blit(gi.atlas_x,
-                  gi.atlas_y,
-                  gi.pixel_w,
-                  gi.pixel_h,
-                  g->bitmap.buffer,
-                  static_cast<std::uint32_t>(g->bitmap.pitch));
+        impl.Blit(gi.atlas_x, gi.atlas_y, g->bitmap);
         impl.dirty_rects.push_back({ gi.atlas_x, gi.atlas_y, gi.pixel_w, gi.pixel_h });
         impl.glyphs.emplace(codepoint, gi);
     }
@@ -426,14 +511,17 @@ struct FontCache::Impl {
     struct Key {
         std::uint64_t blob_hash;
         std::uint32_t pixel_size;
+        std::int32_t  face_index;
         bool          operator==(const Key& o) const noexcept {
-            return blob_hash == o.blob_hash && pixel_size == o.pixel_size;
+            return blob_hash == o.blob_hash && pixel_size == o.pixel_size &&
+                   face_index == o.face_index;
         }
     };
     struct KeyHash {
         std::size_t operator()(const Key& k) const noexcept {
             return std::hash<std::uint64_t> {}(k.blob_hash) ^
-                   (std::hash<std::uint32_t> {}(k.pixel_size) << 1);
+                   (std::hash<std::uint32_t> {}(k.pixel_size) << 1) ^
+                   (std::hash<std::int32_t> {}(k.face_index) << 2);
         }
     };
     std::unordered_map<Key, std::unique_ptr<FontFace>, KeyHash> faces;
@@ -442,13 +530,13 @@ struct FontCache::Impl {
 FontCache::FontCache(): m_impl(std::make_unique<Impl>()) {}
 FontCache::~FontCache() = default;
 
-FontFace* FontCache::GetFace(std::shared_ptr<std::vector<std::byte>> blob,
-                             std::uint32_t                           pixel_size) {
-    if (! blob || blob->empty() || pixel_size == 0) return nullptr;
+FontFace* FontCache::GetFace(std::shared_ptr<std::vector<std::byte>> blob, std::uint32_t pixel_size,
+                             std::int32_t face_index) {
+    if (! blob || blob->empty() || pixel_size == 0 || face_index < 0) return nullptr;
 
     auto      blob_span = std::span<const std::byte>(blob->data(), blob->size());
     auto      blob_hash = HashBlob(blob_span);
-    Impl::Key key { blob_hash, pixel_size };
+    Impl::Key key { blob_hash, pixel_size, face_index };
     if (auto it = m_impl->faces.find(key); it != m_impl->faces.end()) {
         return it->second.get();
     }
@@ -460,13 +548,14 @@ FontFace* FontCache::GetFace(std::shared_ptr<std::vector<std::byte>> blob,
     if (FT_New_Memory_Face(lib,
                            reinterpret_cast<const FT_Byte*>(blob_span.data()),
                            static_cast<FT_Long>(blob_span.size()),
-                           0,
+                           face_index,
                            &face->m_impl->face) != 0) {
         rstd_error("FT_New_Memory_Face failed");
         return nullptr;
     }
+    if (IsLastResortFace(face->m_impl->face)) return nullptr;
     const std::uint32_t raster_pixel_size = pixel_size * kGlyphRasterScale;
-    if (FT_Set_Pixel_Sizes(face->m_impl->face, 0, raster_pixel_size) != 0) {
+    if (! SetFontPixelSize(face->m_impl->face, raster_pixel_size)) {
         rstd_error("FT_Set_Pixel_Sizes failed (px={})", pixel_size);
         return nullptr;
     }
@@ -476,8 +565,8 @@ FontFace* FontCache::GetFace(std::shared_ptr<std::vector<std::byte>> blob,
     face->m_impl->pixel_size        = pixel_size;
     face->m_impl->raster_pixel_size = raster_pixel_size;
     face->m_impl->ResetAtlas(AtlasDimForPixelSize(raster_pixel_size));
-    face->m_impl->atlas_url =
-        "_text_atlas_" + std::to_string(blob_hash) + "_" + std::to_string(pixel_size);
+    face->m_impl->atlas_url = "_text_atlas_" + std::to_string(blob_hash) + "_" +
+                              std::to_string(pixel_size) + "_" + std::to_string(face_index);
 
     auto* raw          = face.get();
     m_impl->faces[key] = std::move(face);
@@ -507,7 +596,7 @@ FontCache* SceneFontCache(sr::Scene& scene) noexcept {
 // e.g. `systemfont_arial`. Fontconfig has an alias table that maps Windows
 // family names (Arial, Courier New, ...) to whatever the user actually has
 // installed. Strip the prefix and ask fc.
-static std::filesystem::path ResolveViaFontconfig(std::string_view name) {
+static std::vector<FontCandidate> ResolveViaFontconfig(std::string_view name) {
     constexpr std::string_view kPrefix = "systemfont_";
     // Match on the basename — scenes occasionally prefix a dir.
     std::string base = std::filesystem::path(name).filename().native();
@@ -522,40 +611,38 @@ static std::filesystem::path ResolveViaFontconfig(std::string_view name) {
     if (! FcInit()) return {};
     FcPattern* pat = FcNameParse(reinterpret_cast<const FcChar8*>(family.c_str()));
     if (pat == nullptr) return {};
-    FcConfigSubstitute(nullptr, pat, FcMatchPattern);
-    FcDefaultSubstitute(pat);
-    FcResult   res   = FcResultNoMatch;
-    FcPattern* match = FcFontMatch(nullptr, pat, &res);
+    auto candidates = FontconfigCandidates(pat);
     FcPatternDestroy(pat);
-    if (match == nullptr || res != FcResultMatch) {
-        if (match != nullptr) FcPatternDestroy(match);
-        return {};
-    }
-    FcChar8*              file = nullptr;
-    std::filesystem::path out;
-    if (FcPatternGetString(match, FC_FILE, 0, &file) == FcResultMatch && file != nullptr) {
-        out = std::filesystem::path(reinterpret_cast<const char*>(file));
-    }
-    FcPatternDestroy(match);
-    return out;
+    return candidates;
 }
 
 FontCache::ResolvedBlob FontCache::ResolveSystemFont(std::string_view name, bool fallback_to_any) {
     namespace fs = std::filesystem;
 
-    auto try_load = [](const fs::path& p) -> ResolvedBlob {
+    auto try_load = [](const fs::path& p, std::int32_t face_index = 0) -> ResolvedBlob {
         if (! fs::exists(p) || ! fs::is_regular_file(p)) return { nullptr, {} };
         auto bytes = ReadAll(p);
         if (! bytes) return { nullptr, {} };
-        return { std::move(bytes), p.string() };
+        auto    lib  = FtLibrary::Get().handle();
+        FT_Face face = nullptr;
+        if (lib == nullptr || FT_New_Memory_Face(lib,
+                                                 reinterpret_cast<const FT_Byte*>(bytes->data()),
+                                                 static_cast<FT_Long>(bytes->size()),
+                                                 face_index,
+                                                 &face) != 0)
+            return { nullptr, {} };
+        const bool usable = ! IsLastResortFace(face);
+        FT_Done_Face(face);
+        if (! usable) return { nullptr, {} };
+        return { std::move(bytes), p.string(), face_index };
     };
 
     if (! name.empty()) {
         // Direct path?
         if (auto rb = try_load(fs::path(name)); rb.bytes) return rb;
         // WE's systemfont_<family> alias → fontconfig.
-        if (auto p = ResolveViaFontconfig(name); ! p.empty()) {
-            if (auto rb = try_load(p); rb.bytes) return rb;
+        for (const auto& candidate : ResolveViaFontconfig(name)) {
+            if (auto rb = try_load(candidate.path, candidate.face_index); rb.bytes) return rb;
         }
         // Bare filename: search common roots.
         // macOS system font directories. /Library/Fonts is user-installed,
@@ -593,6 +680,10 @@ FontCache::ResolvedBlob FontCache::ResolveSystemFont(std::string_view name, bool
     }
 
     if (! fallback_to_any) return { nullptr, {} };
+
+    for (const auto& candidate : ResolveViaFontconfig("systemfont_sans-serif")) {
+        if (auto rb = try_load(candidate.path, candidate.face_index); rb.bytes) return rb;
+    }
 
     // Last-resort fallback: any .ttf/.otf in the system roots.
     std::vector<fs::path> roots {

@@ -139,7 +139,8 @@ public:
     // size. The shared_ptr keeps the blob alive for the face's lifetime so
     // FreeType's pointers into it stay valid. Returns nullptr if FreeType
     // cannot open the blob.
-    FontFace* GetFace(std::shared_ptr<std::vector<std::byte>> blob, std::uint32_t pixel_size);
+    FontFace* GetFace(std::shared_ptr<std::vector<std::byte>> blob, std::uint32_t pixel_size,
+                      std::int32_t face_index = 0);
 
     // Iterate every face the cache currently owns (used by the renderer's
     // per-frame atlas-commit hook).
@@ -148,6 +149,7 @@ public:
     struct ResolvedBlob {
         std::shared_ptr<std::vector<std::byte>> bytes;
         std::string                             source; // path or "in-pkg:..."
+        std::int32_t                            face_index { 0 };
     };
 
     // Resolves a font reference. Tries:
