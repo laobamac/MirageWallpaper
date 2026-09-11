@@ -91,6 +91,7 @@ private struct UIResponsivenessRegression {
             try testObservation()
             try await testImages()
             try await testConfiguration()
+            try await testLockScreenDeployment()
             try await testRenderers()
             try await testLogs()
             print("UIResponsivenessRegression: all checks passed")
@@ -332,6 +333,104 @@ private struct UIResponsivenessRegression {
         print("PASS: screen saver snapshots, stale save rejection and independent display positions")
     }
 
+    static func testLockScreenDeployment() async throws {
+        let fm = FileManager.default
+        let video = try wallpaper("lock-video")
+        let sceneDirectory = root.appending(path: "lock-scene")
+        try fm.createDirectory(at: sceneDirectory, withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: [
+            "title": "Lock Scene", "type": "scene", "file": "scene.json", "preview": "preview.png"
+        ]).write(to: sceneDirectory.appending(path: "project.json"))
+        try Data("{}".utf8).write(to: sceneDirectory.appending(path: "scene.json"))
+        let scene = WEWallpaper.load(from: sceneDirectory)
+        let asset = root.appending(path: "lock-property.png")
+        try ImageProtocol.imageData.write(to: asset)
+        try ImageProtocol.imageData.write(to: scene.previewURL)
+        let properties = ["texture": WEProjectProperty(type: "scenetexture", value: .string(asset.path))]
+        let container = root.appending(path: "LockDeployment")
+        let configurationURL = container.appending(path: "dynamic-lock-screen.json")
+        let displays = [
+            DynamicLockScreenManager.DisplaySnapshot(displayID: 9001, fallbackSource: asset,
+                systemFallbackSource: asset, position: WallpaperPosition(x: 0.1)),
+            DynamicLockScreenManager.DisplaySnapshot(displayID: 9002, fallbackSource: asset,
+                systemFallbackSource: nil, position: WallpaperPosition(x: 0.9))
+        ]
+        let prepared = try await Task.detached {
+            try DynamicLockScreenManager.prepareConfiguration(scene, runtime: WallpaperRuntimeState(),
+                properties: properties, fps: 120, displays: displays, loadFromMemory: true, container: container)
+        }.value
+        let pending = try await Task.detached {
+            try DynamicLockScreenManager.prepareConfiguration(video, runtime: WallpaperRuntimeState(),
+                properties: [:], fps: 30, displays: displays, loadFromMemory: false, container: container)
+        }.value
+        try require(!fm.fileExists(atPath: configurationURL.path), "Preparation published an uncommitted lock configuration")
+        try require(fm.fileExists(atPath: prepared.stagingRoot.path) && !fm.fileExists(atPath: prepared.root.path),
+                    "Preparation did not isolate staged deployment files")
+        try DynamicLockScreenManager.commitConfiguration(prepared, configurationURL: configurationURL)
+        try require(!fm.fileExists(atPath: prepared.stagingRoot.path) && fm.fileExists(atPath: pending.stagingRoot.path),
+                    "Committing one deployment damaged another pending deployment")
+        let savedData = try Data(contentsOf: configurationURL)
+        let saved = try JSONDecoder().decode(DynamicLockScreenConfiguration.self, from: savedData)
+        try require(saved.displays.count == 2 && saved.enabled == true, "Lock configuration lost its displays")
+        try require(saved.displays["display-9001"]?.position?.x == 0.1 &&
+                    saved.displays["display-9002"]?.position?.x == 0.9, "Lock deployment lost display positions")
+        for display in saved.displays.values {
+            try require(display.wallpaperID == scene.id && display.fps == 60 && display.loadFromMemory == true,
+                        "Lock configuration did not preserve its settings snapshot")
+            let paths = [display.renderDirectory, display.entryPath, display.previewPath,
+                         display.desktopFallbackPath, display.systemFallbackPath].compactMap { $0 }
+            for path in paths {
+                try require(path.hasPrefix(prepared.root.path + "/") && fm.fileExists(atPath: path),
+                            "A deployed lock asset still points into staging or is missing: \(path)")
+            }
+            guard case .object(let property) = display.rawProperties["texture"],
+                  case .string(let path) = property["value"] else {
+                throw RegressionFailure(description: "Lock scene property was not serialized")
+            }
+            try require(path.hasPrefix(prepared.root.path + "/") && fm.fileExists(atPath: path),
+                        "Scene property asset path was not relocated with the deployment")
+        }
+        let blockedParent = container.appending(path: "blocked-parent")
+        try Data().write(to: blockedParent)
+        var rejected = false
+        do {
+            try DynamicLockScreenManager.commitConfiguration(pending,
+                configurationURL: blockedParent.appending(path: "configuration.json"))
+        } catch { rejected = true }
+        try require(rejected && !fm.fileExists(atPath: pending.root.path),
+                    "A failed configuration commit left its deployed files behind")
+        let afterFailure = try Data(contentsOf: configurationURL)
+        try require(afterFailure == savedData && fm.fileExists(atPath: prepared.root.path),
+                    "A failed deployment damaged the active lock configuration")
+        let missing = try wallpaper("lock-missing")
+        try fm.removeItem(at: missing.entryURL)
+        rejected = false
+        do {
+            _ = try DynamicLockScreenManager.prepareConfiguration(missing, runtime: WallpaperRuntimeState(),
+                properties: [:], fps: 30, displays: displays, loadFromMemory: false, container: container)
+        } catch { rejected = true }
+        let remaining = try fm.contentsOfDirectory(atPath: container.appending(path: "DynamicLockScreen/Staging").path)
+        try require(rejected && remaining.isEmpty, "A failed preparation retained staging files")
+
+        let saver = ScreenSaverManager(configurationDirectory: root.appending(path: "LockSaverConfiguration"))
+        let context = ScreenSaverManager.ConfigurationContext(
+            positions: ["a": WallpaperPosition(x: 0.2)], selectedPosition: WallpaperPosition(x: 0.2),
+            fps: 50, enableHDRVideo: true, loadFromMemory: true, language: "zh-Hans")
+        let data = try await Task.detached {
+            try ScreenSaverManager.prepareConfiguration(with: scene, runtime: WallpaperRuntimeState(),
+                properties: properties, context: context)
+        }.value
+        try require(!fm.fileExists(atPath: saver.dynamicLockScreenConfigurationURL.path),
+                    "Screen saver preparation published an uncommitted configuration")
+        try saver.configure(with: data, forDynamicLockScreen: true)
+        let saverData = try Data(contentsOf: saver.dynamicLockScreenConfigurationURL)
+        let object = try JSONSerialization.jsonObject(with: saverData) as! [String: Any]
+        try require(object["wallpaperID"] as? String == scene.id && object["fps"] as? Int == 50 &&
+                    object["enableHDRVideo"] as? Bool == true && object["loadFromMemory"] as? Bool == true,
+                    "Background screen saver preparation lost its settings snapshot")
+        print("PASS: background lock deployment, staging isolation, relocated assets and failure rollback")
+    }
+
     static func runRenderer() {
         let fails = CommandLine.arguments.dropFirst().first?.contains("fail-activate") == true
         func emit(_ event: String, _ fields: [String: Any] = [:]) {
@@ -412,6 +511,38 @@ private struct UIResponsivenessRegression {
             !controller.hasCoverageOrWork(onDisplay: 9001) && !controller.hasCoverageOrWork(onDisplay: 9002) &&
                 controller.processIdentifiers.isEmpty
         }
+        for cycle in 0..<5 {
+            let beforeLock = await render(controller, first, display: 9001)
+            let secondDisplay = await render(controller, second, display: 9002)
+            try require(beforeLock && secondDisplay, "Renderers failed before lock cycle \(cycle)")
+            let previousPIDs = controller.processIdentifiers
+            var pendingCompletions = 0
+            controller.render(second, onDisplay: 9001, options: options) { _ in
+                pendingCompletions += 1
+            }
+            controller.suspendAllAndWait()
+            controller.suspendAllAndWait()
+            try require(controller.processIdentifiers.isEmpty,
+                        "Lock suspension retained renderer processes")
+            try require(previousPIDs.allSatisfy { Darwin.kill($0, 0) == -1 && errno == ESRCH },
+                        "Lock suspension left a renderer alive")
+            let lockedResult = await render(controller, first, display: 9001)
+            try require(!lockedResult, "Rendering was accepted while locked")
+            try require(controller.resumeAfterSuspension(), "Unlock failed to resume the controller")
+            let afterUnlock = await render(controller, second, display: 9001)
+            let otherAfterUnlock = await render(controller, first, display: 9002)
+            try require(afterUnlock && otherAfterUnlock,
+                        "Wallpaper switching failed after unlock cycle \(cycle)")
+            try await waitUntil("cancelled lock transition completion") { pendingCompletions == 1 }
+            try require(controller.currentWallpaper(onDisplay: 9001)?.id == second.id &&
+                        controller.currentWallpaper(onDisplay: 9002)?.id == first.id,
+                        "An obsolete lock transition overwrote the restored wallpapers")
+        }
+        controller.stopAllAndWait()
+        try require(!controller.resumeAfterSuspension(), "App termination became resumable")
+        let afterTermination = await render(controller, first, display: 9001)
+        try require(!afterTermination, "Rendering was accepted after app termination")
+        print("PASS: repeated lock suspension, in-flight cancellation, unlock switching and terminal shutdown")
         print("PASS: renderer activation, failure rollback, 100 rapid requests, display isolation and stop ordering")
     }
 
