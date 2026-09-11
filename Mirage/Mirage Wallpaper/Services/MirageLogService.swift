@@ -15,7 +15,22 @@ final class MirageLogService: ObservableObject {
     @Published private(set) var visibleText = ""
 
     private let queue = DispatchQueue(label: "cn.laobamac.Mirage.logging", qos: .utility)
-    private let maximumVisibleCharacters = 1_500_000
+    private let maximumVisibleCharacters = 200_000
+    private let startLock = NSLock()
+    private var recentLines: [String] = []
+    private var recentCharacterCount = 0
+    private var displayGeneration: UInt64 = 0
+    private var queueDisplayGeneration: UInt64 = 0
+    private var isDisplaying = false
+    private var publicationScheduled = false
+    private var bufferVersion: UInt64 = 0
+    private var publishedVersion: UInt64?
+    private let timestampFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
+        return formatter
+    }()
     private var sessionURL: URL?
     private var sessionHandle: FileHandle?
     private var stdoutPipe: Pipe?
@@ -24,85 +39,138 @@ final class MirageLogService: ObservableObject {
     private var originalStderr: FileHandle?
     private var automaticSaveURL: URL?
     private var started = false
+    private let logDirectory: URL?
+    private let capturesStandardStreams: Bool
 
-    private init() {}
+    init(logDirectory: URL? = nil, capturesStandardStreams: Bool = true) {
+        self.logDirectory = logDirectory
+        self.capturesStandardStreams = capturesStandardStreams
+    }
 
     func start() {
-        guard !started else { return }
+        startLock.lock()
+        guard !started else {
+            startLock.unlock()
+            return
+        }
         started = true
-
-        let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appending(path: "Mirage/Logs", directoryHint: .isDirectory)
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        removeExpiredSessions(in: directory)
-        let url = directory.appending(path: "Session-\(UUID().uuidString).log")
-        FileManager.default.createFile(atPath: url.path, contents: nil)
-        sessionURL = url
-        sessionHandle = try? FileHandle(forWritingTo: url)
-
-        captureStandardStreams()
+        queue.async { [self] in
+            let directory = logDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                .appending(path: "Mirage/Logs", directoryHint: .isDirectory)
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            removeExpiredSessions(in: directory)
+            let url = directory.appending(path: "Session-\(UUID().uuidString).log")
+            FileManager.default.createFile(atPath: url.path, contents: nil)
+            sessionURL = url
+            sessionHandle = try? FileHandle(forWritingTo: url)
+        }
+        startLock.unlock()
+        if capturesStandardStreams { captureStandardStreams() }
         append("Mirage logging session started", source: "app")
     }
 
     func append(_ message: String, source: String = "app") {
-        guard started else { return }
-        let sanitized = Self.redact(message)
-        guard !sanitized.isEmpty else { return }
-        queue.async { [weak self] in
-            guard let self else { return }
-            let stamp = Self.timestamp()
+        startLock.lock()
+        let enabled = started
+        startLock.unlock()
+        guard enabled else { return }
+        queue.async { [self] in
+            let sanitized = Self.redact(message)
+            guard !sanitized.isEmpty else { return }
+            let stamp = timestampFormatter.string(from: Date())
             let normalized = sanitized.hasSuffix("\n") ? sanitized : sanitized + "\n"
             let line = "[\(stamp)] [\(source)] \(normalized)"
             if let data = line.data(using: .utf8) {
-                try? self.sessionHandle?.write(contentsOf: data)
+                try? sessionHandle?.write(contentsOf: data)
             }
-            DispatchQueue.main.async {
-                self.visibleText.append(line)
-                if self.visibleText.count > self.maximumVisibleCharacters {
-                    self.visibleText.removeFirst(self.visibleText.count - self.maximumVisibleCharacters)
-                }
+            let tail = String(line.suffix(maximumVisibleCharacters))
+            recentLines.append(tail)
+            recentCharacterCount += tail.utf16.count
+            while recentCharacterCount > maximumVisibleCharacters, recentLines.count > 1 {
+                recentCharacterCount -= recentLines.removeFirst().utf16.count
+            }
+            bufferVersion &+= 1
+            schedulePublication()
+        }
+    }
+
+    func setDisplaying(_ displayed: Bool) {
+        displayGeneration &+= 1
+        let generation = displayGeneration
+        queue.async { [self] in
+            queueDisplayGeneration = generation
+            isDisplaying = displayed
+            if displayed {
+                publishedVersion = nil
+                publishSnapshot()
             }
         }
     }
 
-    func export(to url: URL) throws {
-        try queue.sync {
-            try sessionHandle?.synchronize()
-            guard let sessionURL else { return }
-            let data = try Data(contentsOf: sessionURL)
-            try data.write(to: url, options: .atomic)
+    private func schedulePublication() {
+        guard isDisplaying, !publicationScheduled else { return }
+        publicationScheduled = true
+        queue.asyncAfter(deadline: .now() + 0.25) { [self] in
+            publicationScheduled = false
+            publishSnapshot()
         }
+    }
+
+    private func publishSnapshot() {
+        guard isDisplaying, publishedVersion != bufferVersion else { return }
+        let snapshot = recentLines.joined()
+        let generation = queueDisplayGeneration
+        publishedVersion = bufferVersion
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.displayGeneration == generation,
+                  self.visibleText != snapshot else { return }
+            self.visibleText = snapshot
+        }
+    }
+
+    func export(to url: URL) {
+        queue.async { [self] in
+            try? sessionHandle?.synchronize()
+            guard let sessionURL, let data = try? Data(contentsOf: sessionURL) else { return }
+            try? data.write(to: url, options: .atomic)
+        }
+    }
+
+    func saveAutomaticallyInBackground() {
+        queue.async { [self] in _ = saveAutomaticallyOnQueue() }
     }
 
     @discardableResult
     func saveAutomatically() -> URL? {
-        queue.sync {
-            do {
-                try sessionHandle?.synchronize()
-                guard let sessionURL else { return nil }
-                let destination: URL
-                if let automaticSaveURL {
-                    destination = automaticSaveURL
-                } else {
-                    let desktop = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask)[0]
-                    let directory = desktop.appending(path: "MirageLogs", directoryHint: .isDirectory)
-                    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-                    let base = "Mirage-\(Self.fileTimestamp())"
-                    var candidate = directory.appending(path: "\(base).log")
-                    var suffix = 2
-                    while FileManager.default.fileExists(atPath: candidate.path) {
-                        candidate = directory.appending(path: "\(base)-\(suffix).log")
-                        suffix += 1
-                    }
-                    automaticSaveURL = candidate
-                    destination = candidate
+        queue.sync { saveAutomaticallyOnQueue() }
+    }
+
+    private func saveAutomaticallyOnQueue() -> URL? {
+        do {
+            try sessionHandle?.synchronize()
+            guard let sessionURL else { return nil }
+            let destination: URL
+            if let automaticSaveURL {
+                destination = automaticSaveURL
+            } else {
+                let desktop = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask)[0]
+                let directory = desktop.appending(path: "MirageLogs", directoryHint: .isDirectory)
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                let base = "Mirage-\(Self.fileTimestamp())"
+                var candidate = directory.appending(path: "\(base).log")
+                var suffix = 2
+                while FileManager.default.fileExists(atPath: candidate.path) {
+                    candidate = directory.appending(path: "\(base)-\(suffix).log")
+                    suffix += 1
                 }
-                let data = try Data(contentsOf: sessionURL)
-                try data.write(to: destination, options: .atomic)
-                return destination
-            } catch {
-                return nil
+                automaticSaveURL = candidate
+                destination = candidate
             }
+            let data = try Data(contentsOf: sessionURL)
+            try data.write(to: destination, options: .atomic)
+            return destination
+        } catch {
+            return nil
         }
     }
 
@@ -163,26 +231,25 @@ final class MirageLogService: ObservableObject {
         append(text, source: source)
     }
 
-    private static func redact(_ value: String) -> String {
-        var result = value
+    private static let redactions: [(NSRegularExpression, String)] = {
         let replacements = [
             ("(?i)(key|api[_-]?key|token|access[_-]?token|refresh[_-]?token|password|passwd|steamguard|guard[_-]?code)(\\s*[=:]\\s*)[^\\s&\\\"']+", "$1$2<redacted>"),
             ("(?i)([?&](?:key|api[_-]?key|token|access_token|password)=)[^&\\s]+", "$1<redacted>"),
             ("(?<![A-Fa-f0-9])[A-Fa-f0-9]{32}(?![A-Fa-f0-9])", "<redacted>")
         ]
-        for (pattern, template) in replacements {
-            guard let expression = try? NSRegularExpression(pattern: pattern) else { continue }
-            let range = NSRange(result.startIndex..., in: result)
-            result = expression.stringByReplacingMatches(in: result, range: range, withTemplate: template)
+        return replacements.compactMap { pattern, template in
+            guard let expression = try? NSRegularExpression(pattern: pattern) else { return nil }
+            return (expression, template)
+        }
+    }()
+
+    private static func redact(_ value: String) -> String {
+        var result = value
+        for (expression, template) in redactions {
+            result = expression.stringByReplacingMatches(
+                in: result, range: NSRange(result.startIndex..., in: result), withTemplate: template)
         }
         return result
-    }
-
-    private static func timestamp() -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
-        return formatter.string(from: Date())
     }
 
     private static func fileTimestamp() -> String {
@@ -194,8 +261,11 @@ final class MirageLogService: ObservableObject {
 }
 
 final class DeveloperLogWindowController: NSWindowController, NSWindowDelegate {
-    init() {
-        let view = DeveloperLogView(service: MirageLogService.shared)
+    private let service: MirageLogService
+
+    init(service: MirageLogService = .shared) {
+        self.service = service
+        let view = DeveloperLogView(service: service)
         let controller = NSHostingController(rootView: view)
         let window = NSWindow(contentViewController: controller)
         window.setContentSize(NSSize(width: 820, height: 520))
@@ -212,8 +282,19 @@ final class DeveloperLogWindowController: NSWindowController, NSWindowDelegate {
         fatalError("init(coder:) has not been implemented")
     }
 
+    override func showWindow(_ sender: Any?) {
+        super.showWindow(sender)
+        service.setDisplaying(true)
+    }
+
     func windowWillClose(_ notification: Notification) {
-        MirageLogService.shared.saveAutomatically()
+        service.setDisplaying(false)
+        service.saveAutomaticallyInBackground()
+    }
+
+    func windowDidChangeOcclusionState(_ notification: Notification) {
+        service.setDisplaying(
+            window?.isVisible == true && window?.occlusionState.contains(.visible) == true)
     }
 
     func refreshLocalization() {
@@ -226,19 +307,7 @@ private struct DeveloperLogView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ScrollViewReader { proxy in
-                ScrollView([.horizontal, .vertical]) {
-                    Text(service.visibleText)
-                        .font(.system(size: 11, design: .monospaced))
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .topLeading)
-                        .padding(10)
-                    Color.clear.frame(height: 1).id("bottom")
-                }
-                .onChange(of: service.visibleText) { _, _ in
-                    proxy.scrollTo("bottom", anchor: .bottom)
-                }
-            }
+            DeveloperLogTextView(text: service.visibleText)
             Divider()
             HStack {
                 Text(L("实时日志"))
@@ -251,7 +320,7 @@ private struct DeveloperLogView: View {
                     panel.nameFieldStringValue = "Mirage-\(Self.fileTimestamp()).log"
                     panel.begin { response in
                         guard response == .OK, let url = panel.url else { return }
-                        try? service.export(to: url)
+                        service.export(to: url)
                     }
                 }
             }
@@ -264,5 +333,62 @@ private struct DeveloperLogView: View {
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
         return formatter.string(from: Date())
+    }
+}
+
+private struct DeveloperLogTextView: NSViewRepresentable {
+    let text: String
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSScrollView()
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.drawsBackground = false
+        let textView = NSTextView()
+        textView.isEditable = false
+        textView.isRichText = false
+        textView.isSelectable = true
+        textView.usesFindPanel = true
+        textView.drawsBackground = false
+        textView.isHorizontallyResizable = true
+        textView.isVerticallyResizable = true
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.textContainerInset = NSSize(width: 10, height: 10)
+        textView.textContainer?.containerSize = textView.maxSize
+        textView.textContainer?.widthTracksTextView = false
+        textView.layoutManager?.allowsNonContiguousLayout = true
+        scrollView.documentView = textView
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        guard context.coordinator.text != text,
+              let textView = scrollView.documentView as? NSTextView,
+              let storage = textView.textStorage else { return }
+        let atBottom = textView.bounds.height - scrollView.contentView.bounds.maxY < 40
+        let previous = context.coordinator.text
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular),
+            .foregroundColor: NSColor.labelColor
+        ]
+        storage.beginEditing()
+        if text.hasPrefix(previous) {
+            let suffix = (text as NSString).substring(from: (previous as NSString).length)
+            storage.append(NSAttributedString(string: suffix, attributes: attributes))
+        } else {
+            storage.setAttributedString(NSAttributedString(string: text, attributes: attributes))
+        }
+        storage.endEditing()
+        context.coordinator.text = text
+        if atBottom || previous.isEmpty {
+            textView.scrollRangeToVisible(NSRange(location: storage.length, length: 0))
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    final class Coordinator {
+        var text = ""
     }
 }
