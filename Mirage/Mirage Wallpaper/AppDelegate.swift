@@ -89,7 +89,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                         self.wallpaperViewModel.resumeAfterExternalLockScreen()
                         return
                     }
-                    if saverWasLocked && !ScreenSaverDynamicLockScreenManager.shared.leaveLockedState() { return }
+                    if saverWasLocked {
+                        ScreenSaverDynamicLockScreenManager.shared.leaveLockedState()
+                    }
                     if modeA { self.postDynamicLockScreenState(locked: false) }
                     self.wallpaperViewModel.resumeAfterExternalLockScreen()
                 }

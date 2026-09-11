@@ -614,6 +614,7 @@ final class RendererController {
     private let queryLock = NSLock()
     private var querySnapshot = QuerySnapshot()
     private var shuttingDown = false
+    private var suspended = false
 
     private func readSnapshot() -> QuerySnapshot {
         queryLock.lock()
@@ -626,7 +627,7 @@ final class RendererController {
     private func isCurrentSubmission(_ token: UUID, on displayID: CGDirectDisplayID) -> Bool {
         queryLock.lock()
         defer { queryLock.unlock() }
-        return !shuttingDown && submissionVersions[displayID] == token
+        return !shuttingDown && !suspended && submissionVersions[displayID] == token
     }
 
     private func invalidateSubmissions(except retained: Set<CGDirectDisplayID> = [],
@@ -877,7 +878,7 @@ final class RendererController {
                 completion: ((Bool) -> Void)? = nil) -> Bool {
         let token = UUID()
         queryLock.lock()
-        guard !shuttingDown, wallpaper.kind != .unsupported else {
+        guard !shuttingDown, !suspended, wallpaper.kind != .unsupported else {
             queryLock.unlock()
             dispatchTransitionCompletions(completion.map { [$0] } ?? [], success: false)
             return false
@@ -2222,6 +2223,24 @@ final class RendererController {
         SystemAudioSpectrumService.shared.setEnabled(false)
     }
 
+    func suspendAllAndWait() {
+        queryLock.lock()
+        suspended = true
+        submissionVersions.removeAll()
+        pendingSubmissions.removeAll()
+        queryLock.unlock()
+        stopAllProcessesAndWait()
+    }
+
+    @discardableResult
+    func resumeAfterSuspension() -> Bool {
+        queryLock.lock()
+        defer { queryLock.unlock() }
+        guard !shuttingDown else { return false }
+        suspended = false
+        return true
+    }
+
     /// Synchronous, bounded shutdown for app termination.
     ///
     /// `applicationWillTerminate` returns straight into process exit, so any
@@ -2233,8 +2252,13 @@ final class RendererController {
     func stopAllAndWait() {
         queryLock.lock()
         shuttingDown = true
+        submissionVersions.removeAll()
         pendingSubmissions.removeAll()
         queryLock.unlock()
+        stopAllProcessesAndWait()
+    }
+
+    private func stopAllProcessesAndWait() {
         let (handles, transitionCompletions): ([RendererProcess], [(Bool) -> Void]) = queue.sync {
             let owned = Set(running.keys)
                 .union(candidates.keys)

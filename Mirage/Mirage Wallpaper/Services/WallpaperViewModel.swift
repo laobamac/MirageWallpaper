@@ -300,7 +300,8 @@ class WallpaperViewModel {
         AppDelegate.shared.globalSettingsViewModel.settings.enableSpectrum
     }
     private func currentPlaybackPolicy(for key: DisplayKey) -> GSPlayback {
-        AppDelegate.shared.globalSettingsViewModel.effectivePlaybackAction(for: key)
+        externalLockScreenSuspended ? .stop
+            : AppDelegate.shared.globalSettingsViewModel.effectivePlaybackAction(for: key)
     }
 
     private func isPaused(_ state: WallpaperRuntimeState, action: GSPlayback) -> Bool {
@@ -1491,14 +1492,20 @@ class WallpaperViewModel {
     func suspendForExternalLockScreen() {
         guard !externalLockScreenSuspended else { return }
         externalLockScreenSuspended = true
+        pendingPreparations.removeAll()
+        preparationWorkers.values.forEach { $0.cancel() }
+        pendingScreenAssignments.removeAll()
+        pendingAssignmentProposals.removeAll()
+        cancelAllFailedAssignmentRecoveries()
+        lastAppliedPlayback.removeAll()
         UserDefaults.standard.set(true, forKey: "Mirage.DynamicLockScreen.Locked")
         UserDefaults.standard.synchronize()
-        renderer.stopAllAndWait()
+        renderer.suspendAllAndWait()
         currentByScreen.removeAll()
     }
 
     func resumeAfterExternalLockScreen() {
-        guard externalLockScreenSuspended else { return }
+        guard externalLockScreenSuspended, renderer.resumeAfterSuspension() else { return }
         externalLockScreenSuspended = false
         UserDefaults.standard.set(false, forKey: "Mirage.DynamicLockScreen.Locked")
         UserDefaults.standard.synchronize()
@@ -1582,6 +1589,7 @@ class WallpaperViewModel {
 
     private func applyPlaybackPolicy(_ action: GSPlayback, for key: DisplayKey,
                                      force: Bool = false) {
+        guard !externalLockScreenSuspended else { return }
         guard let displayID = DisplayRegistry.shared.displayID(for: key) else { return }
         if action == .stop {
             if stoppedByPlaybackPolicy.insert(key).inserted {
