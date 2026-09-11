@@ -7,7 +7,7 @@
 import SwiftUI
 
 struct SubscribedWorkshopFilterSidebar: View {
-    @ObservedObject var workshopViewModel: WorkshopViewModel
+    @Bindable var workshopViewModel: WorkshopViewModel
 
     var body: some View {
         VStack {

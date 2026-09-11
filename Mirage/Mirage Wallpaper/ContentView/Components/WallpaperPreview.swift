@@ -7,9 +7,9 @@
 import SwiftUI
 
 struct WallpaperPreview: SubviewOfContentView {
-    @ObservedObject var viewModel: ContentViewModel
-    @ObservedObject var wallpaperViewModel: WallpaperViewModel
-    @ObservedObject var workshopViewModel: WorkshopViewModel
+    @Bindable var viewModel: ContentViewModel
+    @Bindable var wallpaperViewModel: WallpaperViewModel
+    @Bindable var workshopViewModel: WorkshopViewModel
     let isActive: Bool
     
     @Environment(\.undoManager) var undoManager
@@ -81,12 +81,9 @@ struct WallpaperPreview: SubviewOfContentView {
                     .padding(.horizontal)
 
                     VStack(spacing: 10) {
-                        GifImage(contentsOf: wallpaperViewModel.currentWallpaper.project.preview.isEmpty
-                            ? Bundle.main.url(forResource: "WallpaperNotFound", withExtension: "mp4")!
-                            : wallpaperViewModel.currentWallpaper.previewURL,
-                            animates: isActive)
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
+                        WorkshopImage(wallpaper: wallpaperViewModel.currentWallpaper,
+                                      contentMode: .fit, isAnimating: isActive,
+                                      isLoadingEnabled: isActive, preloadsWhenInactive: true)
                             .background(Color(nsColor: NSColor.controlBackgroundColor))
                             .frame(width: 280, height: 280)
                             .clipShape(RoundedRectangle(cornerRadius: 16.0))
@@ -247,8 +244,8 @@ struct WallpaperPreview: SubviewOfContentView {
                     }
 
                     sectionHeader("壁纸属性")
-                    PropertyEditor(wallpaper: wallpaperViewModel.currentWallpaper)
-                        .environmentObject(wallpaperViewModel)
+                    PropertyEditor(wallpaper: wallpaperViewModel.currentWallpaper, isActive: isActive)
+                        .environment(wallpaperViewModel)
 
                     sectionHeader("壁纸")
                     VStack(spacing: 3) {

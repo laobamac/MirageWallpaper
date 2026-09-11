@@ -5,6 +5,7 @@
 //
 
 import SwiftUI
+import Observation
 import UniformTypeIdentifiers
 import Combine
 import CoreGraphics
@@ -27,37 +28,120 @@ struct ScreenSaverFeedback: Identifiable {
     }
 }
 
-class ContentViewModel: ObservableObject, DropDelegate {
-    @AppStorage("SortingBy") var sortingBy: WEWallpaperSortingMethod = .name {
+@Observable
+class ContentViewModel: DropDelegate {
+    var sortingBy = UIStoredValue.rawValue("SortingBy", fallback: WEWallpaperSortingMethod.name) {
         didSet {
+            guard sortingBy != oldValue else { return }
+            UserDefaults.standard.set(sortingBy.rawValue, forKey: "SortingBy")
             currentPage = 1
             if sortingBy == .fileSize { prewarmWallpaperSizes() }
             if sortingBy == .recentlyAdded { sortingSequence = .decrease }
         }
     }
-    @AppStorage("SortingSequence") var sortingSequence: WEWallpaperSortingSequence = .increase {
-        didSet { currentPage = 1 }
+    var sortingSequence = UIStoredValue.rawValue("SortingSequence", fallback: WEWallpaperSortingSequence.increase) {
+        didSet {
+            guard sortingSequence != oldValue else { return }
+            UserDefaults.standard.set(sortingSequence.rawValue, forKey: "SortingSequence")
+            currentPage = 1
+        }
     }
 
-    @AppStorage("FRShowOnly") public var showOnly = FRShowOnly.none { didSet { currentPage = 1 } }
-    @AppStorage("FRType") public var type = FRType.all { didSet { currentPage = 1 } }
-    @AppStorage("FRAgeRating") public var ageRating = FRAgeRating.all { didSet { currentPage = 1 } }
-    @AppStorage("FRWidescreenResolution") public var widescreenResolution = FRWidescreenResolution.all { didSet { currentPage = 1 } }
-    @AppStorage("FRUltraWidescreenResolution") public var ultraWidescreenResolution = FRUltraWidescreenResolution.all { didSet { currentPage = 1 } }
-    @AppStorage("FRDualscreenResolution") public var dualscreenResolution = FRDualscreenResolution.all { didSet { currentPage = 1 } }
-    @AppStorage("FRTriplescreenResolution") public var triplescreenResolution = FRTriplescreenResolution.all { didSet { currentPage = 1 } }
-    @AppStorage("FRPortraitScreenResolution") public var potraitscreenResolution = FRPortraitScreenResolution.all { didSet { currentPage = 1 } }
-    @AppStorage("FRMiscResolution") public var miscResolution = FRMiscResolution.all { didSet { currentPage = 1 } }
-    @AppStorage("FRSource") public var source = FRSource.all { didSet { currentPage = 1 } }
-    @AppStorage("FRTag") public var tag = FRTag.all { didSet { currentPage = 1 } }
+    public var showOnly = UIStoredValue.rawValue("FRShowOnly", fallback: FRShowOnly.none) {
+        didSet {
+            guard showOnly != oldValue else { return }
+            UserDefaults.standard.set(showOnly.rawValue, forKey: "FRShowOnly")
+            currentPage = 1
+        }
+    }
+    public var type = UIStoredValue.rawValue("FRType", fallback: FRType.all) {
+        didSet {
+            guard type != oldValue else { return }
+            UserDefaults.standard.set(type.rawValue, forKey: "FRType")
+            currentPage = 1
+        }
+    }
+    public var ageRating = UIStoredValue.rawValue("FRAgeRating", fallback: FRAgeRating.all) {
+        didSet {
+            guard ageRating != oldValue else { return }
+            UserDefaults.standard.set(ageRating.rawValue, forKey: "FRAgeRating")
+            currentPage = 1
+        }
+    }
+    public var widescreenResolution = UIStoredValue.rawValue("FRWidescreenResolution", fallback: FRWidescreenResolution.all) {
+        didSet {
+            guard widescreenResolution != oldValue else { return }
+            UserDefaults.standard.set(widescreenResolution.rawValue, forKey: "FRWidescreenResolution")
+            currentPage = 1
+        }
+    }
+    public var ultraWidescreenResolution = UIStoredValue.rawValue("FRUltraWidescreenResolution", fallback: FRUltraWidescreenResolution.all) {
+        didSet {
+            guard ultraWidescreenResolution != oldValue else { return }
+            UserDefaults.standard.set(ultraWidescreenResolution.rawValue, forKey: "FRUltraWidescreenResolution")
+            currentPage = 1
+        }
+    }
+    public var dualscreenResolution = UIStoredValue.rawValue("FRDualscreenResolution", fallback: FRDualscreenResolution.all) {
+        didSet {
+            guard dualscreenResolution != oldValue else { return }
+            UserDefaults.standard.set(dualscreenResolution.rawValue, forKey: "FRDualscreenResolution")
+            currentPage = 1
+        }
+    }
+    public var triplescreenResolution = UIStoredValue.rawValue("FRTriplescreenResolution", fallback: FRTriplescreenResolution.all) {
+        didSet {
+            guard triplescreenResolution != oldValue else { return }
+            UserDefaults.standard.set(triplescreenResolution.rawValue, forKey: "FRTriplescreenResolution")
+            currentPage = 1
+        }
+    }
+    public var potraitscreenResolution = UIStoredValue.rawValue("FRPortraitScreenResolution", fallback: FRPortraitScreenResolution.all) {
+        didSet {
+            guard potraitscreenResolution != oldValue else { return }
+            UserDefaults.standard.set(potraitscreenResolution.rawValue, forKey: "FRPortraitScreenResolution")
+            currentPage = 1
+        }
+    }
+    public var miscResolution = UIStoredValue.rawValue("FRMiscResolution", fallback: FRMiscResolution.all) {
+        didSet {
+            guard miscResolution != oldValue else { return }
+            UserDefaults.standard.set(miscResolution.rawValue, forKey: "FRMiscResolution")
+            currentPage = 1
+        }
+    }
+    public var source = UIStoredValue.rawValue("FRSource", fallback: FRSource.all) {
+        didSet {
+            guard source != oldValue else { return }
+            UserDefaults.standard.set(source.rawValue, forKey: "FRSource")
+            currentPage = 1
+        }
+    }
+    public var tag = UIStoredValue.rawValue("FRTag", fallback: FRTag.all) {
+        didSet {
+            guard tag != oldValue else { return }
+            UserDefaults.standard.set(tag.rawValue, forKey: "FRTag")
+            currentPage = 1
+        }
+    }
     
-    @AppStorage("FilterReveal") var isFilterReveal = false
-    @AppStorage("ExplorerIconSize") var explorerIconSize: Double = 170
+    var isFilterReveal = UIStoredValue.value("FilterReveal", fallback: false) {
+        didSet {
+            guard isFilterReveal != oldValue else { return }
+            UserDefaults.standard.set(isFilterReveal, forKey: "FilterReveal")
+        }
+    }
+    var explorerIconSize = UIStoredValue.value("ExplorerIconSize", fallback: 170.0) {
+        didSet {
+            guard explorerIconSize != oldValue else { return }
+            UserDefaults.standard.set(explorerIconSize, forKey: "ExplorerIconSize")
+        }
+    }
     
-    @Published var importAlertPresented = false
-    @Published var isStaging = false
+    var importAlertPresented = false
+    var isStaging = false
     
-    @Published var wallpapers = [WEWallpaper]() {
+    var wallpapers = [WEWallpaper]() {
         didSet { scheduleRecomputePage() }
     }
     
@@ -78,19 +162,19 @@ class ContentViewModel: ObservableObject, DropDelegate {
         let action: Action
     }
 
-    @Published var pendingTrustRequest: PendingTrustRequest?
+    var pendingTrustRequest: PendingTrustRequest?
 
-    @Published var hoveredWallpaper: WEWallpaper?
+    var hoveredWallpaper: WEWallpaper?
     
-    @Published var isUnsubscribeConfirming = false
+    var isUnsubscribeConfirming = false
 
-    @Published var screenSaverFeedback: ScreenSaverFeedback?
+    var screenSaverFeedback: ScreenSaverFeedback?
 
     // Debounced: every keystroke used to kick off a full search + filter + sort
     // over the whole library. The pipeline already runs off the main thread, but
     // typing "landscape" still queued nine complete passes of which only the
     // last mattered. Matches the 500 ms debounce the Workshop search already had.
-    @Published var searchText = "" {
+    var searchText = "" {
         didSet {
             guard searchText != oldValue else { return }
             searchDebounceWorkItem?.cancel()
@@ -109,10 +193,14 @@ class ContentViewModel: ObservableObject, DropDelegate {
 
     private var searchDebounceWorkItem: DispatchWorkItem?
 
-    @Published var isSteamSetupPresented = false
+    var isSteamSetupPresented = false
     
-    @AppStorage("WallpapersPerPage") var wallpapersPerPage: Int = 50 {
-        didSet { currentPage = 1 }
+    var wallpapersPerPage = UIStoredValue.value("WallpapersPerPage", fallback: 50) {
+        didSet {
+            guard wallpapersPerPage != oldValue else { return }
+            UserDefaults.standard.set(wallpapersPerPage, forKey: "WallpapersPerPage")
+            currentPage = 1
+        }
     }
     
     var importAlertError: WPImportError? = nil
@@ -123,7 +211,7 @@ class ContentViewModel: ObservableObject, DropDelegate {
     private var refreshWorkItem: DispatchWorkItem?
     private var refreshInFlight = false
     private var refreshAgain = false
-    @Published private(set) var isRefreshing = false
+    private(set) var isRefreshing = false
 
     convenience init(isStaging: Bool) {
         self.init()
@@ -199,7 +287,7 @@ class ContentViewModel: ObservableObject, DropDelegate {
         }
     }
 
-    @Published public var currentPage: Int = 1 {
+    public var currentPage: Int = 1 {
         didSet { scheduleRecomputePage() }
     }
 
@@ -211,10 +299,11 @@ class ContentViewModel: ObservableObject, DropDelegate {
     // Cached, background-computed result of the search/filter/sort/paginate
     // pipeline. Recomputed only when a genuine input changes, never per frame
     // inside a view body.
-    @Published private(set) var wallpaperPage = WallpaperPage(items: [], pageCount: 1)
+    private(set) var wallpaperPage = WallpaperPage(items: [], pageCount: 1)
 
-    private var recomputeGeneration: UInt64 = 0
-    private let pipelineQueue = DispatchQueue(label: "cn.laobamac.Mirage.library.pipeline", qos: .userInitiated)
+    private var recomputeScheduled = false
+    private let pagePipeline = LatestValueWorker<PipelineInput, WallpaperPage>(
+        label: "cn.laobamac.Mirage.library.pipeline", process: ContentViewModel.computePage)
 
     private var allWallpapers: [WEWallpaper] { wallpapers }
 
@@ -258,8 +347,8 @@ class ContentViewModel: ObservableObject, DropDelegate {
         let currentPage: Int
         let favorites: Set<String>
         let workshopFavorites: Set<String>
-        let importedPrefix: String
-        let additionDates: [String: Date]
+        var importedPrefix: String
+        var additionDates: [String: Date]
     }
 
     private func currentPipelineInput() -> PipelineInput {
@@ -283,26 +372,36 @@ class ContentViewModel: ObservableObject, DropDelegate {
             currentPage: currentPage,
             favorites: FavoritesManager.shared.snapshot(),
             workshopFavorites: SteamServiceManager.shared.workshopFavoriteIDs,
-            importedPrefix: WallpaperLibrary.shared.importedDirectory.path,
-            additionDates: WallpaperLibrary.shared.additionDates(for: wallpapers))
+            importedPrefix: "",
+            additionDates: [:])
     }
 
     // Coalesce bursts of input changes (typing, rapid filter toggles) into a
     // single background pass, and drop stale results via a generation token.
     func scheduleRecomputePage() {
-        recomputeGeneration &+= 1
-        let generation = recomputeGeneration
-        let input = currentPipelineInput()
-        pipelineQueue.async { [weak self] in
-            let page = Self.computePage(input)
-            DispatchQueue.main.async {
-                guard let self, self.recomputeGeneration == generation else { return }
-                self.wallpaperPage = page
+        pagePipeline.cancel()
+        guard !recomputeScheduled else { return }
+        recomputeScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.recomputeScheduled = false
+            self.pagePipeline.submit(self.currentPipelineInput()) { [weak self] page in
+                guard let self else { return }
+                let sameItems = self.wallpaperPage.items.count == page.items.count &&
+                    zip(self.wallpaperPage.items, page.items).allSatisfy { $0.hasSamePresentation(as: $1) }
+                if !sameItems || self.wallpaperPage.pageCount != page.pageCount {
+                    self.wallpaperPage = page
+                }
             }
         }
     }
 
-    private static func computePage(_ input: PipelineInput) -> WallpaperPage {
+    private static func computePage(_ snapshot: PipelineInput) -> WallpaperPage {
+        var input = snapshot
+        input.importedPrefix = WallpaperLibrary.shared.importedDirectory.path
+        if input.sortingBy == .recentlyAdded {
+            input.additionDates = WallpaperLibrary.shared.additionDates(for: input.wallpapers)
+        }
         let searched = searched(input)
         let filtered = filtered(searched, input)
         let sorted = sorted(filtered, input)

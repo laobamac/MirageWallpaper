@@ -7,7 +7,7 @@
 import SwiftUI
 
 struct WorkshopSearchBar: View {
-    @ObservedObject var workshopViewModel: WorkshopViewModel
+    @Bindable var workshopViewModel: WorkshopViewModel
 
     var body: some View {
         HStack(spacing: 10) {

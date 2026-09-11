@@ -8,11 +8,12 @@ import SwiftUI
 
 struct FirstLaunchView: View {
     @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject private var globalSettingsViewModel: GlobalSettingsViewModel
+    @Environment(GlobalSettingsViewModel.self) private var globalSettingsViewModel
     
     @State var checked = false
     
     var body: some View {
+        @Bindable var globalSettingsViewModel = globalSettingsViewModel
         VStack {
             VStack(spacing: 5) {
                 Text("欢迎使用 Mirage")

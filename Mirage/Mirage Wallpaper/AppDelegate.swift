@@ -244,6 +244,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             MirageLogService.shared.saveAutomatically()
         }
         wallpaperViewModel.saveRuntime()
+        wallpaperViewModel.flushPendingSaves()
+        ScreenSaverManager.shared.flushConfigurationUpdates()
+        DynamicLockScreenManager.shared.flushConfigurationUpdates()
         ScreenSaverDynamicLockScreenManager.shared.applicationWillTerminate()
         DesktopOverrideService.shared.finalizeForApplicationTermination()
         // This method returns directly into process exit, so the renderers must

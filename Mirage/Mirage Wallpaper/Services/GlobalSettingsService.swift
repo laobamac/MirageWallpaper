@@ -7,6 +7,7 @@
 import Cocoa
 import Combine
 import SwiftUI
+import Observation
 import ServiceManagement
 import IOKit.ps
 import CoreAudio
@@ -201,26 +202,43 @@ struct GlobalSettings: Codable, Equatable {
     }
 }
 
-class GlobalSettingsViewModel: ObservableObject {
+@Observable
+class GlobalSettingsViewModel {
     private static let loginItemIdentifier = "cn.laobamac.Mirage.LoginItem"
 
     private static var loginItemService: SMAppService {
         SMAppService.loginItem(identifier: loginItemIdentifier)
     }
 
-    @Published var settings: GlobalSettings 
+    var settings: GlobalSettings
     {
         didSet {
-            MirageLocalization.shared.apply(settings.language)
+            guard settings != oldValue else { return }
+            if settings.language != oldValue.language {
+                MirageLocalization.shared.apply(settings.language)
+            }
+            if settings.animatedPreviewPlaybackMode != animatedPreviewPlaybackMode {
+                animatedPreviewPlaybackMode = settings.animatedPreviewPlaybackMode
+            }
+            if settings.hasValidCustomSteamAPIKey != hasValidCustomSteamAPIKey {
+                hasValidCustomSteamAPIKey = settings.hasValidCustomSteamAPIKey
+            }
             validate()
+            settingsChanges.send(settings)
         }
     }
     
-    @Published var selection = 0
+    private let settingsChanges = CurrentValueSubject<GlobalSettings, Never>(GlobalSettings())
+    private var appliedAppearance: GSAppearance?
+    private var monitoredWallpaperIDs: [DisplayKey: String] = [:]
+    private(set) var animatedPreviewPlaybackMode: GSAnimatedPreviewPlayback = .hover
+    private(set) var hasValidCustomSteamAPIKey = false
+
+    var selection = 0
 
     var isSettingsPresented = false
 
-    @Published var isFirstLaunch = UserDefaults.standard.value(forKey: "IsFirstLaunch") as? Bool ?? true
+    var isFirstLaunch = UserDefaults.standard.value(forKey: "IsFirstLaunch") as? Bool ?? true
     
     var didFinishLaunchingNotificationCancellable: Cancellable?
     var didCurrentWallpaperChangeCancellable: Cancellable?
@@ -234,9 +252,9 @@ class GlobalSettingsViewModel: ObservableObject {
     // In-memory snapshot of what is persisted, so the settings UI can tell
     // whether there are unsaved edits with a cheap value comparison instead of
     // decoding GlobalSettings JSON from UserDefaults on every footer render.
-    @Published private(set) var savedSettings: GlobalSettings
-    @Published private(set) var loginItemStatus: SMAppService.Status = .notRegistered
-    @Published private(set) var loginItemError: String?
+    private(set) var savedSettings: GlobalSettings
+    private(set) var loginItemStatus: SMAppService.Status = .notRegistered
+    private(set) var loginItemError: String?
     private var isValidatingSettings = false
     private var isUpdatingLoginItem = false
 
@@ -270,6 +288,9 @@ class GlobalSettingsViewModel: ObservableObject {
         self.savedSettings = initial
         self.loginItemStatus = loginStatus
         self.loginItemError = loginItemMigrationError
+        animatedPreviewPlaybackMode = initial.animatedPreviewPlaybackMode
+        hasValidCustomSteamAPIKey = initial.hasValidCustomSteamAPIKey
+        settingsChanges.send(initial)
         MirageLocalization.shared.apply(self.settings.language)
         self.didFinishLaunchingNotificationCancellable =
         NotificationCenter.default.publisher(for: NSApplication.didFinishLaunchingNotification)
@@ -297,23 +318,23 @@ class GlobalSettingsViewModel: ObservableObject {
     
     func didFinishLaunchingNotification() {
         self.didCurrentWallpaperChangeCancellable =
-        AppDelegate.shared.wallpaperViewModel.$displayStates
+        AppDelegate.shared.wallpaperViewModel.displayStatesChanges
             .sink { [weak self] in self?.didDisplayStatesChange($0) }
         
         self.didAddToLoginItemCancellable =
-        self.$settings
+        self.settingsChanges
             .removeDuplicates { $0.autoStart == $1.autoStart }
             .map { $0.autoStart }
             .sink { [weak self] in self?.didAddToLoginItem($0) }
 
         self.didChangeStatusItemVisibilityCancellable =
-        self.$settings
+        self.settingsChanges
             .removeDuplicates { $0.shouldHideMenuBarIcon == $1.shouldHideMenuBarIcon }
             .map { $0.shouldHideMenuBarIcon }
             .sink { AppDelegate.shared.applyStatusItemVisibility(hidden: $0) }
 
         self.didChangeStatusItemIconCancellable =
-        self.$settings
+        self.settingsChanges
             .removeDuplicates {
                 $0.shouldUseMonochromeMenuBarIcon == $1.shouldUseMonochromeMenuBarIcon
             }
@@ -321,13 +342,13 @@ class GlobalSettingsViewModel: ObservableObject {
             .sink { AppDelegate.shared.applyStatusItemIcon(monochrome: $0) }
 
         self.didChangeDeveloperModeCancellable =
-        self.$settings
+        self.settingsChanges
             .removeDuplicates { $0.isDeveloperModeEnabled == $1.isDeveloperModeEnabled }
             .map { $0.isDeveloperModeEnabled }
             .sink { AppDelegate.shared.applyDeveloperMode(enabled: $0) }
         
         self.didChangeOverrideWallpaperCancellable =
-        self.$settings
+        self.settingsChanges
             .removeDuplicates { $0.shouldOverrideWallpaper == $1.shouldOverrideWallpaper }
             .map { $0.shouldOverrideWallpaper }
             .sink { DesktopOverrideService.shared.didChangeEnabled($0) }
@@ -350,7 +371,7 @@ class GlobalSettingsViewModel: ObservableObject {
             name: ProcessInfo.thermalStateDidChangeNotification, object: nil)
 
         self.validate()
-        playbackPolicySettingsCancellable = $settings
+        playbackPolicySettingsCancellable = settingsChanges
             .map {
                 PlaybackPolicySettingsKey(
                     focused: $0.otherApplicationFocused,
@@ -430,7 +451,6 @@ class GlobalSettingsViewModel: ObservableObject {
         // previous rule set, and letting it land would overwrite the decision
         // this reconfiguration is about to make.
         policyGeneration &+= 1
-        evaluationInFlight = false
         evaluationPending = false
         playbackEvalTimer?.invalidate()
         playbackEvalTimer = nil
@@ -696,6 +716,9 @@ class GlobalSettingsViewModel: ObservableObject {
     }
 
     func didDisplayStatesChange(_ states: [DisplayKey: DisplayWallpaperState]) {
+        let identities = states.mapValues { $0.wallpaper.id }
+        guard identities != monitoredWallpaperIDs else { return }
+        monitoredWallpaperIDs = identities
         if playbackPolicySettingsCancellable != nil {
             DispatchQueue.main.async { [weak self] in self?.configurePlaybackMonitoring() }
         }
@@ -720,7 +743,7 @@ class GlobalSettingsViewModel: ObservableObject {
         guard let data = try? JSONEncoder().encode(settings) else { return }
         UserDefaults.standard.set(data, forKey: "GlobalSettings")
         let loadFromMemory = (settings.wallpaperLoadSource ?? .disk) == .memory
-        ScreenSaverManager.shared.updateLoadFromMemory(loadFromMemory)
+        ScreenSaverManager.shared.updateGlobalSettings(settings, languageIdentifier: MirageLocalization.shared.locale.identifier)
         Task { @MainActor in
             DynamicLockScreenManager.shared.updateLoadFromMemory(loadFromMemory)
             ScreenSaverDynamicLockScreenManager.shared.updateLoadFromMemory(loadFromMemory)
@@ -775,6 +798,8 @@ class GlobalSettingsViewModel: ObservableObject {
            settings.otherApplicationFocused != .keepRunning {
             settings.otherApplicationFocused = .keepRunning
         }
+        guard appliedAppearance != settings.appearance else { return }
+        appliedAppearance = settings.appearance
         switch settings.appearance {
         case .light:
             NSApp.appearance = NSAppearance(named: .aqua)
@@ -872,9 +897,9 @@ class GlobalSettingsViewModel: ObservableObject {
         policyQueue.async { [weak self] in
             let actions = Self.computePlaybackActions(inputs)
             DispatchQueue.main.async {
-                guard let self, self.policyGeneration == generation else { return }
+                guard let self else { return }
                 self.evaluationInFlight = false
-                self.applyPolicyResult(actions)
+                if self.policyGeneration == generation { self.applyPolicyResult(actions) }
                 if self.evaluationPending {
                     self.evaluationPending = false
                     self.evaluatePlaybackState()

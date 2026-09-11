@@ -8,8 +8,8 @@ import SwiftUI
 
 struct DiscoverBannerView: View {
     var items: [WorkshopItem]
-    @ObservedObject var workshopViewModel: WorkshopViewModel
-    @ObservedObject var contentViewModel: ContentViewModel
+    @Bindable var workshopViewModel: WorkshopViewModel
+    @Bindable var contentViewModel: ContentViewModel
 
     @State private var currentIndex: Int = 0
     @State private var timer: Timer?

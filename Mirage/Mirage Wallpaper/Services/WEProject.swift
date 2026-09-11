@@ -551,6 +551,7 @@ struct WEWallpaper: Codable, RawRepresentable, Identifiable, Equatable, Hashable
     var project: WEProject
     var presetDependency: WorkshopId?
     var presetStatus: WEPresetStatus
+    private(set) var presentationIsValid = false
 
     var id: String { wallpaperDirectory.path(percentEncoded: false) }
 
@@ -626,6 +627,7 @@ struct WEWallpaper: Codable, RawRepresentable, Identifiable, Equatable, Hashable
         self.project = project
         self.presetDependency = presetDependency
         self.presetStatus = presetStatus
+        self.presentationIsValid = isValid
     }
 
     init?(rawValue: String) {
@@ -658,6 +660,7 @@ struct WEWallpaper: Codable, RawRepresentable, Identifiable, Equatable, Hashable
         self.project = try c.decode(WEProject.self, forKey: .project)
         self.presetDependency = try? c.decode(WorkshopId.self, forKey: .presetDependency)
         self.presetStatus = (try? c.decode(WEPresetStatus.self, forKey: .presetStatus)) ?? .notPreset
+        self.presentationIsValid = isValid
     }
 
     func encode(to encoder: Encoder) throws {
@@ -672,6 +675,13 @@ struct WEWallpaper: Codable, RawRepresentable, Identifiable, Equatable, Hashable
 
     static func == (lhs: WEWallpaper, rhs: WEWallpaper) -> Bool {
         lhs.wallpaperDirectory == rhs.wallpaperDirectory && lhs.project == rhs.project
+    }
+
+    func hasSamePresentation(as other: WEWallpaper) -> Bool {
+        self == other && renderDirectory == other.renderDirectory &&
+            assetOverlayDirectories == other.assetOverlayDirectories &&
+            presetDependency == other.presetDependency && presetStatus == other.presetStatus &&
+            presentationIsValid == other.presentationIsValid
     }
 
     func hash(into hasher: inout Hasher) { hasher.combine(wallpaperDirectory) }

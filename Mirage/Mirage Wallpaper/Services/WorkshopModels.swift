@@ -5,6 +5,7 @@
 //
 
 import Foundation
+import Observation
 
 // MARK: - Workshop Item
 
@@ -525,14 +526,54 @@ extension Set where Element == WorkshopTypeFilter {
 
 // MARK: - Download Task
 
-struct DownloadTask: Identifiable, Equatable {
+@Observable
+final class DownloadTask: Identifiable, Equatable {
     var id: String { workshopItem.publishedFileId }
     var workshopItem: WorkshopItem
     var attemptID: String?
-    var state: DownloadState
+    var state: DownloadState {
+        didSet {
+            let active = Self.isActive(state)
+            if active != isActive { isActive = active }
+            refreshCompletionState()
+        }
+    }
+    private(set) var isActive: Bool
+    private(set) var isCompleted = false
+    private(set) var isClearable = false
     var startedAt: Date?
     var completedAt: Date?
     var purpose: DownloadPurpose
+
+    init(workshopItem: WorkshopItem, attemptID: String?, state: DownloadState,
+         startedAt: Date?, completedAt: Date?, purpose: DownloadPurpose) {
+        self.workshopItem = workshopItem
+        self.attemptID = attemptID
+        self.state = state
+        self.isActive = Self.isActive(state)
+        self.startedAt = startedAt
+        self.completedAt = completedAt
+        self.purpose = purpose
+        refreshCompletionState()
+    }
+
+    private func refreshCompletionState() {
+        let completed = state == .completed
+        let clearable: Bool
+        switch state {
+        case .completed, .failed: clearable = true
+        default: clearable = false
+        }
+        if isCompleted != completed { isCompleted = completed }
+        if isClearable != clearable { isClearable = clearable }
+    }
+
+    private static func isActive(_ state: DownloadState) -> Bool {
+        switch state {
+        case .resolving, .downloading, .validating: return true
+        default: return false
+        }
+    }
 
     static func == (lhs: DownloadTask, rhs: DownloadTask) -> Bool {
         lhs.id == rhs.id && lhs.attemptID == rhs.attemptID && lhs.state == rhs.state

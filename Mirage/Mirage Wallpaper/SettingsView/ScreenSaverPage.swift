@@ -11,8 +11,8 @@ struct ScreenSaverPage: SettingsPage {
         }
     }
 
-    @ObservedObject var viewModel: GlobalSettingsViewModel
-    @ObservedObject private var wallpaperViewModel: WallpaperViewModel
+    @Bindable var viewModel: GlobalSettingsViewModel
+    @Bindable private var wallpaperViewModel: WallpaperViewModel
     @ObservedObject private var dynamicLockScreenManager = DynamicLockScreenManager.shared
     @ObservedObject private var screenSaverDynamicLockScreenManager = ScreenSaverDynamicLockScreenManager.shared
     @State private var status: Status
@@ -66,11 +66,11 @@ struct ScreenSaverPage: SettingsPage {
 
             Section {
                 LabeledContent("当前屏保壁纸", value: status.configuredTitle)
-                LabeledContent("正在播放", value: wallpaper.isValid ? wallpaper.project.title : "无")
+                LabeledContent("正在播放", value: wallpaper.presentationIsValid ? wallpaper.project.title : "无")
                 Button("将正在播放的壁纸设为屏保") {
                     perform { try configureCurrentWallpaper() }
                 }
-                .disabled(!wallpaper.isValid || (wallpaper.kind != .video && wallpaper.kind != .scene))
+                .disabled(!wallpaper.presentationIsValid || (wallpaper.kind != .video && wallpaper.kind != .scene))
             } header: {
                 Label("屏保壁纸", systemImage: "photo.on.rectangle.angled")
             } footer: {
@@ -103,7 +103,7 @@ struct ScreenSaverPage: SettingsPage {
                     Button("将正在播放的壁纸设为动态锁屏") {
                         perform { try configureCurrentDynamicLockScreen() }
                     }
-                    .disabled(!dynamicLockScreenManager.canUse || !wallpaper.isValid || (wallpaper.kind != .video && wallpaper.kind != .scene))
+                    .disabled(!dynamicLockScreenManager.canUse || !wallpaper.presentationIsValid || (wallpaper.kind != .video && wallpaper.kind != .scene))
                     Button("打开系统墙纸设置") {
                         dynamicLockScreenManager.openSystemSettings()
                     }
@@ -123,7 +123,7 @@ struct ScreenSaverPage: SettingsPage {
                     Button("将正在播放的壁纸设为方案 B 锁屏") {
                         perform { try configureCurrentScreenSaverDynamicLockScreen() }
                     }
-                    .disabled(!screenSaverDynamicLockScreenManager.isEnabled || !wallpaper.isValid || (wallpaper.kind != .video && wallpaper.kind != .scene))
+                    .disabled(!screenSaverDynamicLockScreenManager.isEnabled || !wallpaper.presentationIsValid || (wallpaper.kind != .video && wallpaper.kind != .scene))
                     Text(LocalizedStringKey("方案 B 使用 Mirage 屏保组件，仅在锁屏时临时接管系统墙纸槽位，解锁后恢复原桌面配置。"))
                         .foregroundStyle(.secondary)
                 }

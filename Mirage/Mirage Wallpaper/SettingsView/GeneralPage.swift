@@ -7,7 +7,7 @@
 import SwiftUI
 
 struct GeneralPage: SettingsPage {
-    @ObservedObject var viewModel: GlobalSettingsViewModel
+    @Bindable var viewModel: GlobalSettingsViewModel
 
     @State private var librarySources: [WallpaperLibrarySource]
     @State private var showMirrorWarning = false

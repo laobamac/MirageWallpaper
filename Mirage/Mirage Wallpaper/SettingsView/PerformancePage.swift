@@ -7,7 +7,7 @@
 import SwiftUI
 
 struct PerformancePage: SettingsPage {
-    @ObservedObject var viewModel: GlobalSettingsViewModel
+    @Bindable var viewModel: GlobalSettingsViewModel
 
     @State private var isEditingFPS = false
 

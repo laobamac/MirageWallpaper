@@ -7,17 +7,17 @@
 import SwiftUI
 
 struct DiscoverView: View {
-    @EnvironmentObject private var globalSettingsViewModel: GlobalSettingsViewModel
-    @ObservedObject var workshopViewModel: WorkshopViewModel
-    @ObservedObject var viewModel: ContentViewModel
-    @ObservedObject var wallpaperViewModel: WallpaperViewModel
+    @Environment(GlobalSettingsViewModel.self) private var globalSettingsViewModel
+    @Bindable var workshopViewModel: WorkshopViewModel
+    @Bindable var viewModel: ContentViewModel
+    @Bindable var wallpaperViewModel: WallpaperViewModel
     let navigationModel: MainNavigationModel
     let isActive: Bool
 
-    @State private var hoveredID: String?
     @State private var discoverReturnRowID: String?
 
     var body: some View {
+        @Bindable var globalSettingsViewModel = globalSettingsViewModel
         VStack(spacing: 0) {
             if let browse = workshopViewModel.discoverBrowse {
                 browseToolbar(browse)
@@ -162,7 +162,7 @@ struct DiscoverView: View {
                                     contentViewModel: viewModel,
                                     wallpaperViewModel: wallpaperViewModel,
                                     isActive: isActive,
-                                    animatedPreviewMode: globalSettingsViewModel.settings.animatedPreviewPlaybackMode,
+                                    animatedPreviewMode: globalSettingsViewModel.animatedPreviewPlaybackMode,
                                     onSeeAll: {
                                         discoverReturnRowID = row.id
                                         workshopViewModel.openDiscoverRow(id: row.id)
@@ -217,23 +217,20 @@ struct DiscoverView: View {
                             ForEach(browse.items) { item in
                                 WorkshopItemCard(
                                     item: item,
-                                    isHovered: hoveredID == item.id,
+
                                     isSelected: workshopViewModel.discoverSelectedItemID == item.id,
                                     isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
                                     presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
-                                    downloadState: workshopViewModel.downloadState(for: item.publishedFileId),
+                                    downloadTask: workshopViewModel.downloadTask(for: item.publishedFileId),
                                     isFavorite: workshopViewModel.isWorkshopFavorite(item.publishedFileId),
                                     isActive: isActive,
-                                    animatedPreviewMode: globalSettingsViewModel.settings.animatedPreviewPlaybackMode
+                                    animatedPreviewMode: globalSettingsViewModel.animatedPreviewPlaybackMode
                                 )
-                                .onHover { hovered in
-                                    hoveredID = hovered ? item.id : nil
-                                }
                                 .onTapGesture {
                                     workshopViewModel.selectDiscoverItem(item)
                                 }
                                 .contextMenu {
-                                    if let wallpaper = workshopViewModel.installedItem(workshopId: item.publishedFileId) {
+                                    if let wallpaper = workshopViewModel.cachedInstalledWallpapers[item.publishedFileId] {
                                         ExplorerItemMenu(
                                             contentViewModel: viewModel,
                                             wallpaperViewModel: wallpaperViewModel,

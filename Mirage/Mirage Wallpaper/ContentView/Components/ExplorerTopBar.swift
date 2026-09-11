@@ -7,15 +7,16 @@
 import SwiftUI
 
 struct ExplorerTopBar: SubviewOfContentView {
-    @ObservedObject var viewModel: ContentViewModel
+    @Bindable var viewModel: ContentViewModel
     
-    @EnvironmentObject var globalSettingsViewModel: GlobalSettingsViewModel
+    @Environment(GlobalSettingsViewModel.self) var globalSettingsViewModel
     
     init(contentViewModel viewModel: ContentViewModel) {
         self.viewModel = viewModel
     }
     
     var body: some View {
+        @Bindable var globalSettingsViewModel = globalSettingsViewModel
         HStack {
             TextField("搜索", text: $viewModel.searchText)
                 .textFieldStyle(.roundedBorder)

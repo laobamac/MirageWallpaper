@@ -8,7 +8,7 @@ import SwiftUI
 
 struct TopTabBar: View {
     @ObservedObject var navigationModel: MainNavigationModel
-    @ObservedObject var wallpaperViewModel: WallpaperViewModel
+    @Bindable var wallpaperViewModel: WallpaperViewModel
     @State private var hoverSelection: MainSection?
 
     init(navigationModel: MainNavigationModel, wallpaperViewModel: WallpaperViewModel) {

@@ -5,10 +5,12 @@
 //
 
 import SwiftUI
+import Observation
 import Combine
 import AppKit
 
-class WorkshopViewModel: ObservableObject {
+@Observable
+class WorkshopViewModel {
     struct SubscriptionDownloadPlan {
         let subscriptionCount: Int
         let remainingCount: Int
@@ -19,62 +21,63 @@ class WorkshopViewModel: ObservableObject {
 
     // MARK: - Browse State
 
-    @Published var items: [WorkshopItem] = []
-    @Published var searchText: String = ""
-    @Published var selectedTags: Set<String> = []
-    @Published var sortOrder: WorkshopSortOrder = .trending
-    @Published var trendPeriod: WorkshopTrendPeriod = .week
-    @Published var selectedTypeFilters: Set<WorkshopTypeFilter> = [.all]
-    @Published var workshopShowOnly: FRShowOnly = .none {
+    var items: [WorkshopItem] = []
+    var searchText: String = "" {
+        didSet {
+            if searchText != oldValue { searchChanges.send(searchText) }
+        }
+    }
+    var selectedTags: Set<String> = []
+    var sortOrder: WorkshopSortOrder = .trending
+    var trendPeriod: WorkshopTrendPeriod = .week
+    var selectedTypeFilters: Set<WorkshopTypeFilter> = [.all]
+    var workshopShowOnly: FRShowOnly = .none {
         didSet {
             guard workshopShowOnly != oldValue else { return }
             UserDefaults.standard.set(workshopShowOnly.rawValue, forKey: Self.workshopShowOnlyStorageKey)
         }
     }
-    /// `@Published` + manual persistence rather than `@AppStorage`: SwiftUI does
-    /// not route `@AppStorage` writes inside an `ObservableObject` through
-    /// `objectWillChange`, which would leave the sidebar checkboxes stale.
-    @Published var ageRatingFilter: WorkshopAgeRatingFilter = .default {
+    var ageRatingFilter: WorkshopAgeRatingFilter = .default {
         didSet {
             guard ageRatingFilter != oldValue else { return }
             UserDefaults.standard.set(ageRatingFilter.rawValue, forKey: Self.ageRatingStorageKey)
         }
     }
-    @Published var widescreenResolution = FRWidescreenResolution.all {
+    var widescreenResolution = FRWidescreenResolution.all {
         didSet { UserDefaults.standard.set(widescreenResolution.rawValue, forKey: "WorkshopWidescreenResolution") }
     }
-    @Published var ultraWidescreenResolution = FRUltraWidescreenResolution.all {
+    var ultraWidescreenResolution = FRUltraWidescreenResolution.all {
         didSet { UserDefaults.standard.set(ultraWidescreenResolution.rawValue, forKey: "WorkshopUltraWidescreenResolution") }
     }
-    @Published var dualscreenResolution = FRDualscreenResolution.all {
+    var dualscreenResolution = FRDualscreenResolution.all {
         didSet { UserDefaults.standard.set(dualscreenResolution.rawValue, forKey: "WorkshopDualscreenResolution") }
     }
-    @Published var triplescreenResolution = FRTriplescreenResolution.all {
+    var triplescreenResolution = FRTriplescreenResolution.all {
         didSet { UserDefaults.standard.set(triplescreenResolution.rawValue, forKey: "WorkshopTriplescreenResolution") }
     }
-    @Published var portraitResolution = FRPortraitScreenResolution.all {
+    var portraitResolution = FRPortraitScreenResolution.all {
         didSet { UserDefaults.standard.set(portraitResolution.rawValue, forKey: "WorkshopPortraitResolution") }
     }
-    @Published var miscResolution = FRMiscResolution.all {
+    var miscResolution = FRMiscResolution.all {
         didSet { UserDefaults.standard.set(miscResolution.rawValue, forKey: "WorkshopMiscResolution") }
     }
-    @Published var currentPage: Int = 1
-    @Published var totalItems: Int = 0
-    @Published var isLoading: Bool = false
-    @Published var error: String?
-    @Published var pageNavigationMessage: String?
-    @Published private(set) var knownCreators: [WorkshopCreator] = []
+    var currentPage: Int = 1
+    var totalItems: Int = 0
+    var isLoading: Bool = false
+    var error: String?
+    var pageNavigationMessage: String?
+    private(set) var knownCreators: [WorkshopCreator] = []
 
-    @Published var selectedItem: WorkshopItem?
-    @Published var showCustomization: Bool = false
-    @Published var selectedCreator: WorkshopCreator?
-    @Published var showCreatorProfile: Bool = false
+    var selectedItem: WorkshopItem?
+    var showCustomization: Bool = false
+    var selectedCreator: WorkshopCreator?
+    var showCreatorProfile: Bool = false
 
-    @Published var creatorItems: [WorkshopItem] = []
-    @Published var isLoadingCreatorItems = false
-    @Published var creatorItemsError: String?
-    @Published var creatorItemsPage = 1
-    @Published var creatorItemsTotal = 0
+    var creatorItems: [WorkshopItem] = []
+    var isLoadingCreatorItems = false
+    var creatorItemsError: String?
+    var creatorItemsPage = 1
+    var creatorItemsTotal = 0
     var creatorItemsPerPage: Int {
         let stored = UserDefaults.standard.integer(forKey: "CreatorPerPage")
         return stored > 0 ? stored : 10
@@ -89,75 +92,81 @@ class WorkshopViewModel: ObservableObject {
 
     // MARK: - Discover State
 
-    @Published private(set) var discoverRows: [DiscoverRow] = []
-    @Published private(set) var discoverBrowse: DiscoverBrowseState?
-    @Published var discoverSearchText = ""
-    @Published var isDiscoverLoading: Bool = false
-    @Published private(set) var discoverError: String?
-    @Published private(set) var discoverSelectedItemID: String?
-    @Published private(set) var isDiscoverDetailLoading = false
-    @Published private(set) var discoverDetailError: String?
+    private(set) var discoverRows: [DiscoverRow] = []
+    private(set) var discoverBrowse: DiscoverBrowseState?
+    var discoverSearchText = ""
+    var isDiscoverLoading: Bool = false
+    private(set) var discoverError: String?
+    private(set) var discoverSelectedItemID: String?
+    private(set) var isDiscoverDetailLoading = false
+    private(set) var discoverDetailError: String?
 
     // MARK: - Download State
 
-    @Published var downloadQueue: [DownloadTask] = []
-    @Published var downloadHistory: [DownloadTask] = []
-    @Published var presetDependencyPrompt: PresetDependencyPrompt?
+    var downloadQueue: [DownloadTask] = []
+    var downloadHistory: [DownloadTask] = []
+    var presetDependencyPrompt: PresetDependencyPrompt?
 
-    @Published private(set) var subscriptionRecords: [WorkshopSubscription] = []
-    @Published private(set) var subscriptionCatalogItems: [WorkshopItem] = []
-    @Published private(set) var subscriptionItems: [WorkshopItem] = []
-    @Published private(set) var subscriptionTotal = 0
-    @Published private(set) var subscriptionStartIndex = 0
-    @Published private(set) var isLoadingSubscriptions = false
-    @Published private(set) var subscriptionsError: String?
-    @Published var subscriptionSearchText = ""
-    @Published var subscriptionSelectedTags: Set<String> = []
-    @Published var subscriptionSelectedTypeFilters: Set<WorkshopTypeFilter> = [.all]
-    @Published var subscriptionShowOnly: FRShowOnly = .none {
+    private(set) var subscriptionRecords: [WorkshopSubscription] = []
+    private(set) var subscriptionCatalogItems: [WorkshopItem] = []
+    private(set) var subscriptionItems: [WorkshopItem] = []
+    private(set) var subscriptionTotal = 0
+    private(set) var subscriptionStartIndex = 0
+    private(set) var isLoadingSubscriptions = false
+    private(set) var subscriptionsError: String?
+    var subscriptionSearchText = "" {
+        didSet {
+            if subscriptionSearchText != oldValue {
+                subscriptionSearchChanges.send(subscriptionSearchText)
+            }
+        }
+    }
+    var subscriptionSelectedTags: Set<String> = []
+    var subscriptionSelectedTypeFilters: Set<WorkshopTypeFilter> = [.all]
+    var subscriptionShowOnly: FRShowOnly = .none {
         didSet {
             guard subscriptionShowOnly != oldValue else { return }
             UserDefaults.standard.set(subscriptionShowOnly.rawValue, forKey: Self.subscriptionShowOnlyStorageKey)
         }
     }
-    @Published var subscriptionAgeRatingFilter: WorkshopAgeRatingFilter = .all
-    @Published var subscriptionWidescreenResolution = FRWidescreenResolution.all
-    @Published var subscriptionUltraWidescreenResolution = FRUltraWidescreenResolution.all
-    @Published var subscriptionDualscreenResolution = FRDualscreenResolution.all
-    @Published var subscriptionTriplescreenResolution = FRTriplescreenResolution.all
-    @Published var subscriptionPortraitResolution = FRPortraitScreenResolution.all
-    @Published var subscriptionMiscResolution = FRMiscResolution.all
-    @Published private(set) var subscriptionStates: [String: WorkshopSubscriptionState] = [:]
-    @Published private(set) var checkingSubscriptionIDs: Set<String> = []
-    @Published private(set) var changingSubscriptionIDs: Set<String> = []
-    @Published private(set) var subscriptionActionError: String?
-    @Published private(set) var subscriptionActionErrorItemID: String?
-    @Published private(set) var workshopFavoriteIDs: Set<String> = []
-    @Published private(set) var changingFavoriteIDs: Set<String> = []
-    @Published private(set) var favoriteActionError: String?
-    @Published private(set) var favoriteActionErrorItemID: String?
-    @Published private(set) var isPreparingSubscriptionDownloads = false
-    @Published private(set) var subscriptionDownloadPlan: SubscriptionDownloadPlan?
+    var subscriptionAgeRatingFilter: WorkshopAgeRatingFilter = .all
+    var subscriptionWidescreenResolution = FRWidescreenResolution.all
+    var subscriptionUltraWidescreenResolution = FRUltraWidescreenResolution.all
+    var subscriptionDualscreenResolution = FRDualscreenResolution.all
+    var subscriptionTriplescreenResolution = FRTriplescreenResolution.all
+    var subscriptionPortraitResolution = FRPortraitScreenResolution.all
+    var subscriptionMiscResolution = FRMiscResolution.all
+    private(set) var subscriptionStates: [String: WorkshopSubscriptionState] = [:]
+    private(set) var checkingSubscriptionIDs: Set<String> = []
+    private(set) var changingSubscriptionIDs: Set<String> = []
+    private(set) var subscriptionActionError: String?
+    private(set) var subscriptionActionErrorItemID: String?
+    private(set) var workshopFavoriteIDs: Set<String> = []
+    private(set) var changingFavoriteIDs: Set<String> = []
+    private(set) var favoriteActionError: String?
+    private(set) var favoriteActionErrorItemID: String?
+    private(set) var isPreparingSubscriptionDownloads = false
+    private(set) var subscriptionDownloadPlan: SubscriptionDownloadPlan?
 
-    @Published private(set) var comments: [WorkshopComment] = []
-    @Published private(set) var commentsTotal = 0
-    @Published private(set) var commentsStartIndex = 0
-    @Published private(set) var commentsNextStartIndex = 0
-    @Published private(set) var commentsCanPost = false
-    @Published private(set) var commentsItemID: String?
-    @Published private(set) var isLoadingComments = false
-    @Published private(set) var commentsError: String?
-    @Published private(set) var commentAuthors: [String: WorkshopCreator] = [:]
-    @Published var commentDraft = ""
-    @Published private(set) var isPostingComment = false
+    private(set) var comments: [WorkshopComment] = []
+    private(set) var commentsTotal = 0
+    private(set) var commentsStartIndex = 0
+    private(set) var commentsNextStartIndex = 0
+    private(set) var commentsCanPost = false
+    private(set) var commentsItemID: String?
+    private(set) var isLoadingComments = false
+    private(set) var commentsError: String?
+    private(set) var commentAuthors: [String: WorkshopCreator] = [:]
+    var commentDraft = ""
+    private(set) var isPostingComment = false
 
     // MARK: - Sync State
     // MARK: - Steam service state
 
-    @Published var steamSetupState: SteamSetupState = .checking
-    @Published var steamServiceStatus = SteamServiceStatus()
-    @Published var logoutResultMessage: String?
-    @Published var isLoggingOut = false
+    var steamSetupState: SteamSetupState = .checking
+    var steamServiceStatus = SteamServiceStatus()
+    var logoutResultMessage: String?
+    var isLoggingOut = false
 
     var steamCheckingMessage: String {
         SteamServiceManager.shared.savedUsername.isEmpty
@@ -170,12 +179,7 @@ class WorkshopViewModel: ObservableObject {
     }
 
     var activeDownloadCount: Int {
-        downloadQueue.filter {
-            if case .downloading = $0.state { return true }
-            if case .resolving = $0.state { return true }
-            if case .validating = $0.state { return true }
-            return false
-        }.count
+        downloadQueue.filter(\.isActive).count
     }
 
     var canLoadPreviousSubscriptions: Bool {
@@ -236,6 +240,8 @@ class WorkshopViewModel: ObservableObject {
 
     private var searchDebounce: AnyCancellable?
     private var subscriptionSearchDebounce: AnyCancellable?
+    private let searchChanges = CurrentValueSubject<String, Never>("")
+    private let subscriptionSearchChanges = CurrentValueSubject<String, Never>("")
     private var serviceStateCancellables = Set<AnyCancellable>()
     private var cancelledDownloadIDs: Set<String> = []
     private var pendingPresetApplication: (presetID: String, dependencyID: String, selectionGeneration: Int)?
@@ -286,7 +292,7 @@ class WorkshopViewModel: ObservableObject {
             miscResolution = FRMiscResolution(rawValue: raw)
         }
 
-        searchDebounce = $searchText
+        searchDebounce = searchChanges
             .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
             .removeDuplicates()
             .sink { [weak self] _ in
@@ -294,7 +300,7 @@ class WorkshopViewModel: ObservableObject {
                 self?.search()
             }
 
-        subscriptionSearchDebounce = $subscriptionSearchText
+        subscriptionSearchDebounce = subscriptionSearchChanges
             .debounce(for: .milliseconds(300), scheduler: RunLoop.main)
             .removeDuplicates()
             .sink { [weak self] _ in
@@ -376,44 +382,55 @@ class WorkshopViewModel: ObservableObject {
     // still need their base wallpaper), rebuilt on a background queue whenever
     // the library could have changed.
 
-    @Published private(set) var installedWorkshopIDs: Set<String> = []
-    @Published private(set) var presetsNeedingDependency: Set<String> = []
+    private(set) var installedWorkshopIDs: Set<String> = []
+    private(set) var presetsNeedingDependency: Set<String> = []
     /// Workshop metadata is loaded lazily for the selected local wallpaper.
     /// Keeping it here lets the library and Workshop views share one cache
     /// without scanning or requesting metadata for the whole library.
-    @Published private(set) var installedWorkshopItems: [String: WorkshopItem] = [:]
+    private(set) var installedWorkshopItems: [String: WorkshopItem] = [:]
 
-    private let installedScanQueue = DispatchQueue(
-        label: "cn.laobamac.Mirage.workshop.installed", qos: .utility)
+    private struct InstalledSnapshot {
+        var wallpapers: [String: WEWallpaper] = [:]
+        var needsDependency: Set<String> = []
+    }
+
+    private(set) var cachedInstalledWallpapers: [String: WEWallpaper] = [:]
+    private var shouldReconcileInstalledDownloads = false
+    private let installedScanner = LatestValueWorker<Void, InstalledSnapshot>(
+        label: "cn.laobamac.Mirage.workshop.installed"
+    ) { _ in
+        var snapshot = InstalledSnapshot()
+        for url in WallpaperLibrary.shared.allWallpaperURLs() {
+            let workshopID = url.lastPathComponent
+            if snapshot.wallpapers[workshopID]?.presentationIsValid == true { continue }
+            let wallpaper = WEWallpaper.load(from: url)
+            if let previous = snapshot.wallpapers[workshopID], previous.isPreset,
+               !wallpaper.presentationIsValid { continue }
+            snapshot.wallpapers[workshopID] = wallpaper
+        }
+        snapshot.needsDependency = Set(snapshot.wallpapers.compactMap {
+            $0.value.needsPresetDependency ? $0.key : nil
+        })
+        return snapshot
+    }
     private var requestedInstalledMetadataIDs: Set<String> = []
 
     func refreshInstalledState(reconcileDownloads: Bool = false) {
-        installedScanQueue.async { [weak self] in
+        shouldReconcileInstalledDownloads = shouldReconcileInstalledDownloads || reconcileDownloads
+        installedScanner.submit(()) { [weak self] snapshot in
             guard let self else { return }
-            let directories = WallpaperLibrary.shared.allWorkshopIDDirectories()
-            var installed = Set<String>()
-            var needsDependency = Set<String>()
-            installed.reserveCapacity(directories.count)
-            for (workshopID, url) in directories {
-                installed.insert(workshopID)
-                let wallpaper = WEWallpaper.load(from: url)
-                if wallpaper.needsPresetDependency {
-                    needsDependency.insert(workshopID)
-                }
+            let installed = Set(snapshot.wallpapers.keys)
+            if self.installedWorkshopIDs != installed { self.installedWorkshopIDs = installed }
+            if self.presetsNeedingDependency != snapshot.needsDependency {
+                self.presetsNeedingDependency = snapshot.needsDependency
             }
-            DispatchQueue.main.async {
-                if self.installedWorkshopIDs != installed {
-                    self.installedWorkshopIDs = installed
-                }
-                if self.presetsNeedingDependency != needsDependency {
-                    self.presetsNeedingDependency = needsDependency
-                }
-                if reconcileDownloads {
-                    self.downloadQueue.removeAll { task in
-                        guard !installed.contains(task.id) else { return false }
-                        if case .completed = task.state { return true }
-                        return false
-                    }
+            self.cachedInstalledWallpapers = snapshot.wallpapers
+            if self.shouldReconcileInstalledDownloads {
+                self.shouldReconcileInstalledDownloads = false
+                self.downloadQueue.removeAll { task in
+                    guard !installed.contains(task.id) else { return false }
+                    if case .completed = task.state { return true }
+                    return false
                 }
             }
         }
@@ -1896,26 +1913,33 @@ class WorkshopViewModel: ObservableObject {
         }
     }
 
+    func downloadTask(for workshopId: String) -> DownloadTask? {
+        downloadQueue.first(where: { $0.id == workshopId })
+    }
+
     func downloadState(for workshopId: String) -> DownloadState? {
-        downloadQueue.first(where: { $0.id == workshopId })?.state
+        downloadTask(for: workshopId)?.state
     }
 
     func selectWorkshopItem(_ item: WorkshopItem) {
         selectionGeneration += 1
+        let generation = selectionGeneration
         showCreatorProfile = false
         selectedCreator = nil
-        let installed = installedItem(workshopId: item.publishedFileId)
-        if let wallpaper = installed, wallpaper.needsPresetDependency {
-            showCustomization = false
-            selectedItem = item
-            requestPresetDependency(for: wallpaper)
-        } else if let wallpaper = installed, wallpaper.isValid {
-            AppDelegate.shared.wallpaperViewModel.requestApply(wallpaper)
-            showCustomization = true
-            selectedItem = item
-        } else {
-            showCustomization = false
-            selectedItem = item
+        selectedItem = item
+        showCustomization = false
+        if let wallpaper = cachedInstalledWallpapers[item.publishedFileId] {
+            let model = AppDelegate.shared.wallpaperViewModel
+            let key = model.selectedDisplayKey
+            model.prepareWallpaper(wallpaper, for: key) { [weak self, weak model] fresh in
+                guard let self, let model, self.selectionGeneration == generation else { return }
+                if fresh.needsPresetDependency {
+                    self.requestPresetDependency(for: fresh)
+                } else if fresh.presentationIsValid {
+                    model.requestPreparedWallpaper(fresh, to: key)
+                    self.showCustomization = true
+                }
+            }
         }
         prepareWorkshopInteractions(for: item)
     }
@@ -2081,20 +2105,25 @@ class WorkshopViewModel: ObservableObject {
     // MARK: - Auto Apply
 
     func openInstalledWallpaper(_ wallpaper: WEWallpaper) {
-        // Re-resolve first: a stale `.missingDependency` would otherwise send
-        // the user to the "download the base wallpaper" prompt for a base that
-        // is already installed, leaving the preset permanently unclickable.
-        let fresh = WEWallpaper.load(from: wallpaper.wallpaperDirectory)
-        if fresh.needsPresetDependency {
-            showCreatorProfile = false
-            selectedCreator = nil
-            requestPresetDependency(for: fresh)
-        } else if fresh.isValid {
-            showCreatorProfile = false
-            selectedCreator = nil
-            AppDelegate.shared.wallpaperViewModel.requestApply(fresh)
-            showCustomization = true
-            selectedItem = nil
+        let model = AppDelegate.shared.wallpaperViewModel
+        let key = model.selectedDisplayKey
+        selectionGeneration += 1
+        let generation = selectionGeneration
+        model.prepareWallpaper(wallpaper, for: key) { [weak self, weak model] fresh in
+            guard let self, let model else { return }
+            if fresh.needsPresetDependency {
+                guard self.selectionGeneration == generation else { return }
+                self.showCreatorProfile = false
+                self.selectedCreator = nil
+                self.requestPresetDependency(for: fresh)
+            } else if fresh.presentationIsValid {
+                model.requestPreparedWallpaper(fresh, to: key)
+                guard self.selectionGeneration == generation else { return }
+                self.showCreatorProfile = false
+                self.selectedCreator = nil
+                self.showCustomization = true
+                self.selectedItem = nil
+            }
         }
     }
 

@@ -489,6 +489,7 @@ final class RendererProcess {
 }
 
 struct RenderOptions: Equatable {
+    var developerModeEnabled = false
     var fps: Int = 30
     var volume: Float = 1.0
     var muted: Bool = false
@@ -571,21 +572,21 @@ final class RendererController {
         var options: RenderOptions
     }
 
-    private var running: [CGDirectDisplayID: RendererProcess] = [:]
-    private var candidates: [CGDirectDisplayID: RendererProcess] = [:]
-    private var transitions: [CGDirectDisplayID: ReplacementTransition] = [:]
-    private var pendingRequests: [CGDirectDisplayID: RenderRequest] = [:]
-    private var retiring: [ObjectIdentifier: RendererProcess] = [:]
+    private var running: [CGDirectDisplayID: RendererProcess] = [:] { didSet { updateQuerySnapshotLocked() } }
+    private var candidates: [CGDirectDisplayID: RendererProcess] = [:] { didSet { updateQuerySnapshotLocked() } }
+    private var transitions: [CGDirectDisplayID: ReplacementTransition] = [:] { didSet { updateQuerySnapshotLocked() } }
+    private var pendingRequests: [CGDirectDisplayID: RenderRequest] = [:] { didSet { updateQuerySnapshotLocked() } }
+    private var retiring: [ObjectIdentifier: RendererProcess] = [:] { didSet { updateQuerySnapshotLocked() } }
     /// Processes removed by an explicit stop whose desktop window has not yet
     /// been confirmed hidden. A replacement may prepare behind these handles,
     /// but it cannot activate until each blocker emits a hidden lifecycle event
     /// or its process exits.
-    private var visibilityBlockers: [ObjectIdentifier: RendererProcess] = [:]
-    private var launchingRequests: [CGDirectDisplayID: LaunchingRequest] = [:]
+    private var visibilityBlockers: [ObjectIdentifier: RendererProcess] = [:] { didSet { updateQuerySnapshotLocked() } }
+    private var launchingRequests: [CGDirectDisplayID: LaunchingRequest] = [:] { didSet { updateQuerySnapshotLocked() } }
     /// Active/standby processes can become non-running before Foundation queues
     /// their termination handler onto `queue`. Keep their former visible role
     /// recognizable until that handler supplies the actual exit status.
-    private var awaitingVisibleExits: [ObjectIdentifier: RendererProcess] = [:]
+    private var awaitingVisibleExits: [ObjectIdentifier: RendererProcess] = [:] { didSet { updateQuerySnapshotLocked() } }
     private var coverageSettlementWaiters:
         [CGDirectDisplayID: [UUID: () -> Void]] = [:]
     private var latestRequestTokens: [CGDirectDisplayID: UUID] = [:]
@@ -596,6 +597,75 @@ final class RendererController {
     }
     private var deferredActiveExits: [CGDirectDisplayID: DeferredActiveExit] = [:]
     private let queue = DispatchQueue(label: "cn.laobamac.Mirage.renderer")
+    private let commandQueue = DispatchQueue(label: "cn.laobamac.Mirage.renderer.commands", qos: .userInitiated)
+    private let commandQueueKey = DispatchSpecificKey<Bool>()
+    private var submissionVersions: [CGDirectDisplayID: UUID] = [:]
+    private var pendingSubmissions: [CGDirectDisplayID: UUID] = [:]
+
+    private var isOnCommandQueue: Bool { DispatchQueue.getSpecific(key: commandQueueKey) == true }
+
+    private struct QuerySnapshot {
+        var wallpapers: [CGDirectDisplayID: WEWallpaper] = [:]
+        var rendering: Set<CGDirectDisplayID> = []
+        var coverage: Set<CGDirectDisplayID> = []
+        var processIDs: Set<pid_t> = []
+        var positions: [CGDirectDisplayID: WallpaperPositionAvailability] = [:]
+    }
+    private let queryLock = NSLock()
+    private var querySnapshot = QuerySnapshot()
+    private var shuttingDown = false
+
+    private func readSnapshot() -> QuerySnapshot {
+        queryLock.lock()
+        defer { queryLock.unlock() }
+        var snapshot = querySnapshot
+        snapshot.coverage.formUnion(pendingSubmissions.keys)
+        return snapshot
+    }
+
+    private func isCurrentSubmission(_ token: UUID, on displayID: CGDirectDisplayID) -> Bool {
+        queryLock.lock()
+        defer { queryLock.unlock() }
+        return !shuttingDown && submissionVersions[displayID] == token
+    }
+
+    private func invalidateSubmissions(except retained: Set<CGDirectDisplayID> = [],
+                                       only displayID: CGDirectDisplayID? = nil) {
+        queryLock.lock()
+        let keys = displayID.map { Set([$0]) } ?? Set(submissionVersions.keys).subtracting(retained)
+        for key in keys {
+            submissionVersions[key] = UUID()
+            pendingSubmissions[key] = nil
+        }
+        queryLock.unlock()
+    }
+
+    private var isShuttingDown: Bool {
+        queryLock.lock()
+        defer { queryLock.unlock() }
+        return shuttingDown
+    }
+
+    private func updateQuerySnapshotLocked() {
+        var snapshot = QuerySnapshot()
+        snapshot.wallpapers = running.mapValues(\.wallpaper)
+        snapshot.rendering = Set(running.compactMap { $0.value.process.isRunning ? $0.key : nil })
+        snapshot.coverage = Set(running.keys).union(candidates.keys).union(transitions.keys)
+            .union(pendingRequests.keys).union(launchingRequests.keys)
+            .union(visibilityBlockers.values.map(\.displayID))
+            .union(awaitingVisibleExits.values.map(\.displayID))
+        snapshot.positions = running.mapValues(\.positionAvailability)
+        let handles = Array(running.values) + Array(candidates.values) +
+            transitions.values.compactMap(\.standby) + Array(visibilityBlockers.values) +
+            Array(awaitingVisibleExits.values) + Array(retiring.values)
+        snapshot.processIDs = Set(handles.compactMap {
+            $0.process.isRunning ? $0.process.processIdentifier : nil
+        })
+        queryLock.lock()
+        querySnapshot = snapshot
+        queryLock.unlock()
+    }
+
     // Scene startup has two internal 30-second guards. Web is bounded as well,
     // while video gets a longer, activity-reset deadline for format conversion.
     private static let preparationTimeout: TimeInterval = 75
@@ -634,6 +704,7 @@ final class RendererController {
     private var latestMediaStatus: [String: Any]?
 
     init() {
+        commandQueue.setSpecific(key: commandQueueKey, value: true)
         SystemAudioSpectrumService.shared.onSpectrum = { [weak self] spectrum in
             self?.setAudioSpectrum(spectrum)
         }
@@ -804,6 +875,39 @@ final class RendererController {
     func render(_ wallpaper: WEWallpaper, onDisplay displayID: CGDirectDisplayID,
                 options: RenderOptions, reuseActive: Bool = false,
                 completion: ((Bool) -> Void)? = nil) -> Bool {
+        let token = UUID()
+        queryLock.lock()
+        guard !shuttingDown, wallpaper.kind != .unsupported else {
+            queryLock.unlock()
+            dispatchTransitionCompletions(completion.map { [$0] } ?? [], success: false)
+            return false
+        }
+        submissionVersions[displayID] = token
+        pendingSubmissions[displayID] = token
+        queryLock.unlock()
+        commandQueue.async { [self] in
+            defer {
+                queryLock.lock()
+                if pendingSubmissions[displayID] == token { pendingSubmissions[displayID] = nil }
+                queryLock.unlock()
+                queue.async { [self] in
+                    drainCoverageSettlementWaitersIfNeededLocked(displayID)
+                    reportDeferredActiveExitIfUncoveredLocked(displayID)
+                }
+            }
+            _ = renderOnCommandQueue(wallpaper, onDisplay: displayID, options: options,
+                                     reuseActive: reuseActive, requestToken: token, completion: completion)
+        }
+        return true
+    }
+
+    private func renderOnCommandQueue(_ wallpaper: WEWallpaper, onDisplay displayID: CGDirectDisplayID,
+                                      options: RenderOptions, reuseActive: Bool, requestToken: UUID,
+                                      completion: ((Bool) -> Void)?) -> Bool {
+        guard isCurrentSubmission(requestToken, on: displayID) else {
+            dispatchTransitionCompletions(completion.map { [$0] } ?? [], success: false)
+            return false
+        }
         guard wallpaper.isValid, wallpaper.kind != .unsupported else {
             dispatchTransitionCompletions(completion.map { [$0] } ?? [], success: false)
             return false
@@ -819,7 +923,12 @@ final class RendererController {
             return false
         }
 
-        let requestToken = UUID()
+        var options = options
+        options.userProperties = WallpaperViewModel.resolveProperties(options.userProperties, for: wallpaper)
+        guard isCurrentSubmission(requestToken, on: displayID) else {
+            dispatchTransitionCompletions(completion.map { [$0] } ?? [], success: false)
+            return false
+        }
         let leaseID = UUID()
         queue.sync {
             latestRequestTokens[displayID] = requestToken
@@ -988,7 +1097,7 @@ final class RendererController {
 
         var args: [String] = []
         var env = ProcessInfo.processInfo.environment
-        if AppDelegate.shared.globalSettingsViewModel.settings.isDeveloperModeEnabled {
+        if options.developerModeEnabled {
             env["WR_DEBUG"] = "1"
         }
 
@@ -1126,7 +1235,7 @@ final class RendererController {
             // display-disconnect and app-shutdown calls therefore either cancel
             // this generation before launch or collect the registered process;
             // there is no unowned child between Process.run() and `candidates`.
-            guard generations[displayID] == generation,
+            guard isCurrentSubmission(requestToken, on: displayID), generations[displayID] == generation,
                   latestRequestTokens[displayID] == requestToken,
                   launchingRequests[displayID]?.requestToken == requestToken,
                   launchingRequests[displayID]?.leaseID == leaseID,
@@ -1259,6 +1368,7 @@ final class RendererController {
             let availability = WallpaperPositionAvailability(known: true, x: x, y: y)
             guard availability != handle.positionAvailability else { return }
             handle.positionAvailability = availability
+            updateQuerySnapshotLocked()
             if isActive {
                 DispatchQueue.main.async { [weak self] in
                     self?.onPositionAvailabilityChanged?(displayID)
@@ -2040,6 +2150,11 @@ final class RendererController {
     }
 
     func stop(displayID: CGDirectDisplayID) {
+        if !isOnCommandQueue {
+            invalidateSubmissions(only: displayID)
+            commandQueue.async { [self] in stop(displayID: displayID) }
+            return
+        }
         let (handles, transitionCompletions) = queue.sync {
             removeDisplayStateLocked(displayID)
         }
@@ -2049,6 +2164,11 @@ final class RendererController {
     }
 
     func stopDisplays(except displayIDs: Set<CGDirectDisplayID>) {
+        if !isOnCommandQueue {
+            invalidateSubmissions(except: displayIDs)
+            commandQueue.async { [self] in stopDisplays(except: displayIDs) }
+            return
+        }
         let (handles, transitionCompletions): ([RendererProcess], [(Bool) -> Void]) = queue.sync {
             let owned = Set(running.keys)
                 .union(candidates.keys)
@@ -2074,6 +2194,11 @@ final class RendererController {
     }
 
     func stopAll() {
+        if !isOnCommandQueue {
+            invalidateSubmissions()
+            commandQueue.async { [self] in stopAll() }
+            return
+        }
         let (handles, transitionCompletions): ([RendererProcess], [(Bool) -> Void]) = queue.sync {
             let owned = Set(running.keys)
                 .union(candidates.keys)
@@ -2106,6 +2231,10 @@ final class RendererController {
     /// SIGKILL — waiting on every renderer in parallel so the worst case stays
     /// around two seconds regardless of how many are running.
     func stopAllAndWait() {
+        queryLock.lock()
+        shuttingDown = true
+        pendingSubmissions.removeAll()
+        queryLock.unlock()
         let (handles, transitionCompletions): ([RendererProcess], [(Bool) -> Void]) = queue.sync {
             let owned = Set(running.keys)
                 .union(candidates.keys)
@@ -2164,11 +2293,14 @@ final class RendererController {
     }
 
     func isRendering(onDisplay displayID: CGDirectDisplayID) -> Bool {
-        queue.sync { running[displayID]?.process.isRunning ?? false }
+        readSnapshot().rendering.contains(displayID)
     }
 
     private func hasCoverageOrWorkLocked(_ displayID: CGDirectDisplayID) -> Bool {
-        running[displayID] != nil ||
+        queryLock.lock()
+        let submitted = pendingSubmissions[displayID] != nil
+        queryLock.unlock()
+        return submitted || running[displayID] != nil ||
             candidates[displayID] != nil ||
             transitions[displayID] != nil ||
             pendingRequests[displayID] != nil ||
@@ -2199,7 +2331,7 @@ final class RendererController {
     /// handles are deliberately excluded: they are confirmed hidden and can
     /// never become coverage again.
     func hasCoverageOrWork(onDisplay displayID: CGDirectDisplayID) -> Bool {
-        queue.sync { hasCoverageOrWorkLocked(displayID) }
+        readSnapshot().coverage.contains(displayID)
     }
 
     /// Runs once after live coverage is restored or all controller work for the
@@ -2209,20 +2341,19 @@ final class RendererController {
     func whenCoverageOrWorkSettles(onDisplay displayID: CGDirectDisplayID,
                                    completion: @escaping () -> Void) -> UUID {
         let token = UUID()
-        let settled = queue.sync {
-            guard !coverageOrWorkSettledLocked(displayID) else { return true }
-            coverageSettlementWaiters[displayID, default: [:]][token] = completion
-            return false
-        }
-        if settled {
-            DispatchQueue.main.async(execute: completion)
+        queue.async { [self] in
+            if coverageOrWorkSettledLocked(displayID) {
+                DispatchQueue.main.async(execute: completion)
+            } else {
+                coverageSettlementWaiters[displayID, default: [:]][token] = completion
+            }
         }
         return token
     }
 
     func cancelCoverageOrWorkWaiter(_ token: UUID,
                                     onDisplay displayID: CGDirectDisplayID) {
-        queue.sync {
+        queue.async { [self] in
             guard var waiters = coverageSettlementWaiters[displayID] else { return }
             waiters[token] = nil
             coverageSettlementWaiters[displayID] = waiters.isEmpty ? nil : waiters
@@ -2235,28 +2366,20 @@ final class RendererController {
     }
 
     func currentWallpaper(onDisplay displayID: CGDirectDisplayID) -> WEWallpaper? {
-        queue.sync { running[displayID]?.wallpaper }
+        readSnapshot().wallpapers[displayID]
     }
 
     var activeScreens: [Int] {
-        let displayIDs = queue.sync { Array(running.keys) }
+        let displayIDs = Array(readSnapshot().wallpapers.keys)
         return displayIDs.compactMap(screenIndex(for:)).sorted()
     }
 
     var activeDisplayIDs: [CGDirectDisplayID] {
-        queue.sync { Array(running.keys).sorted() }
+        Array(readSnapshot().wallpapers.keys).sorted()
     }
 
     var processIdentifiers: Set<pid_t> {
-        queue.sync {
-            let standbys = transitions.values.compactMap(\.standby)
-            let handles = Array(running.values) + Array(candidates.values) +
-                standbys + Array(visibilityBlockers.values) +
-                Array(awaitingVisibleExits.values) + Array(retiring.values)
-            return Set(handles.compactMap { handle in
-                handle.process.isRunning ? handle.process.processIdentifier : nil
-            })
-        }
+        readSnapshot().processIDs
     }
 
     // MARK: Live control (broadcast or per-screen)
@@ -2348,7 +2471,11 @@ final class RendererController {
     }
 
     private func forEach(_ displayID: CGDirectDisplayID?, includeCandidates: Bool = true,
-                         _ body: (RendererProcess) -> Void) {
+                         _ body: @escaping (RendererProcess) -> Void) {
+        if !isOnCommandQueue {
+            commandQueue.async { [self] in forEach(displayID, includeCandidates: includeCandidates, body) }
+            return
+        }
         // Snapshot the targets under the controller queue, then run `body`
         // outside it. Bodies talk to renderer stdin, which must never happen
         // while the serial queue is held.
@@ -2481,8 +2608,19 @@ final class RendererController {
     /// commands are emitted solely to the matching, currently visible active.
     func applyPlaybackOptions(_ options: RenderOptions, assignmentID: UUID,
                               onDisplay displayID: CGDirectDisplayID) {
+        if !isOnCommandQueue {
+            commandQueue.async { [self] in applyPlaybackOptions(options, assignmentID: assignmentID, onDisplay: displayID) }
+            return
+        }
         var scopedOptions = options
         scopedOptions.assignmentID = assignmentID
+        let wallpaper = queue.sync {
+            targetsLocked(displayID, includeCandidates: true, assignmentID: assignmentID).first?.wallpaper
+                ?? pendingRequests[displayID]?.wallpaper
+        }
+        if let wallpaper {
+            scopedOptions.userProperties = WallpaperViewModel.resolveProperties(options.userProperties, for: wallpaper)
+        }
         let actives: [RendererProcess] = queue.sync {
             let handles = targetsLocked(
                 displayID, includeCandidates: true, assignmentID: assignmentID)
@@ -2506,6 +2644,10 @@ final class RendererController {
     }
 
     func setVolume(_ volume: Float, onDisplay displayID: CGDirectDisplayID?) {
+        if !isOnCommandQueue {
+            commandQueue.async { [self] in setVolume(volume, onDisplay: displayID) }
+            return
+        }
         let actives: [RendererProcess] = queue.sync {
             let list = targetsLocked(displayID, includeCandidates: true)
             for handle in list { handle.desiredVolume = volume }
@@ -2525,6 +2667,10 @@ final class RendererController {
     }
 
     func setMuted(_ muted: Bool, onDisplay displayID: CGDirectDisplayID?) {
+        if !isOnCommandQueue {
+            commandQueue.async { [self] in setMuted(muted, onDisplay: displayID) }
+            return
+        }
         let actives: [RendererProcess] = queue.sync {
             let list = targetsLocked(displayID, includeCandidates: true)
             for handle in list { handle.desiredMuted = muted }
@@ -2572,6 +2718,10 @@ final class RendererController {
     }
 
     func setPower(_ state: MiragePowerState, fps: Int?, onDisplay displayID: CGDirectDisplayID?) {
+        if !isOnCommandQueue {
+            commandQueue.async { [self] in setPower(state, fps: fps, onDisplay: displayID) }
+            return
+        }
         let paused = state == .pause
         // Hidden candidates/standbys only record policy. Sending resume to a
         // hidden Web renderer would restart its global input monitors, and
@@ -2626,12 +2776,14 @@ final class RendererController {
             guard let resolved = self.displayID(for: screenIndex) else { return }
             displayID = resolved
         } else { displayID = nil }
-        let actives: [RendererProcess] = queue.sync {
-            targetsLocked(displayID, includeCandidates: true).forEach { $0.desiredFps = fps }
-            updatePendingOptionsLocked(displayID) { $0.fps = fps }
-            return liveRunningTargetsLocked(displayID)
+        commandQueue.async { [self] in
+            let actives: [RendererProcess] = queue.sync {
+                targetsLocked(displayID, includeCandidates: true).forEach { $0.desiredFps = fps }
+                updatePendingOptionsLocked(displayID) { $0.fps = fps }
+                return liveRunningTargetsLocked(displayID)
+            }
+            actives.forEach { $0.send(["cmd": "fps", "value": fps]) }
         }
-        actives.forEach { $0.send(["cmd": "fps", "value": fps]) }
     }
 
     func setSpeed(_ speed: Float, on screenIndex: Int? = nil) {
@@ -2644,6 +2796,10 @@ final class RendererController {
     }
 
     func setSpeed(_ speed: Float, onDisplay displayID: CGDirectDisplayID?) {
+        if !isOnCommandQueue {
+            commandQueue.async { [self] in setSpeed(speed, onDisplay: displayID) }
+            return
+        }
         let actives: [RendererProcess] = queue.sync {
             let list = targetsLocked(displayID, includeCandidates: true)
             for handle in list { handle.desiredSpeed = speed }
@@ -2665,6 +2821,10 @@ final class RendererController {
 
     func setFillMode(_ mode: FillMode, onDisplay displayID: CGDirectDisplayID?,
                      assignmentID: UUID? = nil) {
+        if !isOnCommandQueue {
+            commandQueue.async { [self] in setFillMode(mode, onDisplay: displayID, assignmentID: assignmentID) }
+            return
+        }
         let actives: [RendererProcess] = queue.sync {
             targetsLocked(displayID, includeCandidates: true,
                           assignmentID: assignmentID).forEach {
@@ -2680,12 +2840,9 @@ final class RendererController {
 
     func positionAvailability(onDisplay displayID: CGDirectDisplayID,
                               wallpaperID: String) -> WallpaperPositionAvailability {
-        queue.sync {
-            guard let handle = running[displayID], handle.wallpaper.id == wallpaperID else {
-                return .init()
-            }
-            return handle.positionAvailability
-        }
+        let snapshot = readSnapshot()
+        guard snapshot.wallpapers[displayID]?.id == wallpaperID else { return .init() }
+        return snapshot.positions[displayID] ?? .init()
     }
 
     private func sendPosition(_ position: WallpaperPosition, to handle: RendererProcess) {
@@ -2695,6 +2852,10 @@ final class RendererController {
 
     func setPosition(_ position: WallpaperPosition, onDisplay displayID: CGDirectDisplayID,
                      assignmentID: UUID) {
+        if !isOnCommandQueue {
+            commandQueue.async { [self] in setPosition(position, onDisplay: displayID, assignmentID: assignmentID) }
+            return
+        }
         let actives: [RendererProcess] = queue.sync {
             targetsLocked(displayID, includeCandidates: true, assignmentID: assignmentID).forEach {
                 $0.desiredPosition = position
@@ -2723,6 +2884,12 @@ final class RendererController {
     func setProperty(key: String, property: WEProjectProperty,
                      onDisplay displayID: CGDirectDisplayID?,
                      assignmentID: UUID? = nil) {
+        if !isOnCommandQueue {
+            commandQueue.async { [self] in
+                setProperty(key: key, property: property, onDisplay: displayID, assignmentID: assignmentID)
+            }
+            return
+        }
         let actives: [RendererProcess] = queue.sync {
             targetsLocked(displayID, includeCandidates: true,
                           assignmentID: assignmentID).forEach {
@@ -2739,6 +2906,10 @@ final class RendererController {
     }
 
     func resetScriptStorage(onDisplay displayID: CGDirectDisplayID?, assignmentID: UUID? = nil) {
+        if !isOnCommandQueue {
+            commandQueue.async { [self] in resetScriptStorage(onDisplay: displayID, assignmentID: assignmentID) }
+            return
+        }
         let actives: [RendererProcess] = queue.sync {
             liveRunningTargetsLocked(displayID, assignmentID: assignmentID)
         }

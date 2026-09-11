@@ -29,6 +29,38 @@ final class ScreenSaverManager {
     static let shared = ScreenSaverManager()
 
     private let fm = FileManager.default
+    private let configurationDirectory: URL?
+    private let configurationQueue = DispatchQueue(label: "cn.laobamac.Mirage.screensaver.configuration", qos: .utility)
+
+    struct ConfigurationContext {
+        let positions: [String: WallpaperPosition]
+        let selectedPosition: WallpaperPosition
+        let fps: Int
+        let enableHDRVideo: Bool
+        let loadFromMemory: Bool
+        let language: String
+
+        init(positions: [String: WallpaperPosition], selectedPosition: WallpaperPosition,
+             fps: Int, enableHDRVideo: Bool, loadFromMemory: Bool, language: String) {
+            self.positions = positions
+            self.selectedPosition = selectedPosition
+            self.fps = fps
+            self.enableHDRVideo = enableHDRVideo
+            self.loadFromMemory = loadFromMemory
+            self.language = language
+        }
+
+        init(wallpaperID: String, runtime: WallpaperRuntimeState, fps: Int) {
+            let model = AppDelegate.shared.wallpaperViewModel
+            let settings = AppDelegate.shared.globalSettingsViewModel.settings
+            let positions = model.positions(for: wallpaperID)
+            self.init(positions: positions,
+                      selectedPosition: positions[model.selectedDisplayKey.rawValue] ?? runtime.position,
+                      fps: fps, enableHDRVideo: settings.shouldEnableHDRVideo,
+                      loadFromMemory: (settings.wallpaperLoadSource ?? .disk) == .memory,
+                      language: MirageLocalization.shared.locale.identifier)
+        }
+    }
     private let hostBundleIdentifiers = [
         "com.apple.ScreenSaver.Engine",
         "com.apple.ScreenSaver.Engine.legacyScreenSaver"
@@ -41,8 +73,9 @@ final class ScreenSaverManager {
         "Contents/Resources/thumbnail@2x.png"
     ]
 
-    private init() {
-        migrateObsoleteDynamicLockScreenIfNeeded()
+    init(configurationDirectory: URL? = nil) {
+        self.configurationDirectory = configurationDirectory
+        if configurationDirectory == nil { migrateObsoleteDynamicLockScreenIfNeeded() }
     }
 
     var installedURL: URL {
@@ -50,7 +83,8 @@ final class ScreenSaverManager {
     }
 
     var configurationURL: URL {
-        fm.homeDirectoryForCurrentUser.appending(path: "Library/Application Support/Mirage/screensaver.json")
+        (configurationDirectory ?? fm.homeDirectoryForCurrentUser.appending(path: "Library/Application Support/Mirage"))
+            .appending(path: "screensaver.json")
     }
 
     var dynamicLockScreenInstalledURL: URL {
@@ -74,8 +108,8 @@ final class ScreenSaverManager {
     }
 
     var dynamicLockScreenConfigurationURL: URL {
-        fm.homeDirectoryForCurrentUser.appending(
-            path: "Library/Application Support/Mirage/dynamic-lock-screen-screensaver.json")
+        (configurationDirectory ?? fm.homeDirectoryForCurrentUser.appending(path: "Library/Application Support/Mirage"))
+            .appending(path: "dynamic-lock-screen-screensaver.json")
     }
 
     var isInstalled: Bool { fm.fileExists(atPath: installedURL.path) }
@@ -317,7 +351,38 @@ final class ScreenSaverManager {
 
     func configure(with wallpaper: WEWallpaper, runtime: WallpaperRuntimeState,
                    properties: [String: WEProjectProperty], fps: Int,
-                   forDynamicLockScreen: Bool = false) throws {
+                   forDynamicLockScreen: Bool = false,
+                   context: ConfigurationContext? = nil) throws {
+        let snapshot = context ?? ConfigurationContext(wallpaperID: wallpaper.id, runtime: runtime, fps: fps)
+        try configurationQueue.sync {
+            try writeConfiguration(with: wallpaper, runtime: runtime, properties: properties,
+                                   context: snapshot, forDynamicLockScreen: forDynamicLockScreen)
+        }
+    }
+
+    func updateRuntimeIfConfigured(wallpaper: WEWallpaper, runtime: WallpaperRuntimeState,
+                                   properties: [String: WEProjectProperty], context: ConfigurationContext) {
+        configurationQueue.sync {
+            let targets: [(Bool, [String: Any])] = [false, true].compactMap { dynamic in
+                let url = dynamic ? dynamicLockScreenConfigurationURL : configurationURL
+                guard let object = supportedConfigurationObject(at: url),
+                      object["wallpaperID"] as? String == wallpaper.id else { return nil }
+                return (dynamic, object)
+            }
+            guard !targets.isEmpty else { return }
+            let resolved = WallpaperViewModel.resolveProperties(properties, for: wallpaper)
+            for (target, object) in targets {
+                try? writeConfiguration(with: wallpaper, runtime: runtime, properties: resolved,
+                                        context: context, forDynamicLockScreen: target,
+                                        preservingSettingsFrom: object)
+            }
+        }
+    }
+
+    private func writeConfiguration(with wallpaper: WEWallpaper, runtime: WallpaperRuntimeState,
+                                    properties: [String: WEProjectProperty], context: ConfigurationContext,
+                                    forDynamicLockScreen: Bool,
+                                    preservingSettingsFrom existing: [String: Any]? = nil) throws {
         guard wallpaper.isValid else { throw MirageScreenSaverError.noWallpaper }
         guard wallpaper.kind == .video || wallpaper.kind == .scene else {
             throw MirageScreenSaverError.unsupportedWallpaper
@@ -348,10 +413,7 @@ final class ScreenSaverManager {
             }
         }
 
-        let positions = AppDelegate.shared.wallpaperViewModel.positions(for: wallpaper.id)
-        let selectedPosition = positions[AppDelegate.shared.wallpaperViewModel.selectedDisplayKey.rawValue]
-            ?? runtime.position
-        let object: [String: Any] = [
+        var object: [String: Any] = [
             "version": 1,
             "wallpaperID": wallpaper.id,
             "title": wallpaper.project.title,
@@ -359,14 +421,19 @@ final class ScreenSaverManager {
             "entryPath": wallpaper.resolvedEntryURL.path,
             "playableEntryPath": playableVideoCacheURL(for: wallpaper.resolvedEntryURL).path,
             "rawProperties": rawPropertyValues,
-            "fps": min(max(fps, 10), 60),
+            "fps": min(max(context.fps, 10), 60),
             "fillMode": runtime.fillMode.rawValue,
-            "position": selectedPosition.dictionary,
-            "positionsByDisplay": positions.mapValues(\.dictionary),
-            "enableHDRVideo": AppDelegate.shared.globalSettingsViewModel.settings.shouldEnableHDRVideo,
-            "loadFromMemory": (AppDelegate.shared.globalSettingsViewModel.settings.wallpaperLoadSource ?? .disk) == .memory,
-            "language": MirageLocalization.shared.locale.identifier
+            "position": context.selectedPosition.dictionary,
+            "positionsByDisplay": context.positions.mapValues(\.dictionary),
+            "enableHDRVideo": context.enableHDRVideo,
+            "loadFromMemory": context.loadFromMemory,
+            "language": context.language
         ]
+        if let existing {
+            for key in ["fps", "enableHDRVideo", "loadFromMemory", "language"] {
+                if let value = existing[key] { object[key] = value }
+            }
+        }
         guard JSONSerialization.isValidJSONObject(object) else { throw MirageScreenSaverError.invalidConfiguration }
         let data = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
         let targetURL = forDynamicLockScreen
@@ -377,18 +444,37 @@ final class ScreenSaverManager {
     }
 
     func updateLoadFromMemory(_ enabled: Bool, forDynamicLockScreen: Bool = false) {
-        let targetURL = forDynamicLockScreen
-            ? dynamicLockScreenConfigurationURL
-            : configurationURL
-        guard let data = try? Data(contentsOf: targetURL),
-              var object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return }
-        object["loadFromMemory"] = enabled
-        guard JSONSerialization.isValidJSONObject(object),
-              let updated = try? JSONSerialization.data(
-                withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
-        else { return }
-        try? updated.write(to: targetURL, options: .atomic)
+        updateConfigurationValues(["loadFromMemory": enabled], forDynamicLockScreen: forDynamicLockScreen)
+    }
+
+    func updateGlobalSettings(_ settings: GlobalSettings, languageIdentifier: String) {
+        let values: [String: Any] = [
+            "fps": min(max(Int(settings.fps), 10), 60),
+            "enableHDRVideo": settings.shouldEnableHDRVideo,
+            "loadFromMemory": (settings.wallpaperLoadSource ?? .disk) == .memory,
+            "language": languageIdentifier
+        ]
+        updateConfigurationValues(values, forDynamicLockScreen: false)
+        updateConfigurationValues(values, forDynamicLockScreen: true)
+    }
+
+    private func updateConfigurationValues(_ values: [String: Any], forDynamicLockScreen: Bool) {
+        configurationQueue.async { [self] in
+            let targetURL = forDynamicLockScreen
+                ? dynamicLockScreenConfigurationURL
+                : configurationURL
+            guard var object = supportedConfigurationObject(at: targetURL) else { return }
+            object.merge(values) { _, latest in latest }
+            guard JSONSerialization.isValidJSONObject(object),
+                  let updated = try? JSONSerialization.data(
+                    withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
+            else { return }
+            try? updated.write(to: targetURL, options: .atomic)
+        }
+    }
+
+    func flushConfigurationUpdates() {
+        configurationQueue.sync {}
     }
 
     func configuredWallpaperID() -> String? {
@@ -400,24 +486,27 @@ final class ScreenSaverManager {
     }
 
     func remapPersistedPaths(_ mappings: [String: String]) {
-        guard !mappings.isEmpty else { return }
-        let remapper = WallpaperPathRemapper(mappings)
-        for url in [configurationURL, dynamicLockScreenConfigurationURL] {
-            guard let data = try? Data(contentsOf: url),
-                  let object = try? JSONSerialization.jsonObject(with: data) else { continue }
-            func remap(_ value: Any) -> Any {
-                if let string = value as? String { return remapper.path(string) }
-                if let array = value as? [Any] { return array.map(remap) }
-                if let dictionary = value as? [String: Any] {
-                    return dictionary.mapValues(remap)
+        configurationQueue.sync {
+            guard !mappings.isEmpty else { return }
+            let remapper = WallpaperPathRemapper(mappings)
+            for url in [configurationURL, dynamicLockScreenConfigurationURL] {
+                guard let data = try? Data(contentsOf: url),
+                      let object = try? JSONSerialization.jsonObject(with: data) else { continue }
+                func remap(_ value: Any) -> Any {
+                    if let string = value as? String { return remapper.path(string) }
+                    if let array = value as? [Any] { return array.map(remap) }
+                    if let dictionary = value as? [String: Any] {
+                        return dictionary.mapValues(remap)
+                    }
+                    return value
                 }
-                return value
+                let remapped = remap(object)
+                guard JSONSerialization.isValidJSONObject(remapped),
+                      let encoded = try? JSONSerialization.data(
+                        withJSONObject: remapped, options: [.prettyPrinted, .sortedKeys]) else { continue }
+                try? encoded.write(to: url, options: .atomic)
             }
-            let remapped = remap(object)
-            guard JSONSerialization.isValidJSONObject(remapped),
-                  let encoded = try? JSONSerialization.data(
-                    withJSONObject: remapped, options: [.prettyPrinted, .sortedKeys]) else { continue }
-            try? encoded.write(to: url, options: .atomic)
+
         }
     }
 
@@ -439,13 +528,16 @@ final class ScreenSaverManager {
     }
 
     func migrateDynamicLockScreenConfigurationIfNeeded() {
-        guard supportedConfigurationObject(at: dynamicLockScreenConfigurationURL) == nil,
-              supportedConfigurationObject(at: configurationURL) != nil,
-              let data = try? Data(contentsOf: configurationURL) else { return }
-        try? fm.createDirectory(
-            at: dynamicLockScreenConfigurationURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true)
-        try? data.write(to: dynamicLockScreenConfigurationURL, options: .atomic)
+        configurationQueue.sync {
+            guard supportedConfigurationObject(at: dynamicLockScreenConfigurationURL) == nil,
+                  supportedConfigurationObject(at: configurationURL) != nil,
+                  let data = try? Data(contentsOf: configurationURL) else { return }
+            try? fm.createDirectory(
+                at: dynamicLockScreenConfigurationURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+            try? data.write(to: dynamicLockScreenConfigurationURL, options: .atomic)
+
+        }
     }
 
     private func supportedConfigurationObject(at url: URL) -> [String: Any]? {
@@ -458,11 +550,14 @@ final class ScreenSaverManager {
     }
 
     private func discardUnsupportedConfiguration() {
-        for url in [configurationURL, dynamicLockScreenConfigurationURL] {
-            if fm.fileExists(atPath: url.path),
-               supportedConfigurationObject(at: url) == nil {
-                try? fm.removeItem(at: url)
+        configurationQueue.sync {
+            for url in [configurationURL, dynamicLockScreenConfigurationURL] {
+                if fm.fileExists(atPath: url.path),
+                   supportedConfigurationObject(at: url) == nil {
+                    try? fm.removeItem(at: url)
+                }
             }
+
         }
     }
 

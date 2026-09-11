@@ -7,16 +7,16 @@
 import SwiftUI
 
 struct SubscribedWorkshopView: View {
-    @EnvironmentObject private var globalSettingsViewModel: GlobalSettingsViewModel
-    @ObservedObject var workshopViewModel: WorkshopViewModel
-    @ObservedObject var viewModel: ContentViewModel
-    @ObservedObject var wallpaperViewModel: WallpaperViewModel
+    @Environment(GlobalSettingsViewModel.self) private var globalSettingsViewModel
+    @Bindable var workshopViewModel: WorkshopViewModel
+    @Bindable var viewModel: ContentViewModel
+    @Bindable var wallpaperViewModel: WallpaperViewModel
     @ObservedObject private var steamService = SteamServiceManager.shared
     let isActive: Bool
 
-    @State private var hoveredItemID: String?
 
     var body: some View {
+        @Bindable var globalSettingsViewModel = globalSettingsViewModel
         VStack(spacing: 8) {
             toolbar
 
@@ -331,18 +331,15 @@ struct SubscribedWorkshopView: View {
                         ForEach(workshopViewModel.subscriptionItems) { item in
                             WorkshopItemCard(
                                 item: item,
-                                isHovered: hoveredItemID == item.id,
+
                                 isSelected: workshopViewModel.selectedItem?.id == item.id,
                                 isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
                                 presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
-                                downloadState: workshopViewModel.downloadState(for: item.publishedFileId),
+                                downloadTask: workshopViewModel.downloadTask(for: item.publishedFileId),
                                 isFavorite: workshopViewModel.isWorkshopFavorite(item.publishedFileId),
                                 isActive: isActive,
-                                animatedPreviewMode: globalSettingsViewModel.settings.animatedPreviewPlaybackMode
+                                animatedPreviewMode: globalSettingsViewModel.animatedPreviewPlaybackMode
                             )
-                            .onHover { hovering in
-                                hoveredItemID = hovering ? item.id : nil
-                            }
                             .onTapGesture {
                                 workshopViewModel.selectWorkshopItem(item)
                             }

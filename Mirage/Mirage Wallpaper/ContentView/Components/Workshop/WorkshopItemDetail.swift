@@ -9,7 +9,7 @@ import Combine
 
 struct WorkshopItemDetail: View {
     var item: WorkshopItem?
-    @ObservedObject var workshopViewModel: WorkshopViewModel
+    @Bindable var workshopViewModel: WorkshopViewModel
     var isEmbedded: Bool = false
     var embeddedCreatorSteamId: String?
     var isActive: Bool = true
@@ -515,7 +515,7 @@ struct WorkshopItemDetail: View {
     @ViewBuilder
     func downloadSection(for item: WorkshopItem) -> some View {
         let hasDownloadTask = workshopViewModel.downloadState(for: item.publishedFileId) != nil
-        let installed = workshopViewModel.installedItem(workshopId: item.publishedFileId)
+        let installed = workshopViewModel.cachedInstalledWallpapers[item.publishedFileId]
         if let installed, installed.needsPresetDependency {
             VStack(spacing: 6) {
                 Text("预设已下载，但缺少基础壁纸 \(installed.presetDependency?.rawValue ?? "")")
@@ -529,7 +529,7 @@ struct WorkshopItemDetail: View {
                 }
                 .buttonStyle(.borderedProminent)
             }
-        } else if !hasDownloadTask, installed?.isValid == true {
+        } else if !hasDownloadTask, installed?.presentationIsValid == true {
             Button { } label: {
                 Label(LocalizedStringKey(item.isPreset ? "预设已安装" : "已下载"), systemImage: "checkmark.circle.fill")
                     .frame(maxWidth: .infinity)
@@ -757,10 +757,9 @@ enum CreatorGridMetrics {
 
 struct CreatorProfileView: View {
     let creator: WorkshopCreator
-    @ObservedObject var workshopViewModel: WorkshopViewModel
+    @Bindable var workshopViewModel: WorkshopViewModel
     let animatedPreviewMode: GSAnimatedPreviewPlayback
     @State private var selectedDetailItem: WorkshopItem?
-    @State private var hoveredItemID: String?
     @AppStorage("CreatorIconSize") private var iconSize: Double = CreatorGridMetrics.medium
     @AppStorage("CreatorPerPage") private var creatorPageSize: Int = 10
 
@@ -901,18 +900,15 @@ struct CreatorProfileView: View {
                     ForEach(workshopViewModel.creatorItems) { item in
                         WorkshopItemCard(
                             item: item,
-                            isHovered: hoveredItemID == item.id,
+
                             isSelected: false,
                             isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
                             presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
-                            downloadState: workshopViewModel.downloadState(for: item.publishedFileId),
+                            downloadTask: workshopViewModel.downloadTask(for: item.publishedFileId),
                             isFavorite: workshopViewModel.isWorkshopFavorite(item.publishedFileId),
                             isActive: selectedDetailItem == nil,
                             animatedPreviewMode: animatedPreviewMode
                         )
-                        .onHover { hovering in
-                            hoveredItemID = hovering ? item.id : nil
-                        }
                         .onTapGesture {
                             selectedDetailItem = item
                         }

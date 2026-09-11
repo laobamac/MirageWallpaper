@@ -7,7 +7,7 @@
 import SwiftUI
 
 struct DisplayPicker: View {
-    @ObservedObject var wallpaperViewModel: WallpaperViewModel
+    @Bindable var wallpaperViewModel: WallpaperViewModel
     @ObservedObject private var registry = DisplayRegistryObserver.shared
 
     @State private var hovering = false
@@ -73,7 +73,7 @@ struct DisplayPicker: View {
             return L("选择要设置的显示器")
         }
         let wallpaper = wallpaperViewModel.wallpaper(for: selected.key)
-        guard wallpaper.isValid else {
+        guard wallpaper.presentationIsValid else {
             return L("%@ · 未渲染壁纸", selected.name)
         }
         return L("%@ · 当前壁纸：%@", selected.name, wallpaper.project.title)
@@ -88,7 +88,7 @@ struct DisplayPicker: View {
         text += " · \(Int(info.size.width)) × \(Int(info.size.height))"
         if info.isMain { text += L(" · 主屏") }
         let wallpaper = wallpaperViewModel.wallpaper(for: info.key)
-        if wallpaper.isValid {
+        if wallpaper.presentationIsValid {
             text += " · " + wallpaper.project.title
         } else {
             text += " · " + L("未渲染壁纸")

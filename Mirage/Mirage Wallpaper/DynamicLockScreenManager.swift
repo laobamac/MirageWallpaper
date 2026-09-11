@@ -90,6 +90,8 @@ final class DynamicLockScreenManager: ObservableObject {
     private let registeredExtensionFingerprintKey =
         "Mirage.DynamicLockScreen.RegisteredExtensionFingerprint"
     private let extensionQueue = DispatchQueue(label: "cn.laobamac.Mirage.wallpaper-extension", qos: .utility)
+    private let configurationUpdates = CoalescingWorkQueue(label: "cn.laobamac.Mirage.dynamicLockScreen.configuration")
+    private let configurationLock = NSRecursiveLock()
 
     private init() {
         let storedEnabled = UserDefaults.standard.bool(forKey: enabledKey)
@@ -202,6 +204,8 @@ final class DynamicLockScreenManager: ObservableObject {
                                    properties: [String: WEProjectProperty],
                                    fps: Int,
                                    displayIDs: [UInt32]) throws {
+        configurationLock.lock()
+        defer { configurationLock.unlock() }
         guard canUse else { throw DynamicLockScreenError.notEnabled }
         guard wallpaper.isValid else { throw DynamicLockScreenError.noWallpaper }
         guard wallpaper.kind == .video || wallpaper.kind == .scene else {
@@ -309,35 +313,47 @@ final class DynamicLockScreenManager: ObservableObject {
 
     func updatePosition(_ position: WallpaperPosition, fillMode: FillMode,
                         wallpaperID: String, displayID: UInt32) {
-        guard let configurationURL,
-              let data = try? Data(contentsOf: configurationURL),
-              var configuration = try? JSONDecoder().decode(DynamicLockScreenConfiguration.self, from: data),
-              let key = configuration.displays.first(where: {
-                  $0.value.displayID == displayID && $0.value.wallpaperID == wallpaperID
-              })?.key,
-              var display = configuration.displays[key],
-              (display.position ?? .center) != position || display.fillMode != fillMode.rawValue else { return }
-        display.position = position
-        display.fillMode = fillMode.rawValue
-        configuration.displays[key] = display
-        guard let updated = try? JSONEncoder().encode(configuration),
-              (try? updated.write(to: configurationURL, options: .atomic)) != nil else { return }
-        notifyConfigurationChanged()
+        guard let configurationURL else { return }
+        let lock = configurationLock
+        configurationUpdates.submit(key: "position:\(displayID)") {
+            lock.lock()
+            defer { lock.unlock() }
+            guard let data = try? Data(contentsOf: configurationURL),
+                  var configuration = try? JSONDecoder().decode(DynamicLockScreenConfiguration.self, from: data),
+                  let key = configuration.displays.first(where: {
+                      $0.value.displayID == displayID && $0.value.wallpaperID == wallpaperID
+                  })?.key,
+                  var display = configuration.displays[key],
+                  (display.position ?? .center) != position || display.fillMode != fillMode.rawValue else { return }
+            display.position = position
+            display.fillMode = fillMode.rawValue
+            configuration.displays[key] = display
+            guard let updated = try? JSONEncoder().encode(configuration),
+                  (try? updated.write(to: configurationURL, options: .atomic)) != nil else { return }
+            Self.postConfigurationChanged()
+        }
     }
 
     func updateLoadFromMemory(_ enabled: Bool) {
-        guard let configurationURL,
-              let data = try? Data(contentsOf: configurationURL),
-              var configuration = try? JSONDecoder().decode(
-                DynamicLockScreenConfiguration.self, from: data)
-        else { return }
-        for key in configuration.displays.keys {
-            configuration.displays[key]?.loadFromMemory = enabled
+        guard let configurationURL else { return }
+        let lock = configurationLock
+        configurationUpdates.submit(key: "loadFromMemory") {
+            lock.lock()
+            defer { lock.unlock() }
+            guard let data = try? Data(contentsOf: configurationURL),
+                  var configuration = try? JSONDecoder().decode(DynamicLockScreenConfiguration.self, from: data)
+            else { return }
+            for key in configuration.displays.keys {
+                configuration.displays[key]?.loadFromMemory = enabled
+            }
+            guard let updated = try? JSONEncoder().encode(configuration),
+                  (try? updated.write(to: configurationURL, options: .atomic)) != nil else { return }
+            Self.postConfigurationChanged()
         }
-        guard let updated = try? JSONEncoder().encode(configuration),
-              (try? updated.write(to: configurationURL, options: .atomic)) != nil
-        else { return }
-        notifyConfigurationChanged()
+    }
+
+    func flushConfigurationUpdates() {
+        configurationUpdates.flush()
     }
 
     func refreshDesktopFallback(forDisplay displayID: UInt32) {
@@ -357,6 +373,8 @@ final class DynamicLockScreenManager: ObservableObject {
 
     @discardableResult
     func updateDesktopFallback(from source: URL, forDisplay displayID: UInt32) throws -> Bool {
+        configurationLock.lock()
+        defer { configurationLock.unlock() }
         guard let configurationURL,
               let data = try? Data(contentsOf: configurationURL),
               var configuration = try? JSONDecoder().decode(
@@ -380,6 +398,8 @@ final class DynamicLockScreenManager: ObservableObject {
     }
 
     func restoreSystemDesktopFallbacks() {
+        configurationLock.lock()
+        defer { configurationLock.unlock() }
         guard let configurationURL,
               let data = try? Data(contentsOf: configurationURL),
               var configuration = try? JSONDecoder().decode(
@@ -417,6 +437,8 @@ final class DynamicLockScreenManager: ObservableObject {
     }
 
     func clearConfiguration() {
+        configurationLock.lock()
+        defer { configurationLock.unlock() }
         restoreSystemDesktopFallbacks()
         guard let configurationURL,
               let data = try? Data(contentsOf: configurationURL),
@@ -819,6 +841,8 @@ final class DynamicLockScreenManager: ObservableObject {
     }
 
     private func activateStoredConfiguration() {
+        configurationLock.lock()
+        defer { configurationLock.unlock() }
         guard let configurationURL,
               let data = try? Data(contentsOf: configurationURL),
               var configuration = try? JSONDecoder().decode(
@@ -832,6 +856,8 @@ final class DynamicLockScreenManager: ObservableObject {
     }
 
     private func discardUnsupportedConfiguration() {
+        configurationLock.lock()
+        defer { configurationLock.unlock() }
         guard let url = configurationURL,
               let data = try? Data(contentsOf: url),
               let configuration = try? JSONDecoder().decode(DynamicLockScreenConfiguration.self, from: data) else { return }
@@ -848,6 +874,10 @@ final class DynamicLockScreenManager: ObservableObject {
     }
 
     private func notifyConfigurationChanged() {
+        Self.postConfigurationChanged()
+    }
+
+    private nonisolated static func postConfigurationChanged() {
         let center = CFNotificationCenterGetDarwinNotifyCenter()
         CFNotificationCenterPostNotification(
             center,

@@ -20,7 +20,7 @@ private struct SettingsSection: Identifiable {
 }
 
 struct SettingsView: View {
-    @EnvironmentObject var viewModel: GlobalSettingsViewModel
+    @Environment(GlobalSettingsViewModel.self) var viewModel
     @ObservedObject private var localization = MirageLocalization.shared
 
     private var sections: [SettingsSection] {
@@ -40,6 +40,7 @@ struct SettingsView: View {
     }
 
     var body: some View {
+        @Bindable var viewModel = viewModel
         VStack(spacing: 0) {
             header
 
@@ -162,7 +163,7 @@ private struct SettingsTab: View {
 struct SettingsView_Previews: PreviewProvider {
     static var previews: some View {
         SettingsView()
-            .environmentObject({ () -> GlobalSettingsViewModel in
+            .environment({ () -> GlobalSettingsViewModel in
                 let viewModel = GlobalSettingsViewModel()
                 viewModel.selection = 2
                 return viewModel

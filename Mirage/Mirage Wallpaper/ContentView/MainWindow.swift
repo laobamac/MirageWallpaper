@@ -34,7 +34,7 @@ class MainWindowController: NSWindowController, NSWindowDelegate {
                 viewModel: AppDelegate.shared.contentViewModel,
                 wallpaperViewModel: AppDelegate.shared.wallpaperViewModel,
                 navigationModel: AppDelegate.shared.navigationModel
-            ).environmentObject(AppDelegate.shared.globalSettingsViewModel)
+            ).environment(AppDelegate.shared.globalSettingsViewModel)
         )
         hostingView.sizingOptions = []
         self.window.contentView = hostingView

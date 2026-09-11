@@ -9,9 +9,9 @@ import AppKit
 
 struct ExplorerItemMenu: SubviewOfContentView {
     
-    @ObservedObject var viewModel: ContentViewModel
-    @ObservedObject var wallpaperViewModel: WallpaperViewModel
-    @ObservedObject var workshopViewModel: WorkshopViewModel
+    @Bindable var viewModel: ContentViewModel
+    @Bindable var wallpaperViewModel: WallpaperViewModel
+    @Bindable var workshopViewModel: WorkshopViewModel
     
     var hoveredWallpaper: WEWallpaper
     
@@ -80,14 +80,14 @@ struct ExplorerItemMenu: SubviewOfContentView {
                     } label: {
                         Label("加入播放列表", systemImage: "plus")
                     }
-                    .disabled(!hoveredWallpaper.isValid)
+                    .disabled(!hoveredWallpaper.presentationIsValid)
                 } else {
                     Button {
                         PlaylistManager.shared.add(hoveredWallpaper, to: 0)
                     } label: {
                         Label("加入播放列表", systemImage: "plus")
                     }
-                    .disabled(!hoveredWallpaper.isValid)
+                    .disabled(!hoveredWallpaper.presentationIsValid)
                 }
                 Button {
                     viewModel.hoveredWallpaper = hoveredWallpaper
@@ -174,7 +174,7 @@ struct ExplorerItemMenu: SubviewOfContentView {
     }
 
     private var canApply: Bool {
-        hoveredWallpaper.isValid && hoveredWallpaper.kind != .unsupported
+        hoveredWallpaper.presentationIsValid && hoveredWallpaper.kind != .unsupported
     }
 
     private var isFavorite: Bool {
@@ -252,6 +252,7 @@ struct ExplorerItemMenu: SubviewOfContentView {
         let runtime = wallpaperViewModel.loadRuntime(for: wallpaper)
         let properties = wallpaperViewModel.effectiveProperties(for: wallpaper, runtime: runtime)
         let fps = Int(AppDelegate.shared.globalSettingsViewModel.settings.fps)
+        let context = ScreenSaverManager.ConfigurationContext(wallpaperID: wallpaper.id, runtime: runtime, fps: fps)
         let manager = ScreenSaverManager.shared
         let needsInstallation = !manager.isInstalled
 
@@ -262,7 +263,8 @@ struct ExplorerItemMenu: SubviewOfContentView {
                     with: wallpaper,
                     runtime: runtime,
                     properties: properties,
-                    fps: fps
+                    fps: fps,
+                    context: context
                 )
             }
             DispatchQueue.main.async {
@@ -379,7 +381,7 @@ struct ExplorerItemMenu: SubviewOfContentView {
 
 struct WorkshopCardContextMenu: View {
     let item: WorkshopItem
-    @ObservedObject var workshopViewModel: WorkshopViewModel
+    @Bindable var workshopViewModel: WorkshopViewModel
 
     var body: some View {
         Group {
@@ -600,7 +602,7 @@ final class WallpaperShortcutManager: ObservableObject {
         })?.key else { return false }
 
         let wallpaper = WEWallpaper.load(from: URL(fileURLWithPath: wallpaperID))
-        guard wallpaper.isValid, wallpaper.kind != .unsupported else {
+        guard wallpaper.presentationIsValid, wallpaper.kind != .unsupported else {
             shortcuts[wallpaperID] = nil
             persist()
             return true

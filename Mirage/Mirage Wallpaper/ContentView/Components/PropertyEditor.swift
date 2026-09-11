@@ -13,8 +13,9 @@ import UniformTypeIdentifiers
 // Faithful Wallpaper Engine customization sidebar: every property type,
 // condition-driven show/hide, official localization, and real HTML labels.
 struct PropertyEditor: View {
-    @EnvironmentObject var wallpaperViewModel: WallpaperViewModel
+    @Environment(WallpaperViewModel.self) var wallpaperViewModel
     let wallpaper: WEWallpaper
+    var isActive = true
 
     @StateObject private var conditions = ConditionStore()
 
@@ -31,6 +32,7 @@ struct PropertyEditor: View {
     }
 
     var body: some View {
+        @Bindable var wallpaperViewModel = wallpaperViewModel
         Group {
             if sortedProperties.isEmpty {
                 HStack {
@@ -44,47 +46,92 @@ struct PropertyEditor: View {
                     ForEach(visibleProperties, id: \.key) { entry in
                         PropertyRow(wallpaper: wallpaper, key: entry.key,
                                     property: entry.property, conditions: conditions)
-                            .environmentObject(wallpaperViewModel)
+                            .environment(wallpaperViewModel)
                     }
                 }
             }
         }
         .onAppear { refreshConditions() }
-        .onChange(of: wallpaperViewModel.runtime.propertyOverrides) { _, _ in refreshConditions() }
+        .onChange(of: isActive ? wallpaperViewModel.runtime.propertyOverrides : [:]) { _, _ in refreshConditions() }
         .onChange(of: wallpaper.id) { _, _ in refreshConditions() }
+        .onChange(of: allProperties) { _, _ in refreshConditions() }
+        .onChange(of: isActive) { _, active in
+            if active { refreshConditions() } else { conditions.cancel() }
+        }
+        .onDisappear { conditions.cancel() }
     }
 
     private func refreshConditions() {
-        conditions.update(properties: allProperties,
+        guard isActive else { return }
+        conditions.update(identity: wallpaper.id, properties: allProperties,
                           overrides: wallpaperViewModel.runtime.propertyOverrides)
     }
 }
 
-// Wraps the evaluator so value changes re-run condition visibility.
 final class ConditionStore: ObservableObject {
     private let evaluator = WEConditionEvaluator()
-    @Published private(set) var generation = 0
+    @Published private(set) var verdicts: [String: Bool] = [:]
+    private var identity: String?
+    private var lastProperties: [String: WEProjectProperty]?
+    private var lastOverrides: [String: WEPropertyValue]?
 
-    // Order matters: updateContext also drops the evaluator's cached verdicts,
-    // so the generation bump that follows re-renders against fresh results.
-    func update(properties: [String: WEProjectProperty], overrides: [String: WEPropertyValue]) {
-        evaluator.updateContext(properties: properties, overrides: overrides)
-        generation &+= 1
+    func update(identity: String, properties: [String: WEProjectProperty],
+                overrides: [String: WEPropertyValue]) {
+        guard self.identity != identity || lastProperties != properties || lastOverrides != overrides else {
+            return
+        }
+        if self.identity != identity {
+            evaluator.cancel()
+            verdicts = [:]
+        }
+        self.identity = identity
+        lastProperties = properties
+        lastOverrides = overrides
+        var expressions = Set<String>()
+        var values: [String: Any] = [:]
+        for (key, property) in properties {
+            for expression in [property.condition] + (property.options ?? []).map(\.condition) {
+                if let expression, !expression.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    expressions.insert(expression)
+                }
+            }
+            let raw = overrides[key] ?? property.value
+            let value: Any
+            switch raw {
+            case .bool(let flag): value = flag
+            case .number(let number): value = number
+            case .string(let string):
+                if property.propertyType == .bool { value = (string as NSString).boolValue }
+                else if let integer = Int(string) { value = integer }
+                else if let number = Double(string) { value = number }
+                else if string == "true" { value = true }
+                else if string == "false" { value = false }
+                else { value = string }
+            }
+            values[key] = ["value": value]
+        }
+        evaluator.evaluate(identity: identity, conditions: expressions.sorted(), values: values) { [weak self] result in
+            guard let self, self.identity == identity, self.verdicts != result else { return }
+            self.verdicts = result
+        }
     }
 
-    // Called once per row and once per combo option on every body pass; within
-    // one generation the evaluator answers repeats from its cache instead of
-    // re-entering JavaScriptCore.
     func isVisible(_ condition: String?) -> Bool {
-        _ = generation // establish dependency
-        return evaluator.evaluate(condition)
+        guard let condition else { return true }
+        return verdicts[condition] ?? true
+    }
+
+    func cancel() {
+        evaluator.cancel()
+        lastProperties = nil
+        lastOverrides = nil
     }
 }
 
 // MARK: - Property row
 
 struct PropertyRow: View {
-    @EnvironmentObject var wallpaperViewModel: WallpaperViewModel
+    @Environment(WallpaperViewModel.self) var wallpaperViewModel
     let wallpaper: WEWallpaper
     let key: String
     let property: WEProjectProperty
@@ -112,6 +159,7 @@ struct PropertyRow: View {
     }
 
     var body: some View {
+        @Bindable var wallpaperViewModel = wallpaperViewModel
         Group {
             switch property.propertyType {
         case .bool:

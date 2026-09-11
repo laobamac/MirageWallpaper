@@ -7,7 +7,7 @@
 import SwiftUI
 
 struct DownloadPopover: View {
-    @ObservedObject var workshopViewModel: WorkshopViewModel
+    @Bindable var workshopViewModel: WorkshopViewModel
     @State private var revealError: String?
 
     var body: some View {
@@ -65,16 +65,8 @@ struct DownloadPopover: View {
             Divider()
 
             HStack {
-                let active = workshopViewModel.downloadQueue.filter {
-                    if case .downloading = $0.state { return true }
-                    if case .resolving = $0.state { return true }
-                    if case .validating = $0.state { return true }
-                    return false
-                }.count
-                let completed = workshopViewModel.downloadQueue.filter {
-                    if case .completed = $0.state { return true }
-                    return false
-                }.count
+                let active = workshopViewModel.downloadQueue.filter(\.isActive).count
+                let completed = workshopViewModel.downloadQueue.filter(\.isCompleted).count
 
                 Label("\(active) 下载中", systemImage: "arrow.down.circle.fill")
                     .font(.caption)
@@ -101,11 +93,7 @@ struct DownloadPopover: View {
     }
 
     private var hasCompleted: Bool {
-        workshopViewModel.downloadQueue.contains {
-            if case .completed = $0.state { return true }
-            if case .failed = $0.state { return true }
-            return false
-        }
+        workshopViewModel.downloadQueue.contains(where: \.isClearable)
     }
 
     private func revealInFinder(_ task: DownloadTask) {
