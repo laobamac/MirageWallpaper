@@ -39,6 +39,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         setMainMenu()
         setStatusMenu()
+        navigationModel.selection = globalSettingsViewModel.settings.startupSection
         self.mainWindowController = MainWindowController()
         self.settingsWindowController = SettingsWindowController(
             viewModel: globalSettingsViewModel)

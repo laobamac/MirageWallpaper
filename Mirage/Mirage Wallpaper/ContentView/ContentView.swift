@@ -10,11 +10,20 @@ protocol SubviewOfContentView: View {
     var viewModel: ContentViewModel { get set }
 }
 
-enum MainSection: Int, CaseIterable, Hashable {
+enum MainSection: String, CaseIterable, Hashable {
     case installed
     case discover
     case workshop
     case subscriptions
+
+    var title: String {
+        switch self {
+        case .installed: return L("已安装")
+        case .discover: return L("发现")
+        case .workshop: return L("创意工坊")
+        case .subscriptions: return L("已订阅")
+        }
+    }
 }
 
 final class MainNavigationModel: ObservableObject {

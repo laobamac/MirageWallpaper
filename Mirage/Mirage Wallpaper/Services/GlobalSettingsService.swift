@@ -118,6 +118,13 @@ struct GlobalSettings: Codable, Equatable {
     
     // MARK: Automatic Setup
     var autoStart = false
+    var startupPage: String?
+
+    var startupSection: MainSection {
+        get { startupPage.flatMap(MainSection.init(rawValue:)) ?? .installed }
+        set { startupPage = newValue.rawValue }
+    }
+
     var hideMenuBarIcon: Bool? = false
     var monochromeMenuBarIcon: Bool? = false
     var safeMode = false
