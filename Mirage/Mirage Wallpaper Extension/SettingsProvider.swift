@@ -10,15 +10,7 @@ private func mirageLocalized(_ key: String) -> String {
     Bundle.main.localizedString(forKey: key, value: key, table: "Localizable")
 }
 
-func buildMirageSettingsViewModels() -> AnyObject? {
-    guard let configuration = mirageLoadConfiguration() else {
-        return mirageSettingsViewModelsXPC(
-            MirageSettingsViewModels(
-                desktop: MirageSettingsViewModel(groups: [], refreshPolicy: .default, isModificationDisabled: false),
-                screenSaver: nil
-            )
-        )
-    }
+func buildMirageSettingsViewModels(configuration: MirageLockConfiguration) throws -> AnyObject {
     let provider = MirageChoiceProviderID(Bundle.main.bundleIdentifier ?? "cn.laobamac.Mirage.WallpaperExtension")
     let fallbackThumbnail = URL(fileURLWithPath: "/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/SidebarDisplay.icns")
     let thumbnailURL = Bundle.main.url(forResource: "thumbnail", withExtension: "png") ?? fallbackThumbnail
@@ -67,30 +59,12 @@ func buildMirageSettingsViewModels() -> AnyObject? {
         thumbnail: nil
     )
     let models = MirageSettingsViewModels(
-        desktop: MirageSettingsViewModel(groups: [group], refreshPolicy: .default, isModificationDisabled: false),
+        desktop: MirageSettingsViewModel(groups: configuration.enabled == false ? [] : [group],
+                                        refreshPolicy: .default, isModificationDisabled: false),
         screenSaver: nil
     )
-    return mirageSettingsViewModelsXPC(models)
-}
-
-private struct MirageStoredConfiguration: Codable {
-    let version: Int
-    let enabled: Bool?
-    let displays: [String: MirageStoredDisplay]
-}
-
-private struct MirageStoredDisplay: Codable {
-    let displayID: UInt32
-    let title: String
-    let kind: String?
-}
-
-private func mirageLoadConfiguration() -> MirageStoredConfiguration? {
-    guard let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.cn.laobamac.Mirage"),
-          let data = try? Data(contentsOf: container.appendingPathComponent("dynamic-lock-screen.json")),
-          let decoded = try? JSONDecoder().decode(MirageStoredConfiguration.self, from: data) else { return nil }
-    guard decoded.enabled != false,
-          !decoded.displays.isEmpty,
-          decoded.displays.values.allSatisfy({ $0.kind == "video" || $0.kind == "scene" }) else { return nil }
-    return decoded
+    guard let encoded = mirageSettingsViewModelsXPC(models) else {
+        throw MirageLockBridge.failure("Unable to encode wallpaper settings")
+    }
+    return encoded
 }

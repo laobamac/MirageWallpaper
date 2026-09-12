@@ -91,9 +91,21 @@ struct ScreenSaverPage: SettingsPage {
                     set: { dynamicLockScreenManager.setEnabled($0) }
                 ))
                 .disabled(!dynamicLockScreenManager.isAvailable)
+                if dynamicLockScreenManager.isEnabled {
+                    HStack(spacing: 8) {
+                        if dynamicLockScreenManager.connectionState == .preparing {
+                            ProgressView().controlSize(.small)
+                        }
+                        Text(dynamicLockScreenManager.connectionStatusMessage)
+                            .foregroundStyle(.secondary)
+                    }
+                }
                 if let registrationErrorMessage = dynamicLockScreenManager.registrationErrorMessage {
                     Text(registrationErrorMessage)
                         .foregroundStyle(.red)
+                    Button(LocalizedStringKey("重试动态锁屏连接")) {
+                        dynamicLockScreenManager.retryConnection()
+                    }
                 }
                 if !dynamicLockScreenManager.isAvailable {
                     Text(LocalizedStringKey("动态锁屏需要 macOS 26 或更高版本。"))

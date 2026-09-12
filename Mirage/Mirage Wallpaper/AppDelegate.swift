@@ -140,7 +140,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func postDynamicLockScreenState(locked: Bool) {
-        let name = locked ? "cn.laobamac.Mirage.dynamicLockScreen.locked" : "cn.laobamac.Mirage.dynamicLockScreen.unlocked"
+        let name = locked ? MirageLockBridge.lockedNotification : MirageLockBridge.unlockedNotification
         CFNotificationCenterPostNotification(
             CFNotificationCenterGetDarwinNotifyCenter(),
             CFNotificationName(name as CFString),
@@ -153,7 +153,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func postDynamicLockScreenWake() {
         CFNotificationCenterPostNotification(
             CFNotificationCenterGetDarwinNotifyCenter(),
-            CFNotificationName("cn.laobamac.Mirage.dynamicLockScreen.wake" as CFString),
+            CFNotificationName(MirageLockBridge.wakeNotification as CFString),
             nil,
             nil,
             true
@@ -163,7 +163,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func postDynamicLockScreenSleep() {
         CFNotificationCenterPostNotification(
             CFNotificationCenterGetDarwinNotifyCenter(),
-            CFNotificationName("cn.laobamac.Mirage.dynamicLockScreen.sleep" as CFString),
+            CFNotificationName(MirageLockBridge.sleepNotification as CFString),
             nil,
             nil,
             true
@@ -196,6 +196,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         SteamServiceManager.shared.start()
 
+        DynamicLockScreenManager.shared.prepareAtLaunch()
         if DynamicLockScreenManager.shared.isEnabled {
             DynamicLockScreenManager.shared.setEnabled(true)
         }
@@ -222,10 +223,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         UpdateManager.shared.start()
 
         PlaylistManager.shared.startRotators(wallpaperViewModel: wallpaperViewModel)
-
-        DispatchQueue.global(qos: .utility).async {
-            ScreenSaverManager.shared.refreshInstalledVersionIfNeeded()
-        }
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {

@@ -41,6 +41,12 @@ VIDEO_BIN="$ROOT/VideoRenderer/build/release/Tools/VideoWallpaper/VideoWallpaper
 ASSETS_DIR="$ROOT/assets"
 EXTENSION="$CONTENTS/Extensions/MirageWallpaperExtension.appex"
 EXTENSION_FRAMEWORKS="$EXTENSION/Contents/Frameworks"
+APP_ENTITLEMENTS="$ROOT/Mirage/Mirage Wallpaper/Mirage_Wallpaper.entitlements"
+EXTENSION_ENTITLEMENTS="$ROOT/Mirage/Mirage Wallpaper Extension/MirageWallpaperExtension.entitlements"
+if [ "$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$CONTENTS/Info.plist")" = "cn.laobamac.Mirage.Development" ]; then
+    APP_ENTITLEMENTS="$ROOT/Mirage/Mirage Wallpaper/Mirage_Wallpaper.Development.entitlements"
+    EXTENSION_ENTITLEMENTS="$ROOT/Mirage/Mirage Wallpaper Extension/MirageWallpaperExtension.Development.entitlements"
+fi
 
 BREW_PREFIX="$(brew --prefix)"
 MOLTENVK="$BREW_PREFIX/opt/molten-vk/lib/libMoltenVK.dylib"
@@ -285,7 +291,7 @@ EOF
         [ -f "$executable" ] || continue
         sign_item "$executable"
     done
-    codesign --force "${SIGN_ARGS[@]}" --entitlements "$ROOT/Mirage/Mirage Wallpaper Extension/MirageWallpaperExtension.entitlements" --sign "$SIGN_IDENTITY" "$EXTENSION"
+    codesign --force "${SIGN_ARGS[@]}" --entitlements "$EXTENSION_ENTITLEMENTS" --sign "$SIGN_IDENTITY" "$EXTENSION"
 fi
 
 echo "[bundle] 重新签名..."
@@ -330,6 +336,6 @@ for executable in "$APP/Contents/MacOS"/*.dylib; do
     [ -f "$executable" ] || continue
     sign_item "$executable"
 done
-codesign --force "${SIGN_ARGS[@]}" --entitlements "$ROOT/Mirage/Mirage Wallpaper/Mirage_Wallpaper.entitlements" --sign "$SIGN_IDENTITY" "$APP"
+codesign --force "${SIGN_ARGS[@]}" --entitlements "$APP_ENTITLEMENTS" --sign "$SIGN_IDENTITY" "$APP"
 
 echo "[bundle] 完成"

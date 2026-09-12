@@ -102,6 +102,11 @@
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		E30000010000000000000000 = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = WallpaperExtensionSupport;
+			sourceTree = "<group>";
+		};
 		E20000010000000000000000 = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = WallpaperLayout;
@@ -171,6 +176,7 @@
 		5EC47E6D2A2DB2E600120CCC = {
 			isa = PBXGroup;
 			children = (
+				E30000010000000000000000,
 				E20000010000000000000000,
 				BB52C0202FFC254D00C34DE3 /* Mirage Wallpaper */,
 				A10000020000000000000000 /* Mirage Screen Saver */,
@@ -226,6 +232,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				BB52C0202FFC254D00C34DE3 /* Mirage Wallpaper */,
+				E30000010000000000000000,
 				E20000010000000000000000,
 			);
 			name = "Mirage Wallpaper";
@@ -291,6 +298,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				D10000020000000000000000 /* Mirage Wallpaper Extension */,
+				E30000010000000000000000,
 				E20000010000000000000000,
 			);
 			name = MirageWallpaperExtension;
@@ -600,7 +608,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
 				AUTOMATION_APPLE_EVENTS = NO;
-				CODE_SIGN_ENTITLEMENTS = "Mirage Wallpaper/Mirage_Wallpaper.entitlements";
+				CODE_SIGN_ENTITLEMENTS = "Mirage Wallpaper/Mirage_Wallpaper.Development.entitlements";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
@@ -631,7 +639,7 @@
 				MACOSX_DEPLOYMENT_TARGET = 14.2;
 				MARKETING_VERSION = 1.1.2;
 				ONLY_ACTIVE_ARCH = NO;
-				PRODUCT_BUNDLE_IDENTIFIER = cn.laobamac.Mirage;
+				PRODUCT_BUNDLE_IDENTIFIER = cn.laobamac.Mirage.Development;
 				PRODUCT_MODULE_NAME = "$(PRODUCT_NAME:c99extidentifier)";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -810,7 +818,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
-				CODE_SIGN_ENTITLEMENTS = "Mirage Wallpaper Extension/MirageWallpaperExtension.entitlements";
+				CODE_SIGN_ENTITLEMENTS = "Mirage Wallpaper Extension/MirageWallpaperExtension.Development.entitlements";
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Manual;
 				CURRENT_PROJECT_VERSION = 1;
@@ -821,7 +829,7 @@
 				INFOPLIST_FILE = "Mirage Wallpaper Extension/Info.plist";
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.1.2;
-				PRODUCT_BUNDLE_IDENTIFIER = cn.laobamac.Mirage.WallpaperExtension;
+				PRODUCT_BUNDLE_IDENTIFIER = cn.laobamac.Mirage.Development.WallpaperExtension;
 				PRODUCT_MODULE_NAME = MirageWallpaperExtension;
 				PRODUCT_NAME = MirageWallpaperExtension;
 				REGISTER_APP_GROUPS = YES;

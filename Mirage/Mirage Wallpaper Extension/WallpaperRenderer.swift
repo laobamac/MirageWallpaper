@@ -12,70 +12,6 @@ import Darwin
 import Foundation
 import ImageIO
 
-enum MirageLockAnyValue: Codable {
-    case string(String)
-    case number(Double)
-    case bool(Bool)
-    case object([String: MirageLockAnyValue])
-    case array([MirageLockAnyValue])
-    case null
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        if container.decodeNil() { self = .null; return }
-        if let value = try? container.decode(Bool.self) { self = .bool(value); return }
-        if let value = try? container.decode(Double.self) { self = .number(value); return }
-        if let value = try? container.decode(String.self) { self = .string(value); return }
-        if let value = try? container.decode([String: MirageLockAnyValue].self) { self = .object(value); return }
-        self = .array(try container.decode([MirageLockAnyValue].self))
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.singleValueContainer()
-        switch self {
-        case .string(let value): try container.encode(value)
-        case .number(let value): try container.encode(value)
-        case .bool(let value): try container.encode(value)
-        case .object(let value): try container.encode(value)
-        case .array(let value): try container.encode(value)
-        case .null: try container.encodeNil()
-        }
-    }
-
-    var foundationValue: Any {
-        switch self {
-        case .string(let value): return value
-        case .number(let value): return value
-        case .bool(let value): return value
-        case .object(let value): return value.mapValues { $0.foundationValue }
-        case .array(let value): return value.map(\.foundationValue)
-        case .null: return NSNull()
-        }
-    }
-}
-
-struct MirageLockDisplayConfiguration: Codable {
-    let displayID: UInt32
-    let wallpaperID: String
-    let title: String
-    let kind: String
-    let renderDirectory: String
-    let entryPath: String
-    let previewPath: String?
-    let desktopFallbackPath: String?
-    let rawProperties: [String: MirageLockAnyValue]
-    let fps: Int
-    let fillMode: String
-    var position: WallpaperPosition? = nil
-    let loadFromMemory: Bool?
-}
-
-struct MirageLockConfiguration: Codable {
-    let version: Int
-    let enabled: Bool?
-    let displays: [String: MirageLockDisplayConfiguration]
-}
-
 private final class MirageSceneLibrary {
     typealias Create = @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<CChar>?, UnsafePointer<CChar>?, UnsafePointer<CChar>?, UInt32, UInt32, UInt32, UnsafePointer<CChar>?, Double, Double) -> UnsafeMutableRawPointer?
     typealias SetPaused = @convention(c) (UnsafeMutableRawPointer?, Int32) -> Void
@@ -135,16 +71,18 @@ final class MirageLockRenderer {
     private let isVideo: Bool
     private var sceneLibrary: MirageSceneLibrary?
     private var sceneEngine: UnsafeMutableRawPointer?
+    private let onStateChange: (String?) -> Void
 
     init(rootLayer: CALayer, size: CGSize, scale: CGFloat,
          configuration: MirageLockDisplayConfiguration, locked: Bool,
-         dynamicEnabled: Bool) {
+         dynamicEnabled: Bool, onStateChange: @escaping (String?) -> Void = { _ in }) {
         self.rootLayer = rootLayer
         self.configuration = configuration
         self.renderSize = size
         self.isLocked = locked && dynamicEnabled
         self.dynamicEnabled = dynamicEnabled
         self.isVideo = configuration.kind == "video"
+        self.onStateChange = onStateChange
         rootLayer.frame = CGRect(origin: .zero, size: size)
         rootLayer.contentsScale = scale
         rootLayer.masksToBounds = true
@@ -190,11 +128,15 @@ final class MirageLockRenderer {
                   let tracks = try? await asset.loadTracks(withMediaType: .video),
                   !tracks.isEmpty else {
                 NSLog("[MirageLock] video asset is not playable: %@", entryURL.path)
+                guard !Task.isCancelled else { return }
+                self?.reportFailure("Video asset is not playable: \(entryURL.lastPathComponent)")
                 return
             }
             for track in tracks {
                 guard let decodable = try? await track.load(.isDecodable), decodable else {
                     NSLog("[MirageLock] video track is not decodable: %@", entryURL.path)
+                    guard !Task.isCancelled else { return }
+                    self?.reportFailure("Video track is not decodable: \(entryURL.lastPathComponent)")
                     return
                 }
             }
@@ -230,6 +172,7 @@ final class MirageLockRenderer {
         videoReady = true
         sceneReady = false
         updateDesktopLayerVisibility()
+        onStateChange(nil)
     }
 
     private func loadScene(_ configuration: MirageLockDisplayConfiguration, size: CGSize) {
@@ -237,11 +180,13 @@ final class MirageLockRenderer {
               FileManager.default.fileExists(atPath: assetsURL.path),
               let library = MirageSceneLibrary() else {
             NSLog("[MirageLock] scene runtime unavailable")
+            reportFailure("Scene runtime is unavailable")
             return
         }
         guard let icdURL = Bundle.main.resourceURL?.appendingPathComponent("vulkan/icd.d/MoltenVK_icd.json"),
               FileManager.default.fileExists(atPath: icdURL.path) else {
             NSLog("[MirageLock] scene Vulkan ICD unavailable")
+            reportFailure("Scene Vulkan ICD is unavailable")
             return
         }
         setenv("VK_ICD_FILENAMES", icdURL.path, 1)
@@ -265,12 +210,17 @@ final class MirageLockRenderer {
         }
         guard let engine else {
             NSLog("[MirageLock] scene engine creation failed: pkg=%@", configuration.entryPath)
+            reportFailure("Scene engine creation failed")
             return
         }
         sceneLibrary = library
         sceneEngine = engine
         let callbackPointer = Unmanaged.passUnretained(self).toOpaque()
         library.setFirstFrame(engine, Self.firstFrameCallback, callbackPointer)
+    }
+
+    private func reportFailure(_ message: String) {
+        DispatchQueue.main.async { [weak self] in self?.onStateChange(message) }
     }
 
     func pause() {
@@ -390,8 +340,10 @@ final class MirageLockRenderer {
         guard let pointer else { return }
         let renderer = Unmanaged<MirageLockRenderer>.fromOpaque(pointer).takeUnretainedValue()
         DispatchQueue.main.async {
+            guard renderer.sceneEngine != nil else { return }
             renderer.sceneReady = true
             renderer.updateDesktopLayerVisibility()
+            renderer.onStateChange(nil)
         }
     }
 

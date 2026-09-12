@@ -53,11 +53,17 @@ struct MirageWallpaperExtensionConfiguration: AppExtensionConfiguration {
         ]
         selectors.forEach { exported.setClasses(allowed, for: $0.0, argumentIndex: $0.1, ofReply: $0.2) }
         connection.exportedInterface = exported
-        connection.remoteObjectInterface = NSXPCInterface(with: WallpaperExtensionProxyXPCProtocol.self)
+        let proxyInterface = NSXPCInterface(with: WallpaperExtensionProxyXPCProtocol.self)
+        proxyInterface.setClasses(allowed, for: NSSelectorFromString("updateSettingsViewModels:reply:"),
+                                  argumentIndex: 0, ofReply: false)
+        connection.remoteObjectInterface = proxyInterface
         let handler = MirageWallpaperXPCHandler()
         connection.exportedObject = handler
-        handler.agentProxy = connection.remoteObjectProxy as? WallpaperExtensionProxyXPCProtocol
+        handler.agentProxy = connection.remoteObjectProxyWithErrorHandler { [weak handler] error in
+            handler?.connectionFailed(error)
+        } as? WallpaperExtensionProxyXPCProtocol
         connection.invalidationHandler = { [weak handler] in handler?.invalidateAll() }
+        connection.interruptionHandler = { [weak handler] in handler?.invalidateAll() }
         connection.resume()
         return true
     }
@@ -73,6 +79,7 @@ final class MirageWallpaperExtension: NSObject, AppExtension {
         super.init()
         if #available(macOS 26.0, *) {
             _ = dlopen("/System/Library/PrivateFrameworks/WallpaperExtensionKit.framework/WallpaperExtensionKit", RTLD_LAZY)
+            _ = MirageLockRuntimeIdentity.current
         }
     }
 }

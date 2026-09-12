@@ -960,3 +960,25 @@
 "选择壁纸从左到右的展示区域" = "Choose the visible region from left to right";
 
 "选择壁纸从上到下的展示区域" = "Choose the visible region from top to bottom";
+
+"动态锁屏已关闭" = "Dynamic lock screen is off";
+
+"已启用，请设置锁屏壁纸" = "Enabled. Set a lock screen wallpaper to continue.";
+
+"正在连接动态锁屏" = "Connecting to the dynamic lock screen…";
+
+"已注册，等待系统载入动态锁屏" = "Registered. Waiting for macOS to load the dynamic lock screen.";
+
+"动态锁屏已连接，等待画面就绪" = "Connected. Waiting for the wallpaper to become ready.";
+
+"动态锁屏已就绪" = "Dynamic lock screen is ready";
+
+"动态锁屏恢复失败" = "Dynamic lock screen recovery failed";
+
+"重试动态锁屏连接" = "Retry Dynamic Lock Screen Connection";
+
+"动态锁屏恢复失败，请重试；详细原因已写入日志" = "Could not restore the dynamic lock screen. Try again; details have been saved to the log.";
+
+"动态锁屏配置无法读取，请检查文件访问权限或重新设置壁纸" = "Could not read the lock screen configuration. Check file access permissions or set the wallpaper again.";
+
+"无法保存动态锁屏状态" = "Could not save the dynamic lock screen state";

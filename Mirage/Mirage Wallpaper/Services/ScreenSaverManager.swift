@@ -185,6 +185,8 @@ final class ScreenSaverManager {
     private func installComponent(bundledURL: URL, installedURL: URL,
                                   bundleIdentifier: String,
                                   executableName: String) throws {
+        WallpaperServiceCoordinator.lock.lock()
+        defer { WallpaperServiceCoordinator.lock.unlock() }
         let directory = installedURL.deletingLastPathComponent()
         try fm.createDirectory(at: directory, withIntermediateDirectories: true)
         let stagingURL = directory.appending(
@@ -312,6 +314,8 @@ final class ScreenSaverManager {
     }
 
     private func terminateScreenSaverServices(restartWallpaperAgent: Bool) throws {
+        WallpaperServiceCoordinator.lock.lock()
+        defer { WallpaperServiceCoordinator.lock.unlock() }
         let identifiers = restartWallpaperAgent
             ? hostBundleIdentifiers + [wallpaperAgentBundleIdentifier]
             : hostBundleIdentifiers
