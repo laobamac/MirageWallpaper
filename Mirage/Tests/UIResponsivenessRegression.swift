@@ -58,6 +58,54 @@ private final class ImageProtocol: URLProtocol, @unchecked Sendable {
     }
 }
 
+private final class PlaylistPlaybackProbe: PlaylistPlayback {
+    let displayStatesChanges: CurrentValueSubject<[DisplayKey: DisplayWallpaperState], Never>
+    let wallpaperChangeRequests = PassthroughSubject<DisplayKey, Never>()
+    var paused = true
+    var muted = true
+    var stopped = false
+    var requests: [(String, DisplayKey)] = []
+    var restoredFocus = false
+    private var generation = UUID()
+
+    init(wallpaper: WEWallpaper, display: DisplayKey) {
+        displayStatesChanges = CurrentValueSubject([
+            display: DisplayWallpaperState(wallpaper: wallpaper, runtime: WallpaperRuntimeState())
+        ])
+    }
+
+    func state(for key: DisplayKey) -> DisplayWallpaperState? { displayStatesChanges.value[key] }
+    func isTrusted(_ wallpaper: WEWallpaper) -> Bool { false }
+
+    func allowsPlaylistAdvance(on key: DisplayKey, manually: Bool, updateOnPause: Bool) -> Bool {
+        !stopped && (manually || updateOnPause || !paused)
+    }
+
+    func assign(_ wallpaper: WEWallpaper, to key: DisplayKey, restoreFocus: Bool,
+                preservingPlaybackState: Bool, completion: ((Bool) -> Void)?) {
+        if !preservingPlaybackState { paused = false; muted = false }
+        restoredFocus = restoredFocus || restoreFocus
+        requests.append((wallpaper.id, key))
+        generation = UUID()
+        let request = generation
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.025) { [self] in
+            guard generation == request else { completion?(false); return }
+            var states = displayStatesChanges.value
+            states[key] = DisplayWallpaperState(wallpaper: wallpaper, runtime: WallpaperRuntimeState())
+            displayStatesChanges.send(states)
+            completion?(true)
+        }
+    }
+
+    func applyDirectly(_ wallpaper: WEWallpaper, to key: DisplayKey) {
+        generation = UUID()
+        wallpaperChangeRequests.send(key)
+        var states = displayStatesChanges.value
+        states[key] = DisplayWallpaperState(wallpaper: wallpaper, runtime: WallpaperRuntimeState())
+        displayStatesChanges.send(states)
+    }
+}
+
 @main
 @MainActor
 private struct UIResponsivenessRegression {
@@ -86,6 +134,16 @@ private struct UIResponsivenessRegression {
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             NSApplication.shared.setActivationPolicy(.accessory)
             NSApplication.shared.finishLaunching()
+            if CommandLine.arguments.contains("--startup-playlist") {
+                try testStartupAndPlaylistNavigation()
+                try await testPlaylistControls()
+                try await testPlaylistTransitions()
+                print("StartupPlaylistRegression: all checks passed")
+                return
+            }
+            try testStartupAndPlaylistNavigation()
+            try await testPlaylistControls()
+            try await testPlaylistTransitions()
             try await testWorkers()
             try await testConditions()
             try testObservation()
@@ -213,6 +271,212 @@ private struct UIResponsivenessRegression {
         try require(localeUpdates.access { $0 } == 0, "Unchanged language was republished")
         subscription.cancel()
         print("PASS: download observation scope and unchanged localization")
+    }
+
+    static func testStartupAndPlaylistNavigation() throws {
+        var settings = GlobalSettings()
+        settings.fps = 47
+        settings.masterVolume = 0.37
+        let encoded = try JSONEncoder().encode(settings)
+        let restored = try JSONDecoder().decode(GlobalSettings.self, from: encoded)
+        try require(restored.startupSection == .installed && restored.fps == 47 && restored.masterVolume == 0.37,
+                    "A legacy settings payload lost its existing preferences")
+        for section in MainSection.allCases {
+            settings.startupSection = section
+            let decoded = try JSONDecoder().decode(GlobalSettings.self, from: JSONEncoder().encode(settings))
+            try require(decoded.startupSection == section && decoded.fps == 47,
+                        "Startup page did not survive serialization")
+        }
+        settings.startupPage = "future-page"
+        let unknown = try JSONDecoder().decode(GlobalSettings.self, from: JSONEncoder().encode(settings))
+        try require(unknown.startupSection == .installed && unknown.masterVolume == 0.37,
+                    "An unknown startup page reset unrelated settings")
+        let navigation = MainNavigationModel(selection: .subscriptions)
+        navigation.selection = .workshop
+        try require(navigation.selection == .workshop, "Startup selection prevented subsequent navigation")
+
+        func playlist(_ ids: [String], order: PlaylistOrder = .sorted) -> Playlist {
+            var playlist = Playlist(items: ids.map { PlaylistItem(wallpaperID: $0, addedAt: Date()) })
+            playlist.settings.order = order
+            return playlist
+        }
+        var ordered = playlist(["a", "b", "missing", "c"])
+        var cursor = PlaylistNavigation()
+        cursor.synchronize(with: ordered)
+        cursor.observe("a")
+        let available: Set<String> = ["a", "b", "c"]
+        func candidate(_ direction: PlaylistDirection, current: String?, pending: PlaylistNavigation.Target? = nil,
+                       availableIDs: Set<String> = ["a", "b", "c"]) -> PlaylistNavigation.Target? {
+            cursor.candidates(for: direction, in: ordered, availableIDs: availableIDs,
+                              currentID: current, pending: pending).first
+        }
+        try require(candidate(.next, current: "a")?.wallpaperID == "b" &&
+                    candidate(.previous, current: "a")?.wallpaperID == "c" &&
+                    candidate(.next, current: "b")?.wallpaperID == "c",
+                    "Ordered navigation failed to wrap or skip missing entries")
+        try require(candidate(.next, current: "outside")?.wallpaperID == "a" &&
+                    candidate(.previous, current: nil)?.wallpaperID == "c" &&
+                    candidate(.previous, current: "missing")?.wallpaperID == "b",
+                    "An absent or unplayable current wallpaper broke list positioning")
+        try require(candidate(.next, current: "a", availableIDs: ["a"]) == nil &&
+                    candidate(.previous, current: "a", availableIDs: []) == nil,
+                    "Navigation reloaded the only current wallpaper or an empty list")
+        let pending = candidate(.next, current: "a")!
+        try require(candidate(.next, current: "a", pending: pending)?.wallpaperID == "c" &&
+                    candidate(.previous, current: "a", pending: pending)?.wallpaperID == "a" && cursor.history == ["a"],
+                    "Rapid commands used stale playback state or recorded unplayed targets")
+
+        ordered.settings.order = .random
+        cursor.synchronize(with: ordered)
+        cursor.observe("a")
+        try require(candidate(.previous, current: "a") == nil, "Random playback invented a previous wallpaper")
+        cursor.commit(.init(wallpaperID: "b"))
+        cursor.commit(.init(wallpaperID: "c"))
+        let previous = candidate(.previous, current: "c")!
+        try require(previous.wallpaperID == "b" &&
+                    candidate(.previous, current: "c", pending: previous)?.wallpaperID == "a",
+                    "Repeated backwards commands did not follow playback history")
+        cursor.commit(previous)
+        let forward = candidate(.next, current: "b")!
+        try require(forward.wallpaperID == "c" && forward.historyIndex != nil,
+                    "Forward navigation discarded the remaining random history")
+        cursor.commit(forward)
+        let randomChoices = cursor.candidates(for: .next, in: ordered, availableIDs: available, currentID: "c")
+        try require(Set(randomChoices.map(\.wallpaperID)) == ["a", "b"] &&
+                    randomChoices.allSatisfy { $0.historyIndex == nil },
+                    "Random navigation repeated the current wallpaper")
+        ordered.items.removeAll { $0.wallpaperID == "b" }
+        cursor.synchronize(with: ordered)
+        try require(candidate(.previous, current: "c")?.wallpaperID == "a", "Deleted history entries were retained")
+        ordered = playlist(["a", "c"], order: .random)
+        cursor.synchronize(with: ordered)
+        try require(cursor.history.isEmpty, "Loading another playlist retained the previous history")
+        for index in 0..<150 { cursor.observe(index.isMultiple(of: 2) ? "a" : "c") }
+        try require(cursor.history.count == 100 && cursor.historyIndex == 99, "Playback history grew without a bound")
+        cursor.observe("outside")
+        try require(cursor.history.isEmpty, "An external wallpaper left an invalid history cursor")
+        print("PASS: startup settings compatibility, page round trips, ordered navigation and bounded random history")
+    }
+
+    static func testPlaylistControls() async throws {
+        guard let display = DisplayRegistry.shared.connected.first else {
+            throw RegressionFailure(description: "Playlist integration tests require a connected display")
+        }
+        let first = try wallpaper("playlist-a")
+        let second = try wallpaper("playlist-b")
+        let third = try wallpaper("playlist-c")
+        var library = [first, second, third]
+        let playback = PlaylistPlaybackProbe(wallpaper: first, display: display.key)
+        let manager = PlaylistManager(storageURL: root.appending(path: "playlists.json"))
+        manager.ensureScreen(display.index)
+        manager.clear(screen: display.index)
+        for wallpaper in library { manager.add(wallpaper, to: display.index) }
+        manager.updateSettings(on: display.index) { $0.timing = .never; $0.transition = .disabled }
+        manager.startRotators(wallpaperViewModel: playback)
+        defer { manager.stopAllRotators() }
+        func advance(_ direction: PlaylistDirection) {
+            manager.advance(direction, on: display.key, library: library)
+        }
+        func currentID() -> String? { playback.state(for: display.key)?.wallpaper.id }
+        try require(manager.canAdvance(.next, on: display.key, library: library), "A populated playlist was disabled")
+        advance(.next)
+        try await waitUntil("manual next while paused") { currentID() == second.id }
+        advance(.previous)
+        try await waitUntil("manual previous") { currentID() == first.id }
+        try require(playback.paused && playback.muted && !playback.restoredFocus,
+                    "Manual switching cleared playback overrides or requested window focus")
+        let beforeRapid = playback.requests.count
+        for _ in 0..<7 { advance(.next) }
+        try await waitUntil("coalesced manual navigation") { currentID() == second.id }
+        try require(playback.requests.count == beforeRapid + 1,
+                    "Rapid commands launched redundant intermediate wallpapers")
+        playback.stopped = true
+        try require(!manager.canAdvance(.next, on: display.key, library: library), "Stop policy allowed navigation")
+        playback.stopped = false
+        try require(!manager.canAdvance(.next, on: DisplayKey(rawValue: "disconnected"), library: library),
+                    "An obsolete menu target was treated as a connected display")
+        manager.updateSettings(on: display.index) { $0.videoSequence = true }
+        advance(.next)
+        try await waitUntil("manual video-sequence override") { currentID() == third.id }
+        NotificationCenter.default.post(name: .rendererVideoDidEnd, object: nil, userInfo: ["screen": display.index])
+
+        let missing = try wallpaper("playlist-missing")
+        let webDirectory = root.appending(path: "playlist-web")
+        try FileManager.default.createDirectory(at: webDirectory, withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: ["title": "Web", "type": "web", "file": "index.html"])
+            .write(to: webDirectory.appending(path: "project.json"))
+        try Data("<html></html>".utf8).write(to: webDirectory.appending(path: "index.html"))
+        let web = WEWallpaper.load(from: webDirectory)
+        for wallpaper in [missing, web] { manager.add(wallpaper, to: display.index) }
+        library += [missing, web]
+        try FileManager.default.removeItem(at: missing.entryURL)
+        advance(.next)
+        try await waitUntil("missing and untrusted playlist entries") { currentID() == first.id }
+        try require(!playback.requests.contains { $0.0 == missing.id || $0.0 == web.id },
+                    "An invalid entry or untrusted web wallpaper reached playback")
+        try require(playback.requests.allSatisfy { $0.1 == display.key }, "Navigation changed the wrong display")
+
+        manager.remove(itemID: missing.id, from: display.index)
+        manager.remove(itemID: web.id, from: display.index)
+        library = [first, second, third]
+        manager.updateSettings(on: display.index) { $0.order = .random }
+        try require(!manager.canAdvance(.previous, on: display.key, library: library), "A fresh random history had a previous item")
+        advance(.next)
+        try await waitUntil("first random item") { currentID() != first.id }
+        let randomFirst = currentID()!
+        advance(.next)
+        try await waitUntil("second random item") { currentID() != randomFirst }
+        let randomSecond = currentID()!
+        advance(.previous)
+        try await waitUntil("random history backwards") { currentID() == randomFirst }
+        advance(.next)
+        try await waitUntil("random history forwards") { currentID() == randomSecond }
+
+        playback.paused = false
+        let weekdays = try (0..<7).map { try wallpaper("weekday-\($0)") }
+        var weekdayPlaylist = Playlist(items: weekdays.map { PlaylistItem(wallpaperID: $0.id, addedAt: Date()) })
+        weekdayPlaylist.settings.timing = .dayOfWeek
+        weekdayPlaylist.settings.transition = .disabled
+        library = weekdays
+        manager.load(saved: weekdayPlaylist, into: display.index)
+        let today = Calendar.current.component(.weekday, from: Date()) - 1
+        try await waitUntil("weekday anchor") { currentID() == weekdays[today].id }
+        advance(.next)
+        try await waitUntil("manual weekday selection") { currentID() == weekdays[(today + 1) % 7].id }
+        try await Task.sleep(for: .milliseconds(100))
+        try require(currentID() == weekdays[(today + 1) % 7].id,
+                    "Rescheduling immediately restored the weekday anchor")
+
+        manager.updateSettings(on: display.index) { $0.timing = .never; $0.transition = .enabled; $0.transitionSeconds = 0.2 }
+        advance(.next)
+        playback.applyDirectly(weekdays[0], to: display.key)
+        try await Task.sleep(for: .milliseconds(250))
+        try require(currentID() == weekdays[0].id, "A pending playlist operation overwrote a direct selection")
+        let beforeStop = playback.requests.count
+        advance(.next)
+        manager.stopAllRotators()
+        try await Task.sleep(for: .milliseconds(250))
+        try require(playback.requests.count == beforeStop &&
+                    !manager.canAdvance(.next, on: display.key, library: library),
+                    "A stopped rotator accepted or completed an obsolete request")
+        print("PASS: playlist dispatch, rapid commands, pause/mute preservation, invalid entries, random history and weekday override")
+    }
+
+    static func testPlaylistTransitions() async throws {
+        let overlay = PlaylistTransitionOverlay.shared
+        var applied: [String] = []
+        overlay.present(on: 0, duration: 0, kind: .disabled) { applied.append("cancelled") }
+        overlay.cancel(on: 0)
+        try await Task.sleep(for: .milliseconds(30))
+        try require(applied.isEmpty, "A cancelled queued transition still applied its wallpaper")
+        overlay.present(on: 0, duration: 0.2, kind: .enabled) { applied.append("old") }
+        try await Task.sleep(for: .milliseconds(30))
+        overlay.present(on: 0, duration: 0.2, kind: .enabled) { applied.append("latest") }
+        try await waitUntil("latest transition") { applied.contains("latest") }
+        try await Task.sleep(for: .milliseconds(250))
+        try require(applied == ["latest"], "An obsolete transition applied after its replacement")
+        overlay.cancel(on: 0)
+        print("PASS: queued transition cancellation and superseded animation callbacks")
     }
 
     static func pngData() throws -> Data {

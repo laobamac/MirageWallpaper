@@ -17,6 +17,7 @@ def main():
     parser.add_argument("--derived-data", type=Path,
                         default=Path(tempfile.gettempdir()) / "MirageUIRegressionBuild")
     parser.add_argument("--skip-build", action="store_true")
+    parser.add_argument("--startup-playlist", action="store_true")
     args = parser.parse_args()
     project = Path(__file__).resolve().parents[1]
     artifacts = Path(tempfile.mkdtemp(prefix="mirage-ui-regression-"))
@@ -49,7 +50,10 @@ def main():
         "-o", str(executable)
     ], check=True, env=env)
     with (artifacts / "renderer.log").open("w") as log:
-        result = subprocess.run([str(executable)], cwd=artifacts, env=env,
+        command = [str(executable)]
+        if args.startup_playlist:
+            command.append("--startup-playlist")
+        result = subprocess.run(command, cwd=artifacts, env=env,
                                 stderr=log, timeout=90)
     if result.returncode:
         print((artifacts / "renderer.log").read_text(), flush=True)
