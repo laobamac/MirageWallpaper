@@ -63,6 +63,9 @@ fi
 cleanup() {
     [ -z "$TEMP_XCCONFIG" ] || rm -f "$TEMP_XCCONFIG"
     [ -z "$NOTARY_TEMP_DIR" ] || rm -rf "$NOTARY_TEMP_DIR"
+    if [ -n "${APP:-}" ]; then
+        rm -rf "$APP" "$BUILD_DIR/DD/Build/Products/$CONFIG/MirageWallpaperExtension.appex"
+    fi
 }
 trap cleanup EXIT
 
