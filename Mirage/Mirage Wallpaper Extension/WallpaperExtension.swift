@@ -73,7 +73,6 @@ final class MirageWallpaperExtension: NSObject, AppExtension {
         super.init()
         if #available(macOS 26.0, *) {
             _ = dlopen("/System/Library/PrivateFrameworks/WallpaperExtensionKit.framework/WallpaperExtensionKit", RTLD_LAZY)
-            MirageSnapshotProvider.installEncodingCompatibility()
         }
     }
 }

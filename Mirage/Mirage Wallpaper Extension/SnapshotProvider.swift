@@ -11,23 +11,6 @@ import Foundation
 import ImageIO
 
 enum MirageSnapshotProvider {
-    static func installEncodingCompatibility() {
-        guard let snapshotClass = NSClassFromString("WallpaperSnapshotXPC"),
-              let method = class_getInstanceMethod(snapshotClass, NSSelectorFromString("encodeWithCoder:")),
-              let coderClass = NSClassFromString("NSXPCCoder") else { return }
-        let selector = NSSelectorFromString("encodeWithCoder:")
-        let original = method_getImplementation(method)
-        typealias Encode = @convention(c) (AnyObject, Selector, NSCoder) -> Void
-        let originalFunction = unsafeBitCast(original, to: Encode.self)
-        let block: @convention(block) (AnyObject, NSCoder) -> Void = { object, coder in
-            let originalClass = object_getClass(coder)
-            object_setClass(coder, coderClass)
-            originalFunction(object, selector, coder)
-            if let originalClass { object_setClass(coder, originalClass) }
-        }
-        method_setImplementation(method, imp_implementationWithBlock(block))
-    }
-
     static func makeSnapshot(from configuration: MirageLockConfiguration?) -> AnyObject? {
         guard let display = configuration?.displays.values.first else { return nil }
         let locked = currentScreenLockState()
@@ -80,7 +63,7 @@ enum MirageSnapshotProvider {
         return try? generator.copyCGImage(at: .zero, actualTime: nil)
     }
 
-    private static func makeSnapshot(from image: CGImage) -> AnyObject? {
+    static func makeSnapshot(from image: CGImage) -> AnyObject? {
         let properties: [IOSurfacePropertyKey: any Sendable] = [
             .width: image.width,
             .height: image.height,
@@ -89,8 +72,10 @@ enum MirageSnapshotProvider {
         ]
         guard let surface = IOSurface(properties: properties),
               let snapshotClass = NSClassFromString("WallpaperSnapshotXPC"),
+              let storage = class_getInstanceVariable(snapshotClass, "rawValue"),
+              ivar_getOffset(storage) >= MemoryLayout<UnsafeRawPointer>.size,
+              ivar_getOffset(storage) + MemoryLayout<UnsafeRawPointer>.size <= class_getInstanceSize(snapshotClass),
               let instance = class_createInstance(snapshotClass, 0),
-              class_getInstanceSize(snapshotClass) >= 16,
               let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
               let context = CGContext(
                 data: surface.baseAddress,
@@ -105,7 +90,9 @@ enum MirageSnapshotProvider {
         context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
         surface.unlock(options: [], seed: nil)
         let retainedSurface = Unmanaged.passRetained(surface).toOpaque()
-        Unmanaged.passUnretained(instance as AnyObject).toOpaque().advanced(by: 8).storeBytes(of: retainedSurface, as: UnsafeMutableRawPointer.self)
+        Unmanaged.passUnretained(instance as AnyObject).toOpaque()
+            .advanced(by: ivar_getOffset(storage))
+            .storeBytes(of: retainedSurface, as: UnsafeMutableRawPointer.self)
         return instance as AnyObject
     }
 }
