@@ -37,7 +37,7 @@ struct DisplayWallpaperState: Codable, Equatable {
 }
 
 @Observable
-class WallpaperViewModel {
+class WallpaperViewModel: PlaylistPlayback {
     let renderer = RendererController()
 
     private struct AppliedPlaybackState: Equatable {
@@ -54,6 +54,21 @@ class WallpaperViewModel {
         let key: DisplayKey
         let state: DisplayWallpaperState
         let restoreFocus: Bool
+        let completion: AssignmentCompletion?
+    }
+
+    private final class AssignmentCompletion {
+        private var callback: ((Bool) -> Void)?
+
+        init(_ callback: @escaping (Bool) -> Void) {
+            self.callback = callback
+        }
+
+        func finish(_ success: Bool) {
+            let callback = callback
+            self.callback = nil
+            callback?(success)
+        }
     }
 
     private struct FailedAssignmentRecovery {
@@ -78,6 +93,7 @@ class WallpaperViewModel {
     }
 
     let displayStatesChanges = CurrentValueSubject<[DisplayKey: DisplayWallpaperState], Never>([:])
+    let wallpaperChangeRequests = PassthroughSubject<DisplayKey, Never>()
     private var selectedWallpaperSnapshot = WallpaperViewModel.invalidWallpaper
     private var selectedRuntimeSnapshot = WallpaperRuntimeState()
     private var positionAvailabilityGeneration: UInt64 = 0
@@ -258,7 +274,8 @@ class WallpaperViewModel {
                 var state = proposal.state
                 state.wallpaper = updated
                 return PendingAssignmentProposal(id: proposal.id, key: proposal.key, state: state,
-                                                restoreFocus: proposal.restoreFocus)
+                                                restoreFocus: proposal.restoreFocus,
+                                                completion: proposal.completion)
             }
         }
         persistStates()
@@ -363,6 +380,7 @@ class WallpaperViewModel {
     }
 
     func requestApply(_ wallpaper: WEWallpaper, to key: DisplayKey) {
+        wallpaperChangeRequests.send(key)
         prepareWallpaper(wallpaper, for: key) { [weak self] fresh in
             self?.requestPreparedWallpaper(fresh, to: key)
         }
@@ -395,15 +413,19 @@ class WallpaperViewModel {
 
     // MARK: 指派与停止
 
-    func assign(_ wallpaper: WEWallpaper, to key: DisplayKey, restoreFocus: Bool = false) {
+    func assign(_ wallpaper: WEWallpaper, to key: DisplayKey, restoreFocus: Bool = false,
+                preservingPlaybackState: Bool = false, completion: ((Bool) -> Void)? = nil) {
+        if !preservingPlaybackState { wallpaperChangeRequests.send(key) }
+        let completion = completion.map(AssignmentCompletion.init)
         pendingPreparations[key] = nil
         preparationWorkers[key]?.cancel()
         guard wallpaper.presentationIsValid, wallpaper.kind != .unsupported else {
             clear(key)
+            completion?.finish(false)
             return
         }
         let previous = displayStates[key]
-        clearSessionPlaybackOverrides()
+        if !preservingPlaybackState { clearSessionPlaybackOverrides() }
         var resolved: WallpaperRuntimeState
         if let previous, previous.wallpaper.id == wallpaper.id {
             resolved = previous.runtime
@@ -421,6 +443,7 @@ class WallpaperViewModel {
             commitAssignmentState(state, assignmentID: UUID(), for: key)
             if shouldRestoreFocus { AppDelegate.shared.restoreMainWindowFocus() }
             syncStatusItems()
+            completion?.finish(true)
             return
         }
         if currentPlaybackPolicy(for: key) == .stop {
@@ -428,9 +451,10 @@ class WallpaperViewModel {
             pendingAssignmentProposals[displayID] = nil
             commitAssignmentState(state, assignmentID: UUID(), for: key)
             if shouldRestoreFocus { AppDelegate.shared.restoreMainWindowFocus() }
+            completion?.finish(true)
         } else {
             submitAssignment(state, to: displayID, key: key, reuseActive: true,
-                             restoreFocus: shouldRestoreFocus)
+                             restoreFocus: shouldRestoreFocus, completion: completion)
             if shouldRestoreFocus { AppDelegate.shared.restoreMainWindowFocus() }
         }
         syncStatusItems()
@@ -440,10 +464,11 @@ class WallpaperViewModel {
                                   to displayID: CGDirectDisplayID,
                                   key: DisplayKey,
                                   reuseActive: Bool,
-                                  restoreFocus: Bool) {
+                                  restoreFocus: Bool,
+                                  completion: AssignmentCompletion? = nil) {
         let requestID = UUID()
         let proposal = PendingAssignmentProposal(id: requestID, key: key, state: state,
-                                                 restoreFocus: restoreFocus)
+                                                 restoreFocus: restoreFocus, completion: completion)
         cancelFailedAssignmentRecovery(for: key)
         pendingAssignmentProposals[displayID, default: []].append(proposal)
         apply(state, to: displayID, key: key, reuseActive: reuseActive,
@@ -456,7 +481,10 @@ class WallpaperViewModel {
                                     on displayID: CGDirectDisplayID,
                                     success: Bool) {
         guard var proposals = pendingAssignmentProposals[displayID],
-              let index = proposals.firstIndex(where: { $0.id == proposal.id }) else { return }
+              let index = proposals.firstIndex(where: { $0.id == proposal.id }) else {
+            proposal.completion?.finish(false)
+            return
+        }
         let wasLatest = proposals.last?.id == proposal.id
         proposals.remove(at: index)
         if proposals.isEmpty {
@@ -486,6 +514,7 @@ class WallpaperViewModel {
             }
         }
         syncStatusItems()
+        proposal.completion?.finish(success)
     }
 
     private func assignmentStateMergingCurrentRuntime(
@@ -567,6 +596,7 @@ class WallpaperViewModel {
     }
 
     func clear(_ key: DisplayKey) {
+        wallpaperChangeRequests.send(key)
         pendingPreparations[key] = nil
         preparationWorkers[key]?.cancel()
         discardPendingAssignment(for: key)
@@ -596,6 +626,7 @@ class WallpaperViewModel {
     }
 
     func stopAllWallpapers() {
+        for info in DisplayRegistry.shared.connected { wallpaperChangeRequests.send(info.key) }
         pendingPreparations.removeAll()
         preparationWorkers.values.forEach { $0.cancel() }
         for (key, state) in displayStates {
@@ -1492,6 +1523,7 @@ class WallpaperViewModel {
     func suspendForExternalLockScreen() {
         guard !externalLockScreenSuspended else { return }
         externalLockScreenSuspended = true
+        for info in DisplayRegistry.shared.connected { wallpaperChangeRequests.send(info.key) }
         pendingPreparations.removeAll()
         preparationWorkers.values.forEach { $0.cancel() }
         pendingScreenAssignments.removeAll()
@@ -1520,6 +1552,13 @@ class WallpaperViewModel {
             AppDelegate.shared.globalSettingsViewModel.effectivePlaybackActions,
             force: true)
         syncStatusItems()
+    }
+
+    func allowsPlaylistAdvance(on key: DisplayKey, manually: Bool, updateOnPause: Bool) -> Bool {
+        guard DisplayRegistry.shared.info(for: key) != nil else { return false }
+        let policy = currentPlaybackPolicy(for: key)
+        guard policy != .stop else { return false }
+        return manually || updateOnPause || !isPaused(runtime(for: key), action: policy)
     }
 
     private func schedulePlaybackPolicyApplication(for key: DisplayKey) {
@@ -1571,6 +1610,7 @@ class WallpaperViewModel {
         lastAppliedPlayback[proposal.key] = nil
         persistStates()
         syncStatusItems()
+        proposal.completion?.finish(true)
     }
 
     func applyPlaybackPolicy(_ action: GSPlayback, force: Bool = false) {
@@ -1653,7 +1693,7 @@ class WallpaperViewModel {
 
     // MARK: 状态栏菜单项文字同步
 
-    private func syncStatusItems() {
+    func syncStatusItems() {
         syncStatusPauseItem(isPaused: sessionPaused)
         syncStatusMuteItem(isMuted: sessionMuted)
     }

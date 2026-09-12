@@ -985,3 +985,5 @@
 
 "启动时显示" = "Show at Startup";
 "保存后在下次启动 Mirage 时生效。" = "Save to use this page the next time Mirage starts.";
+"上一张" = "Previous Wallpaper";
+"下一张" = "Next Wallpaper";
