@@ -76,7 +76,7 @@ func buildMirageSettingsViewModels(configuration: MirageLockConfiguration) throw
     )
     let models = MirageSettingsViewModels(
         desktop: MirageSettingsViewModel(groups: configuration.enabled == false ? [] : [group],
-                                        refreshPolicy: .default, isModificationDisabled: false),
+                                        refreshPolicy: .discretionary, isModificationDisabled: false),
         screenSaver: nil
     )
     guard let encoded = mirageSettingsViewModelsXPC(models) else {

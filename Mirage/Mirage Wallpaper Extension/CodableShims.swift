@@ -133,16 +133,27 @@ enum MirageContentBadge: Codable {
 }
 
 enum MirageRefreshPolicy: Codable {
-    case `default`
+    case `default`, discretionary
 
-    private enum Keys: String, CodingKey { case `default` }
+    private enum Keys: String, CodingKey { case `default`, discretionary }
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: Keys.self)
-        _ = container.nestedContainer(keyedBy: EmptyKeys.self, forKey: .default)
+        switch self {
+        case .default: _ = container.nestedContainer(keyedBy: EmptyKeys.self, forKey: .default)
+        case .discretionary: _ = container.nestedContainer(keyedBy: EmptyKeys.self, forKey: .discretionary)
+        }
     }
 
-    init(from decoder: Decoder) throws { self = .default }
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: Keys.self)
+        if container.contains(.discretionary) { self = .discretionary }
+        else if container.contains(.default) { self = .default }
+        else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath,
+                                                   debugDescription: "Unsupported wallpaper settings refresh policy"))
+        }
+    }
 }
 
 enum MirageThumbnail: Codable {
