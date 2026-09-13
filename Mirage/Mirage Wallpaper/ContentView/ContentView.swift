@@ -10,11 +10,20 @@ protocol SubviewOfContentView: View {
     var viewModel: ContentViewModel { get set }
 }
 
-enum MainSection: Int, CaseIterable, Hashable {
+enum MainSection: String, CaseIterable, Hashable {
     case installed
     case discover
     case workshop
     case subscriptions
+
+    var title: String {
+        switch self {
+        case .installed: return L("已安装")
+        case .discover: return L("发现")
+        case .workshop: return L("创意工坊")
+        case .subscriptions: return L("已订阅")
+        }
+    }
 }
 
 final class MainNavigationModel: ObservableObject {
@@ -59,14 +68,16 @@ private struct FilterSidebarLayout<Sidebar: View, Content: View>: View {
 }
 
 struct ContentView: View {
-    @EnvironmentObject var globalSettingsViewModel: GlobalSettingsViewModel
+    @Environment(GlobalSettingsViewModel.self) var globalSettingsViewModel
     @ObservedObject private var localization = MirageLocalization.shared
 
-    @ObservedObject var viewModel: ContentViewModel
-    @ObservedObject var wallpaperViewModel: WallpaperViewModel
-    @ObservedObject var workshopViewModel: WorkshopViewModel
+    @Bindable var viewModel: ContentViewModel
+    @Bindable var wallpaperViewModel: WallpaperViewModel
+    @Bindable var workshopViewModel: WorkshopViewModel
     @ObservedObject var navigationModel: MainNavigationModel
     @ObservedObject private var shortcutManager = WallpaperShortcutManager.shared
+    @ObservedObject private var dynamicLockScreenManager = DynamicLockScreenManager.shared
+    @ObservedObject private var screenSaverDynamicLockScreenManager = ScreenSaverDynamicLockScreenManager.shared
     @StateObject private var steamSetupViewModel = SteamSetupViewModel()
     @State private var loadedSections: Set<MainSection>
     @State private var pendingSceneFileExport: WEWallpaper?
@@ -85,6 +96,7 @@ struct ContentView: View {
     }
 
     var body: some View {
+        @Bindable var globalSettingsViewModel = globalSettingsViewModel
         ZStack {
             HSplitView {
                 if viewModel.isStaging {
@@ -96,7 +108,7 @@ struct ContentView: View {
                             if loadedSections.contains(.installed) {
                                 VStack(spacing: 5) {
                                     ExplorerTopBar(contentViewModel: viewModel)
-                                        .environmentObject(globalSettingsViewModel)
+                                        .environment(globalSettingsViewModel)
                                     FilterSidebarLayout(isPresented: viewModel.isFilterReveal, sidebar: {
                                         FilterResults(viewModel: viewModel)
                                     }, content: {
@@ -104,7 +116,7 @@ struct ContentView: View {
                                             contentViewModel: viewModel,
                                             wallpaperViewModel: wallpaperViewModel,
                                             isActive: navigationModel.selection == .installed,
-                                            animatedPreviewMode: globalSettingsViewModel.settings.animatedPreviewPlaybackMode
+                                            animatedPreviewMode: globalSettingsViewModel.animatedPreviewPlaybackMode
                                         )
                                         .onDrop(of: [.fileURL], delegate: viewModel)
                                         .contextMenu {
@@ -193,7 +205,7 @@ struct ContentView: View {
                             CreatorProfileView(
                                 creator: creator,
                                 workshopViewModel: workshopViewModel,
-                                animatedPreviewMode: globalSettingsViewModel.settings.animatedPreviewPlaybackMode
+                                animatedPreviewMode: globalSettingsViewModel.animatedPreviewPlaybackMode
                             )
                             .frame(maxWidth: 420)
                         }
@@ -243,11 +255,27 @@ struct ContentView: View {
         }
         .alert(isPresented: $viewModel.importAlertPresented, error: viewModel.importAlertError) { }
         .alert(item: $viewModel.screenSaverFeedback) { feedback in
-            Alert(
+            if feedback.action == .openFullDiskAccess {
+                return Alert(
+                    title: Text(feedback.title),
+                    message: Text(feedback.message),
+                    primaryButton: .default(Text("打开完全磁盘访问权限设置")) {
+                        dynamicLockScreenManager.openFullDiskAccessSettings()
+                    },
+                    secondaryButton: .cancel(Text("取消"))
+                )
+            }
+            return Alert(
                 title: Text(feedback.title),
                 message: Text(feedback.message),
                 dismissButton: .default(Text("好"))
             )
+        }
+        .sheet(isPresented: $dynamicLockScreenManager.isConfirmationPresented) {
+            DynamicLockScreenConfirmationSheet(manager: dynamicLockScreenManager)
+        }
+        .sheet(isPresented: $screenSaverDynamicLockScreenManager.isConfirmationPresented) {
+            ScreenSaverDynamicLockScreenConfirmationSheet(manager: screenSaverDynamicLockScreenManager)
         }
         .alert(
             "Steam 收藏",
@@ -281,7 +309,7 @@ struct ContentView: View {
         }
         .sheet(isPresented: $globalSettingsViewModel.isFirstLaunch) {
             FirstLaunchView()
-                .environmentObject(globalSettingsViewModel)
+                .environment(globalSettingsViewModel)
         }
         .sheet(isPresented: $navigationModel.isMobileDevicesPresented) {
             MobileDevicesView(viewModel: AppDelegate.shared.mobileDevicesViewModel)
@@ -333,13 +361,19 @@ struct ContentView: View {
             MobileTransferOverlay()
         }
         .environment(\.locale, localization.locale)
-        .frame(minWidth: 1000, minHeight: 640)
+        .frame(minWidth: 1100, minHeight: 640)
         .onChange(of: navigationModel.selection) { _, section in
             loadedSections.insert(section)
         }
-        .task {
+        .task(id: viewModel.isStaging) {
+            guard viewModel.isStaging else { return }
             for section in MainSection.allCases where !loadedSections.contains(section) {
-                await Task.yield()
+                do {
+                    try await Task.sleep(for: .milliseconds(250))
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled else { return }
                 loadedSections.insert(section)
             }
         }
@@ -368,6 +402,6 @@ struct ContentView_Previews: PreviewProvider {
             wallpaperViewModel: .init(),
             navigationModel: MainNavigationModel()
         )
-            .environmentObject(GlobalSettingsViewModel())
+            .environment(GlobalSettingsViewModel())
     }
 }

@@ -27,6 +27,7 @@ public:
     bool                            Contains(RstdPath path) const override;
     std::shared_ptr<IBinaryStream>  Open(RstdPath path) override;
     std::shared_ptr<IBinaryStreamW> OpenW(RstdPath path) override;
+    std::optional<std::string> FindUniqueByBasename(std::string_view basename) const override;
 
     // Pkg-format version stamp from the binary header (e.g. "PKGV0023").
     // Empty if the pkg was malformed.

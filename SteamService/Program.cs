@@ -59,7 +59,7 @@ while (running)
             var restoreCancellation = authenticationCancellation;
             writer.Response(command.RequestId, true);
             authenticationTask = RunAuthenticationAsync(
-                () => session.LoginWithRefreshTokenAsync(command.Username, command.RefreshToken, restoreCancellation.Token),
+                () => session.LoginWithRefreshTokenAsync(command.Username, command.RefreshToken, command.LoginId.GetValueOrDefault(), restoreCancellation.Token),
                 writer,
                 restoreCancellation.Token);
             break;
@@ -74,7 +74,7 @@ while (running)
             var passwordCancellation = authenticationCancellation;
             writer.Response(command.RequestId, true);
             authenticationTask = RunAuthenticationAsync(
-                () => session.LoginWithPasswordAsync(command.Username, command.Password, command.GuardData, passwordCancellation.Token),
+                () => session.LoginWithPasswordAsync(command.Username, command.Password, command.GuardData, command.LoginId.GetValueOrDefault(), passwordCancellation.Token),
                 writer,
                 passwordCancellation.Token);
             break;
@@ -84,7 +84,7 @@ while (running)
             var qrCancellation = authenticationCancellation;
             writer.Response(command.RequestId, true);
             authenticationTask = RunAuthenticationAsync(
-                () => session.LoginWithQrAsync(qrCancellation.Token),
+                () => session.LoginWithQrAsync(command.LoginId.GetValueOrDefault(), qrCancellation.Token),
                 writer,
                 qrCancellation.Token);
             break;

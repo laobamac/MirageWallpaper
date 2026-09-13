@@ -7,239 +7,264 @@
 import SwiftUI
 
 struct DiscoverSectionView: View {
-    var title: String
-    var icon: String
-    var iconColor: Color
-    var items: [WorkshopItem]
-    @ObservedObject var workshopViewModel: WorkshopViewModel
-    @ObservedObject var contentViewModel: ContentViewModel
-    @ObservedObject var wallpaperViewModel: WallpaperViewModel
+    var row: DiscoverRow
+    @Bindable var workshopViewModel: WorkshopViewModel
+    @Bindable var contentViewModel: ContentViewModel
+    @Bindable var wallpaperViewModel: WallpaperViewModel
     let isActive: Bool
     let animatedPreviewMode: GSAnimatedPreviewPlayback
-    var onSeeAll: () -> Void
+    let onSeeAll: () -> Void
 
-    @State private var hoveredId: String?
     @State private var scrollIndex = 0
 
+    private var cardWidth: CGFloat {
+        min(190, max(118, contentViewModel.explorerIconSize))
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Image(systemName: icon)
-                    .foregroundStyle(iconColor)
-                    .font(.title3)
-                Text(title)
-                    .font(.title3)
-                    .bold()
-                Spacer()
-                Button {
-                    onSeeAll()
-                } label: {
-                    HStack(spacing: 4) {
-                        Text("查看全部")
-                        Image(systemName: "chevron.right")
+        VStack(alignment: .leading, spacing: 10) {
+            Text(row.query.title)
+                .font(.title3.weight(.medium))
+                .lineLimit(1)
+
+            if row.isLoading && row.items.isEmpty {
+                loadingCards
+            } else if let error = row.error, row.items.isEmpty {
+                HStack(spacing: 10) {
+                    Text(error)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                    Button("重试") {
+                        workshopViewModel.loadDiscoverRow(id: row.id)
                     }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
                 }
-                .buttonStyle(.plain)
+                .frame(height: cardWidth, alignment: .center)
+            } else if row.items.isEmpty {
+                Text("此推荐暂无可用壁纸")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .frame(height: cardWidth, alignment: .center)
+            } else {
+                cards
             }
 
-            ScrollViewReader { proxy in
-                ZStack {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        LazyHStack(spacing: 14) {
-                            ForEach(items) { item in
-                                WorkshopItemDownloadStatus(
-                                    workshopID: item.publishedFileId,
-                                    downloadStore: workshopViewModel.downloadStore
-                                ) { downloadState in
-                                    DiscoverCard(
-                                        item: item,
-                                        isHovered: hoveredId == item.id,
-                                        isSelected: workshopViewModel.selectedItem?.id == item.id,
-                                        isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
-                                        presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
-                                        downloadState: downloadState,
-                                        isFavorite: workshopViewModel.isWorkshopFavorite(item.publishedFileId),
-                                        cardWidth: contentViewModel.explorerIconSize,
-                                        isActive: isActive,
-                                        animatedPreviewMode: animatedPreviewMode
+            if !row.items.isEmpty {
+                HStack(spacing: 8) {
+                    Button {
+                        onSeeAll()
+                    } label: {
+                        Text("查看更多")
+                        .padding(.horizontal, 10)
+                        .frame(height: 30)
+                    }
+                    .buttonStyle(.borderless)
+                    .background(Color.primary.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 2))
+
+                    Text(L("%d 项", row.total))
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        }
+        .onAppear {
+            workshopViewModel.loadDiscoverRow(id: row.id)
+        }
+    }
+
+    private var loadingCards: some View {
+        HStack(spacing: 8) {
+            ForEach(0..<6, id: \.self) { _ in
+                Rectangle()
+                    .fill(Color.primary.opacity(0.07))
+                    .frame(width: cardWidth, height: cardWidth)
+                    .overlay { ProgressView().controlSize(.small) }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .clipped()
+    }
+
+    private var cards: some View {
+        ScrollViewReader { proxy in
+            ZStack {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(spacing: 8) {
+                        ForEach(row.items) { item in
+                            WorkshopItemDownloadStatus(
+                                workshopID: item.publishedFileId,
+                                downloadStore: workshopViewModel.downloadStore
+                            ) { downloadState in
+                                DiscoverCard(
+                                    item: item,
+                                    isSelected: workshopViewModel.discoverSelectedItemID == item.id,
+                                    isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
+                                    presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
+                                    downloadTask: workshopViewModel.downloadTask(for: item.publishedFileId),
+                                    liveDownloadState: downloadState,
+                                    isFavorite: workshopViewModel.isWorkshopFavorite(item.publishedFileId),
+                                    cardWidth: cardWidth,
+                                    isActive: isActive,
+                                    animatedPreviewMode: animatedPreviewMode
+                                )
+                            }
+                            .id(item.id)
+                            .onTapGesture {
+                                workshopViewModel.selectDiscoverItem(item)
+                            }
+                            .contextMenu {
+                                if let wallpaper = workshopViewModel.cachedInstalledWallpapers[item.publishedFileId] {
+                                    ExplorerItemMenu(
+                                        contentViewModel: contentViewModel,
+                                        wallpaperViewModel: wallpaperViewModel,
+                                        workshopViewModel: workshopViewModel,
+                                        current: wallpaper
                                     )
-                                }
-                                .id(item.id)
-                                .onHover { hovered in
-                                    hoveredId = hovered ? item.id : nil
-                                }
-                                .onTapGesture {
-                                    workshopViewModel.selectWorkshopItem(item)
-                                }
-                                .contextMenu {
-                                    if let wallpaper = workshopViewModel.installedItem(
-                                        workshopId: item.publishedFileId
-                                    ) {
-                                        ExplorerItemMenu(
-                                            contentViewModel: contentViewModel,
-                                            wallpaperViewModel: wallpaperViewModel,
-                                            workshopViewModel: workshopViewModel,
-                                            current: wallpaper
-                                        )
-                                        ExplorerGlobalMenu(
-                                            contentViewModel: contentViewModel,
-                                            wallpaperViewModel: wallpaperViewModel
-                                        )
-                                    } else {
-                                        WorkshopCardContextMenu(
-                                            item: item,
-                                            workshopViewModel: workshopViewModel
-                                        )
-                                        WallpaperGridViewMenu(viewModel: contentViewModel)
-                                    }
+                                    ExplorerGlobalMenu(
+                                        contentViewModel: contentViewModel,
+                                        wallpaperViewModel: wallpaperViewModel
+                                    )
+                                } else {
+                                    WorkshopCardContextMenu(
+                                        item: item,
+                                        workshopViewModel: workshopViewModel
+                                    )
+                                    WallpaperGridViewMenu(viewModel: contentViewModel)
                                 }
                             }
                         }
-                        .padding(.vertical, 6)
-                        .padding(.horizontal, 2)
-                        .background(HorizontalScrollWheelBridge { offset in
-                            let extent = max(1, contentViewModel.explorerIconSize + 14)
-                            let index = Int((offset / extent).rounded(.up))
-                            scrollIndex = min(max(0, items.count - 1), max(0, index))
-                        })
                     }
+                    .background(HorizontalScrollWheelBridge { offset in
+                        let extent = max(1, cardWidth + 8)
+                        scrollIndex = min(max(0, row.items.count - 1), max(0, Int((offset / extent).rounded(.up))))
+                    })
+                }
 
-                    HStack {
-                        scrollButton(systemImage: "chevron.left", disabled: scrollIndex == 0) {
-                            scrollIndex = max(0, scrollIndex - 3)
-                            scroll(to: scrollIndex, proxy: proxy)
-                        }
-                        Spacer()
-                        scrollButton(
-                            systemImage: "chevron.right",
-                            disabled: scrollIndex >= max(0, items.count - 1)
-                        ) {
-                            scrollIndex = min(max(0, items.count - 1), scrollIndex + 3)
+                HStack {
+                    if scrollIndex > 0 {
+                        scrollButton(systemImage: "chevron.left") {
+                            scrollIndex = max(0, scrollIndex - 5)
                             scroll(to: scrollIndex, proxy: proxy)
                         }
                     }
-                    .padding(.horizontal, 6)
+                    Spacer()
+                    if scrollIndex < max(0, row.items.count - 1) {
+                        scrollButton(systemImage: "chevron.right") {
+                            scrollIndex = min(max(0, row.items.count - 1), scrollIndex + 5)
+                            scroll(to: scrollIndex, proxy: proxy)
+                        }
+                    }
                 }
-                .onChange(of: items.map(\.id)) { _, _ in
-                    scrollIndex = 0
-                }
+                .padding(.horizontal, 4)
+                .allowsHitTesting(true)
+            }
+            .frame(height: cardWidth)
+            .onChange(of: row.items.map(\.id)) { _, _ in
+                scrollIndex = 0
             }
         }
     }
 
     private func scroll(to index: Int, proxy: ScrollViewProxy) {
-        guard items.indices.contains(index) else { return }
-        withAnimation(.easeOut(duration: 0.25)) {
-            proxy.scrollTo(items[index].id, anchor: .leading)
+        guard row.items.indices.contains(index) else { return }
+        withAnimation(.easeOut(duration: 0.2)) {
+            proxy.scrollTo(row.items[index].id, anchor: .leading)
         }
     }
 
-    private func scrollButton(systemImage: String, disabled: Bool, action: @escaping () -> Void) -> some View {
+    private func scrollButton(systemImage: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.title3.weight(.semibold))
-                .frame(width: 44, height: 44)
-                .background(.regularMaterial, in: Circle())
-                .shadow(color: .black.opacity(0.18), radius: 4, y: 2)
-                .contentShape(Circle())
+                .font(.title2.weight(.semibold))
+                .foregroundStyle(.white)
+                .frame(width: 34, height: 72)
+                .background(.black.opacity(0.55))
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(disabled)
-        .opacity(disabled ? 0.35 : 1)
     }
 }
 
 struct DiscoverCard: View {
     var item: WorkshopItem
-    var isHovered: Bool
+    @State private var isHovered = false
     var isSelected: Bool
     var isDownloaded: Bool
     var presetNeedsDependency: Bool
-    var downloadState: DownloadState?
-    var isFavorite: Bool
+    var downloadTask: DownloadTask?
+    var liveDownloadState: DownloadState? = nil
+
+    private var downloadState: DownloadState? { isActive ? (liveDownloadState ?? downloadTask?.state) : nil }
+    var isFavorite: Bool = false
     var cardWidth: CGFloat
     var isActive: Bool
     var animatedPreviewMode: GSAnimatedPreviewPlayback
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ZStack(alignment: .topTrailing) {
-                WorkshopImage(
-                    url: item.previewImageURL,
-                    contentMode: .fill,
-                    isAnimating: isActive && (isHovered || isSelected ||
-                        animatedPreviewMode == .visible),
-                    isLoadingEnabled: isActive
-                )
-                    .frame(width: cardWidth, height: cardWidth)
+        ZStack(alignment: .topTrailing) {
+            WorkshopImage(
+                url: item.previewImageURL,
+                contentMode: .fill,
+                isAnimating: isActive && (isHovered || isSelected || animatedPreviewMode == .visible),
+                isLoadingEnabled: isActive,
+                preloadsWhenInactive: true
+            )
+            .frame(width: cardWidth, height: cardWidth)
+            .clipped()
 
-                if isDownloaded {
-                    Image(systemName: presetNeedsDependency ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                        .foregroundStyle(.white, presetNeedsDependency ? .orange : .green)
-                        .symbolRenderingMode(.palette)
-                        .font(.body)
-                        .padding(7)
-                } else if let state = downloadState {
-                    downloadStateIndicator(state)
-                        .padding(7)
-                }
+            if isDownloaded {
+                Image(systemName: presetNeedsDependency ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                    .foregroundStyle(.white, presetNeedsDependency ? .orange : .green)
+                    .symbolRenderingMode(.palette)
+                    .font(.body)
+                    .padding(7)
+            } else if let downloadState {
+                downloadStateIndicator(downloadState)
+                    .padding(7)
             }
-            .overlay(alignment: .topLeading) {
-                if item.isPreset {
-                    Label("预设", systemImage: "slider.horizontal.3")
-                        .font(.caption2.bold())
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 3)
-                        .background(.purple, in: Capsule())
-                        .foregroundStyle(.white)
-                        .padding(7)
-                }
-            }
-
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 5) {
-                    Text(item.title)
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
-                    if isFavorite {
-                        Image(systemName: "heart.fill")
-                            .font(.caption)
-                            .foregroundStyle(.red)
-                    }
-                }
-
-                HStack(spacing: 10) {
-                    Label(item.formattedSubscriptions, systemImage: "arrow.down.circle")
-                    Label(item.displayTypeName, systemImage: "tag")
-                }
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 9)
-            .frame(width: cardWidth, alignment: .leading)
         }
-        .background(.regularMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(alignment: .topLeading) {
+            if item.isApproved {
+                Image(systemName: "trophy.fill")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 25, height: 25)
+                    .background(Color.green.opacity(0.85))
+            }
+        }
+        .overlay(alignment: .bottom) {
+            HStack(spacing: 4) {
+                Text(item.title)
+                    .lineLimit(2)
+                if isFavorite {
+                    Image(systemName: "heart.fill")
+                        .foregroundStyle(.red)
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.white)
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 7)
+            .background(.black.opacity(0.58))
+        }
         .overlay {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+            Rectangle()
                 .strokeBorder(
-                    isSelected ? Color.accentColor : Color.white.opacity(isHovered ? 0.32 : 0.06),
-                    lineWidth: isSelected ? 2 : 1
+                    isSelected ? Color.accentColor : Color.white.opacity(isHovered ? 0.55 : 0.10),
+                    lineWidth: isSelected ? 3 : 1
                 )
                 .allowsHitTesting(false)
         }
-        .shadow(color: .black.opacity(isHovered ? 0.28 : 0.10),
-                radius: isHovered ? 12 : 4, y: isHovered ? 6 : 2)
-        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isHovered)
+        .onHover { isHovered = $0 }
+        .brightness(isHovered ? 0.06 : 0)
+        .animation(.easeOut(duration: 0.14), value: isHovered)
     }
 
     @ViewBuilder
-    func downloadStateIndicator(_ state: DownloadState) -> some View {
+    private func downloadStateIndicator(_ state: DownloadState) -> some View {
         switch state {
         case .downloading(let progress):
             ZStack {
@@ -259,7 +284,7 @@ struct DiscoverCard: View {
                 .font(.body)
         case .validating:
             ProgressView()
-                .scaleEffect(0.5)
+                .controlSize(.mini)
         default:
             EmptyView()
         }

@@ -7,8 +7,8 @@
 import SwiftUI
 
 struct WallpaperExplorer: SubviewOfContentView {
-    @ObservedObject var viewModel: ContentViewModel
-    @ObservedObject var wallpaperViewModel: WallpaperViewModel
+    @Bindable var viewModel: ContentViewModel
+    @Bindable var wallpaperViewModel: WallpaperViewModel
     let isActive: Bool
     let animatedPreviewMode: GSAnimatedPreviewPlayback
 

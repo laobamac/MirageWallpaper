@@ -50,6 +50,13 @@ Json MergeUserPropertyDescriptor(const Json& schema, const Json& patch) {
     if (object.is_none()) return MakeDescriptor(std::move(merged_value));
     (*object)->insert(::alloc::string::String::make(rstd::cppstd::as_str("value")),
                       std::move(merged_value));
+    if (patch.is_object()) {
+        for (const char* key : { "type", "icon" }) {
+            if (auto member = patch.get(key); member.is_some())
+                (*object)->insert(::alloc::string::String::make(rstd::cppstd::as_str(key)),
+                                  (*member)->clone());
+        }
+    }
     return descriptor;
 }
 

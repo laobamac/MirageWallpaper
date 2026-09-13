@@ -740,14 +740,20 @@ bool SceneAnimationCurve::Empty() const { return c0.empty() && c1.empty() && c2.
 
 SceneAnimationPlayback::SceneAnimationPlayback(std::string name, float fps,
                                                std::int32_t frame_count, std::string mode,
-                                               bool wraploop, bool start_paused)
+                                               bool wraploop, bool start_paused,
+                                               std::vector<SceneAnimationEvent> events)
     : m_name(std::move(name)),
       m_fps(fps > 0.0f ? fps : 30.0f),
       m_frame_count(std::max(frame_count, 0)),
       m_mode(std::move(mode)),
       m_wraploop(wraploop),
       m_status(start_paused ? SceneAnimationPlaybackStatus::Paused
-                            : SceneAnimationPlaybackStatus::Playing) {}
+                            : SceneAnimationPlaybackStatus::Playing),
+      m_events(std::move(events)) {
+    std::sort(m_events.begin(), m_events.end(), [](const auto& left, const auto& right) {
+        return left.frame < right.frame;
+    });
+}
 
 bool SceneAnimationPlayback::Loops() const {
     return m_wraploop || m_mode == "loop" || m_mode == "repeat";
@@ -786,7 +792,19 @@ void SceneAnimationPlayback::Tick(double runtime) {
     const double delta = std::max(runtime - *m_last_runtime, 0.0);
     m_last_runtime     = runtime;
     if (! IsPlaying() || delta == 0.0 || m_frame_count <= 0) return;
+    const double previous = m_phase_frame;
     m_phase_frame += delta * static_cast<double>(m_fps) * m_rate;
+    if (m_mode != "mirror" && ! Loops()) {
+        const double low  = std::min(previous, m_phase_frame);
+        const double high = std::max(previous, m_phase_frame);
+        for (const auto& event : m_events) {
+            const double frame = static_cast<double>(event.frame);
+            if ((m_rate >= 0.0 && frame > low && frame <= high) ||
+                (m_rate < 0.0 && frame >= low && frame < high)) {
+                m_pending_events.push_back(event);
+            }
+        }
+    }
     if (m_mode == "mirror" || Loops()) return;
     const double end = static_cast<double>(m_frame_count);
     if (m_rate >= 0.0 && m_phase_frame >= end) {
@@ -809,6 +827,7 @@ void SceneAnimationPlayback::Play() {
 void SceneAnimationPlayback::Stop() {
     m_phase_frame = 0.0;
     m_status      = SceneAnimationPlaybackStatus::Stopped;
+    m_pending_events.clear();
 }
 
 void SceneAnimationPlayback::Pause() {
@@ -822,10 +841,17 @@ void SceneAnimationPlayback::SetFrame(double frame) {
     if (m_status == SceneAnimationPlaybackStatus::Stopped ||
         m_status == SceneAnimationPlaybackStatus::Completed)
         m_status = SceneAnimationPlaybackStatus::Paused;
+    m_pending_events.clear();
 }
 
 void SceneAnimationPlayback::SetRate(double rate) {
     if (std::isfinite(rate)) m_rate = rate;
+}
+
+std::vector<SceneAnimationEvent> SceneAnimationPlayback::ConsumeEvents() {
+    std::vector<SceneAnimationEvent> out;
+    out.swap(m_pending_events);
+    return out;
 }
 
 float SceneAnimationCurve::EvaluateScalar(float base, double runtime) const {
@@ -865,6 +891,20 @@ void SceneNode::RegisterFieldAnimation(
         m_field_animation_playbacks.end())
         m_field_animation_playbacks.push_back(playback);
     if (! playback->Name().empty()) m_named_field_animations[playback->Name()] = playback;
+}
+
+void SceneNode::RegisterAnimationPlayback(
+    const std::shared_ptr<SceneAnimationPlayback>& playback) {
+    RegisterFieldAnimation(playback);
+}
+
+std::vector<SceneAnimationEvent> SceneNode::ConsumeAnimationEvents() {
+    std::vector<SceneAnimationEvent> events;
+    for (const auto& playback : m_field_animation_playbacks) {
+        auto pending = playback->ConsumeEvents();
+        for (auto& event : pending) events.push_back(std::move(event));
+    }
+    return events;
 }
 
 std::shared_ptr<SceneAnimationPlayback>
@@ -939,6 +979,25 @@ Scene::Scene()
 }
 Scene::~Scene() = default;
 
+std::optional<std::array<double, 2>> Scene::CursorPositionOnCanvas(double x, double y) const {
+    if (!UsesSyntheticPerspectiveCamera() || activeCamera == nullptr ||
+        !std::isfinite(x) || !std::isfinite(y)) return std::nullopt;
+    const Eigen::Matrix4d matrix = activeCamera->GetViewProjectionMatrix();
+    if (!matrix.allFinite() || std::abs(matrix.determinant()) < 1e-20) return std::nullopt;
+    const Eigen::Matrix4d inverse = matrix.inverse();
+    Eigen::Vector4d near = inverse * Eigen::Vector4d(2 * x - 1, 1 - 2 * y, 0, 1);
+    Eigen::Vector4d far = inverse * Eigen::Vector4d(2 * x - 1, 1 - 2 * y, 1, 1);
+    if (!near.allFinite() || !far.allFinite() || std::abs(near.w()) < 1e-12 ||
+        std::abs(far.w()) < 1e-12) return std::nullopt;
+    near /= near.w();
+    far /= far.w();
+    const double depth = far.z() - near.z();
+    if (std::abs(depth) < 1e-12) return std::nullopt;
+    const Eigen::Vector4d point = near + (far - near) * (-near.z() / depth);
+    if (!point.allFinite()) return std::nullopt;
+    return std::array { point.x(), point.y() };
+}
+
 std::optional<SceneCameraTransforms> Scene::ActiveCameraTransforms() const {
     if (! activeCamera) return std::nullopt;
     return activeCamera->Transforms();
@@ -1010,6 +1069,7 @@ SceneNodeId Scene::RegisterNode(SceneNode& node,
             return node.m_identity;
         }
         node.m_wallpaper_identity              = wallpaper;
+        node.m_scene_script_layer              = true;
         node.m_id                              = wallpaper->value;
         m_wallpaper_node_ids[wallpaper->value] = node.m_identity;
     } else if (! node.m_wallpaper_identity) {
@@ -1026,21 +1086,68 @@ SceneNodeId Scene::RegisterNode(SceneNode& node,
 
 void Scene::RebuildResourceIndex() { m_resource_index.Rebuild(*this, m_resource_generation); }
 
+void Scene::RegisterScriptLayer(SceneNode& node) {
+    node.m_scene_script_layer = true;
+    RegisterNode(node);
+}
+
 void Scene::AttachRuntimeNode(SceneNode& parent, rstd::sync::Arc<SceneNode> node) {
-    RegisterNode(*node);
+    RegisterScriptLayer(*node);
     parent.AppendChild(std::move(node));
     RebuildResourceIndex();
     m_render_graph_dirty = true;
 }
 
+void Scene::RegisterAuthoredLayer(WallpaperLayerId id, i32 parent_id) {
+    if (id.value < 0 || m_authored_layer_parents.contains(id.value)) return;
+    m_authored_layer_order[parent_id].push_back(id.value);
+    m_authored_layer_parents[id.value] = parent_id;
+}
+
 std::optional<std::size_t> Scene::LayerIndex(const SceneNode& node) const {
     auto* parent = node.Parent();
-    return parent != nullptr ? parent->ChildIndex(node) : std::nullopt;
+    if (parent == nullptr || ! node.SceneScriptLayer()) return std::nullopt;
+    if (auto wallpaper = node.WallpaperIdentity()) {
+        auto parent_id = m_authored_layer_parents.find(wallpaper->value);
+        if (parent_id != m_authored_layer_parents.end()) {
+            auto siblings = m_authored_layer_order.find(parent_id->second);
+            if (siblings != m_authored_layer_order.end()) {
+                std::size_t index = 0;
+                for (i32 sibling : siblings->second) {
+                    if (sibling == wallpaper->value) return index;
+                    ++index;
+                }
+            }
+        }
+    }
+    std::size_t index = 0;
+    for (const auto& child : parent->m_children) {
+        if (! child->SceneScriptLayer()) continue;
+        if (child.as_ptr() == &node) return index;
+        ++index;
+    }
+    return std::nullopt;
 }
 
 bool Scene::SortLayer(SceneNode& node, std::size_t index) {
     auto* parent = node.Parent();
-    if (parent == nullptr || ! parent->MoveChild(node, index)) return false;
+    if (parent == nullptr || ! node.SceneScriptLayer()) return false;
+    auto current = LayerIndex(node);
+    if (! current || *current == index) return false;
+
+    auto moving      = parent->m_children.end();
+    auto destination = parent->m_children.end();
+    std::size_t logical_index = 0;
+    for (auto it = parent->m_children.begin(); it != parent->m_children.end(); ++it) {
+        if (it->as_ptr() == &node) moving = it;
+        if (! (*it)->SceneScriptLayer()) continue;
+        if (logical_index == index) destination = it;
+        ++logical_index;
+    }
+    if (moving == parent->m_children.end() || destination == parent->m_children.end())
+        return false;
+    if (*current < index) ++destination;
+    parent->m_children.splice(destination, parent->m_children, moving);
     m_render_graph_dirty = true;
     return true;
 }
@@ -1155,8 +1262,22 @@ void Scene::MarkLayerStaticElidable(WallpaperLayerId id) {
 
 void Scene::MarkLayerVisibilityElidable(WallpaperLayerId id) {
     if (id.value < 0) return;
+    if (m_runtime_layer_visibility_ids.count(id.value) != 0) return;
     visibility_elidable_layer_ids.insert(id.value);
     elidable_layer_ids.insert(id.value);
+}
+
+void Scene::EnableRuntimeLayerVisibility(WallpaperLayerId id) {
+    if (id.value < 0) return;
+    m_runtime_layer_visibility_ids.insert(id.value);
+    if (visibility_elidable_layer_ids.erase(id.value) != 0) RebuildElidableLayerIds();
+    m_pending_node_visibility_changes.erase(id.value);
+}
+
+void Scene::RegisterPuppetAnimationVisibilityBinding(
+    std::string key, std::function<void(const Json&)> setter) {
+    if (key.empty() || ! setter) return;
+    puppet_animation_visibility_index[std::move(key)].push_back(std::move(setter));
 }
 
 bool Scene::ConsumeRenderGraphDirty() {
@@ -1189,6 +1310,7 @@ bool Scene::SetNodeVisible(SceneNode& node, bool visible) {
         RegisterNode(node);
         return changed;
     }
+    if (m_runtime_layer_visibility_ids.count(id) != 0) return changed;
 
     // Do not mutate visibility_elidable_layer_ids here. A script may set the
     // same layer false and true before the frame is drawn; only its final
@@ -1226,6 +1348,10 @@ bool Scene::CommitDynamicTopology() {
 }
 
 bool Scene::ApplyUserNodeVisibilityBindings(std::string_view key, const Json& property) {
+    if (auto it = puppet_animation_visibility_index.find(std::string(key));
+        it != puppet_animation_visibility_index.end()) {
+        for (const auto& setter : it->second) setter(property);
+    }
     if (m_resource_index.Empty()) RebuildResourceIndex();
     bool matched_binding = false;
     for (auto* node : m_resource_index.Nodes()) {
@@ -1512,8 +1638,7 @@ void Scene::CaptureCameraPathViewports() {
     }
 }
 
-void Scene::EnablePlanarReflection() {
-    m_planar_reflection_enabled = true;
+void Scene::EnsurePlanarReflectionRenderTarget() {
     const std::string key(WE_REFLECTION_PREFIX);
     if (renderTargets.count(key) != 0) return;
 
@@ -1530,7 +1655,13 @@ void Scene::EnablePlanarReflection() {
         .withDepth         = true,
         .bind              = { .enable = true, .screen = true },
         .preserve_on_write = true,
+        .hdr_format        = hdr_render_targets,
     };
+}
+
+void Scene::EnablePlanarReflection() {
+    m_planar_reflection_enabled = true;
+    EnsurePlanarReflectionRenderTarget();
 }
 
 std::string Scene::EnsureLinkRenderTarget(WallpaperLayerId source_layer,
@@ -1542,6 +1673,7 @@ std::string Scene::EnsureLinkRenderTarget(WallpaperLayerId source_layer,
             .width      = sz.x() > 0 ? static_cast<i32>(sz.x()) : ortho[0],
             .height     = sz.y() > 0 ? static_cast<i32>(sz.y()) : ortho[1],
             .allowReuse = false,
+            .hdr_format = hdr_render_targets,
         };
     }
     return link_key;

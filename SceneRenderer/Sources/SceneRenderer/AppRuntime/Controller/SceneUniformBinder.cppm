@@ -93,6 +93,12 @@ struct SceneCameraShake {
     float roughness { 1.0f };
 };
 
+struct SceneNodeRenderTransform {
+    Eigen::Matrix4d model { Eigen::Matrix4d::Identity() };
+    Eigen::Matrix4d view_projection { Eigen::Matrix4d::Identity() };
+    Eigen::Matrix4d model_view_projection { Eigen::Matrix4d::Identity() };
+};
+
 class SceneUniformUpdater : public IShaderValueUpdater {
 public:
     SceneUniformUpdater(Scene* scene): m_scene(scene) {}
@@ -108,6 +114,7 @@ public:
     void SetTexelSize(float x, float y) override;
 
     void SetNodeData(void*, const SceneUniformNodeData&);
+    std::shared_ptr<WPPuppetLayer> PuppetLayerForNode(void*) const;
     // Replicate the uniform record from src to dst. Used when scripts clone
     // a SceneNode at parse time so the clones pick up the template data.
     void CopyNodeData(void* src, void* dst);
@@ -135,7 +142,19 @@ public:
 
     void SetScreenSize(i32 w, i32 h) override { m_screen_size = { (float)w, (float)h }; }
 
+    std::optional<SceneNodeRenderTransform>
+    NodeRenderTransform(SceneNode* node,
+                        SceneRenderViewKind view = SceneRenderViewKind::Primary);
+
+    std::optional<SceneNodeRenderTransform>
+    NodeScreenTransform(SceneNode* node,
+                        SceneRenderViewKind view = SceneRenderViewKind::Primary);
+
 private:
+    std::optional<SceneNodeRenderTransform>
+    NodeTransform(SceneNode* node, SceneRenderViewKind view, bool screen_camera,
+                  bool apply_geometry_transform);
+
     Scene*               m_scene;
     SceneCameraParallax  m_parallax;
     SceneCameraShake     m_cameraShake;

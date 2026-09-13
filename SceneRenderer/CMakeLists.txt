@@ -89,6 +89,16 @@ if(SCENERENDERER_BUILD_ENGINE AND SCENERENDERER_BUILD_TESTS)
     set_property(TARGET SceneRendererTextGeometryTests PROPERTY CXX_SCAN_FOR_MODULES ON)
     add_test(NAME SceneRendererTextGeometry COMMAND SceneRendererTextGeometryTests)
 
+    find_package(Freetype REQUIRED)
+    pkg_check_modules(FONTCONFIG REQUIRED IMPORTED_TARGET fontconfig)
+    add_executable(SceneRendererTextFontFallbackTests Tests/TextFontFallbackRegression.cpp)
+    target_link_libraries(SceneRendererTextFontFallbackTests
+        PRIVATE SceneRenderer::Import Freetype::Freetype PkgConfig::FONTCONFIG)
+    set_property(TARGET SceneRendererTextFontFallbackTests PROPERTY CXX_SCAN_FOR_MODULES ON)
+    add_test(NAME SceneRendererTextFontFallback COMMAND SceneRendererTextFontFallbackTests
+        "${CMAKE_CURRENT_SOURCE_DIR}/../assets/fonts")
+    set_tests_properties(SceneRendererTextFontFallback PROPERTIES SKIP_RETURN_CODE 77)
+
     add_executable(SceneRendererLayerVisibilityTests Tests/LayerVisibilityRegression.cpp)
     target_link_libraries(SceneRendererLayerVisibilityTests PRIVATE SceneRenderer::Import)
     set_property(TARGET SceneRendererLayerVisibilityTests PROPERTY CXX_SCAN_FOR_MODULES ON)
@@ -98,6 +108,12 @@ if(SCENERENDERER_BUILD_ENGINE AND SCENERENDERER_BUILD_TESTS)
     target_link_libraries(SceneRendererRuntimeCompatibilityTests PRIVATE SceneRenderer::Render)
     set_property(TARGET SceneRendererRuntimeCompatibilityTests PROPERTY CXX_SCAN_FOR_MODULES ON)
     add_test(NAME SceneRendererRuntimeCompatibility COMMAND SceneRendererRuntimeCompatibilityTests)
+
+    add_executable(SceneRendererWallpaperPositionTests Tests/WallpaperPositionRenderRegression.cpp)
+    target_link_libraries(SceneRendererWallpaperPositionTests PRIVATE SceneRenderer::Engine)
+    set_property(TARGET SceneRendererWallpaperPositionTests PROPERTY CXX_SCAN_FOR_MODULES ON)
+    add_test(NAME SceneRendererWallpaperPosition COMMAND SceneRendererWallpaperPositionTests)
+    set_tests_properties(SceneRendererWallpaperPosition PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 75)
 
     add_executable(SceneRendererScriptCompatibilityTests Tests/ScriptCompatibilityRegression.cpp)
     target_link_libraries(SceneRendererScriptCompatibilityTests PRIVATE SceneRenderer::Import)

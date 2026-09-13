@@ -4,6 +4,7 @@ export module sr.text;
 import sr.types;
 import rstd.cppstd;
 import sr.scene;
+import sr.fs;
 
 export namespace sr::text
 {
@@ -138,7 +139,8 @@ public:
     // size. The shared_ptr keeps the blob alive for the face's lifetime so
     // FreeType's pointers into it stay valid. Returns nullptr if FreeType
     // cannot open the blob.
-    FontFace* GetFace(std::shared_ptr<std::vector<std::byte>> blob, std::uint32_t pixel_size);
+    FontFace* GetFace(std::shared_ptr<std::vector<std::byte>> blob, std::uint32_t pixel_size,
+                      std::int32_t face_index = 0);
 
     // Iterate every face the cache currently owns (used by the renderer's
     // per-frame atlas-commit hook).
@@ -147,6 +149,7 @@ public:
     struct ResolvedBlob {
         std::shared_ptr<std::vector<std::byte>> bytes;
         std::string                             source; // path or "in-pkg:..."
+        std::int32_t                            face_index { 0 };
     };
 
     // Resolves a font reference. Tries:
@@ -157,6 +160,8 @@ public:
     //      fallback (when fallback_to_any == true)
     // Returns {nullptr, ""} if nothing matches.
     static ResolvedBlob ResolveSystemFont(std::string_view name, bool fallback_to_any = true);
+    static ResolvedBlob ResolveFont(sr::fs::VFS& vfs, std::string_view name,
+                                    bool fallback_to_any = true);
 
 private:
     struct Impl;
@@ -214,6 +219,12 @@ struct TextLayoutStyle {
     // Effect/background layers must retain the font baseline coordinates so
     // effect projection and logical layer framing use the same origin.
     bool center_source { true };
+
+    bool          limit_width { false };
+    float         max_width { 0.0f };
+    bool          limit_rows { false };
+    std::uint32_t max_rows { 0 };
+    bool          use_ellipsis { false };
 };
 
 struct TextLayoutMetrics {
@@ -251,8 +262,9 @@ struct TextGeometry {
 TextGeometry ResolveTextGeometry(const TextGeometryPolicy& policy,
                                  const TextLayoutMetrics&  metrics);
 
-// Resolves WE's text-frame alignment without involving the visible glyph
-// crop. The returned position is the logical frame centre in parent space.
+// Resolves WE's text-frame alignment. The returned position is where the
+// layout's line box centre goes; a non-centre alignment lands the line box's
+// edge on the frame's edge rather than its centre on the frame's centre.
 std::array<float, 2> ResolveTextAnchorPosition(std::string_view horizontal,
                                                std::string_view vertical,
                                                float            origin_x,
@@ -260,7 +272,9 @@ std::array<float, 2> ResolveTextAnchorPosition(std::string_view horizontal,
                                                float            frame_width,
                                                float            frame_height,
                                                float            scale_x,
-                                               float            scale_y);
+                                               float            scale_y,
+                                               float            line_box_width,
+                                               float            line_box_height);
 
 class TextLayouter {
 public:
@@ -279,12 +293,14 @@ public:
     void SetText(std::string_view utf8);
     void SetFace(FontFace* face);
     void SetHorizontalAlign(std::string_view align);
+    void SetLayoutScale(float scale);
 
     // Live per-vertex color / alpha updates. Rewrites the glyph vertex colors
     // in place (re-runs the current layout), so text-layer `color` / `alpha`
     // user properties take effect without a scene reload.
     void SetColor(float r, float g, float b);
     void SetAlpha(float alpha);
+    void SetMaxWidth(float max_width);
 
     // For ParseTextObj's initial-bbox log; reflects the most recent layout.
     float             TextWidth() const noexcept;

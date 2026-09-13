@@ -34,6 +34,9 @@ struct ShaderReflected {
         unsigned    offset;
         std::size_t size { 0 };
         std::size_t num { 1 };
+        std::size_t slot_count { 0 };
+        std::size_t slot_stride { 0 };
+        std::size_t slot_payload { 0 };
     };
     struct Block {
         int         index;

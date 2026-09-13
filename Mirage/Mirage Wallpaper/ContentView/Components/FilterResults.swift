@@ -81,7 +81,7 @@ private struct ResolutionFilterGroup<Filter>: View where Filter: FilterResultsMo
 }
 
 struct FilterResults: View {
-    @ObservedObject var viewModel: FilterResultsViewModel
+    @Bindable var viewModel: FilterResultsViewModel
     
     var body: some View {
         VStack {

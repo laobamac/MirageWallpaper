@@ -38,6 +38,8 @@ public:
     void destory(const Device&, RenderingResources&) override;
 
 private:
+    void ensureDestinationRenderTarget(Scene&);
+
     Desc m_desc;
 };
 

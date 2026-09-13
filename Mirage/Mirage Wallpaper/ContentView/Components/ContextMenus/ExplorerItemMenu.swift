@@ -9,8 +9,8 @@ import AppKit
 
 struct ExplorerItemMenu: SubviewOfContentView {
     
-    @ObservedObject var viewModel: ContentViewModel
-    @ObservedObject var wallpaperViewModel: WallpaperViewModel
+    @Bindable var viewModel: ContentViewModel
+    @Bindable var wallpaperViewModel: WallpaperViewModel
     // Context menus are hosted by native AppKit menus.  Do not subscribe the
     // menu itself to the workshop/download objects: download progress is
     // published several times per second and would make AppKit tear down and
@@ -66,7 +66,12 @@ struct ExplorerItemMenu: SubviewOfContentView {
                 Button(action: setAsScreenSaver) {
                     Label("设为屏保", systemImage: "sparkles.tv")
                 }
-                .disabled(!canApply)
+                .disabled(!canApply || (hoveredWallpaper.kind != .video && hoveredWallpaper.kind != .scene))
+
+                Button(action: setAsDynamicLockScreen) {
+                    Label("设为动态锁屏", systemImage: "lock.rectangle")
+                }
+                .disabled(!canApply || (hoveredWallpaper.kind != .video && hoveredWallpaper.kind != .scene))
             }
 
             Section {
@@ -82,14 +87,14 @@ struct ExplorerItemMenu: SubviewOfContentView {
                     } label: {
                         Label("加入播放列表", systemImage: "plus")
                     }
-                    .disabled(!hoveredWallpaper.isValid)
+                    .disabled(!hoveredWallpaper.presentationIsValid)
                 } else {
                     Button {
                         PlaylistManager.shared.add(hoveredWallpaper, to: 0)
                     } label: {
                         Label("加入播放列表", systemImage: "plus")
                     }
-                    .disabled(!hoveredWallpaper.isValid)
+                    .disabled(!hoveredWallpaper.presentationIsValid)
                 }
                 Button {
                     viewModel.hoveredWallpaper = hoveredWallpaper
@@ -178,7 +183,7 @@ struct ExplorerItemMenu: SubviewOfContentView {
     }
 
     private var canApply: Bool {
-        hoveredWallpaper.isValid && hoveredWallpaper.kind != .unsupported
+        hoveredWallpaper.presentationIsValid && hoveredWallpaper.kind != .unsupported
     }
 
     private var isFavorite: Bool {
@@ -314,6 +319,7 @@ struct ExplorerItemMenu: SubviewOfContentView {
         let runtime = wallpaperViewModel.loadRuntime(for: wallpaper)
         let properties = wallpaperViewModel.effectiveProperties(for: wallpaper, runtime: runtime)
         let fps = Int(AppDelegate.shared.globalSettingsViewModel.settings.fps)
+        let context = ScreenSaverManager.ConfigurationContext(wallpaperID: wallpaper.id, runtime: runtime, fps: fps)
         let manager = ScreenSaverManager.shared
         let needsInstallation = !manager.isInstalled
 
@@ -324,7 +330,8 @@ struct ExplorerItemMenu: SubviewOfContentView {
                     with: wallpaper,
                     runtime: runtime,
                     properties: properties,
-                    fps: fps
+                    fps: fps,
+                    context: context
                 )
             }
             DispatchQueue.main.async {
@@ -340,6 +347,108 @@ struct ExplorerItemMenu: SubviewOfContentView {
                         message: error.localizedDescription
                     )
                 }
+            }
+        }
+    }
+
+    private func setAsDynamicLockScreen() {
+        if DynamicLockScreenModeStore.active == .screenSaver || !DynamicLockScreenManager.shared.isAvailable {
+            setAsScreenSaverDynamicLockScreen()
+            return
+        }
+        let manager = DynamicLockScreenManager.shared
+        guard manager.isAvailable else {
+            viewModel.screenSaverFeedback = ScreenSaverFeedback(
+                title: L("动态锁屏不可用"),
+                message: L("动态锁屏需要 macOS 26 或更高版本。")
+            )
+            return
+        }
+        guard manager.canUse else {
+            manager.requestEnable()
+            return
+        }
+        guard hoveredWallpaper.kind == .video || hoveredWallpaper.kind == .scene else {
+            viewModel.screenSaverFeedback = ScreenSaverFeedback(
+                title: L("设置动态锁屏失败"),
+                message: L("当前壁纸不能用作动态锁屏")
+            )
+            return
+        }
+        let displayIDs = displays.compactMap { DisplayRegistry.shared.displayID(for: $0.key) }
+        let runtime = wallpaperViewModel.loadRuntime(for: hoveredWallpaper)
+        let properties = wallpaperViewModel.effectiveProperties(for: hoveredWallpaper, runtime: runtime)
+        Task { @MainActor in
+            do {
+                try await manager.configureCurrentWallpaper(
+                    hoveredWallpaper,
+                    runtime: runtime,
+                    properties: properties,
+                    fps: Int(AppDelegate.shared.globalSettingsViewModel.settings.fps),
+                    displayIDs: displayIDs
+                )
+                viewModel.screenSaverFeedback = ScreenSaverFeedback(
+                    title: L("已设为动态锁屏"),
+                    message: L("“%@”已部署到锁屏扩展。", hoveredWallpaper.project.title)
+                )
+            } catch DynamicLockScreenError.fullDiskAccessRequired {
+                viewModel.screenSaverFeedback = ScreenSaverFeedback(
+                    title: L("动态锁屏需要完全磁盘访问权限"),
+                    message: L("由于当前 Mirage 版本未使用开发者证书签名，macOS 不允许 Mirage 与动态锁屏扩展共享部署文件。请在“隐私与安全性 > 完全磁盘访问权限”中添加并启用 Mirage，然后重新打开 Mirage 并再次设置动态锁屏。"),
+                    action: .openFullDiskAccess
+                )
+            } catch is CancellationError {
+                return
+            } catch {
+                viewModel.screenSaverFeedback = ScreenSaverFeedback(
+                    title: L("设置动态锁屏失败"),
+                    message: error.localizedDescription
+                )
+            }
+        }
+    }
+
+    private func setAsScreenSaverDynamicLockScreen() {
+        let manager = ScreenSaverDynamicLockScreenManager.shared
+        guard manager.isAvailable else {
+            viewModel.screenSaverFeedback = ScreenSaverFeedback(
+                title: L("动态锁屏不可用"),
+                message: L("动态锁屏方案 B 需要 macOS 14.2 或更高版本。")
+            )
+            return
+        }
+        guard manager.isEnabled else {
+            manager.requestEnable()
+            return
+        }
+        guard hoveredWallpaper.kind == .video || hoveredWallpaper.kind == .scene else {
+            viewModel.screenSaverFeedback = ScreenSaverFeedback(
+                title: L("设置动态锁屏失败"),
+                message: L("当前壁纸不能用作动态锁屏")
+            )
+            return
+        }
+        let runtime = wallpaperViewModel.loadRuntime(for: hoveredWallpaper)
+        let properties = wallpaperViewModel.effectiveProperties(for: hoveredWallpaper, runtime: runtime)
+        Task { @MainActor in
+            do {
+                try await manager.configureCurrentWallpaper(
+                    hoveredWallpaper,
+                    runtime: runtime,
+                    properties: properties,
+                    fps: Int(AppDelegate.shared.globalSettingsViewModel.settings.fps)
+                )
+                viewModel.screenSaverFeedback = ScreenSaverFeedback(
+                    title: L("已设为动态锁屏"),
+                    message: L("“%@”已设为方案 B 锁屏壁纸。", hoveredWallpaper.project.title)
+                )
+            } catch is CancellationError {
+                return
+            } catch {
+                viewModel.screenSaverFeedback = ScreenSaverFeedback(
+                    title: L("设置动态锁屏失败"),
+                    message: error.localizedDescription
+                )
             }
         }
     }
@@ -610,7 +719,7 @@ final class WallpaperShortcutManager: ObservableObject {
         })?.key else { return false }
 
         let wallpaper = WEWallpaper.load(from: URL(fileURLWithPath: wallpaperID))
-        guard wallpaper.isValid, wallpaper.kind != .unsupported else {
+        guard wallpaper.presentationIsValid, wallpaper.kind != .unsupported else {
             shortcuts[wallpaperID] = nil
             persist()
             return true

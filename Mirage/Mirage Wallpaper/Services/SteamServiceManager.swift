@@ -32,6 +32,8 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
     private let ioQueue = DispatchQueue(label: "cn.laobamac.Mirage.steam-service", qos: .userInitiated)
     private let keychainService = "cn.laobamac.Mirage.SteamService"
     private let usernameKey = "SteamServiceUsername"
+    private let loginIDKey = "SteamServiceLoginID"
+    private let loginID: UInt32
     private var process: Process?
     private var input: FileHandle?
     private var outputBuffer = Data()
@@ -49,9 +51,13 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
 
     private var requestHandlers: [String: RequestHandler] = [:]
     private var downloadHandlers: [String: (DownloadState) -> Void] = [:]
+    private var downloadWorkshopIDs: [String: String] = [:]
     private var restoringSession = false
+    private var reconnectingSession = false
     private var restoreRetryCount = 0
     private var restoreRetryWorkItem: DispatchWorkItem?
+    private var restartRetryCount = 0
+    private var restartRetryWorkItem: DispatchWorkItem?
     private var explicitShutdown = false
     private var favoriteRefreshGeneration = 0
 
@@ -112,7 +118,9 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
         let items: [Item]
     }
 
-    private init() {}
+    private init() {
+        loginID = Self.loadLoginID(forKey: loginIDKey)
+    }
 
     func start() {
         ioQueue.async { [weak self] in
@@ -136,7 +144,7 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
                 self.loginState = .loggingIn
                 self.authenticationState = .checking
             }
-            self.sendCommandOnQueue("loginQr") { success, message, errorCode in
+            self.sendCommandOnQueue("loginQr", fields: ["loginId": self.loginID]) { success, message, errorCode in
                 if !success { self.failAuthenticationRequest(code: errorCode, detail: message) }
             }
         }
@@ -154,7 +162,8 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
             }
             var fields: [String: Any] = [
                 "username": username,
-                "password": password
+                "password": password,
+                "loginId": self.loginID
             ]
             if let guardData = self.keychainValue(account: self.guardDataAccount(username)) {
                 fields["guardData"] = guardData
@@ -225,22 +234,43 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
         ioQueue.async { [weak self] in
             guard let self else { return }
             self.downloadHandlers[taskId] = onProgress
-            self.sendCommandOnQueue("download", fields: [
-                "taskId": taskId,
-                "workshopId": workshopId,
-                "outputRoot": self.contentDirectory.path
-            ]) { success, message, errorCode in
-                if !success {
-                    let handler = self.downloadHandlers.removeValue(forKey: taskId)
-                    let localized = self.localizedError(code: errorCode, detail: message)
-                    self.updateOnMain { handler?(.failed(localized)) }
-                }
-            }
+            self.downloadWorkshopIDs[taskId] = workshopId
+            self.startDownloadOnQueue(workshopId: workshopId, taskId: taskId)
         }
     }
 
     func cancelDownload(taskId: String) {
-        sendCommand("cancelDownload", fields: ["taskId": taskId])
+        ioQueue.async { [weak self] in
+            guard let self else { return }
+            guard self.process?.isRunning == true else {
+                let handler = self.downloadHandlers.removeValue(forKey: taskId)
+                self.downloadWorkshopIDs.removeValue(forKey: taskId)
+                self.updateOnMain { handler?(.failed(L("下载已取消"))) }
+                return
+            }
+            self.sendCommandOnQueue("cancelDownload", fields: ["taskId": taskId])
+        }
+    }
+
+    private func startDownloadOnQueue(workshopId: String, taskId: String) {
+        sendCommandOnQueue("download", fields: [
+            "taskId": taskId,
+            "workshopId": workshopId,
+            "outputRoot": contentDirectory.path
+        ]) { [weak self] success, message, errorCode in
+            guard let self, !success else { return }
+            guard self.downloadWorkshopIDs[taskId] == workshopId else { return }
+            let handler = self.downloadHandlers.removeValue(forKey: taskId)
+            self.downloadWorkshopIDs.removeValue(forKey: taskId)
+            let localized = self.localizedError(code: errorCode, detail: message)
+            self.updateOnMain { handler?(.failed(localized)) }
+        }
+    }
+
+    private func resumeDownloadsOnQueue() {
+        for (taskId, workshopId) in downloadWorkshopIDs where downloadHandlers[taskId] != nil {
+            startDownloadOnQueue(workshopId: workshopId, taskId: taskId)
+        }
     }
 
     func downloadedItemDirectory(workshopId: String) -> URL? {
@@ -428,6 +458,8 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
     func shutdown() {
         explicitShutdown = true
         ioQueue.sync {
+            cancelServiceRestartOnQueue()
+            cancelRestoreRetry()
             guard let process else { return }
             sendCommandOnQueue("shutdown")
             try? input?.close()
@@ -444,9 +476,11 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
     private func startOnQueue() {
         guard process?.isRunning != true else { return }
         guard let launch = serviceLaunchConfiguration() else {
+            let message = L("Steam 服务组件不可用")
+            failActiveDownloadsOnQueue(message)
             updateOnMain {
                 self.isAvailable = false
-                self.authenticationState = .unavailable(L("Steam 服务组件不可用"))
+                self.authenticationState = .unavailable(message)
             }
             return
         }
@@ -489,9 +523,11 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
             sendCommandOnQueue("hello")
             restoreSessionOnQueue()
         } catch {
+            let message = L("Steam 服务启动失败：%@", error.localizedDescription)
+            failActiveDownloadsOnQueue(message)
             updateOnMain {
                 self.isAvailable = false
-                self.authenticationState = .unavailable(L("Steam 服务启动失败：%@", error.localizedDescription))
+                self.authenticationState = .unavailable(message)
             }
         }
     }
@@ -560,7 +596,8 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
         }
         sendCommandOnQueue("restoreSession", fields: [
             "username": username,
-            "refreshToken": token
+            "refreshToken": token,
+            "loginId": loginID
         ]) { [weak self] success, message, errorCode in
             guard let self, !success else { return }
             self.restoringSession = false
@@ -594,6 +631,34 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
         restoreRetryWorkItem?.cancel()
         restoreRetryWorkItem = nil
         restoreRetryCount = 0
+    }
+
+    private func scheduleServiceRestartOnQueue() {
+        guard !explicitShutdown, restartRetryWorkItem == nil else { return }
+        guard restartRetryCount < 6 else {
+            let message = L("Steam 服务多次启动失败，请重试")
+            failActiveDownloadsOnQueue(message)
+            updateOnMain {
+                self.loginState = .failed(message)
+                self.authenticationState = .unavailable(message)
+            }
+            return
+        }
+        let delay = min(30.0, pow(2.0, Double(min(restartRetryCount, 5))))
+        restartRetryCount += 1
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.restartRetryWorkItem = nil
+            self.startOnQueue()
+        }
+        restartRetryWorkItem = work
+        ioQueue.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
+    private func cancelServiceRestartOnQueue() {
+        restartRetryWorkItem?.cancel()
+        restartRetryWorkItem = nil
+        restartRetryCount = 0
     }
 
     private func sendCommand(_ command: String, fields: [String: Any] = [:], completion: ((Bool, String?, String?) -> Void)? = nil) {
@@ -728,6 +793,14 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
                 self.loginState = .loggingIn
                 self.authenticationState = .checking
             }
+        case "reconnecting":
+            reconnectingSession = true
+            updateOnMain {
+                self.isLoggedIn = false
+                self.steamId = ""
+                self.loginState = .loggingIn
+                self.authenticationState = .checking
+            }
         case "qr":
             if let challenge = event["challengeUrl"] as? String {
                 updateOnMain { self.loginState = .waitingForQR(challenge) }
@@ -741,12 +814,13 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
         case "loggedIn":
             let resolvedUsername = username ?? savedUsername
             let wasRestoring = restoringSession
+            let wasReconnecting = reconnectingSession
             let refreshTokenStatus: OSStatus
             if let token = event["refreshToken"] as? String, !token.isEmpty {
                 refreshTokenStatus = setKeychainValue(
                     token, account: refreshTokenAccount(resolvedUsername))
             } else {
-                refreshTokenStatus = wasRestoring ? errSecSuccess : errSecDecode
+                refreshTokenStatus = (wasRestoring || wasReconnecting) ? errSecSuccess : errSecDecode
             }
             var auxiliaryStatus = errSecSuccess
             if let guardData = event["guardData"] as? String, !guardData.isEmpty {
@@ -755,14 +829,17 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
             }
             if refreshTokenStatus == errSecSuccess {
                 savedUsername = resolvedUsername
-            } else if !wasRestoring {
+            } else if !wasRestoring && !wasReconnecting {
                 savedUsername = ""
             }
             let persistenceStatus = refreshTokenStatus == errSecSuccess
                 ? auxiliaryStatus
                 : refreshTokenStatus
             restoringSession = false
+            reconnectingSession = false
             cancelRestoreRetry()
+            restartRetryCount = 0
+            resumeDownloadsOnQueue()
             updateOnMain {
                 self.isLoggedIn = true
                 self.accountName = resolvedUsername
@@ -785,6 +862,7 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
                     message = L("保存的 Steam 会话已失效，请重新登录")
                 }
             }
+            failActiveDownloadsOnQueue(message)
             updateOnMain {
                 self.favoriteRefreshGeneration += 1
                 self.isLoggedIn = false
@@ -795,9 +873,18 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
             }
         case "loggedOut":
             if errorCode == "AUTH_CANCELLED" { return }
-            let message = errorCode == nil && (detail?.isEmpty != false)
+            reconnectingSession = false
+            let message: String
+            if errorCode == "AUTH_FAILED" {
+                message = L("保存的 Steam 会话已失效，请重新登录")
+            } else {
+                message = errorCode == nil && (detail?.isEmpty != false)
                 ? L("需要登录 Steam")
                 : localizedError(code: errorCode, detail: detail)
+            }
+            if errorCode != "CONNECTION_LOST" {
+                failActiveDownloadsOnQueue(message)
+            }
             updateOnMain {
                 self.favoriteRefreshGeneration += 1
                 self.isLoggedIn = false
@@ -831,12 +918,15 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
         case "completed":
             next = .completed
             downloadHandlers.removeValue(forKey: taskId)
+            downloadWorkshopIDs.removeValue(forKey: taskId)
         case "cancelled":
             next = .failed(L("下载已取消"))
             downloadHandlers.removeValue(forKey: taskId)
+            downloadWorkshopIDs.removeValue(forKey: taskId)
         case "failed":
             next = .failed(localizedError(code: event["errorCode"] as? String, detail: event["message"] as? String))
             downloadHandlers.removeValue(forKey: taskId)
+            downloadWorkshopIDs.removeValue(forKey: taskId)
         default:
             return
         }
@@ -849,9 +939,7 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
         outputBuffer.removeAll(keepingCapacity: true)
         cancelRestoreRetry()
         restoringSession = false
-        let handlers = Array(downloadHandlers.values)
         let requests = Array(requestHandlers.values)
-        downloadHandlers.removeAll()
         requestHandlers.removeAll()
         guard !explicitShutdown else { return }
         let reasonText: String
@@ -868,7 +956,7 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
             message = L("Steam 服务意外退出（状态 %@）", String(status))
         }
         MirageLogService.shared.append(
-            "Steam service terminated: reason=\(reasonText) status=\(status)",
+            "Steam service terminated: reason=\(reasonText) status=\(status) message=\(message)",
             source: "steam-service"
         )
         for request in requests {
@@ -880,14 +968,16 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
             self.isLoggedIn = false
             self.steamId = ""
             self.workshopFavoriteIDs = []
-            self.loginState = .failed(message)
-            self.authenticationState = .unavailable(L("Steam 服务组件不可用"))
-            for handler in handlers { handler(.failed(L("Steam 服务连接已中断"))) }
+            self.loginState = .loggingIn
+            self.authenticationState = .checking
+            for handler in self.downloadHandlers.values { handler(.resolving) }
         }
+        scheduleServiceRestartOnQueue()
     }
 
     private func failAuthenticationRequest(code: String?, detail: String?) {
         let message = localizedError(code: code, detail: detail)
+        failActiveDownloadsOnQueue(message)
         updateOnMain {
             self.favoriteRefreshGeneration += 1
             self.isLoggedIn = false
@@ -895,6 +985,17 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
             self.workshopFavoriteIDs = []
             self.loginState = .failed(message)
             self.authenticationState = .unavailable(message)
+        }
+    }
+
+    private func failActiveDownloadsOnQueue(_ message: String) {
+        let handlers = Array(downloadHandlers.values)
+        downloadHandlers.removeAll()
+        downloadWorkshopIDs.removeAll()
+        updateOnMain {
+            for handler in handlers {
+                handler(.failed(message))
+            }
         }
     }
 
@@ -907,7 +1008,7 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
         case "WORKSHOP_DETAILS_UNAVAILABLE": return L("Steam 未返回该创意工坊作品的有效信息")
         case "WRONG_APP": return L("该作品不属于 Wallpaper Engine 创意工坊")
         case "CONTENT_MANIFEST_MISSING", "WORKSHOP_DEPOT_MISSING", "MANIFEST_ACCESS_DENIED", "EMPTY_MANIFEST": return L("无法解析该创意工坊作品的下载内容")
-        case "NO_CONTENT_SERVER", "CHUNK_DOWNLOAD_FAILED": return L("Steam 内容服务器下载失败，请稍后重试")
+        case "NO_CONTENT_SERVER", "MANIFEST_DOWNLOAD_FAILED", "CHUNK_DOWNLOAD_FAILED": return L("Steam 内容服务器下载失败，请稍后重试")
         case "VALIDATION_FAILED": return L("下载内容校验失败，请重试")
         case "PROJECT_JSON_MISSING": return L("下载内容中缺少 project.json")
         case "UNSAFE_PATH", "UNSUPPORTED_SYMLINK": return L("下载内容包含不安全的文件路径")
@@ -944,6 +1045,16 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
 
     private func updateOnMain(_ block: @escaping () -> Void) {
         DispatchQueue.main.async(execute: block)
+    }
+
+    private static func loadLoginID(forKey key: String) -> UInt32 {
+        if let number = UserDefaults.standard.object(forKey: key) as? NSNumber,
+           number.uint32Value != 0 {
+            return number.uint32Value
+        }
+        let value = UInt32.random(in: 1...UInt32.max)
+        UserDefaults.standard.set(Int(value), forKey: key)
+        return value
     }
 
     private func refreshTokenAccount(_ username: String) -> String { "refresh-token:\(username.lowercased())" }

@@ -7,7 +7,7 @@
 import SwiftUI
 
 struct WorkshopTagBar: View {
-    @ObservedObject var workshopViewModel: WorkshopViewModel
+    @Bindable var workshopViewModel: WorkshopViewModel
 
     private let displayTags: [WorkshopTag] = [
         .anime, .nature, .abstract, .landscape, .sciFi, .cartoon,

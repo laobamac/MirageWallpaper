@@ -32,7 +32,10 @@ internal sealed class SteamSession : IAsyncDisposable
     private readonly SemaphoreSlim authGate = new(1, 1);
     private readonly SemaphoreSlim appInfoGate = new(1, 1);
     private readonly SemaphoreSlim favoriteGate = new(1, 1);
+    private readonly SemaphoreSlim contentServerGate = new(1, 1);
+    private readonly object stateGate = new();
     private readonly ConcurrentDictionary<(uint DepotId, string Host), SteamContent.CDNAuthToken> cdnTokens = new();
+    private readonly ConcurrentDictionary<string, int> contentServerFailures = new(StringComparer.OrdinalIgnoreCase);
     private readonly Task callbackLoop;
     private TaskCompletionSource<bool>? connectedSource;
     private TaskCompletionSource<bool>? resetConnectionSource;
@@ -42,6 +45,15 @@ internal sealed class SteamSession : IAsyncDisposable
     private SteamApps.PICSProductInfoCallback.PICSProductInfo? appInfo;
     private string refreshToken = "";
     private string accessToken = "";
+    private string reconnectAccountName = "";
+    private uint loginId;
+    private Server[] contentServers = [];
+    private DateTime contentServerExpiration = DateTime.MinValue;
+    private DateTime contentServerRefreshNotBefore = DateTime.MinValue;
+    private int contentServerCursor;
+    private TaskCompletionSource<bool> onlineSource = NewOnlineSource();
+    private CancellationTokenSource? recoveryCancellation;
+    private Task? recoveryTask;
     private bool shuttingDown;
 
     public bool IsLoggedIn { get; private set; }
@@ -85,17 +97,22 @@ internal sealed class SteamSession : IAsyncDisposable
         callbackLoop = RunCallbacksAsync();
     }
 
-    public async Task LoginWithRefreshTokenAsync(string username, string refreshToken, CancellationToken cancellationToken)
+    public async Task LoginWithRefreshTokenAsync(string username, string refreshToken, uint loginId, CancellationToken cancellationToken)
     {
+        CancelRecovery();
+        var effectiveLoginId = NormalizeLoginId(loginId);
         await authGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             writer.AuthState("connecting", username);
             await EnsureConnectedAsync(cancellationToken).ConfigureAwait(false);
-            await LogOnAsync(username, refreshToken, cancellationToken).ConfigureAwait(false);
+            await LogOnAsync(username, refreshToken, effectiveLoginId, cancellationToken).ConfigureAwait(false);
             this.refreshToken = refreshToken;
             accessToken = "";
             AccountName = username;
+            reconnectAccountName = username;
+            this.loginId = effectiveLoginId;
+            MarkOnline();
             writer.AuthState("loggedIn", username, steamId: SteamId);
         }
         finally
@@ -104,8 +121,10 @@ internal sealed class SteamSession : IAsyncDisposable
         }
     }
 
-    public async Task LoginWithPasswordAsync(string username, string password, string? guardData, CancellationToken cancellationToken)
+    public async Task LoginWithPasswordAsync(string username, string password, string? guardData, uint loginId, CancellationToken cancellationToken)
     {
+        CancelRecovery();
+        var effectiveLoginId = NormalizeLoginId(loginId);
         await authGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -128,10 +147,13 @@ internal sealed class SteamSession : IAsyncDisposable
                 .WaitAsync(authCancellation.Token)
                 .ConfigureAwait(false);
             var result = await PollCredentialsResultAsync(session, loginAuthenticator, authCancellation.Token).ConfigureAwait(false);
-            await LogOnAsync(result.AccountName, result.RefreshToken, authCancellation.Token).ConfigureAwait(false);
+            await LogOnAsync(result.AccountName, result.RefreshToken, effectiveLoginId, authCancellation.Token).ConfigureAwait(false);
             refreshToken = result.RefreshToken;
             accessToken = result.AccessToken;
             AccountName = result.AccountName;
+            reconnectAccountName = result.AccountName;
+            this.loginId = effectiveLoginId;
+            MarkOnline();
             writer.AuthState("loggedIn", result.AccountName, refreshToken: result.RefreshToken, guardData: result.NewGuardData ?? guardData, steamId: SteamId);
         }
         finally
@@ -143,8 +165,10 @@ internal sealed class SteamSession : IAsyncDisposable
         }
     }
 
-    public async Task LoginWithQrAsync(CancellationToken cancellationToken)
+    public async Task LoginWithQrAsync(uint loginId, CancellationToken cancellationToken)
     {
+        CancelRecovery();
+        var effectiveLoginId = NormalizeLoginId(loginId);
         await authGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -163,10 +187,13 @@ internal sealed class SteamSession : IAsyncDisposable
             writer.AuthState("qr", challengeUrl: session.ChallengeURL);
             var result = await session.PollingWaitForResultAsync(authCancellation.Token).ConfigureAwait(false);
             writer.AuthState("authenticating", result.AccountName);
-            await LogOnAsync(result.AccountName, result.RefreshToken, authCancellation.Token).ConfigureAwait(false);
+            await LogOnAsync(result.AccountName, result.RefreshToken, effectiveLoginId, authCancellation.Token).ConfigureAwait(false);
             refreshToken = result.RefreshToken;
             accessToken = result.AccessToken;
             AccountName = result.AccountName;
+            reconnectAccountName = result.AccountName;
+            this.loginId = effectiveLoginId;
+            MarkOnline();
             writer.AuthState("loggedIn", result.AccountName, refreshToken: result.RefreshToken, guardData: result.NewGuardData, steamId: SteamId);
         }
         finally
@@ -262,13 +289,14 @@ internal sealed class SteamSession : IAsyncDisposable
 
     public async Task<(Server Server, string? Token)> GetDownloadServerAsync(uint depotId, int offset, CancellationToken cancellationToken)
     {
-        var servers = await content.GetServersForSteamPipe().WaitAsync(cancellationToken).ConfigureAwait(false);
+        var servers = await GetContentServersAsync(cancellationToken).ConfigureAwait(false);
         var eligible = servers
-            .Where(server => !string.IsNullOrWhiteSpace(server.Host) && (server.AllowedAppIds.Length == 0 || server.AllowedAppIds.Contains(AppId)) && (server.Type == "CDN" || server.Type == "SteamCache"))
-            .OrderBy(server => server.WeightedLoad)
+            .OrderBy(server => contentServerFailures.TryGetValue(server.Host!, out var failures) ? failures : 0)
+            .ThenBy(server => server.WeightedLoad)
             .ToArray();
         if (eligible.Length == 0) throw new ServiceException("NO_CONTENT_SERVER", "Steam returned no eligible content server.");
-        var selected = eligible[Math.Abs(offset) % eligible.Length];
+        var selection = unchecked((uint)(Interlocked.Increment(ref contentServerCursor) + offset));
+        var selected = eligible[selection % (uint)eligible.Length];
         var host = selected.Host!;
         var key = (depotId, host);
         if (!cdnTokens.TryGetValue(key, out var auth) || auth.Expiration <= DateTime.UtcNow.AddMinutes(1))
@@ -285,6 +313,70 @@ internal sealed class SteamSession : IAsyncDisposable
             }
         }
         return (selected, auth.Token);
+    }
+
+    public void ReportDownloadServerFailure(uint depotId, string? host)
+    {
+        if (string.IsNullOrWhiteSpace(host)) return;
+        cdnTokens.TryRemove((depotId, host), out _);
+        var failures = contentServerFailures.AddOrUpdate(host, 1, static (_, value) => value + 1);
+        if (failures < 2 || DateTime.UtcNow < contentServerRefreshNotBefore) return;
+        contentServerRefreshNotBefore = DateTime.UtcNow.AddSeconds(10);
+        contentServerExpiration = DateTime.MinValue;
+    }
+
+    public void ReportDownloadServerSuccess(string? host)
+    {
+        if (!string.IsNullOrWhiteSpace(host)) contentServerFailures.TryRemove(host, out _);
+    }
+
+    public async Task WaitForOnlineAsync(CancellationToken cancellationToken)
+    {
+        Task onlineTask;
+        lock (stateGate)
+        {
+            if (IsLoggedIn) return;
+            onlineTask = onlineSource.Task;
+        }
+        await onlineTask.WaitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<Server[]> GetContentServersAsync(CancellationToken cancellationToken)
+    {
+        var now = DateTime.UtcNow;
+        var cached = contentServers;
+        if (cached.Length > 0 && now < contentServerExpiration) return cached;
+
+        await contentServerGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            now = DateTime.UtcNow;
+            cached = contentServers;
+            if (cached.Length > 0 && now < contentServerExpiration) return cached;
+            try
+            {
+                var servers = await content.GetServersForSteamPipe().WaitAsync(cancellationToken).ConfigureAwait(false);
+                var eligible = servers
+                    .Where(server => !string.IsNullOrWhiteSpace(server.Host) &&
+                        (server.AllowedAppIds.Length == 0 || server.AllowedAppIds.Contains(AppId)) &&
+                        (server.Type == "CDN" || server.Type == "SteamCache"))
+                    .ToArray();
+                if (eligible.Length == 0) throw new ServiceException("NO_CONTENT_SERVER", "Steam returned no eligible content server.");
+                contentServers = eligible;
+                contentServerExpiration = now.AddMinutes(2);
+                contentServerFailures.Clear();
+                return eligible;
+            }
+            catch when (cached.Length > 0)
+            {
+                contentServerExpiration = now.AddSeconds(15);
+                return cached;
+            }
+        }
+        finally
+        {
+            contentServerGate.Release();
+        }
     }
 
     public async Task<SubscriptionPage> GetSubscriptionsAsync(int startIndex, CancellationToken cancellationToken)
@@ -560,15 +652,142 @@ internal sealed class SteamSession : IAsyncDisposable
     public void Logout()
     {
         CancelAuthentication();
+        CancelRecovery();
         IsLoggedIn = false;
         AccountName = "";
         SteamId = "";
         refreshToken = "";
         accessToken = "";
+        reconnectAccountName = "";
+        loginId = 0;
         appInfo = null;
         cdnTokens.Clear();
+        contentServers = [];
+        contentServerFailures.Clear();
+        MarkOffline();
         if (client.IsConnected) user.LogOff();
         writer.AuthState("loggedOut");
+    }
+
+    private static TaskCompletionSource<bool> NewOnlineSource()
+    {
+        return new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    private static uint NormalizeLoginId(uint value)
+    {
+        return value == 0 ? (uint)RandomNumberGenerator.GetInt32(1, int.MaxValue) : value;
+    }
+
+    private void MarkOnline()
+    {
+        lock (stateGate) onlineSource.TrySetResult(true);
+    }
+
+    private void MarkOffline()
+    {
+        lock (stateGate)
+        {
+            if (onlineSource.Task.IsCompleted) onlineSource = NewOnlineSource();
+        }
+    }
+
+    private void CancelRecovery()
+    {
+        lock (stateGate) recoveryCancellation?.Cancel();
+    }
+
+    private void StartRecovery(string message)
+    {
+        string username;
+        string token;
+        uint currentLoginId;
+        CancellationTokenSource cancellation;
+        lock (stateGate)
+        {
+            if (shuttingDown || recoveryTask is { IsCompleted: false }) return;
+            username = reconnectAccountName;
+            token = refreshToken;
+            currentLoginId = loginId;
+            if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(token))
+            {
+                writer.AuthState("loggedOut", message: message, errorCode: "CONNECTION_LOST");
+                return;
+            }
+            cancellation = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+            recoveryCancellation = cancellation;
+            recoveryTask = Task.Run(() => RecoverAsync(username, token, NormalizeLoginId(currentLoginId), cancellation));
+        }
+    }
+
+    private async Task RecoverAsync(string username, string token, uint currentLoginId, CancellationTokenSource cancellation)
+    {
+        var attempt = 0;
+        try
+        {
+            while (!cancellation.IsCancellationRequested)
+            {
+                attempt += 1;
+                writer.AuthState("reconnecting", username, message: "Steam connection is recovering.", errorCode: "CONNECTION_LOST");
+                try
+                {
+                    await authGate.WaitAsync(cancellation.Token).ConfigureAwait(false);
+                    try
+                    {
+                        if (client.IsConnected) await ResetConnectionAsync().ConfigureAwait(false);
+                        await EnsureConnectedAsync(cancellation.Token).ConfigureAwait(false);
+                        await LogOnAsync(username, token, currentLoginId, cancellation.Token).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        authGate.Release();
+                    }
+
+                    refreshToken = token;
+                    accessToken = "";
+                    AccountName = username;
+                    reconnectAccountName = username;
+                    loginId = currentLoginId;
+                    MarkOnline();
+                    writer.AuthState("loggedIn", username, steamId: SteamId);
+                    return;
+                }
+                catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { return; }
+                catch (Exception error) when (IsTerminalAuthenticationFailure(error))
+                {
+                    MarkOffline();
+                    writer.AuthState("loggedOut", username, message: error.Message, errorCode: "AUTH_FAILED");
+                    return;
+                }
+                catch
+                {
+                    var seconds = Math.Min(30, 1 << Math.Min(attempt - 1, 5));
+                    var jitter = Random.Shared.NextDouble() * 0.4;
+                    await Task.Delay(TimeSpan.FromSeconds(seconds + jitter), cancellation.Token).ConfigureAwait(false);
+                }
+            }
+        }
+        finally
+        {
+            lock (stateGate)
+            {
+                if (ReferenceEquals(recoveryCancellation, cancellation))
+                {
+                    recoveryCancellation = null;
+                    recoveryTask = null;
+                }
+            }
+            cancellation.Dispose();
+        }
+    }
+
+    private static bool IsTerminalAuthenticationFailure(Exception error)
+    {
+        while (error.InnerException != null && error is AggregateException or IOException)
+        {
+            error = error.InnerException;
+        }
+        return error is ServiceException { Code: "AUTH_FAILED" };
     }
 
     private async Task EnsureConnectedAsync(CancellationToken cancellationToken)
@@ -600,7 +819,7 @@ internal sealed class SteamSession : IAsyncDisposable
         throw lastError ?? new ServiceException("CONNECTION_LOST", "Steam connection closed.");
     }
 
-    private async Task LogOnAsync(string username, string refreshToken, CancellationToken cancellationToken)
+    private async Task LogOnAsync(string username, string refreshToken, uint loginId, CancellationToken cancellationToken)
     {
         loggedOnSource = new TaskCompletionSource<SteamUser.LoggedOnCallback>(TaskCreationOptions.RunContinuationsAsynchronously);
         user.LogOn(new SteamUser.LogOnDetails
@@ -608,7 +827,7 @@ internal sealed class SteamSession : IAsyncDisposable
             Username = username,
             AccessToken = refreshToken,
             ShouldRememberPassword = true,
-            LoginID = 0x4D495247
+            LoginID = loginId
         });
         var result = await loggedOnSource.Task.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false);
         if (result.Result != EResult.OK) throw new ServiceException("AUTH_FAILED", result.Result.ToString());
@@ -657,11 +876,10 @@ internal sealed class SteamSession : IAsyncDisposable
         if (IsLoggedIn && !shuttingDown)
         {
             IsLoggedIn = false;
-            AccountName = "";
             SteamId = "";
-            refreshToken = "";
             accessToken = "";
-            writer.AuthState("loggedOut", message: "Steam connection closed.", errorCode: "CONNECTION_LOST");
+            MarkOffline();
+            StartRecovery("Steam connection closed.");
         }
     }
 
@@ -674,17 +892,17 @@ internal sealed class SteamSession : IAsyncDisposable
     {
         if (shuttingDown || !IsLoggedIn) return;
         IsLoggedIn = false;
-        AccountName = "";
         SteamId = "";
-        refreshToken = "";
         accessToken = "";
-        writer.AuthState("loggedOut", message: callback.Result.ToString());
+        MarkOffline();
+        StartRecovery(callback.Result.ToString());
     }
 
     public async ValueTask DisposeAsync()
     {
         shuttingDown = true;
         CancelAuthentication();
+        CancelRecovery();
         if (client.IsConnected)
         {
             if (IsLoggedIn) user.LogOff();
@@ -696,6 +914,7 @@ internal sealed class SteamSession : IAsyncDisposable
         authGate.Dispose();
         appInfoGate.Dispose();
         favoriteGate.Dispose();
+        contentServerGate.Dispose();
     }
 }
 

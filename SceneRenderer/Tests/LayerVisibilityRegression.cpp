@@ -220,6 +220,23 @@ void TestDynamicSceneIdentityAndVisibilityDebounce() {
           "a changed final dynamic visibility state rebuilds the render graph");
 }
 
+void TestRuntimeLayerVisibilityKeepsStaticGraph() {
+    sr::Scene scene;
+    auto      node = rstd::sync::Arc<sr::SceneNode>::make();
+    node->ID() = 77;
+    node->SetVisible(false);
+    scene.RegisterNode(*node, sr::WallpaperLayerId { .value = 77 });
+    scene.sceneGraph->AppendChild(node.clone());
+    scene.MarkLayerVisibilityElidable(sr::WallpaperLayerId { .value = 77 });
+
+    scene.EnableRuntimeLayerVisibility(sr::WallpaperLayerId { .value = 77 });
+    Check(! Elidable(scene, 77), "scripted visibility keeps authored layers in the graph");
+    Check(scene.SetNodeVisible(*node, true), "scripted layer can become visible");
+    Check(! scene.CommitNodeVisibilityChanges(), "scripted visibility does not rebuild the graph");
+    Check(scene.SetNodeVisible(*node, false), "scripted layer can become hidden");
+    Check(! scene.CommitNodeVisibilityChanges(), "scripted hide keeps the graph stable");
+}
+
 } // namespace
 
 int main() {
@@ -229,6 +246,7 @@ int main() {
     TestDependencyCaptureAlpha();
     TestFinalOutputOverrideRestoresAuthoredTarget();
     TestDynamicSceneIdentityAndVisibilityDebounce();
+    TestRuntimeLayerVisibilityKeepsStaticGraph();
     if (g_failures == 0) std::cout << "LayerVisibilityRegression: ok\n";
     return g_failures == 0 ? 0 : 1;
 }

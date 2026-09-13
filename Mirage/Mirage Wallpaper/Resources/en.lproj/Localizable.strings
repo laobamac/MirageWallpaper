@@ -942,3 +942,122 @@
 "App 缺少场景转换组件，请重新安装 Mirage。" = "The app is missing scene conversion components. Reinstall Mirage.";
 "场景转换失败：%@" = "Scene conversion failed: %@";
 "移动设备场景壁纸不能超过 4 GB。" = "Mobile scene wallpapers cannot exceed 4 GB.";
+"查找壁纸" = "Find wallpapers";
+"查找" = "Find";
+"清除搜索" = "Clear Search";
+"正在加载壁纸详情" = "Loading wallpaper details";
+"此推荐暂无可用壁纸" = "No wallpapers are available for this recommendation";
+"查看更多" = "See More";
+"%d 项" = "%d items";
+"“%@”的搜索结果" = "Search results for “%@”";
+"最近的好评壁纸" = "Recently Approved Wallpapers";
+"当下最热门" = "Popular Right Now";
+"手机必用" = "Made for Mobile";
+"最热门的音频响应壁纸" = "Popular Audio Responsive Wallpapers";
+"最热门的%@壁纸" = "Popular %@ Wallpapers";
+"今年热门的%@壁纸" = "Popular %@ Wallpapers This Year";
+"本周热门的%@壁纸" = "Popular %@ Wallpapers This Week";
+"最新的%@壁纸" = "Newest %@ Wallpapers";
+"精选创作者 · %@" = "Featured Creator · %@";
+"焦点作品集" = "Featured Collection";
+"最新壁纸" = "Newest Wallpapers";
+"热门壁纸" = "Popular Wallpapers";
+"来自 %@ 的最新壁纸" = "Newest Wallpapers from %@";
+"来自 %@ 的热门壁纸" = "Popular Wallpapers from %@";
+"Wallpaper Engine 发现页返回了无效响应" = "Wallpaper Engine Discover returned an invalid response";
+"Wallpaper Engine 发现页请求失败：HTTP %@" = "Wallpaper Engine Discover request failed: HTTP %@";
+"返回发现" = "Back to Discover";
+"刷新" = "Refresh";
+"动态锁屏" = "Dynamic Lock Screen";
+"启用动态锁屏" = "Enable Dynamic Lock Screen";
+"将正在播放的壁纸设为动态锁屏" = "Set Playing Wallpaper as Dynamic Lock Screen";
+"设为动态锁屏" = "Set as Dynamic Lock Screen";
+"锁屏壁纸" = "Lock Screen Wallpaper";
+"尚未设置" = "Not Set";
+"动态锁屏不可用" = "Dynamic Lock Screen Unavailable";
+"动态锁屏需要 macOS 26 或更高版本。" = "Dynamic Lock Screen requires macOS 26 or later.";
+"此功能仅支持 macOS 26 及以上版本。Mirage 使用的动态锁屏 API 来自逆向分析，可能随系统更新失效，也可能导致系统壁纸服务重启。启用前请确认你了解并接受这一风险。" = "This feature requires macOS 26 or later. Mirage uses a reverse-engineered dynamic lock screen API that may stop working after system updates and may restart the system wallpaper service. Confirm that you understand and accept this risk before enabling it.";
+"输入“我同意”或“Agree”" = "Enter “我同意” or “Agree”";
+"请输入“我同意”或“Agree”" = "Enter “我同意” or “Agree”";
+"确认开启" = "Enable";
+"动态锁屏使用逆向得到的系统 API，可能随 macOS 更新失效。动态锁屏支持视频和场景壁纸。启用后请前往墙纸内切换为Mirage动态锁屏。" = "Dynamic Lock Screen uses a reverse-engineered system API and may stop working after macOS updates. Dynamic Lock Screen supports video and scene wallpapers.Once enabled, please go to the Wallpaper settings and switch to the Mirage dynamic lock screen.";
+"已设为动态锁屏" = "Dynamic Lock Screen Set";
+"“%@”已部署到锁屏扩展。" = "“%@” was deployed to the lock screen extension.";
+"设置动态锁屏失败" = "Could Not Set Dynamic Lock Screen";
+"动态锁屏需要完全磁盘访问权限" = "Dynamic Lock Screen Requires Full Disk Access";
+"由于当前 Mirage 版本未使用开发者证书签名，macOS 不允许 Mirage 与动态锁屏扩展共享部署文件。请在“隐私与安全性 > 完全磁盘访问权限”中添加并启用 Mirage，然后重新打开 Mirage 并再次设置动态锁屏。" = "Because this Mirage build is not signed with a developer certificate, macOS does not allow Mirage and its Dynamic Lock Screen extension to share deployment files. Add and enable Mirage in Privacy & Security > Full Disk Access, then reopen Mirage and set the Dynamic Lock Screen again.";
+"打开完全磁盘访问权限设置" = "Open Full Disk Access Settings";
+"请先开启动态锁屏并完成确认" = "Enable Dynamic Lock Screen and complete confirmation first";
+"当前壁纸不能用作动态锁屏" = "The current wallpaper cannot be used as Dynamic Lock Screen";
+"动态锁屏共享容器不可用" = "Dynamic Lock Screen shared container is unavailable";
+"打开系统墙纸设置" = "Open System Wallpaper Settings";
+"Mirage 动态锁屏显示器实例" = "Mirage Dynamic Lock Screen Display Instance";
+"启用动态锁屏方案 A" = "Enable Dynamic Lock Screen — Method A";
+"方案 A 锁屏壁纸" = "Method A Lock Screen Wallpaper";
+"启用动态锁屏方案 B" = "Enable Dynamic Lock Screen — Method B";
+"动态锁屏方案 B 需要 macOS 14.2 或更高版本。" = "Dynamic Lock Screen Method B requires macOS 14.2 or later.";
+"方案 B 锁屏壁纸" = "Method B Lock Screen Wallpaper";
+"将正在播放的壁纸设为方案 B 锁屏" = "Set Playing Wallpaper as Method B Lock Screen";
+"方案 B 使用 Mirage 屏保组件，仅在锁屏时临时接管系统墙纸槽位，解锁后恢复原桌面配置。" = "Method B uses the Mirage screen saver component, temporarily takes over the system wallpaper slot only while locked, and restores the original desktop configuration after unlock.";
+"屏保动态锁屏" = "Screen Saver Dynamic Lock Screen";
+"此功能通过系统屏保和系统墙纸配置实现，支持 macOS 14.2 及以上版本。它依赖未公开的系统配置格式，可能随 macOS 更新失效，并会在锁屏期间重启系统墙纸服务。启用前请确认你了解并接受这一风险。" = "This feature uses the system screen saver and wallpaper configuration and supports macOS 14.2 or later. It relies on an undocumented system format, may stop working after macOS updates, and restarts the system wallpaper service while locking. Confirm that you understand and accept this risk before enabling it.";
+"请先开启屏保动态锁屏并完成确认" = "Enable Screen Saver Dynamic Lock Screen and complete confirmation first";
+"无法访问系统墙纸配置" = "Unable to access the system wallpaper configuration";
+"系统墙纸配置格式不受支持" = "The system wallpaper configuration format is unsupported";
+"系统墙纸配置已被其他程序修改，请稍后重试" = "The system wallpaper configuration was modified by another process. Try again later.";
+"系统墙纸配置已被用户修改，Mirage 未覆盖当前设置" = "The system wallpaper configuration was changed by the user. Mirage did not overwrite the current settings.";
+"“%@”已设为方案 B 锁屏壁纸。" = "“%@” was set as the Method B lock screen wallpaper.";
+"屏保动态锁屏需要 macOS 14.2 或更高版本" = "Screen Saver Dynamic Lock Screen requires macOS 14.2 or later";
+"动态锁屏扩展组件缺失或损坏，请重新安装 Mirage" = "The dynamic lock screen extension is missing or damaged. Please reinstall Mirage.";
+"无法向系统注册 Mirage，请重试或重启 Mirage 后重新开启动态锁屏" = "Mirage could not be registered with the system. Please retry, or restart Mirage and re-enable the dynamic lock screen.";
+"动态锁屏扩展注册失败，请重试；若仍失败请重启 Mirage 后重新开启动态锁屏" = "Failed to register the dynamic lock screen extension. Please retry; if the problem persists, restart Mirage and re-enable the dynamic lock screen.";
+"动态锁屏扩展注册失败：无法重启系统墙纸服务，请重试" = "Failed to register the dynamic lock screen extension: the system wallpaper service could not be restarted. Please retry.";
+"选择快捷方式" = "Choose Shortcut";
+"无法使用所选文件" = "Could Not Use Selected File";
+"无法读取所选图片" = "The selected image could not be read";
+"无法保存所选图片" = "The selected image could not be saved";
+
+"画面位置" = "Picture position";
+
+"水平位置（X）" = "Horizontal position (X)";
+
+"垂直位置（Y）" = "Vertical position (Y)";
+
+"位置调整适用于填充模式" = "Position adjustment is available in Fill mode";
+
+"壁纸运行后可调整画面位置" = "Position can be adjusted while the wallpaper is running";
+
+"仅可调整被裁切的方向，50% 为居中" = "Adjust the cropped directions. 50% is centered.";
+
+"恢复居中" = "Center picture";
+
+"选择壁纸从左到右的展示区域" = "Choose the visible region from left to right";
+
+"选择壁纸从上到下的展示区域" = "Choose the visible region from top to bottom";
+
+"动态锁屏已关闭" = "Dynamic lock screen is off";
+
+"已启用，请设置锁屏壁纸" = "Enabled. Set a lock screen wallpaper to continue.";
+
+"正在连接动态锁屏" = "Connecting to the dynamic lock screen…";
+
+"已注册，等待系统载入动态锁屏" = "Registered. Waiting for macOS to load the dynamic lock screen.";
+
+"动态锁屏已连接，等待画面就绪" = "Connected. Waiting for the wallpaper to become ready.";
+
+"动态锁屏已就绪" = "Dynamic lock screen is ready";
+
+"动态锁屏恢复失败" = "Dynamic lock screen recovery failed";
+
+"重试动态锁屏连接" = "Retry Dynamic Lock Screen Connection";
+
+"动态锁屏恢复失败，请重试；详细原因已写入日志" = "Could not restore the dynamic lock screen. Try again; details have been saved to the log.";
+
+"动态锁屏配置无法读取，请检查文件访问权限或重新设置壁纸" = "Could not read the lock screen configuration. Check file access permissions or set the wallpaper again.";
+
+"无法保存动态锁屏状态" = "Could not save the dynamic lock screen state";
+
+"启动时显示" = "Show at Startup";
+"保存后在下次启动 Mirage 时生效。" = "Save to use this page the next time Mirage starts.";
+"上一张" = "Previous Wallpaper";
+"下一张" = "Next Wallpaper";

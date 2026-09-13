@@ -319,10 +319,15 @@ static OSStatus WRTapIOProc(AudioDeviceID inDevice, const AudioTimeStamp *inNow,
 
     vDSP_vmul(window, 1, _hann, 1, window, 1, kFFT_N);
 
-    float realOut[kFFT_N];
-    float imagOut[kFFT_N];
-    static float zeroIn[kFFT_N];
-    vDSP_DFT_Execute(_dftSetup, window, zeroIn, realOut, imagOut);
+    // vDSP real DFT expects even/odd split, not contiguous input.
+    // Passing it directly uses only half the samples and halves the bin.
+    float splitEven[kFFT_N / 2];
+    float splitOdd[kFFT_N / 2];
+    float realOut[kFFT_N / 2];
+    float imagOut[kFFT_N / 2];
+    DSPSplitComplex packed = { .realp = splitEven, .imagp = splitOdd };
+    vDSP_ctoz((const DSPComplex *)window, 2, &packed, 1, kFFT_N / 2);
+    vDSP_DFT_Execute(_dftSetup, splitEven, splitOdd, realOut, imagOut);
 
     const NSUInteger half = kFFT_N / 2;
     const NSUInteger usableBins = half - 1;
@@ -340,7 +345,8 @@ static OSStatus WRTapIOProc(AudioDeviceID inDevice, const AudioTimeStamp *inNow,
         grouped[b] = sumMag / (float)perGroup;
     }
 
-    const float norm = 2.0f / (float)half;
+    // vDSP real DFT is 2x the mathematical DFT, so 2/N becomes 1/half here.
+    const float norm = 1.0f / (float)half;
     const float logBase = 4.0f;
     for (NSUInteger b = 0; b < kBinCount; ++b) {
         float m = grouped[b] * norm;

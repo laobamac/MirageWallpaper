@@ -6,7 +6,11 @@
 extern "C" void* SceneRendererMacMetalDisplayCreateForNSView(void* ns_view);
 extern "C" void* SceneRendererMacMetalDisplayCreateForNSViewWithDrawableSize(
     void* ns_view, std::uint32_t width, std::uint32_t height);
+extern "C" void* SceneRendererMacMetalDisplayCreateForCALayerWithDrawableSize(
+    void* ca_layer, std::uint32_t width, std::uint32_t height);
 extern "C" void SceneRendererMacMetalDisplayDestroy(void* handle);
+extern "C" void* SceneRendererMacMetalTextureRetain(void* texture);
+extern "C" void SceneRendererMacMetalTextureRelease(void* texture);
 extern "C" void SceneRendererMacMetalDisplayDraw(void* handle, void* texture,
                                                  std::uint32_t width, std::uint32_t height,
                                                  void (*presented)(void*), void* userdata);
@@ -50,11 +54,34 @@ extern "C" void* MirageSceneSaverHostCreate(void* ns_view, std::uint32_t drawabl
     return result;
 }
 
+extern "C" void* MirageSceneDesktopHostCreate(void* ca_layer, std::uint32_t drawable_width,
+                                                std::uint32_t drawable_height) {
+    auto create = ^void* {
+        auto* host = new SaverHost();
+        host->display = SceneRendererMacMetalDisplayCreateForCALayerWithDrawableSize(
+            ca_layer, drawable_width, drawable_height);
+        if (host->display == nullptr) {
+            delete host;
+            return nullptr;
+        }
+        host->reference = [MirageSaverHostReference new];
+        host->reference.host = host;
+        return host;
+    };
+    if (NSThread.isMainThread) return create();
+    __block void* result = nullptr;
+    dispatch_sync(dispatch_get_main_queue(), ^{ result = create(); });
+    return result;
+}
+
 extern "C" void MirageSceneSaverHostPresent(void* handle, void* texture,
                                               std::uint32_t width, std::uint32_t height) {
     auto* host = static_cast<SaverHost*>(handle);
     if (host == nullptr || texture == nullptr) return;
-    host->texture.store(texture);
+    void* retained = SceneRendererMacMetalTextureRetain(texture);
+    if (retained == nullptr) return;
+    void* previous = host->texture.exchange(retained);
+    SceneRendererMacMetalTextureRelease(previous);
     host->width.store(width);
     host->height.store(height);
     if (host->scheduled.exchange(true)) return;
@@ -63,9 +90,11 @@ extern "C" void MirageSceneSaverHostPresent(void* handle, void* texture,
         auto* current = static_cast<SaverHost*>(reference.host);
         if (current == nullptr) return;
         current->scheduled.store(false);
-        SceneRendererMacMetalDisplayDraw(current->display, current->texture.load(),
+        void* current_texture = current->texture.exchange(nullptr);
+        SceneRendererMacMetalDisplayDraw(current->display, current_texture,
                                          current->width.load(), current->height.load(), nullptr,
                                          nullptr);
+        SceneRendererMacMetalTextureRelease(current_texture);
     });
 }
 
@@ -73,6 +102,8 @@ extern "C" void MirageSceneSaverHostDestroy(void* handle) {
     auto* host = static_cast<SaverHost*>(handle);
     if (host == nullptr) return;
     host->reference.host = nullptr;
+    void* texture = host->texture.exchange(nullptr);
+    SceneRendererMacMetalTextureRelease(texture);
     auto destroy = ^{
         SceneRendererMacMetalDisplayDestroy(host->display);
         host->display = nullptr;

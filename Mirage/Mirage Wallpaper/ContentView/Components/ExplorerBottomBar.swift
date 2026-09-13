@@ -7,8 +7,8 @@
 import SwiftUI
 
 struct ExplorerBottomBar: View {
-    @ObservedObject var contentViewModel: ContentViewModel
-    @ObservedObject var wallpaperViewModel: WallpaperViewModel
+    @Bindable var contentViewModel: ContentViewModel
+    @Bindable var wallpaperViewModel: WallpaperViewModel
     @ObservedObject private var manager = PlaylistManager.shared
 
     @AppStorage("PlaylistCollapsed") private var isCollapsed = false
@@ -156,7 +156,7 @@ struct ExplorerBottomBar: View {
 
     private func addCurrentSelection() {
         let current = wallpaperViewModel.currentWallpaper
-        if current.isValid {
+        if current.presentationIsValid {
             manager.add(current, to: targetScreen)
             selectedItemID = current.id
         }

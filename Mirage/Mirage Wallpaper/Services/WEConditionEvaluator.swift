@@ -6,140 +6,88 @@
 
 import Foundation
 import JavaScriptCore
+import Darwin
 
-// Evaluates Wallpaper Engine property/option `condition` expressions (JS, e.g.
-// "clock.value == true" or "a.value == 1 && [1,2].includes(b.value)"). Empty or
-// failing expressions resolve to visible so a stray condition never hides a row.
-//
-// The expressions are copied verbatim out of a third-party project.json and are
-// therefore untrusted. `evaluate` is called from a SwiftUI `body`, so a
-// condition of "while(1){}" would otherwise wedge the main thread for good.
-//
-// JavaScriptCore can bound script execution with
-// JSContextGroupSetExecutionTimeLimit, but that function is declared in the
-// private JSContextRefPrivate.h header: it is not part of the JavaScriptCore
-// module shipped in the public macOS SDK, and JSVirtualMachine exposes no
-// JSContextGroupRef either, so it cannot be reached from Swift here without
-// private-API tricks. Every expression therefore runs on a dedicated serial
-// queue while the caller waits with a short timeout.
-//
-// Caveat of that approach: a script that never returns keeps spinning on that
-// queue forever, because JavaScriptCore offers no public way to interrupt it.
-// A run of consecutive timeouts therefore retires the evaluator for good — its
-// JSContext and queue are released (the runaway job still owns them, which is
-// why a fresh context would be required and why we simply stop evaluating
-// instead), the cache is cleared, and every later condition resolves to visible.
-// The price is one spinning thread leaked per malicious wallpaper; the UI stays
-// responsive.
 final class WEConditionEvaluator {
+    static let workerArgument = "--mirage-condition-worker"
 
-    // Orders of magnitude above any legitimate condition (a comparison or two).
-    private static let evaluationTimeout: DispatchTimeInterval = .milliseconds(100)
+    private struct Request {
+        let identity: String
+        let conditions: [String]
+        let values: [String: Any]
+    }
 
-    // The very first evaluation also pays for JavaScriptCore warm-up plus a
-    // queue hop, which on a loaded machine can exceed the steady-state budget
-    // through no fault of the expression. Retiring is permanent, so that one
-    // gets room to breathe.
-    private static let firstEvaluationTimeout: DispatchTimeInterval = .milliseconds(500)
+    private let worker: Worker
+    private let pipeline: LatestValueWorker<Request, [String: Bool]>
 
-    // Retire only after a *run* of timeouts. A genuinely wedged queue never
-    // drains, so a runaway condition trips this almost immediately, while a
-    // single unlucky sample under load cannot permanently disable the editor.
-    private static let maxConsecutiveTimeouts = 3
-
-    private var consecutiveTimeouts = 0
-    private var hasEvaluatedOnce = false
-
-    // nil once a condition has timed out: evaluation is disabled from then on.
-    private var runtime: Runtime? = Runtime()
-
-    // Condition string -> last verdict. Cleared whenever the values behind the
-    // expressions change, so a SwiftUI body recomputation does not re-enter
-    // JavaScriptCore once per row (and per combo option) on every pass.
-    private var cache: [String: Bool] = [:]
-
-    // `cache` and `runtime` are only ever touched by the caller (the main thread
-    // in practice); the worker queue only ever touches the JSContext. The lock
-    // keeps that split safe even if a condition is evaluated off the main thread.
-    private let lock = NSLock()
-
-    func updateContext(properties: [String: WEProjectProperty],
-                       overrides: [String: WEPropertyValue]) {
-        lock.lock()
-        cache.removeAll()
-        let runtime = self.runtime
-        lock.unlock()
-        guard let runtime, let context = runtime.context else { return }
-
-        var values: [String: Any] = [:]
-        values.reserveCapacity(properties.count)
-        for (key, prop) in properties {
-            let raw = overrides[key] ?? prop.value
-            values[key] = ["value": jsValue(for: raw, type: prop.propertyType)]
+    init(executableURL: URL? = Bundle.main.executableURL,
+         evaluationTimeout: TimeInterval = 0.25,
+         startupTimeout: TimeInterval = 2) {
+        let worker = Worker(executableURL: executableURL,
+                            evaluationTimeout: evaluationTimeout,
+                            startupTimeout: startupTimeout)
+        self.worker = worker
+        pipeline = LatestValueWorker(label: "cn.laobamac.Mirage.conditions") {
+            worker.evaluate($0)
         }
-        // Never wait here: if a runaway script already owns the queue this must
-        // not block the UI. The queue is serial, so a later evaluate() still
-        // observes these values.
-        runtime.queue.async {
-            for (key, value) in values {
-                context.setObject(value, forKeyedSubscript: key as NSString)
+    }
+
+    func evaluate(identity: String, conditions: [String], values: [String: Any],
+                  completion: @escaping ([String: Bool]) -> Void) {
+        pipeline.submit(Request(identity: identity, conditions: conditions, values: values),
+                        completion: completion)
+    }
+
+    func cancel() {
+        pipeline.cancel()
+        worker.cancel()
+    }
+
+    deinit {
+        cancel()
+    }
+
+    static func runWorkerIfRequested() -> Bool {
+        guard CommandLine.arguments.contains(workerArgument) else { return false }
+        let parent = DispatchSource.makeProcessSource(identifier: getppid(), eventMask: .exit,
+                                                      queue: .global(qos: .utility))
+        parent.setEventHandler { _exit(0) }
+        parent.resume()
+        defer { parent.cancel() }
+        let machine = JSVirtualMachine()
+        while let line = readLine() {
+            autoreleasepool {
+                guard let data = line.data(using: .utf8), data.count <= 8 * 1024 * 1024,
+                      let request = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let id = request["id"] as? String,
+                      let conditions = request["conditions"] as? [String],
+                      let values = request["values"] as? [String: Any] else { return }
+                let context = JSContext(virtualMachine: machine)
+                context?.exceptionHandler = { _, _ in }
+                for (key, value) in values {
+                    context?.setObject(value, forKeyedSubscript: key as NSString)
+                }
+                var verdicts: [String: Bool] = [:]
+                for condition in conditions {
+                    context?.exception = nil
+                    let result = context?.evaluateScript(condition)
+                    if context?.exception != nil {
+                        verdicts[condition] = true
+                    } else {
+                        verdicts[condition] = verdict(result)
+                    }
+                }
+                guard var response = try? JSONSerialization.data(withJSONObject: [
+                    "id": id, "verdicts": verdicts
+                ]) else { return }
+                response.append(0x0A)
+                try? FileHandle.standardOutput.write(contentsOf: response)
             }
         }
+        return true
     }
 
-    func evaluate(_ condition: String?) -> Bool {
-        guard let condition, !condition.trimmingCharacters(in: .whitespaces).isEmpty else {
-            return true
-        }
-        lock.lock()
-        if let cached = cache[condition] {
-            lock.unlock()
-            return cached
-        }
-        let runtime = self.runtime
-        let timeout = hasEvaluatedOnce ? Self.evaluationTimeout : Self.firstEvaluationTimeout
-        lock.unlock()
-        // Retired evaluator: everything stays visible.
-        guard let runtime, let context = runtime.context else { return true }
-
-        let box = ResultBox()
-        let semaphore = DispatchSemaphore(value: 0)
-        runtime.queue.async {
-            box.value = WEConditionEvaluator.verdict(of: context.evaluateScript(condition))
-            semaphore.signal()
-        }
-        guard semaphore.wait(timeout: .now() + timeout) == .success else {
-            lock.lock()
-            hasEvaluatedOnce = true
-            consecutiveTimeouts += 1
-            let exhausted = consecutiveTimeouts >= Self.maxConsecutiveTimeouts
-            lock.unlock()
-            if exhausted { retire() }
-            return true
-        }
-        // The semaphore orders the worker's write before this read.
-        let result = box.value
-        lock.lock()
-        hasEvaluatedOnce = true
-        consecutiveTimeouts = 0
-        cache[condition] = result
-        lock.unlock()
-        return result
-    }
-
-    // Drops the wedged context and its queue, and stops evaluating for good.
-    private func retire() {
-        lock.lock()
-        let wasActive = runtime != nil
-        runtime = nil
-        cache.removeAll()
-        lock.unlock()
-        if wasActive {
-            NSLog("[Mirage] 条件表达式执行超时，已停用该壁纸的条件求值")
-        }
-    }
-
-    private static func verdict(of result: JSValue?) -> Bool {
+    private static func verdict(_ result: JSValue?) -> Bool {
         guard let result else { return true }
         if result.isBoolean { return result.toBool() }
         if result.isNumber { return result.toDouble() != 0 }
@@ -147,32 +95,181 @@ final class WEConditionEvaluator {
         return result.toBool()
     }
 
-    private func jsValue(for value: WEPropertyValue, type: WEPropertyType) -> Any {
-        switch value {
-        case .bool(let b): return b
-        case .number(let d): return d
-        case .string(let s):
-            if type == .bool { return (s as NSString).boolValue }
-            if let i = Int(s) { return i }
-            if let d = Double(s) { return d }
-            if s == "true" { return true }
-            if s == "false" { return false }
-            return s
+    private final class Worker {
+        private let executableURL: URL?
+        private let evaluationTimeout: TimeInterval
+        private let startupTimeout: TimeInterval
+        private let lock = NSLock()
+        private var process: Process?
+        private var input: Pipe?
+        private var output: Pipe?
+        private var cancellation: UInt64 = 0
+        private var identity: String?
+        private var failures = 0
+
+        init(executableURL: URL?, evaluationTimeout: TimeInterval, startupTimeout: TimeInterval) {
+            self.executableURL = executableURL
+            self.evaluationTimeout = evaluationTimeout
+            self.startupTimeout = startupTimeout
         }
+
+        func evaluate(_ request: Request) -> [String: Bool] {
+            if identity != request.identity {
+                cancel()
+                identity = request.identity
+                failures = 0
+            }
+            guard failures < 3, !request.conditions.isEmpty else { return [:] }
+            let id = UUID().uuidString
+            guard var data = try? JSONSerialization.data(withJSONObject: [
+                "id": id, "conditions": request.conditions, "values": request.values
+            ]), data.count <= 8 * 1024 * 1024 else { return [:] }
+            data.append(0x0A)
+            guard let connection = connection() else { return [:] }
+            let reply = Reply(id: id)
+            let reader = connection.output.fileHandleForReading
+            reader.readabilityHandler = { handle in
+                let chunk = handle.availableData
+                reply.consume(chunk)
+                if chunk.isEmpty { handle.readabilityHandler = nil }
+            }
+            let timeout = connection.started ? startupTimeout : evaluationTimeout
+            let deadline = DispatchTime.now() + timeout
+            let timeoutWork = DispatchWorkItem { [weak self] in
+                guard reply.markTimedOut() else { return }
+                self?.cancel(matching: connection.process)
+                reply.ready.signal()
+            }
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: deadline, execute: timeoutWork)
+            defer {
+                timeoutWork.cancel()
+                reader.readabilityHandler = nil
+            }
+            do {
+                try connection.input.fileHandleForWriting.write(contentsOf: data)
+            } catch {
+                if reply.timedOut || isCurrent(connection.process) { failures += 1 }
+                cancel(matching: connection.process)
+                return [:]
+            }
+            guard reply.ready.wait(timeout: deadline) == .success,
+                  let result = reply.result else {
+                if reply.timedOut || isCurrent(connection.process) { failures += 1 }
+                cancel(matching: connection.process)
+                return [:]
+            }
+            failures = 0
+            return result
+        }
+
+        private func connection() -> (process: Process, input: Pipe, output: Pipe, started: Bool)? {
+            lock.lock()
+            let generation = cancellation
+            if let process, process.isRunning, let input, let output {
+                lock.unlock()
+                return (process, input, output, false)
+            }
+            lock.unlock()
+            guard let executableURL else { return nil }
+            let next = Process()
+            let stdin = Pipe()
+            let stdout = Pipe()
+            next.executableURL = executableURL
+            next.arguments = [WEConditionEvaluator.workerArgument]
+            next.standardInput = stdin
+            next.standardOutput = stdout
+            next.standardError = FileHandle.nullDevice
+            _ = fcntl(stdin.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
+            do {
+                try next.run()
+            } catch {
+                return nil
+            }
+            lock.lock()
+            guard cancellation == generation else {
+                lock.unlock()
+                if next.isRunning { kill(next.processIdentifier, SIGKILL) }
+                return nil
+            }
+            process = next
+            input = stdin
+            output = stdout
+            lock.unlock()
+            return (next, stdin, stdout, true)
+        }
+
+        private func isCurrent(_ candidate: Process) -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return process === candidate
+        }
+
+        func cancel(matching candidate: Process? = nil) {
+            lock.lock()
+            if let candidate, process !== candidate {
+                lock.unlock()
+                return
+            }
+            cancellation &+= 1
+            let previous = process
+            process = nil
+            input = nil
+            output = nil
+            lock.unlock()
+            if let previous, previous.isRunning {
+                kill(previous.processIdentifier, SIGKILL)
+            }
+        }
+
+        deinit { cancel() }
     }
 
-    // Ties the JSContext to the one queue that is allowed to touch it.
-    private final class Runtime {
-        let queue = DispatchQueue(label: "com.mirage.wallpaper.condition-evaluator",
-                                  qos: .userInitiated)
-        let context = JSContext()
+    private final class Reply {
+        let ready = DispatchSemaphore(value: 0)
+        private let id: String
+        private let lock = NSLock()
+        private var buffer = Data()
+        private var finished = false
+        private var expired = false
+        private var value: [String: Bool]?
 
-        init() { context?.exceptionHandler = { _, _ in } }
-    }
+        init(id: String) { self.id = id }
 
-    // One box per evaluation, so a timed-out job can never overwrite the result
-    // a later evaluation is waiting for.
-    private final class ResultBox {
-        var value = true
+        var result: [String: Bool]? {
+            lock.lock()
+            defer { lock.unlock() }
+            return value
+        }
+
+        var timedOut: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return expired
+        }
+
+        func markTimedOut() -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            guard !finished else { return false }
+            finished = true
+            expired = true
+            return true
+        }
+
+        func consume(_ data: Data) {
+            lock.lock()
+            defer { lock.unlock() }
+            guard !finished else { return }
+            buffer.append(data)
+            if let newline = buffer.firstIndex(of: 0x0A),
+               let response = try? JSONSerialization.jsonObject(with: Data(buffer[..<newline])) as? [String: Any],
+               response["id"] as? String == id {
+                value = response["verdicts"] as? [String: Bool]
+                finished = true
+            } else if data.isEmpty || buffer.count > 8 * 1024 * 1024 {
+                finished = true
+            }
+            if finished { ready.signal() }
+        }
     }
 }

@@ -36,6 +36,7 @@ std::string ToString(const TextureFormat& format) {
         FMT(RGB8);
         FMT(RG8);
         FMT(R8);
+        FMT(RGBA16F);
         FMT(D32F);
     default: std::fprintf(stderr, "[ERROR] Not valid tex format: %d\n", (int)format); return "";
     }

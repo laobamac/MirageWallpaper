@@ -1,13 +1,20 @@
 #include <array>
 #include <cmath>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
+#include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 import sr.text;
 import sr.scene;
 import sr.spec_texs;
+import sr.fs;
+import sr.pkg_fs;
 
 namespace
 {
@@ -18,10 +25,104 @@ bool Near(float actual, float expected, float epsilon = 0.001f) {
     return false;
 }
 
+bool Check(bool value, std::string_view what) {
+    if (value) return true;
+    std::cerr << "failed: " << what << '\n';
+    return false;
+}
+
+bool WriteFile(const std::filesystem::path& path, std::string_view value) {
+    std::error_code ec;
+    std::filesystem::create_directories(path.parent_path(), ec);
+    if (ec) return false;
+    std::ofstream output(path, std::ios::binary);
+    output.write(value.data(), static_cast<std::streamsize>(value.size()));
+    return output.good();
+}
+
+std::string BlobText(const sr::text::FontCache::ResolvedBlob& blob) {
+    if (! blob.bytes) return {};
+    return std::string(reinterpret_cast<const char*>(blob.bytes->data()), blob.bytes->size());
+}
+
+bool WritePackage(const std::filesystem::path& path,
+                  const std::vector<std::pair<std::string, std::string>>& entries) {
+    std::vector<std::uint8_t> bytes;
+    const auto append_i32 = [&bytes](std::int32_t value) {
+        const auto raw = static_cast<std::uint32_t>(value);
+        for (unsigned shift = 0; shift < 32; shift += 8)
+            bytes.push_back(static_cast<std::uint8_t>(raw >> shift));
+    };
+    const auto append_string = [&bytes, &append_i32](std::string_view value) {
+        append_i32(static_cast<std::int32_t>(value.size()));
+        bytes.insert(bytes.end(), value.begin(), value.end());
+    };
+
+    append_string("PKGV0023");
+    append_i32(static_cast<std::int32_t>(entries.size()));
+    std::int32_t offset = 0;
+    for (const auto& [name, value] : entries) {
+        append_string(name);
+        append_i32(offset);
+        append_i32(static_cast<std::int32_t>(value.size()));
+        offset += static_cast<std::int32_t>(value.size());
+    }
+    for (const auto& [_, value] : entries) bytes.insert(bytes.end(), value.begin(), value.end());
+
+    std::ofstream output(path, std::ios::binary);
+    output.write(reinterpret_cast<const char*>(bytes.data()),
+                 static_cast<std::streamsize>(bytes.size()));
+    return output.good();
+}
+
 } // namespace
 
 int main() {
     bool ok = true;
+
+    int marker = 0;
+    const auto root = std::filesystem::temp_directory_path() /
+                      ("scenerenderer-font-resolution-" +
+                       std::to_string(reinterpret_cast<std::uintptr_t>(&marker)));
+    const auto shared_root = root / "shared";
+    const auto package_path = root / "scene.pkg";
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+    ok &= Check(WriteFile(shared_root / "fonts" / "library" / "三极萌萌简体.ttf", "shared"),
+                "write shared font fixture");
+    ok &= Check(WritePackage(package_path,
+                             { { "fonts/exact.ttf", "exact" },
+                               { "fonts/workshop/example/三极萌萌简体.ttf", "package" },
+                               { "fonts/one/duplicate.ttf", "one" },
+                               { "fonts/two/duplicate.ttf", "two" } }),
+                "write package font fixture");
+
+    sr::fs::VFS vfs;
+    ok &= Check(vfs.Mount("/assets", sr::fs::CreatePhysicalFs(shared_root.string()), "assets"),
+                "mount shared font fixture");
+    auto package = sr::fs::WPPkgFs::CreatePkgFs(package_path.string(), true);
+    ok &= Check(package && vfs.Mount("/assets", std::move(package)),
+                "mount package font fixture");
+
+    const auto exact = sr::text::FontCache::ResolveFont(vfs, "fonts/exact.ttf", false);
+    ok &= Check(exact.source == "/assets/fonts/exact.ttf" && BlobText(exact) == "exact",
+                "resolve exact package font path");
+
+    const auto normalized =
+        sr::text::FontCache::ResolveFont(vfs, "fonts\\exact.ttf", false);
+    ok &= Check(normalized.source == "/assets/fonts/exact.ttf" && BlobText(normalized) == "exact",
+                "resolve normalized package font path");
+
+    const auto nested =
+        sr::text::FontCache::ResolveFont(vfs, "fonts/三极萌萌简体.ttf", false);
+    ok &= Check(nested.source == "/assets/fonts/workshop/example/三极萌萌简体.ttf" &&
+                    BlobText(nested) == "package",
+                "resolve unique package font basename");
+
+    ok &= Check(! vfs.FindUniqueByBasenameInTopMount("/assets", "duplicate.ttf")
+                       .has_value(),
+                "reject ambiguous package font basename");
+    std::filesystem::remove_all(root, ec);
 
     // Tabs in WE text are formatting artifacts and consume neither atlas
     // space nor layout width.
@@ -31,7 +132,7 @@ int main() {
         ok = false;
     } else {
         sr::text::FontCache cache;
-        auto*               face = cache.GetFace(font.bytes, 64);
+        auto*               face = cache.GetFace(font.bytes, 64, font.face_index);
         const std::array<std::uint32_t, 1> tabs { '\t' };
         if (face == nullptr) {
             std::cerr << "failed to load system font for tab regression\n";
@@ -68,18 +169,36 @@ int main() {
         .source_centered  = true,
     };
     const auto clock_geometry = sr::text::ResolveTextGeometry(clock_policy, clock_metrics);
-    const auto clock_anchor = sr::text::ResolveTextAnchorPosition(
-        "center", "bottom", 0.0f, -46.78589f, 104.0f, 58.0f, 0.75f, 0.75f);
+    const auto clock_anchor   = sr::text::ResolveTextAnchorPosition("center",
+                                                                 "bottom",
+                                                                 0.0f,
+                                                                 -46.78589f,
+                                                                 104.0f,
+                                                                 58.0f,
+                                                                 0.75f,
+                                                                 0.75f,
+                                                                 clock_metrics.text_width,
+                                                                 clock_metrics.text_height);
 
     ok &= Near(clock_geometry.draw_height, 35.0f);
     ok &= Near(clock_geometry.draw_offset_y, 1.0f);
-    ok &= Near(clock_anchor[1], -25.03589f);
+    // Bottom-aligned: the 55 px line box sits flush on the frame's bottom
+    // edge, so the anchor rises by half the line box, not half the frame.
+    ok &= Near(clock_anchor[1], -26.16089f);
 
-    // The neighbouring date is centre-aligned. With the clock's authored
-    // frame, the final parent-scaled ink gap is 9.32 px; substituting the
-    // clock's 35 px ink height for its frame makes this negative (overlap).
-    const auto date_anchor = sr::text::ResolveTextAnchorPosition(
-        "center", "center", 0.0f, -54.06921f, 66.0f, 24.0f, 1.25f, 1.25f);
+    // The neighbouring date is centre-aligned. Anchoring by the line box keeps
+    // the final parent-scaled ink gap positive; anchoring by the 35 px ink box
+    // instead would make it negative (overlap).
+    const auto date_anchor = sr::text::ResolveTextAnchorPosition("center",
+                                                                "center",
+                                                                0.0f,
+                                                                -54.06921f,
+                                                                66.0f,
+                                                                24.0f,
+                                                                1.25f,
+                                                                1.25f,
+                                                                40.0f,
+                                                                20.0f);
     constexpr float parent_scale       = 1.4f;
     constexpr float date_source_center = 0.5f;
     constexpr float date_draw_height   = 15.0f;
@@ -91,7 +210,7 @@ int main() {
     const float half_heights =
         (clock_geometry.draw_height * 0.75f + date_draw_height * 1.25f) *
         parent_scale * 0.5f;
-    ok &= Near(centre_distance - half_heights, 9.32164f, 0.002f);
+    ok &= Near(centre_distance - half_heights, 7.74664f, 0.002f);
 
     // An effect layer retains the font-baseline source position. Geometry
     // resolution must keep the authored 533x238 frame intact while ensuring
@@ -150,7 +269,7 @@ int main() {
 
     if (font.bytes) {
         sr::text::FontCache large_cache;
-        auto* large_face = large_cache.GetFace(font.bytes, 128);
+        auto* large_face = large_cache.GetFace(font.bytes, 128, font.face_index);
         if (large_face == nullptr) {
             std::cerr << "failed to load exact-256-raster font\n";
             ok = false;
@@ -171,7 +290,7 @@ int main() {
         }
 
         sr::text::FontCache style_cache;
-        auto* style_face = style_cache.GetFace(font.bytes, 32);
+        auto* style_face = style_cache.GetFace(font.bytes, 32, font.face_index);
         if (style_face == nullptr) {
             std::cerr << "failed to load text style font\n";
             ok = false;
@@ -203,6 +322,34 @@ int main() {
                 ok &= Near(vertex.Data()[offset + 3], 0.5f);
                 layouter.SetAlpha(0.2f);
                 ok &= Near(vertex.Data()[offset + 3], 0.2f);
+            }
+
+            auto background_mesh = std::make_shared<sr::SceneMesh>(true);
+            background_mesh->AddVertexArray(sr::SceneVertexArray(
+                sr::MakeAttrSet({ sr::VAttr::Position, sr::VAttr::TexCoord, sr::VAttr::Color }), 8));
+            background_mesh->AddIndexArray(sr::SceneIndexArray(12));
+            sr::text::TextLayoutStyle background_style;
+            background_style.alpha            = 0.5f;
+            background_style.opaquebackground = true;
+            background_style.background_color = { 0.4f, 0.6f, 0.8f };
+            sr::text::TextLayouter background_layouter(
+                style_face, background_mesh, background_style, 2);
+            background_layouter.SetText("A");
+
+            const auto& background_vertex = background_mesh->GetVertexArray(0);
+            const auto background_attrs = background_vertex.GetAttrOffsetMap();
+            const auto background_color = background_attrs.find("a_Color");
+            if (background_color == background_attrs.end()) {
+                std::cerr << "text background color vertex attribute missing\n";
+                ok = false;
+            } else {
+                const auto background_offset = background_color->second.offset / sizeof(float);
+                const auto glyph_offset = background_offset + 4 * background_vertex.OneSize();
+                ok &= Near(background_vertex.Data()[background_offset + 3], 0.5f);
+                ok &= Near(background_vertex.Data()[glyph_offset + 3], 0.5f);
+                background_layouter.SetAlpha(0.2f);
+                ok &= Near(background_vertex.Data()[background_offset + 3], 0.2f);
+                ok &= Near(background_vertex.Data()[glyph_offset + 3], 0.2f);
             }
         }
     }

@@ -115,6 +115,8 @@ bool ImageEffect::FromJson(const sr::Json& json, fs::VFS& vfs, SceneVersion v) {
     sr::GetJsonValue(json, "name", name, false);
     sr::GetJsonValue(json, "username", username, false);
     sr::GetJsonValue(json, "id", id, false);
+    AbsorbAllFieldBindings(json, field_bindings);
+    auto instance_name = name;
     auto parsed_effect = sr::ParseJson(fs::GetFileContent(vfs, "/assets/" + filePath));
     if (parsed_effect.is_err()) {
         rstd_error("Can't parse effect json {}: {}", filePath, parsed_effect.unwrap_err());
@@ -122,6 +124,7 @@ bool ImageEffect::FromJson(const sr::Json& json, fs::VFS& vfs, SceneVersion v) {
     }
     auto jEffect = parsed_effect.unwrap();
     if (! FromFileJson(jEffect, vfs)) return false;
+    if (! instance_name.empty()) name = std::move(instance_name);
 
     if (auto injected_passes = json.get("passes"); injected_passes.is_some()) {
         auto array = (*injected_passes)->as_array();
@@ -292,6 +295,8 @@ bool ImageObject::FromJson(const sr::Json& json, fs::VFS& vfs, SceneVersion v) {
         sr::GetJsonValue(json, "origin", origin);
         sr::GetJsonValue(json, "angles", angles);
         sr::GetJsonValue(json, "scale", scale);
+        ReadUserValueBinding(json, "scale", scale_user);
+        scale_user_key = scale_user.name;
         if (! sr::GetJsonValue(json, "parallaxDepth", parallaxDepth, false) && composite_layer) {
             // WE gives composite containers the regular layer depth when the field is omitted.
             parallaxDepth = { 1.0f, 1.0f };

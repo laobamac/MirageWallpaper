@@ -419,6 +419,8 @@ public:
                                std::uint32_t atlas_w, std::uint32_t x, std::uint32_t y,
                                std::uint32_t w, std::uint32_t h);
 
+    bool HasFontAtlasImage(const std::string& key) const;
+
 private:
     std::optional<VmaImageParameters> CreateTex(TextureKey);
     uint64_t                          nextImageGeneration();

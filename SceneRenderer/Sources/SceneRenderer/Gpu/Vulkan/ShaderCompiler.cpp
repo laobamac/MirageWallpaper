@@ -160,6 +160,47 @@ inline const char* DefaultEntryName(SourceLang lang, sr::ShaderType s) {
     return "main";
 }
 
+void FillUniformSlotShape(const SpvReflectBlockVariable&   unif,
+                          ShaderReflected::BlockedUniform& out) {
+    const auto* ty = unif.type_description;
+    if (ty == nullptr || unif.size == 0) return;
+
+    const std::size_t scalar_bytes =
+        unif.numeric.scalar.width != 0 ? unif.numeric.scalar.width / 8u : 4u;
+    if (scalar_bytes == 0) return;
+
+    std::size_t elem_count  = 1;
+    std::size_t elem_stride = unif.size;
+    if (unif.array.dims_count > 0 && unif.array.stride != 0) {
+        for (u32 i = 0; i < unif.array.dims_count; ++i) {
+            elem_count *= unif.array.dims[i];
+        }
+        elem_stride = unif.array.stride;
+    }
+    if (elem_count == 0 || elem_stride == 0) return;
+
+    if ((ty->type_flags & SPV_REFLECT_TYPE_FLAG_MATRIX) != 0 && unif.numeric.matrix.stride != 0) {
+        const std::size_t matrix_stride = unif.numeric.matrix.stride;
+        const std::size_t majors        = elem_stride / matrix_stride;
+        const std::size_t scalars       = (std::size_t)unif.numeric.matrix.column_count *
+                                    (std::size_t)unif.numeric.matrix.row_count;
+        if (majors == 0 || scalars == 0 || scalars % majors != 0) return;
+        out.slot_count   = elem_count * majors;
+        out.slot_stride  = matrix_stride;
+        out.slot_payload = (scalars / majors) * scalar_bytes;
+        return;
+    }
+
+    if ((ty->type_flags & SPV_REFLECT_TYPE_FLAG_STRUCT) != 0) return;
+
+    const std::size_t components = (ty->type_flags & SPV_REFLECT_TYPE_FLAG_VECTOR) != 0
+                                       ? std::max(1u, unif.numeric.vector.component_count)
+                                       : 1u;
+    out.slot_count               = elem_count;
+    out.slot_stride              = elem_stride;
+    out.slot_payload             = components * scalar_bytes;
+}
+
 } // namespace
 
 bool sr::vulkan::GenReflect(std::span<const std::vector<unsigned>> codes,
@@ -222,6 +263,7 @@ bool sr::vulkan::GenReflect(std::span<const std::vector<unsigned>> codes,
                     ShaderReflected::BlockedUniform bunif {};
                     bunif.size                      = unif.size;
                     bunif.offset                    = unif.offset;
+                    FillUniformSlotShape(unif, bunif);
                     ref_block.member_map[unif.name] = bunif;
                 }
             } else if (b.descriptor_type == SPV_REFLECT_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER ||

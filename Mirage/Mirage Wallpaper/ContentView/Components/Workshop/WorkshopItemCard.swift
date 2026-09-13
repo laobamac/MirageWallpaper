@@ -8,11 +8,14 @@ import SwiftUI
 
 struct WorkshopItemCard: View {
     var item: WorkshopItem
-    var isHovered: Bool
+    @State private var isHovered = false
     var isSelected: Bool
     var isDownloaded: Bool
     var presetNeedsDependency: Bool
-    var downloadState: DownloadState?
+    var downloadTask: DownloadTask?
+    var liveDownloadState: DownloadState? = nil
+
+    private var downloadState: DownloadState? { isActive ? (liveDownloadState ?? downloadTask?.state) : nil }
     var isFavorite: Bool = false
     var isActive: Bool = true
     var animatedPreviewMode: GSAnimatedPreviewPlayback = .hover
@@ -24,7 +27,8 @@ struct WorkshopItemCard: View {
                 contentMode: .fill,
                 isAnimating: isActive && (isHovered || isSelected ||
                     animatedPreviewMode == .visible),
-                isLoadingEnabled: isActive
+                isLoadingEnabled: isActive,
+                preloadsWhenInactive: true
             )
 
             captionStrip
@@ -50,6 +54,7 @@ struct WorkshopItemCard: View {
         )
         .shadow(color: .black.opacity(isHovered ? 0.30 : 0.12),
                 radius: isHovered ? 12 : 4, y: isHovered ? 6 : 2)
+        .onHover { isHovered = $0 }
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isHovered)
     }
 

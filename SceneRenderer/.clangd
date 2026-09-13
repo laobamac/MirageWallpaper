@@ -1,0 +1,73 @@
+# =============================================================================
+# SceneRenderer — clangd 配置
+#
+# 【为什么需要这个文件】
+# 下面这几个文件在 VSCode 里会报 “call to 'to_string' is ambiguous” /
+# “reference to 'xxx' is ambiguous” 之类的错误，但 **真实编译 100% 通过**
+# （已用 compile_commands.json 里的原始命令逐个验证，全部 exit 0）。
+#
+# 【根因】clangd 的 preamble(PCH) 与 C++20 模块 BMI 之间的声明合并失败。
+# 触发条件是：一个 module 实现单元/分区在全局模块片段（module; 之后）里
+# **文本 include** 了某个标准头，而同模块的另一个分区也文本 include 了同一个头，
+# 于是同一个 std 声明既从 preamble 来、又从分区 BMI 来。真实编译会把两份合并，
+# clangd 走 PCH 路径合并不了，就变成“两个一模一样的候选”。
+#
+# 【已排除的原因】（都实测过，都不是）
+#   * 不是 --experimental-modules-support：开/关结果完全一致
+#   * 不是 SDK 不一致：SDKROOT 对齐到构建所用的 CLT SDK 后依旧
+#   * 不是 debug/release CDB 选错：强制用 debug CDB 后依旧
+#   * 不是预构建 BMI 陈旧：剥掉 @modmap 让 clangd 自建 BMI 后依旧（且慢 66s）
+# 结论：clangd 上游限制，配置层面无真修复，只能按文件精确压制。
+#
+# 【新文件又亮红灯怎么办】
+# 这份名单是全量扫描 56 个“GMF 文本 include + import rstd.cppstd”的高危文件
+# 得出的（6/56 命中）。以后新增文件报同类错误时，先确认能编译，再把路径加到
+# 下面的 PathMatch 里。重新扫描（约 12 分钟）：
+#   for f in $(grep -rl 'import rstd.cppstd' --include='*.cpp' --include='*.cppm' \
+#       SceneRenderer/Sources/SceneRenderer); do \
+#     /usr/local/opt/llvm/bin/clangd --check="$PWD/$f" 2>&1 \
+#       | grep '^E\[' | grep -v 'tweak:' | grep -o '\[[a-z_]*\]' | sort -u \
+#       | sed "s|^|$f |"; done
+# 注意：clangd --check 报的 error 总数里绝大部分是 refactoring 探测失败
+# （tweak: …），必须过滤掉 `tweak:` 才是真实诊断。
+# =============================================================================
+
+---
+If:
+  PathMatch:
+    - .*/Wallpaper/Compiler/MaterialShaderCompiler\.cpp
+    - .*/Wallpaper/Compiler/ShaderAnnotations\.cpp
+    - .*/Gpu/Vulkan/TextureCache\.cpp
+    - .*/Gpu/Pipeline/PresentPass\.cpp
+    - .*/AppRuntime/Controller/WallpaperEngineRuntime\.cpp
+    - .*/Domain/Semantics/SemanticTextures\.cppm
+Diagnostics:
+  # 逐个诊断码压制会变成打地鼠：压掉 ovl_ambiguous_call 会露出
+  # ambiguous_reference，再露出 ovl_no_viable_function_in_call
+  # （std::string_view 被拆成两个类型，连隐式转换都找不到）……
+  # 这些文件 clangd 的语义分析本来就是错的，**整份诊断都不可信**，
+  # 所以整体压制。跳转/补全/大纲仍然可用，正确性由构建保证。
+  # 其余 450+ 个文件的诊断完全不受影响。
+  Suppress: "*"
+CompileFlags:
+  Add:
+    # Suppress 只在“上报”层过滤，被压掉的错误仍会累加 clang 内部计数器，
+    # 撞到默认 -ferror-limit=20 就抛一个 **Suppress 拦不住的 fatal**
+    # （SemanticTextures.cppm 实测就只剩一条 fatal_too_many_errors）。
+    # 取消上限后级联 fatal 不再产生；因为上面已整体压制，也不会露出新诊断。
+    - -ferror-limit=0
+
+# -----------------------------------------------------------------------------
+# 如果不想每次新增文件都来维护上面的名单，可以把下面这段取消注释，
+# 改成整个 SceneRenderer 一律压制这 4 个码（代价：SceneRenderer 里**真正**的
+# 二义性错误在编辑器里也不再显示，只能靠构建发现）。
+# -----------------------------------------------------------------------------
+# ---
+# If:
+#   PathMatch: .*/SceneRenderer/Sources/.*
+# Diagnostics:
+#   Suppress:
+#     - ovl_ambiguous_call
+#     - ambiguous_reference
+#     - module_odr_violation_record
+#     - fatal_too_many_errors

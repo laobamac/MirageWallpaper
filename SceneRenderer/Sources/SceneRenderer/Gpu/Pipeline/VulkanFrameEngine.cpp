@@ -17,10 +17,53 @@ import sr.utils;
 import sr.scene;
 import sr.spec_texs;
 import sr.text;
+import eigen;
 
 import sr.rgraph;
 
 using namespace sr::vulkan;
+
+std::array<sr::i32, 2> sr::vulkan::ProjectedLayerPhysicalExtent(
+    sr::Scene& scene, sr::SceneNode& node, unsigned width, unsigned height) {
+    if (width == 0 || height == 0 || scene.activeCamera == nullptr) return { 1, 1 };
+
+    node.UpdateTrans();
+    const Eigen::Matrix4d transform =
+        scene.activeCamera->GetViewProjectionMatrix() * node.ModelTrans() *
+        node.GeometryTransform();
+    const Eigen::Vector2f size = node.Size();
+    const double          half_width = std::abs(static_cast<double>(size.x())) * 0.5;
+    const double          half_height = std::abs(static_cast<double>(size.y())) * 0.5;
+    const std::array<Eigen::Vector4d, 4> corners {
+        Eigen::Vector4d { -half_width, -half_height, 0.0, 1.0 },
+        Eigen::Vector4d { half_width, -half_height, 0.0, 1.0 },
+        Eigen::Vector4d { half_width, half_height, 0.0, 1.0 },
+        Eigen::Vector4d { -half_width, half_height, 0.0, 1.0 },
+    };
+
+    double min_x = std::numeric_limits<double>::infinity();
+    double min_y = std::numeric_limits<double>::infinity();
+    double max_x = -std::numeric_limits<double>::infinity();
+    double max_y = -std::numeric_limits<double>::infinity();
+    for (const auto& corner : corners) {
+        const Eigen::Vector4d projected = transform * corner;
+        if (! projected.allFinite() || std::abs(projected.w()) < 1e-12) continue;
+        const double x = (projected.x() / projected.w() * 0.5 + 0.5) * width;
+        const double y = (projected.y() / projected.w() * 0.5 + 0.5) * height;
+        min_x          = std::min(min_x, x);
+        min_y          = std::min(min_y, y);
+        max_x          = std::max(max_x, x);
+        max_y          = std::max(max_y, y);
+    }
+
+    const auto extent = [](double min_value, double max_value) {
+        if (! std::isfinite(min_value) || ! std::isfinite(max_value)) return sr::i32 { 1 };
+        const double value = std::ceil(max_value) - std::floor(min_value);
+        return static_cast<sr::i32>(std::clamp(
+            value, 1.0, static_cast<double>(std::numeric_limits<sr::i32>::max())));
+    };
+    return { extent(min_x, max_x), extent(min_y, max_y) };
+}
 
 constexpr uint64_t             vk_wait_time { 10u * 1000u * 1000000u };
 constexpr uint32_t             vk_upload_command_num { 3 };
@@ -286,17 +329,17 @@ struct RenderProgram {
         }
     }
 
-    bool refreshMaterialTextureBindings(const sr::RenderSceneSnapshot&    render_scene,
-                                        std::span<const sr::RenderItemId> render_items) {
-        if (render_items.empty()) return false;
+    bool refreshMaterialTextureBindings(const sr::RenderSceneSnapshot&       render_scene,
+                                        std::span<const sr::SceneDrawItemId> draw_items) {
+        if (draw_items.empty()) return false;
 
         bool requires_graph_rebuild = false;
         for (auto& record : pass_records) {
             if (record.pass == nullptr) continue;
-            auto pass_render_item = record.pass->renderItemId();
-            if (! pass_render_item.has_value()) continue;
-            auto matched = std::any_of(render_items.begin(), render_items.end(), [&](auto id) {
-                return SameRenderItemId(*pass_render_item, id);
+            auto pass_draw_item = record.pass->sceneDrawItemId();
+            if (! pass_draw_item.has_value()) continue;
+            auto matched = std::any_of(draw_items.begin(), draw_items.end(), [&](auto id) {
+                return id.index == pass_draw_item->index && id.generation == pass_draw_item->generation;
             });
             if (! matched) continue;
 
@@ -317,6 +360,21 @@ struct RenderProgram {
         for (auto& item : scene.renderTargets) {
             auto& rt = item.second;
             if (rt.bind.enable && rt.bind.screen) {
+                if (! rt.bind.name.empty()) {
+                    auto camera = scene.cameras.find(rt.bind.name);
+                    if (camera != scene.cameras.end() && camera->second) {
+                        auto attached = camera->second->GetAttachedNode();
+                        if (attached.is_some() && (*attached)->Parent() != nullptr) {
+                            const auto projected = ProjectedLayerPhysicalExtent(
+                                scene, *(*attached)->Parent(), extent.width, extent.height);
+                            rt.width = static_cast<sr::i32>(std::max(
+                                1.0, std::round(rt.bind.scale * projected[0])));
+                            rt.height = static_cast<sr::i32>(std::max(
+                                1.0, std::round(rt.bind.scale * projected[1])));
+                            continue;
+                        }
+                    }
+                }
                 rt.width  = static_cast<sr::i32>(rt.bind.scale * extent.width);
                 rt.height = static_cast<sr::i32>(rt.bind.scale * extent.height);
             }
@@ -566,6 +624,7 @@ struct VulkanRender::Impl {
                              PassInvalidationFlags);
     std::vector<PreparedPassDiagnostic> preparedPassDiagnostics() const;
     void                                UpdateCameraFillMode(Scene&, sr::FillMode);
+    std::array<bool, 2> UpdateCameraPosition(Scene&, sr::FillMode, WallpaperPosition);
 
     bool                       initRes();
     bool                       acquireUploadCommandSlot(RenderingResources&, std::size_t&);
@@ -709,17 +768,18 @@ void VulkanRender::pumpFontAtlases(Scene& scene) {
         }
         const auto fm     = face->Metrics();
         const auto pixels = face->AtlasPixels();
-        (void)tex.UploadFontAtlasRegion(face->AtlasUrl(),
-                                        pixels.data(),
-                                        fm.atlas_w,
-                                        min_x,
-                                        min_y,
-                                        max_x - min_x,
-                                        max_y - min_y);
-        // Clear regardless: if VkImage didn't exist yet, the pixels are
-        // already in the CPU buffer that CreateTex aliases on its first
-        // call. Re-uploading would just duplicate work.
-        face->ClearDirtyRects();
+        const bool uploaded = tex.UploadFontAtlasRegion(face->AtlasUrl(),
+                                                        pixels.data(),
+                                                        fm.atlas_w,
+                                                        min_x,
+                                                        min_y,
+                                                        max_x - min_x,
+                                                        max_y - min_y);
+        // Clear when the copy is queued, and also when no VkImage exists yet:
+        // the pixels are then already in the CPU buffer CreateTex aliases on
+        // its first call. Stay pending only if an image was there and the
+        // upload itself failed.
+        if (uploaded || ! tex.HasFontAtlasImage(face->AtlasUrl())) face->ClearDirtyRects();
     }
 }
 
@@ -793,6 +853,11 @@ void VulkanRender::UpdateCameraFillMode(Scene& scene, sr::FillMode fill) {
     pImpl->UpdateCameraFillMode(scene, fill);
 };
 
+std::array<bool, 2> VulkanRender::UpdateCameraPosition(Scene& scene, sr::FillMode fill,
+                                                     WallpaperPosition position) {
+    return pImpl->UpdateCameraPosition(scene, fill, position);
+}
+
 bool VulkanRender::onSwapchainReady(unsigned width, unsigned height) {
     return pImpl->onSwapchainReady(width, height);
 }
@@ -814,7 +879,7 @@ bool VulkanRender::Impl::init(RenderInitInfo info) {
 
     std::vector<Extension> inst_exts { base_inst_exts.begin(), base_inst_exts.end() };
     std::vector<Extension> device_exts { base_device_exts.begin(), base_device_exts.end() };
-    if (info.metal_frame_callback) {
+    if (m_metal_frame_cb) {
         for (auto& extension : device_exts) {
             if (extension.name == "VK_EXT_metal_objects") extension.required = true;
         }
@@ -1605,6 +1670,39 @@ void sr::vulkan::UpdateCameraFillModeForExtent(sr::Scene& scene, sr::FillMode fi
     gPerCam.Update();
     scene.UpdateLinkedCamera("global");
     scene.CaptureCameraPathViewports();
+    scene.TickCameraPaths();
+}
+
+std::array<bool, 2> sr::vulkan::UpdateCameraPositionForExtent(
+    sr::Scene& scene, sr::FillMode fillmode, WallpaperPosition position,
+    unsigned width, unsigned height) {
+    position = position.Normalized();
+    const auto extent = scene.OrthographicProjectionExtent();
+    double overflow_x = 0.0, overflow_y = 0.0;
+    if (fillmode == FillMode::ASPECTCROP && width > 0 && height > 0 &&
+        std::isfinite(extent[0]) && std::isfinite(extent[1]) && extent[0] > 0 && extent[1] > 0) {
+        const double source_aspect = extent[0] / extent[1];
+        const double target_aspect = static_cast<double>(width) / height;
+        overflow_x = std::max(0.0, source_aspect / target_aspect - 1.0);
+        if (scene.UsesSyntheticPerspectiveCamera())
+            overflow_y = std::max(0.0, target_aspect / source_aspect - 1.0);
+    }
+    const double x = (1.0 - 2.0 * position.x) * overflow_x;
+    const double y = (2.0 * position.y - 1.0) * overflow_y;
+    for (const auto* name : { "global", "global_perspective" }) {
+        auto it = scene.cameras.find(name);
+        if (it == scene.cameras.end() || !it->second) continue;
+        it->second->SetProjectionOffset(x, y);
+        it->second->Update();
+        scene.UpdateLinkedCamera(name);
+    }
+    return { overflow_x > 0.000001, overflow_y > 0.000001 };
+}
+
+std::array<bool, 2> VulkanRender::Impl::UpdateCameraPosition(
+    sr::Scene& scene, sr::FillMode fillmode, WallpaperPosition position) {
+    const auto extent = m_device->out_extent();
+    return UpdateCameraPositionForExtent(scene, fillmode, position, extent.width, extent.height);
 }
 
 void VulkanRender::Impl::UpdateCameraFillMode(sr::Scene& scene, sr::FillMode fillmode) {
@@ -1679,7 +1777,6 @@ void VulkanRender::Impl::refreshPreparedResources(Scene&                     sce
         scene, m_device->out_extent(), max_framebuffer_extent, m_msaa_samples);
     m_program.finalizeFramePassRequests(scene);
     m_program.finalizeResourceRequests(scene);
-    m_device->tex_cache().BeginVideoTextureActivity();
     m_program.prepare(scene, *m_device, m_rendering_resources, render_scene);
     m_program.rebuildScopes();
 
@@ -1718,9 +1815,15 @@ bool VulkanRender::Impl::refreshPreparedMaterialTextures(
     Scene& scene, const RenderSceneSnapshot& render_scene,
     std::span<const sr::SceneMaterialId> materials) {
     if (! m_inited || m_program.pass_records.empty()) return true;
-    auto render_items = RenderItemsForMaterials(render_scene, materials);
+    std::vector<SceneDrawItemId> draw_items;
+    for (auto material : materials) {
+        for (auto item : render_scene.renderItemsFor(material)) {
+            if (auto* record = render_scene.renderItem(item))
+                draw_items.push_back(record->scene_draw_item);
+        }
+    }
     bool requires_graph_rebuild =
-        m_program.refreshMaterialTextureBindings(render_scene, render_items);
+        m_program.refreshMaterialTextureBindings(render_scene, draw_items);
     if (requires_graph_rebuild) return false;
     refreshPreparedResources(scene, render_scene);
     return true;

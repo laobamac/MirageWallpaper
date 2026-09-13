@@ -7,7 +7,7 @@
 import SwiftUI
 
 struct PluginsPage: SettingsPage {
-    @ObservedObject var viewModel: GlobalSettingsViewModel
+    @Bindable var viewModel: GlobalSettingsViewModel
     
     init(globalSettings viewModel: GlobalSettingsViewModel) {
         self.viewModel = viewModel
@@ -35,7 +35,7 @@ struct PluginsPage: SettingsPage {
 struct PluginPage_Previews: PreviewProvider {
     static var previews: some View {
         SettingsView()
-            .environmentObject({ () -> GlobalSettingsViewModel in
+            .environment({ () -> GlobalSettingsViewModel in
                 let viewModel = GlobalSettingsViewModel()
                 viewModel.selection = 2
                 return viewModel

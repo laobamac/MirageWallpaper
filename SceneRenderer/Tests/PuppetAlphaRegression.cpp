@@ -207,11 +207,62 @@ void TestLayerBlendScalesTowardOpaque() {
     Check(Near(none.alpha, 1.0f), "a zero-blend layer leaves the sprite opaque");
 }
 
+void TestHiddenLayerPlaybackState() {
+    auto puppet = MakePuppet(21, 10, 10.0, 10.0f, {});
+    auto layers = OneLayer(21);
+    layers[0].name    = "hidden";
+    layers[0].visible = false;
+
+    sr::WPPuppetLayer layer(puppet);
+    layer.prepared(layers);
+    auto handle = layer.animationLayer("hidden");
+    Check(handle.has_value(), "hidden puppet animation remains addressable");
+    if (! handle) return;
+    auto initial = layer.animationState(*handle);
+    Check(initial && ! initial->visible && ! initial->playing,
+          "hidden puppet animation starts stopped and preserves visibility state");
+
+    (void)layer.genFrame(0.0);
+    auto hidden_pose = layer.genFrame(0.5);
+    Check(Near(hidden_pose[0].translation().x(), 0.0f),
+          "hidden puppet animation does not affect the pose");
+
+    layer.setAnimationVisible(*handle, true);
+    layer.stopAnimation(*handle);
+    layer.playAnimation(*handle);
+    auto playing_pose = layer.genFrame(1.0);
+    Check(Near(playing_pose[0].translation().x(), 5.0f, 0.01f),
+          "visible puppet animation advances after play");
+
+    layer.pauseAnimation(*handle);
+    auto paused_pose = layer.genFrame(1.5);
+    Check(Near(paused_pose[0].translation().x(), 5.0f, 0.01f),
+          "paused puppet animation holds its frame");
+
+    layer.stopAnimation(*handle);
+    auto stopped_pose = layer.genFrame(2.0);
+    Check(Near(stopped_pose[0].translation().x(), 0.0f, 0.01f),
+          "stopped puppet animation resets to frame zero");
+
+    auto single = layer.playSingleAnimation("hidden");
+    Check(single.has_value() && layer.animationLayerCount() == 2,
+          "single puppet animation creates a temporary layer");
+    if (! single) return;
+    (void)layer.genFrame(3.1);
+    auto completed = layer.animationState(*single);
+    Check(completed && ! completed->playing,
+          "single puppet animation completes at its final frame");
+    (void)layer.genFrame(3.2);
+    Check(layer.animationLayerCount() == 1 && ! layer.animationState(*single),
+          "completed single puppet animation is removed");
+}
+
 int main() {
     TestBlinkEnvelopeDrivesAlphaNotPose();
     TestStaticTrackStillFades();
     TestFlatCurveLeavesPermutationAlone();
     TestLayerBlendScalesTowardOpaque();
+    TestHiddenLayerPlaybackState();
     if (g_failures == 0) std::cout << "PuppetAlphaRegression: ok\n";
     return g_failures == 0 ? 0 : 1;
 }

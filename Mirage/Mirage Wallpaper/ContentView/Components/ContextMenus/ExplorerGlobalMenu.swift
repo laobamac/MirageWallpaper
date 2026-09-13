@@ -8,8 +8,8 @@ import SwiftUI
 
 struct ExplorerGlobalMenu: SubviewOfContentView {
     
-    @ObservedObject var viewModel: ContentViewModel
-    @ObservedObject var wallpaperViewModel: WallpaperViewModel
+    @Bindable var viewModel: ContentViewModel
+    @Bindable var wallpaperViewModel: WallpaperViewModel
     
     init(contentViewModel viewModel: ContentViewModel, wallpaperViewModel: WallpaperViewModel) {
         self.wallpaperViewModel = wallpaperViewModel

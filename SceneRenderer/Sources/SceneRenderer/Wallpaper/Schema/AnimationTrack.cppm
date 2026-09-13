@@ -26,6 +26,20 @@ inline void ReadPuppetAnimationLayers(const sr::Json&                           
         sr::GetJsonValue(jLayer, "blendin", layer.blendin, false);
         sr::GetJsonValue(jLayer, "blendout", layer.blendout, false);
         sr::GetJsonValue(jLayer, "blendtime", layer.blendtime, false);
+        if (auto visible = jLayer.get("visible"); visible.is_some() && (*visible)->is_object()) {
+            if (auto user = (*visible)->get("user"); user.is_some()) {
+                if ((*user)->is_string()) {
+                    layer.visible_user = rstd::cppstd::to_string(*(*user)->as_str());
+                } else if ((*user)->is_object()) {
+                    if (auto name = (*user)->get("name"); name.is_some() && (*name)->is_string())
+                        layer.visible_user = rstd::cppstd::to_string(*(*name)->as_str());
+                    if (auto condition = (*user)->get("condition"); condition.is_some()) {
+                        layer.visible_condition = std::make_shared<sr::Json>((*condition)->clone());
+                        layer.visible_has_condition = true;
+                    }
+                }
+            }
+        }
         out.push_back(std::move(layer));
     }
 }

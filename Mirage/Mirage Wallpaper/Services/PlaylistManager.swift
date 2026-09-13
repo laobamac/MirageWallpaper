@@ -24,17 +24,23 @@ final class PlaylistManager: ObservableObject {
     private let ioQueue = DispatchQueue(label: "cn.laobamac.Mirage.playlist.io", qos: .utility)
     private var writeWorkItem: DispatchWorkItem?
     private var rotators: [Int: PlaylistRotator] = [:]
+    private weak var wallpaperViewModel: (any PlaylistPlayback)?
+    private var displayObserver: NSObjectProtocol?
 
     private struct Persisted: Codable {
         var currents: [String: Playlist]
         var saved: [Playlist]
     }
 
-    private init() {
+    private convenience init() {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appending(path: "Mirage")
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
-        self.storageURL = base.appending(path: "playlists.json")
+        self.init(storageURL: base.appending(path: "playlists.json"))
+    }
+
+    init(storageURL: URL) {
+        self.storageURL = storageURL
         load()
     }
 
@@ -98,18 +104,19 @@ final class PlaylistManager: ObservableObject {
 
     // MARK: Rotator lifecycle
 
-    func startRotators(wallpaperViewModel: WallpaperViewModel) {
-        rotators.values.forEach { $0.stop() }
-        rotators.removeAll()
+    func startRotators(wallpaperViewModel: any PlaylistPlayback) {
+        stopAllRotators()
+        self.wallpaperViewModel = wallpaperViewModel
         for screen in currents.keys {
-            let rotator = PlaylistRotator(screen: screen, wallpaperViewModel: wallpaperViewModel, manager: self)
-            rotators[screen] = rotator
-            rotator.start(reason: .appLaunch)
+            _ = rotator(on: screen, startingWith: .appLaunch)
         }
+        displayObserver = NotificationCenter.default.addObserver(
+            forName: DisplayRegistry.didChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in self?.synchronizeRotators() }
     }
 
     func kickRotator(on screen: Int) {
-        rotators[screen]?.rebuild(reason: .settingsChanged)
+        rotator(on: screen)?.rebuild(reason: .manualAdvance)
     }
 
     func kickAllRotators() {
@@ -118,6 +125,48 @@ final class PlaylistManager: ObservableObject {
 
     func stopAllRotators() {
         rotators.values.forEach { $0.stop() }
+        rotators.removeAll()
+        wallpaperViewModel = nil
+        if let displayObserver {
+            NotificationCenter.default.removeObserver(displayObserver)
+            self.displayObserver = nil
+        }
+    }
+
+    private func rotator(on screen: Int,
+                         startingWith reason: PlaylistRotator.StartReason = .manualAdvance) -> PlaylistRotator? {
+        guard currents[screen] != nil, let wallpaperViewModel,
+              let key = DisplayRegistry.shared.key(forScreenIndex: screen) else { return nil }
+        if let existing = rotators[screen], existing.displayKey == key { return existing }
+        rotators[screen]?.stop()
+        let rotator = PlaylistRotator(screen: screen, displayKey: key,
+                                      wallpaperViewModel: wallpaperViewModel, manager: self)
+        rotators[screen] = rotator
+        rotator.start(reason: reason)
+        return rotator
+    }
+
+    private func synchronizeRotators() {
+        for screen in Array(rotators.keys) {
+            guard let rotator = rotators[screen] else { continue }
+            if DisplayRegistry.shared.key(forScreenIndex: screen) != rotator.displayKey {
+                rotator.stop()
+                rotators[screen] = nil
+            }
+        }
+        for screen in currents.keys { _ = rotator(on: screen) }
+    }
+
+    func canAdvance(_ direction: PlaylistDirection, on display: DisplayKey, library: [WEWallpaper]) -> Bool {
+        guard let screen = DisplayRegistry.shared.screenIndex(for: display),
+              let rotator = rotator(on: screen) else { return false }
+        return rotator.canAdvance(direction, library: library)
+    }
+
+    func advance(_ direction: PlaylistDirection, on display: DisplayKey, library: [WEWallpaper]) {
+        guard let screen = DisplayRegistry.shared.screenIndex(for: display),
+              let rotator = rotator(on: screen) else { return }
+        rotator.advanceManually(direction, library: library)
     }
 
     // MARK: Current-playlist mutations
@@ -129,7 +178,7 @@ final class PlaylistManager: ObservableObject {
         currents[screen] = playlist
         scheduleSave()
         NotificationCenter.default.post(name: .playlistCurrentDidChange, object: nil, userInfo: ["screen": screen])
-        rotators[screen]?.rebuild(reason: .listChanged)
+        rotator(on: screen)?.rebuild(reason: .listChanged)
     }
 
     func add(_ wallpaper: WEWallpaper, to screen: Int) {
@@ -204,7 +253,7 @@ final class PlaylistManager: ObservableObject {
         currents[screen] = target
         scheduleSave()
         NotificationCenter.default.post(name: .playlistCurrentDidChange, object: nil, userInfo: ["screen": screen])
-        rotators[screen]?.rebuild(reason: .listChanged)
+        rotator(on: screen)?.rebuild(reason: .listChanged)
     }
 
     func deleteSaved(_ id: UUID) {
@@ -224,6 +273,7 @@ final class PlaylistManager: ObservableObject {
             currents[screen] = Playlist(name: L("默认播放列表"))
             scheduleSave()
         }
+        _ = rotator(on: screen)
     }
 
     func resolvedItems(on screen: Int, library: [WEWallpaper]) -> [WEWallpaper] {

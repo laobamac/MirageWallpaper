@@ -39,6 +39,14 @@ SCENE_SAVER_LIB="$ROOT/SceneRenderer/build/$SCENE_PRESET/Tools/SceneScreenSaver/
 WEB_BIN="$ROOT/WebRenderer/build/release/Tools/WebWallpaper/WebWallpaper"
 VIDEO_BIN="$ROOT/VideoRenderer/build/release/Tools/VideoWallpaper/VideoWallpaper"
 ASSETS_DIR="$ROOT/assets"
+EXTENSION="$CONTENTS/Extensions/MirageWallpaperExtension.appex"
+EXTENSION_FRAMEWORKS="$EXTENSION/Contents/Frameworks"
+APP_ENTITLEMENTS="$ROOT/Mirage/Mirage Wallpaper/Mirage_Wallpaper.entitlements"
+EXTENSION_ENTITLEMENTS="$ROOT/Mirage/Mirage Wallpaper Extension/MirageWallpaperExtension.entitlements"
+if [ "$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$CONTENTS/Info.plist")" = "cn.laobamac.Mirage.Development" ]; then
+    APP_ENTITLEMENTS="$ROOT/Mirage/Mirage Wallpaper/Mirage_Wallpaper.Development.entitlements"
+    EXTENSION_ENTITLEMENTS="$ROOT/Mirage/Mirage Wallpaper Extension/MirageWallpaperExtension.Development.entitlements"
+fi
 
 BREW_PREFIX="$(brew --prefix)"
 MOLTENVK="$BREW_PREFIX/opt/molten-vk/lib/libMoltenVK.dylib"
@@ -199,6 +207,11 @@ rm -rf "$RESOURCES/assets"
 cp -R "$ASSETS_DIR" "$RESOURCES/assets"
 
 SAVER="$RESOURCES/Screen Savers/MirageScreenSaver.saver"
+DYNAMIC_SAVER="$RESOURCES/Screen Savers/MirageDynamicLockScreen.saver"
+rm -rf "$RESOURCES/Mirage Components/MirageDynamicLockScreen.saver"
+rm -rf "$RESOURCES/Screen Savers/MirageDynamicLockScreen.saver"
+rm -rf "$RESOURCES/Screen Savers/.MirageDynamicLockScreen.saver"
+rm -rf "$DYNAMIC_SAVER"
 if [ -d "$SAVER" ]; then
     SAVER_FRAMEWORKS="$SAVER/Contents/Frameworks"
     SAVER_RESOURCES="$SAVER/Contents/Resources"
@@ -225,6 +238,62 @@ if [ -d "$SAVER" ]; then
 EOF
 fi
 
+if [ -d "$SAVER" ]; then
+    rm -rf "$DYNAMIC_SAVER"
+    cp -R "$SAVER" "$DYNAMIC_SAVER"
+    plutil -replace CFBundleIdentifier -string "cn.laobamac.Mirage.DynamicLockScreen" \
+        "$DYNAMIC_SAVER/Contents/Info.plist"
+    plutil -replace CFBundleDisplayName -string "Mirage 锁屏组件" \
+        "$DYNAMIC_SAVER/Contents/Info.plist"
+    plutil -replace CFBundleName -string "Mirage 锁屏组件" \
+        "$DYNAMIC_SAVER/Contents/Info.plist"
+fi
+
+if [ -d "$EXTENSION" ]; then
+    EXTENSION_RESOURCES="$EXTENSION/Contents/Resources"
+    EXTENSION_VK_ICD_DIR="$EXTENSION_RESOURCES/vulkan/icd.d"
+    mkdir -p "$EXTENSION_FRAMEWORKS" "$EXTENSION_RESOURCES"
+    rm -f "$EXTENSION_FRAMEWORKS"/*.dylib
+    cp -f "$SCENE_SAVER_LIB" "$EXTENSION_FRAMEWORKS/libMirageSceneSaver.dylib"
+    chmod u+w "$EXTENSION_FRAMEWORKS/libMirageSceneSaver.dylib"
+    for lib in "$FRAMEWORKS"/*.dylib; do
+        [ -f "$lib" ] || continue
+        cp -f "$lib" "$EXTENSION_FRAMEWORKS/$(basename "$lib")"
+    done
+    for lib in "$EXTENSION_FRAMEWORKS"/*.dylib; do
+        [ -f "$lib" ] || continue
+        retarget_lib "$lib"
+        install_name_tool -add_rpath "@loader_path" "$lib" 2>/dev/null || true
+    done
+    rm -rf "$EXTENSION_RESOURCES/assets"
+    cp -R "$ASSETS_DIR" "$EXTENSION_RESOURCES/assets"
+    mkdir -p "$EXTENSION_VK_ICD_DIR"
+    cat > "$EXTENSION_VK_ICD_DIR/MoltenVK_icd.json" <<EOF
+{
+    "file_format_version" : "1.0.0",
+    "ICD": {
+        "library_path" : "../../../Frameworks/$MVK_BASE",
+        "api_version" : "1.4.0",
+        "is_portability_driver" : true
+    }
+}
+EOF
+    echo "[bundle] 已生成扩展内嵌 ICD"
+    for lib in "$EXTENSION_FRAMEWORKS"/*.dylib; do
+        [ -f "$lib" ] || continue
+        sign_item "$lib"
+    done
+    for executable in "$EXTENSION/Contents/MacOS"/*.dylib; do
+        [ -f "$executable" ] || continue
+        sign_item "$executable"
+    done
+    for executable in "$EXTENSION/Contents/MacOS/MirageWallpaperExtension"; do
+        [ -f "$executable" ] || continue
+        sign_item "$executable"
+    done
+    codesign --force "${SIGN_ARGS[@]}" --entitlements "$EXTENSION_ENTITLEMENTS" --sign "$SIGN_IDENTITY" "$EXTENSION"
+fi
+
 echo "[bundle] 重新签名..."
 for lib in "$FRAMEWORKS"/*.dylib; do
     [ -f "$lib" ] || continue
@@ -248,6 +317,25 @@ if [ -d "${SAVER:-}" ]; then
     done
     sign_bundle "$SAVER"
 fi
-codesign --force "${SIGN_ARGS[@]}" --entitlements "$ROOT/Mirage/Mirage Wallpaper/Mirage_Wallpaper.entitlements" --sign "$SIGN_IDENTITY" "$APP"
+if [ -d "${DYNAMIC_SAVER:-}" ]; then
+    for lib in "$DYNAMIC_SAVER/Contents/Frameworks"/*.dylib; do
+        [ -f "$lib" ] || continue
+        sign_item "$lib"
+    done
+    sign_bundle "$DYNAMIC_SAVER"
+fi
+LOGIN_ITEM="$APP/Contents/Library/LoginItems/Mirage Login Item.app"
+if [ -d "$LOGIN_ITEM" ]; then
+    for executable in "$LOGIN_ITEM/Contents/MacOS"/*.dylib; do
+        [ -f "$executable" ] || continue
+        sign_item "$executable"
+    done
+    sign_bundle "$LOGIN_ITEM"
+fi
+for executable in "$APP/Contents/MacOS"/*.dylib; do
+    [ -f "$executable" ] || continue
+    sign_item "$executable"
+done
+codesign --force "${SIGN_ARGS[@]}" --entitlements "$APP_ENTITLEMENTS" --sign "$SIGN_IDENTITY" "$APP"
 
 echo "[bundle] 完成"

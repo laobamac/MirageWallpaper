@@ -28,6 +28,29 @@ internal sealed class WorkshopDownloader
 
     public async Task<DownloadResult> DownloadAsync(string taskId, ulong workshopId, string outputRoot, CancellationToken cancellationToken)
     {
+        const int maxAttempts = 4;
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                await session.WaitForOnlineAsync(cancellationToken).ConfigureAwait(false);
+                return await DownloadOnceAsync(taskId, workshopId, outputRoot, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception error) when (attempt < maxAttempts && IsRetryable(error))
+            {
+                writer.DownloadState(taskId, "resolving", message: "Retrying Steam download request.", errorCode: "DOWNLOAD_RETRYING");
+                await session.WaitForOnlineAsync(cancellationToken).ConfigureAwait(false);
+                await Task.Delay(TimeSpan.FromMilliseconds(500 * attempt * attempt), cancellationToken).ConfigureAwait(false);
+            }
+        }
+    }
+
+    private async Task<DownloadResult> DownloadOnceAsync(string taskId, ulong workshopId, string outputRoot, CancellationToken cancellationToken)
+    {
         if (!OperatingSystem.IsMacOS()) throw new PlatformNotSupportedException();
         writer.DownloadState(taskId, "resolving");
         var detailsRequest = new CPublishedFile_GetDetails_Request { appid = SteamSession.AppId, includechildren = true };
@@ -50,8 +73,31 @@ internal sealed class WorkshopDownloader
 
         using var cdn = new Client(session.Client);
         using var cancellationRegistration = cancellationToken.Register(cdn.Dispose);
-        var serverInfo = await session.GetDownloadServerAsync(depotId, 0, cancellationToken).ConfigureAwait(false);
-        var manifest = await cdn.DownloadManifestAsync(depotId, details.hcontent_file, requestCode, serverInfo.Server, depotKeyResult.DepotKey, cdnAuthToken: serverInfo.Token).WaitAsync(cancellationToken).ConfigureAwait(false);
+        DepotManifest? manifest = null;
+        Exception? manifestError = null;
+        for (var attempt = 0; attempt < 4; attempt++)
+        {
+            string? serverHost = null;
+            try
+            {
+                var serverInfo = await session.GetDownloadServerAsync(depotId, attempt, cancellationToken).ConfigureAwait(false);
+                serverHost = serverInfo.Server.Host;
+                manifest = await cdn.DownloadManifestAsync(depotId, details.hcontent_file, requestCode, serverInfo.Server, depotKeyResult.DepotKey, cdnAuthToken: serverInfo.Token).WaitAsync(cancellationToken).ConfigureAwait(false);
+                session.ReportDownloadServerSuccess(serverHost);
+                break;
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception error) when (IsRetryable(error))
+            {
+                session.ReportDownloadServerFailure(depotId, serverHost);
+                manifestError = error;
+                await Task.Delay(TimeSpan.FromMilliseconds(300 * (attempt + 1)), cancellationToken).ConfigureAwait(false);
+            }
+        }
+        if (manifest == null)
+        {
+            throw new ServiceException("MANIFEST_DOWNLOAD_FAILED", manifestError?.Message ?? "Steam did not return a content manifest.");
+        }
         if (manifest.Files == null || manifest.Files.Count == 0) throw new ServiceException("EMPTY_MANIFEST", "The Workshop content manifest is empty.");
 
         var root = Path.GetFullPath(outputRoot);
@@ -102,8 +148,8 @@ internal sealed class WorkshopDownloader
 
         using var progress = new DownloadProgressTracker(writer, taskId);
         progress.Start(totalCompressed, reusableCompressed);
-        var workers = Enumerable.Range(0, Math.Min(4, Math.Max(1, needed.Count)))
-            .Select(index => RunWorkerAsync(index, depotId, depotKeyResult.DepotKey, needed, progress, cancellationToken))
+        var workers = Enumerable.Range(0, Math.Min(8, Math.Max(1, needed.Count)))
+            .Select(index => RunWorkerAsync(index, cdn, depotId, depotKeyResult.DepotKey, needed, progress, cancellationToken))
             .ToArray();
         await Task.WhenAll(workers).ConfigureAwait(false);
         progress.Stop();
@@ -132,10 +178,8 @@ internal sealed class WorkshopDownloader
         return new DownloadResult(totalCompressed, final);
     }
 
-    private async Task RunWorkerAsync(int workerIndex, uint depotId, byte[] depotKey, ConcurrentQueue<(DepotManifest.FileData File, DepotManifest.ChunkData Chunk, string Path)> queue, DownloadProgressTracker progress, CancellationToken cancellationToken)
+    private async Task RunWorkerAsync(int workerIndex, Client cdn, uint depotId, byte[] depotKey, ConcurrentQueue<(DepotManifest.FileData File, DepotManifest.ChunkData Chunk, string Path)> queue, DownloadProgressTracker progress, CancellationToken cancellationToken)
     {
-        using var cdn = new Client(session.Client);
-        using var cancellationRegistration = cancellationToken.Register(cdn.Dispose);
         while (queue.TryDequeue(out var work))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -146,9 +190,11 @@ internal sealed class WorkshopDownloader
                 for (var attempt = 0; attempt < 4; attempt++)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
+                    string? serverHost = null;
                     try
                     {
                         var server = await session.GetDownloadServerAsync(depotId, workerIndex + attempt, cancellationToken).ConfigureAwait(false);
+                        serverHost = server.Server.Host;
                         var buffer = new byte[work.Chunk.UncompressedLength];
                         using var transfer = progress.BeginTransfer(work.Chunk.CompressedLength);
                         DownloadContext.Current.Value = transfer;
@@ -158,6 +204,7 @@ internal sealed class WorkshopDownloader
                             using var handle = File.OpenHandle(work.Path, FileMode.Open, FileAccess.Write, FileShare.ReadWrite, FileOptions.Asynchronous | FileOptions.RandomAccess);
                             await RandomAccess.WriteAsync(handle, buffer.AsMemory(0, written), (long)work.Chunk.Offset, cancellationToken).ConfigureAwait(false);
                             transfer.Complete();
+                            session.ReportDownloadServerSuccess(server.Server.Host);
                             lastError = null;
                             break;
                         }
@@ -169,6 +216,7 @@ internal sealed class WorkshopDownloader
                     catch (OperationCanceledException) { throw; }
                     catch (Exception error)
                     {
+                        session.ReportDownloadServerFailure(depotId, serverHost);
                         lastError = error;
                         await Task.Delay(TimeSpan.FromMilliseconds(300 * (attempt + 1)), cancellationToken).ConfigureAwait(false);
                     }
@@ -180,6 +228,19 @@ internal sealed class WorkshopDownloader
                 GlobalChunkSlots.Release();
             }
         }
+    }
+
+    private static bool IsRetryable(Exception error)
+    {
+        while (error.InnerException != null && error is AggregateException or IOException)
+        {
+            error = error.InnerException;
+        }
+        if (error is ServiceException service)
+        {
+            return service.Code is "CONNECTION_LOST" or "NO_CONTENT_SERVER" or "CHUNK_DOWNLOAD_FAILED";
+        }
+        return error is AsyncJobFailedException or SteamKitWebRequestException or HttpRequestException or IOException or TimeoutException or TaskCanceledException;
     }
 
     private static bool IsChunkValid(FileStream stream, DepotManifest.ChunkData chunk)

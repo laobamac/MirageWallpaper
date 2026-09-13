@@ -5,101 +5,161 @@
 //
 
 import AppKit
+import Combine
 import Foundation
+
+protocol PlaylistPlayback: AnyObject {
+    var displayStatesChanges: CurrentValueSubject<[DisplayKey: DisplayWallpaperState], Never> { get }
+    var wallpaperChangeRequests: PassthroughSubject<DisplayKey, Never> { get }
+    func state(for key: DisplayKey) -> DisplayWallpaperState?
+    func isTrusted(_ wallpaper: WEWallpaper) -> Bool
+    func allowsPlaylistAdvance(on key: DisplayKey, manually: Bool, updateOnPause: Bool) -> Bool
+    func assign(_ wallpaper: WEWallpaper, to key: DisplayKey, restoreFocus: Bool,
+                preservingPlaybackState: Bool, completion: ((Bool) -> Void)?)
+}
 
 final class PlaylistRotator {
     enum StartReason { case appLaunch, listChanged, settingsChanged, manualAdvance }
 
-    private let screen: Int
-    private weak var wallpaperViewModel: WallpaperViewModel?
-    private weak var manager: PlaylistManager?
+    private struct AdvanceRequest {
+        let id = UUID()
+        let playlistID: UUID
+        let target: PlaylistNavigation.Target
+        let direction: PlaylistDirection?
+        let manually: Bool
+        let excludedIDs: Set<String>
+    }
 
+    let screen: Int
+    let displayKey: DisplayKey
+    private weak var wallpaperViewModel: (any PlaylistPlayback)?
+    private weak var manager: PlaylistManager?
     private var timer: DispatchSourceTimer?
     private var videoEndObserver: NSObjectProtocol?
-    private var lastPlayedID: String?
+    private var stateSubscription: AnyCancellable?
+    private var requestSubscription: AnyCancellable?
+    private var navigation = PlaylistNavigation()
+    private var pendingRequest: AdvanceRequest?
+    private var applyingTargets: [UUID: PlaylistNavigation.Target] = [:]
+    private var schedulingGeneration = UUID()
+    private var isRunning = false
     private var didHandleLaunch = false
     private var pendingVideoAdvance = false
+    private let preparationWorker = LatestValueWorker<String, WEWallpaper?>(
+        label: "cn.laobamac.Mirage.playlist.prepare"
+    ) { id in
+        let wallpaper = WEWallpaper.load(from: URL(fileURLWithPath: id, isDirectory: id.hasSuffix("/")))
+        guard wallpaper.presentationIsValid, wallpaper.kind != .unsupported,
+              FileManager.default.isReadableFile(atPath: wallpaper.resolvedEntryURL.path) else { return nil }
+        return wallpaper
+    }
 
-    init(screen: Int, wallpaperViewModel: WallpaperViewModel, manager: PlaylistManager) {
+    init(screen: Int, displayKey: DisplayKey, wallpaperViewModel: any PlaylistPlayback, manager: PlaylistManager) {
         self.screen = screen
+        self.displayKey = displayKey
         self.wallpaperViewModel = wallpaperViewModel
         self.manager = manager
+        navigation.synchronize(with: manager.current(on: screen))
+        stateSubscription = wallpaperViewModel.displayStatesChanges.sink { [weak self] states in
+            guard let self, let manager = self.manager else { return }
+            let id = states[self.displayKey]?.wallpaper.id
+            guard !self.applyingTargets.values.contains(where: { $0.wallpaperID == id }) else { return }
+            self.navigation.synchronize(with: manager.current(on: self.screen))
+            self.navigation.observe(id)
+        }
+        navigation.observe(wallpaperViewModel.state(for: displayKey)?.wallpaper.id)
+        requestSubscription = wallpaperViewModel.wallpaperChangeRequests.sink { [weak self] key in
+            guard let self, self.displayKey == key else { return }
+            self.stopScheduling()
+            self.cancelPendingAdvance()
+            self.rebuild(reason: .manualAdvance)
+        }
     }
 
     deinit { stop() }
 
     func start(reason: StartReason) {
+        isRunning = true
         rebuild(reason: reason)
     }
 
     func stop() {
+        isRunning = false
+        stopScheduling()
+        cancelPendingAdvance()
+    }
+
+    private func stopScheduling() {
+        schedulingGeneration = UUID()
         timer?.cancel()
         timer = nil
+        pendingVideoAdvance = false
         if let observer = videoEndObserver {
             NotificationCenter.default.removeObserver(observer)
             videoEndObserver = nil
         }
     }
 
-    // MARK: Scheduling
+    private func cancelPendingAdvance() {
+        pendingRequest = nil
+        preparationWorker.cancel()
+        PlaylistTransitionOverlay.shared.cancel(on: screen)
+    }
 
     func rebuild(reason: StartReason) {
+        if Thread.isMainThread {
+            guard isRunning else { return }
+            rebuildOnMain(reason: reason)
+            return
+        }
         DispatchQueue.main.async { [weak self] in
-            self?.rebuildOnMain(reason: reason)
+            guard let self, self.isRunning else { return }
+            self.rebuildOnMain(reason: reason)
         }
     }
 
     private func rebuildOnMain(reason: StartReason) {
-        stop()
-        pendingVideoAdvance = false
-        guard let manager, let vm = wallpaperViewModel else { return }
+        stopScheduling()
+        if reason != .manualAdvance { cancelPendingAdvance() }
+        guard isRunning, let manager, let vm = wallpaperViewModel,
+              DisplayRegistry.shared.screenIndex(for: displayKey) == screen else { return }
         let playlist = manager.current(on: screen)
-        guard playlist.items.count > 0 else { return }
+        navigation.synchronize(with: playlist)
+        if navigation.history.isEmpty { navigation.observe(vm.state(for: displayKey)?.wallpaper.id) }
+        guard !playlist.items.isEmpty else { return }
 
-        if reason == .appLaunch || playlist.settings.alwaysBeginFirst || playlist.settings.introOnStartup {
-            applyLaunchAnchor(playlist: playlist, vm: vm, reason: reason)
+        if reason == .appLaunch, !didHandleLaunch {
+            didHandleLaunch = true
+            if playlist.settings.introOnStartup || playlist.settings.alwaysBeginFirst,
+               let first = playlist.items.first {
+                requestFixed(first.wallpaperID, playlist: playlist)
+            }
         }
 
-        if playlist.settings.videoSequence {
-            observeVideoEnd()
-        }
-
+        if playlist.settings.videoSequence { observeVideoEnd() }
         switch playlist.settings.timing {
-        case .never:
-            return
-        case .logon:
-            return
+        case .never, .logon:
+            break
         case .timer:
             scheduleTimer(after: playlist.settings.timerIntervalSeconds)
         case .daytime:
             scheduleNextDaytimeAnchor(from: playlist.settings.daytimeAnchors)
         case .dayOfWeek:
             scheduleNextMidnight()
-            applyDayOfWeek(playlist: playlist, vm: vm)
+            if reason != .manualAdvance { applyDayOfWeek(playlist: playlist, vm: vm) }
         }
-    }
-
-    private func applyLaunchAnchor(playlist: Playlist, vm: WallpaperViewModel, reason: StartReason) {
-        guard reason == .appLaunch, !didHandleLaunch else { return }
-        didHandleLaunch = true
-        guard let target = firstItemWallpaper(playlist: playlist) else { return }
-        if playlist.settings.introOnStartup || playlist.settings.alwaysBeginFirst {
-            apply(target, on: vm)
-        }
-    }
-
-    private func firstItemWallpaper(playlist: Playlist) -> WEWallpaper? {
-        guard let first = playlist.items.first else { return nil }
-        let library = WallpaperLibrary.shared.loadAll()
-        return library.first(where: { $0.id == first.wallpaperID })
     }
 
     private func scheduleTimer(after seconds: TimeInterval) {
-        let t = DispatchSource.makeTimerSource(queue: .main)
-        t.schedule(deadline: .now() + seconds, repeating: seconds)
-        t.setEventHandler { [weak self] in self?.tick() }
-        t.resume()
-        timer = t
+        let generation = schedulingGeneration
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + seconds, repeating: seconds)
+        timer.setEventHandler { [weak self] in
+            guard let self, self.schedulingGeneration == generation else { return }
+            self.tick()
+        }
+        timer.resume()
+        self.timer = timer
     }
 
     private func scheduleNextDaytimeAnchor(from anchors: [Int]) {
@@ -122,15 +182,17 @@ final class PlaylistRotator {
             target = calendar.date(from: comps)
         }
         guard let fireAt = target else { return }
-        let delay = max(fireAt.timeIntervalSinceNow, 30)
-        let t = DispatchSource.makeTimerSource(queue: .main)
-        t.schedule(deadline: .now() + delay)
-        t.setEventHandler { [weak self] in
-            self?.tick()
-            self?.rebuildOnMain(reason: .listChanged)
+        let generation = schedulingGeneration
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + max(fireAt.timeIntervalSinceNow, 30))
+        timer.setEventHandler { [weak self] in
+            guard let self, self.schedulingGeneration == generation else { return }
+            self.tick()
+            self.timer?.cancel()
+            self.scheduleNextDaytimeAnchor(from: anchors)
         }
-        t.resume()
-        timer = t
+        timer.resume()
+        self.timer = timer
     }
 
     private func scheduleNextMidnight() {
@@ -138,115 +200,177 @@ final class PlaylistRotator {
         guard let next = calendar.nextDate(after: Date(),
                                            matching: DateComponents(hour: 0, minute: 0, second: 5),
                                            matchingPolicy: .nextTime) else { return }
-        let delay = max(next.timeIntervalSinceNow, 30)
-        let t = DispatchSource.makeTimerSource(queue: .main)
-        t.schedule(deadline: .now() + delay)
-        t.setEventHandler { [weak self] in
-            self?.rebuildOnMain(reason: .listChanged)
+        let generation = schedulingGeneration
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + max(next.timeIntervalSinceNow, 30))
+        timer.setEventHandler { [weak self] in
+            guard let self, self.schedulingGeneration == generation,
+                  let manager = self.manager, let vm = self.wallpaperViewModel else { return }
+            self.applyDayOfWeek(playlist: manager.current(on: self.screen), vm: vm)
+            self.timer?.cancel()
+            self.scheduleNextMidnight()
         }
-        t.resume()
-        timer = t
+        timer.resume()
+        self.timer = timer
     }
 
-    private func applyDayOfWeek(playlist: Playlist, vm: WallpaperViewModel) {
+    private func applyDayOfWeek(playlist: Playlist, vm: any PlaylistPlayback) {
         let today = Calendar.current.component(.weekday, from: Date()) - 1
-        let library = WallpaperLibrary.shared.loadAll()
         let items = playlist.items.prefix(7)
-        guard today >= 0, today < items.count else { return }
-        let wallpaperID = items[items.index(items.startIndex, offsetBy: today)].wallpaperID
-        if let wallpaper = library.first(where: { $0.id == wallpaperID }) {
-            apply(wallpaper, on: vm)
-        }
+        guard items.indices.contains(today),
+              vm.allowsPlaylistAdvance(on: displayKey, manually: false,
+                                       updateOnPause: playlist.settings.updateOnPause) else { return }
+        requestFixed(items[today].wallpaperID, playlist: playlist)
     }
 
     private func observeVideoEnd() {
-        let name = Notification.Name.rendererVideoDidEnd
+        let generation = schedulingGeneration
         videoEndObserver = NotificationCenter.default.addObserver(
-            forName: name, object: nil, queue: .main
+            forName: .rendererVideoDidEnd, object: nil, queue: .main
         ) { [weak self] note in
-            guard let self else { return }
-            guard let s = note.userInfo?["screen"] as? Int, s == self.screen else { return }
-            guard self.pendingVideoAdvance else { return }
+            guard let self, self.schedulingGeneration == generation,
+                  note.userInfo?["screen"] as? Int == self.screen,
+                  self.pendingVideoAdvance else { return }
             self.pendingVideoAdvance = false
-            self.advanceNow()
+            self.advance(.next, manually: false)
         }
     }
 
-    // MARK: Advance
-
-    // Timer / anchor fire. With videoSequence on and a video currently showing,
-    // defer the switch until the video finishes its current loop; otherwise
-    // advance right away.
     private func tick() {
-        guard let vm = wallpaperViewModel else { return }
-        let settings = manager?.current(on: screen).settings ?? PlaylistSettings.default()
-        if settings.videoSequence, vm.currentByScreen[screen]?.kind == .video {
+        guard pendingRequest == nil, let vm = wallpaperViewModel, let manager else { return }
+        let settings = manager.current(on: screen).settings
+        guard vm.allowsPlaylistAdvance(on: displayKey, manually: false,
+                                       updateOnPause: settings.updateOnPause) else { return }
+        if settings.videoSequence, vm.state(for: displayKey)?.wallpaper.kind == .video {
             pendingVideoAdvance = true
             return
         }
-        advanceNow()
+        advance(.next, manually: false)
     }
 
-    private func advanceNow() {
-        guard let manager, let vm = wallpaperViewModel else { return }
-        guard shouldAdvance(vm: vm) else { return }
+    func canAdvance(_ direction: PlaylistDirection, library: [WEWallpaper]) -> Bool {
+        guard isRunning, let manager, let vm = wallpaperViewModel,
+              DisplayRegistry.shared.screenIndex(for: displayKey) == screen else { return false }
         let playlist = manager.current(on: screen)
-        guard let next = pickNext(from: playlist, vm: vm) else { return }
-        apply(next, on: vm)
+        guard vm.allowsPlaylistAdvance(on: displayKey, manually: true,
+                                       updateOnPause: playlist.settings.updateOnPause) else { return false }
+        navigation.synchronize(with: playlist)
+        let available = playableIDs(in: playlist, library: library, vm: vm)
+        return !navigation.candidates(for: direction, in: playlist, availableIDs: available,
+                                      currentID: vm.state(for: displayKey)?.wallpaper.id,
+                                      pending: pendingRequest?.target).isEmpty
     }
 
-    private func shouldAdvance(vm: WallpaperViewModel) -> Bool {
-        let policy = DisplayRegistry.shared.key(forScreenIndex: screen).map {
-            AppDelegate.shared.globalSettingsViewModel.effectivePlaybackAction(for: $0)
-        } ?? .keepRunning
-        if policy == .stop { return false }
-        let manager = manager
-        let settings = manager?.current(on: screen).settings ?? PlaylistSettings.default()
-        if policy == .pause && !settings.updateOnPause { return false }
-        return true
+    func advanceManually(_ direction: PlaylistDirection, library: [WEWallpaper]) {
+        guard canAdvance(direction, library: library) else { return }
+        rebuildOnMain(reason: .manualAdvance)
+        advance(direction, manually: true, library: library)
     }
 
-    private func pickNext(from playlist: Playlist, vm: WallpaperViewModel) -> WEWallpaper? {
-        let library = WallpaperLibrary.shared.loadAll()
-        let items = playlist.items
-        guard !items.isEmpty else { return nil }
-        // Unconfirmed web wallpapers are skipped rather than selected: rotation
-        // is automatic, so it must not raise a modal, and the renderer's trust
-        // backstop would refuse to launch one anyway — parking the rotation on
-        // whatever was showing until the next tick.
-        let playable = library.filter { $0.kind != .web || vm.isTrusted($0) }
-        let ids = items.map(\.wallpaperID)
-        let byID = Dictionary(uniqueKeysWithValues: playable.map { ($0.id, $0) })
-        let resolved = ids.compactMap { byID[$0] }
-        guard !resolved.isEmpty else { return nil }
-        let currentID = vm.currentByScreen[screen]?.id ?? lastPlayedID
-        switch playlist.settings.order {
-        case .sorted:
-            if let currentID, let idx = ids.firstIndex(of: currentID) {
-                // Walk forward to the next *playable* entry, so a skipped
-                // wallpaper does not fall back to the head of the list.
-                for offset in 1...ids.count {
-                    if let next = byID[ids[(idx + offset) % ids.count]] { return next }
-                }
-                return resolved.first
+    private func playableIDs(in playlist: Playlist, library: [WEWallpaper], vm: any PlaylistPlayback) -> Set<String> {
+        let ids = Set(playlist.items.map(\.wallpaperID))
+        return Set(library.lazy.filter {
+            ids.contains($0.id) && $0.presentationIsValid && $0.kind != .unsupported &&
+                ($0.kind != .web || vm.isTrusted($0))
+        }.map(\.id))
+    }
+
+    private func advance(_ direction: PlaylistDirection, manually: Bool,
+                         library: [WEWallpaper]? = nil, excludedIDs: Set<String> = []) {
+        guard isRunning, let manager, let vm = wallpaperViewModel,
+              DisplayRegistry.shared.screenIndex(for: displayKey) == screen else { return }
+        let playlist = manager.current(on: screen)
+        guard vm.allowsPlaylistAdvance(on: displayKey, manually: manually,
+                                       updateOnPause: playlist.settings.updateOnPause) else {
+            cancelPendingAdvance()
+            return
+        }
+        navigation.synchronize(with: playlist)
+        let available = library.map { playableIDs(in: playlist, library: $0, vm: vm) }
+            ?? Set(playlist.items.map(\.wallpaperID))
+        let candidates = navigation.candidates(
+            for: direction, in: playlist, availableIDs: available.subtracting(excludedIDs),
+            currentID: vm.state(for: displayKey)?.wallpaper.id, pending: pendingRequest?.target)
+        let target = playlist.settings.order == .random && direction == .next && candidates.first?.historyIndex == nil
+            ? candidates.randomElement() : candidates.first
+        guard let target else {
+            cancelPendingAdvance()
+            return
+        }
+        begin(AdvanceRequest(playlistID: playlist.id, target: target, direction: direction,
+                             manually: manually, excludedIDs: excludedIDs))
+    }
+
+    private func requestFixed(_ id: String, playlist: Playlist) {
+        guard let vm = wallpaperViewModel,
+              vm.state(for: displayKey)?.wallpaper.id != id,
+              vm.allowsPlaylistAdvance(on: displayKey, manually: false,
+                                       updateOnPause: playlist.settings.updateOnPause) else { return }
+        begin(AdvanceRequest(playlistID: playlist.id, target: .init(wallpaperID: id),
+                             direction: nil, manually: false, excludedIDs: []))
+    }
+
+    private func begin(_ request: AdvanceRequest) {
+        pendingRequest = request
+        PlaylistTransitionOverlay.shared.cancel(on: screen)
+        preparationWorker.submit(request.target.wallpaperID) { [weak self] wallpaper in
+            guard let self, self.pendingRequest?.id == request.id,
+                  let vm = self.wallpaperViewModel, let manager = self.manager else { return }
+            let playlist = manager.current(on: self.screen)
+            guard playlist.id == request.playlistID,
+                  playlist.items.contains(where: { $0.wallpaperID == request.target.wallpaperID }),
+                  DisplayRegistry.shared.screenIndex(for: self.displayKey) == self.screen,
+                  vm.allowsPlaylistAdvance(on: self.displayKey, manually: request.manually,
+                                           updateOnPause: playlist.settings.updateOnPause) else {
+                self.cancelPendingAdvance()
+                return
             }
-            return resolved.first
-        case .random:
-            guard resolved.count > 1 else { return resolved.first }
-            var pool = resolved
-            if let currentID { pool.removeAll { $0.id == currentID } }
-            return pool.randomElement() ?? resolved.first
+            guard let wallpaper, wallpaper.kind != .web || vm.isTrusted(wallpaper) else {
+                self.retry(request)
+                return
+            }
+            let settings = playlist.settings
+            PlaylistTransitionOverlay.shared.present(
+                on: self.screen, duration: settings.transitionSeconds, kind: settings.transition
+            ) { [weak self, weak vm] in
+                guard let self, let vm, self.pendingRequest?.id == request.id else { return }
+                guard DisplayRegistry.shared.screenIndex(for: self.displayKey) == self.screen,
+                      vm.allowsPlaylistAdvance(on: self.displayKey, manually: request.manually,
+                                               updateOnPause: settings.updateOnPause) else {
+                    self.cancelPendingAdvance()
+                    return
+                }
+                self.applyingTargets[request.id] = request.target
+                vm.assign(wallpaper, to: self.displayKey, restoreFocus: false,
+                          preservingPlaybackState: true) { [weak self] success in
+                    guard let self else { return }
+                    self.applyingTargets[request.id] = nil
+                    if success, self.manager?.current(on: self.screen).id == request.playlistID {
+                        self.navigation.commit(request.target)
+                    }
+                    guard self.pendingRequest?.id == request.id else { return }
+                    if success {
+                        self.pendingRequest = nil
+                        if request.manually { self.rebuildOnMain(reason: .manualAdvance) }
+                    } else {
+                        self.retry(request)
+                    }
+                }
+            }
         }
     }
 
-    private func apply(_ wallpaper: WEWallpaper, on vm: WallpaperViewModel) {
-        lastPlayedID = wallpaper.id
-        let settings = manager?.current(on: screen).settings ?? PlaylistSettings.default()
-        let duration = settings.transition == .disabled ? 0 : settings.transitionSeconds
-        PlaylistTransitionOverlay.shared.present(
-            on: screen, duration: duration, kind: settings.transition
-        ) {
-            vm.applyOnScreen(wallpaper, screen: self.screen)
+    private func retry(_ request: AdvanceRequest) {
+        guard pendingRequest?.id == request.id else { return }
+        guard let direction = request.direction else {
+            cancelPendingAdvance()
+            return
         }
+        var excluded = request.excludedIDs
+        excluded.insert(request.target.wallpaperID)
+        if let currentID = wallpaperViewModel?.state(for: displayKey)?.wallpaper.id {
+            excluded.insert(currentID)
+        }
+        advance(direction, manually: request.manually, excludedIDs: excluded)
     }
 }

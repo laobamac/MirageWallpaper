@@ -94,6 +94,160 @@ ImageType DetectEmbeddedImageType(const unsigned char* data, usize size) {
     return ImageType::UNKNOWN;
 }
 
+int DetectJpegExifOrientation(const unsigned char* data, usize size) {
+    if (size < 4 || data[0] != 0xff || data[1] != 0xd8) return 1;
+
+    usize pos = 2;
+    while (pos + 4 <= size) {
+        while (pos < size && data[pos] != 0xff) ++pos;
+        while (pos < size && data[pos] == 0xff) ++pos;
+        if (pos >= size) break;
+
+        const unsigned char marker = data[pos++];
+        if (marker == 0xda || marker == 0xd9) break;
+        if (marker == 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
+        if (pos + 2 > size) break;
+
+        const usize segment_length = (static_cast<usize>(data[pos]) << 8) | data[pos + 1];
+        if (segment_length < 2 || pos + segment_length > size) break;
+
+        if (marker == 0xe1 && segment_length >= 8 &&
+            std::memcmp(data + pos + 2, "Exif\0\0", 6) == 0) {
+            const unsigned char* tiff = data + pos + 8;
+            const usize          tiff_size = segment_length - 8;
+            if (tiff_size >= 8) {
+                const bool little_endian = tiff[0] == 'I' && tiff[1] == 'I';
+                const bool big_endian = tiff[0] == 'M' && tiff[1] == 'M';
+                if (little_endian || big_endian) {
+                    const auto read16 = [tiff, tiff_size, little_endian](usize offset,
+                                                                           uint16_t& value) {
+                        if (offset + 2 > tiff_size) return false;
+                        if (little_endian)
+                            value = static_cast<uint16_t>(tiff[offset]) |
+                                    (static_cast<uint16_t>(tiff[offset + 1]) << 8);
+                        else
+                            value = (static_cast<uint16_t>(tiff[offset]) << 8) |
+                                    static_cast<uint16_t>(tiff[offset + 1]);
+                        return true;
+                    };
+                    const auto read32 = [tiff, tiff_size, little_endian](usize offset,
+                                                                           uint32_t& value) {
+                        if (offset + 4 > tiff_size) return false;
+                        if (little_endian)
+                            value = static_cast<uint32_t>(tiff[offset]) |
+                                    (static_cast<uint32_t>(tiff[offset + 1]) << 8) |
+                                    (static_cast<uint32_t>(tiff[offset + 2]) << 16) |
+                                    (static_cast<uint32_t>(tiff[offset + 3]) << 24);
+                        else
+                            value = (static_cast<uint32_t>(tiff[offset]) << 24) |
+                                    (static_cast<uint32_t>(tiff[offset + 1]) << 16) |
+                                    (static_cast<uint32_t>(tiff[offset + 2]) << 8) |
+                                    static_cast<uint32_t>(tiff[offset + 3]);
+                        return true;
+                    };
+
+                    uint16_t magic = 0;
+                    uint32_t ifd_offset = 0;
+                    if (read16(2, magic) && magic == 42 && read32(4, ifd_offset) &&
+                        static_cast<usize>(ifd_offset) + 2 <= tiff_size) {
+                        uint16_t entry_count = 0;
+                        if (read16(ifd_offset, entry_count)) {
+                            for (uint16_t i = 0; i < entry_count; ++i) {
+                                const usize entry = static_cast<usize>(ifd_offset) + 2 +
+                                                     static_cast<usize>(i) * 12;
+                                if (entry + 12 > tiff_size) break;
+                                uint16_t tag = 0;
+                                uint16_t type = 0;
+                                uint32_t count = 0;
+                                if (! read16(entry, tag) || ! read16(entry + 2, type) ||
+                                    ! read32(entry + 4, count))
+                                    break;
+                                if (tag != 0x0112 || type != 3 || count == 0) continue;
+
+                                uint16_t orientation = 1;
+                                if (count == 1) {
+                                    if (! read16(entry + 8, orientation)) break;
+                                } else {
+                                    uint32_t value_offset = 0;
+                                    if (! read32(entry + 8, value_offset) ||
+                                        ! read16(static_cast<usize>(value_offset), orientation))
+                                        break;
+                                }
+                                return orientation >= 1 && orientation <= 8 ? orientation : 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        pos += segment_length;
+    }
+    return 1;
+}
+
+bool ExifOrientationSwapsAxes(int orientation) {
+    return orientation >= 5 && orientation <= 8;
+}
+
+ImageDataPtr NormalizeRgbaOrientation(uint8_t* source,
+                                      int width,
+                                      int height,
+                                      int orientation,
+                                      int expected_width,
+                                      int expected_height) {
+    const int output_width = ExifOrientationSwapsAxes(orientation) ? height : width;
+    const int output_height = ExifOrientationSwapsAxes(orientation) ? width : height;
+    if (output_width != expected_width || output_height != expected_height) {
+        stbi_image_free(source);
+        return {};
+    }
+
+    if (orientation == 1) {
+        return ImageDataPtr(source, [](uint8_t* data) { stbi_image_free(data); });
+    }
+
+    const usize output_size = static_cast<usize>(output_width) * output_height * 4;
+    auto* output = new uint8_t[output_size];
+    for (int y = 0; y < output_height; ++y) {
+        for (int x = 0; x < output_width; ++x) {
+            int source_x = x;
+            int source_y = y;
+            switch (orientation) {
+            case 2: source_x = width - 1 - x; break;
+            case 3:
+                source_x = width - 1 - x;
+                source_y = height - 1 - y;
+                break;
+            case 4: source_y = height - 1 - y; break;
+            case 5:
+                source_x = y;
+                source_y = x;
+                break;
+            case 6:
+                source_x = y;
+                source_y = height - 1 - x;
+                break;
+            case 7:
+                source_x = width - 1 - y;
+                source_y = height - 1 - x;
+                break;
+            case 8:
+                source_x = width - 1 - y;
+                source_y = x;
+                break;
+            default: break;
+            }
+            const usize source_offset =
+                (static_cast<usize>(source_y) * width + source_x) * 4;
+            const usize output_offset =
+                (static_cast<usize>(y) * output_width + x) * 4;
+            std::memcpy(output + output_offset, source + source_offset, 4);
+        }
+    }
+    stbi_image_free(source);
+    return ImageDataPtr(output, [](uint8_t* data) { delete[] data; });
+}
+
 TextureFormat ToTexFormate(int type) {
     /*
         type
@@ -140,6 +294,7 @@ u64 MinMipmapBytes(TextureFormat format, i32 width, i32 height) {
     case TextureFormat::RGB8: return w * h * 3ull;
     case TextureFormat::RGBA8:
     case TextureFormat::D32F: return w * h * 4ull;
+    case TextureFormat::RGBA16F: return w * h * 8ull;
     }
     return 0;
 }
@@ -447,33 +602,32 @@ std::shared_ptr<Image> TextureAssetDecoder::Parse(const std::string& name) {
                 }
                 img.header.type   = embedded;
                 img.header.format = TextureFormat::RGBA8;
-                mipmap.data       = ImageDataPtr((uint8_t*)data, [](uint8_t* data) {
-                    stbi_image_free((unsigned char*)data);
-                });
                 // u64 math: w * h * 4 overflows i32 for the dimensions stb
                 // will happily hand back.
                 const u64 decoded = (u64)std::max<i32>(w, 0) * (u64)std::max<i32>(h, 0) * 4ull;
                 if (decoded == 0 || decoded > (u64)std::numeric_limits<i32>::max()) {
+                    stbi_image_free(data);
                     rstd_error("embedded image {}x{} is out of range in {}", w, h, name);
                     return nullptr;
                 }
-                // The .tex header records the padded / power-of-two tex size,
-                // but the embedded container holds the image at its true size
-                // and that is what stb just handed us. Adopt the decoded
-                // geometry: the buffer is w * h * 4 bytes, so both the
-                // validation below and TextureCache's vkCmdCopyBufferToImage
-                // extent have to describe the decoded image, not the header.
-                src_size      = (i32)decoded;
-                mipmap.width  = w;
-                mipmap.height = h;
-                if (i_mipmap == 0) {
-                    // TextureCache creates the VkImage from the *slot* extent
-                    // and copies each level with the *mipmap* extent, so mip 0
-                    // disagreeing with its slot is a copy past the image.
-                    img_slot.width  = w;
-                    img_slot.height = h;
-                    SetHeaderPow2(img.header, w, h);
+                const int orientation = embedded == ImageType::JPEG
+                                            ? DetectJpegExifOrientation(
+                                                  (const unsigned char*)result.data(),
+                                                  (usize)src_size)
+                                            : 1;
+                mipmap.data = NormalizeRgbaOrientation(
+                    data, w, h, orientation, mipmap.width, mipmap.height);
+                if (! mipmap.data) {
+                    rstd_error("embedded image {}x{} orientation {} does not match declared mip {}x{} in {}",
+                               w,
+                               h,
+                               orientation,
+                               mipmap.width,
+                               mipmap.height,
+                               name);
+                    return nullptr;
                 }
+                src_size      = (i32)decoded;
             } else {
                 mipmap.data = ImageDataPtr(new uint8_t[(usize)src_size], [](uint8_t* data) {
                     delete[] data;

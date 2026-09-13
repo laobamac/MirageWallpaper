@@ -8,7 +8,7 @@ import Cocoa
 import SwiftUI
 
 class MainWindowController: NSWindowController, NSWindowDelegate {
-    private let minimumContentSize = NSSize(width: 1000, height: 640)
+    private let minimumContentSize = NSSize(width: 1300, height: 640)
 
     override var window: NSWindow! {
         get {
@@ -21,7 +21,7 @@ class MainWindowController: NSWindowController, NSWindowDelegate {
     
     override init(window: NSWindow?) {
         super.init(window: NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1000, height: 640),
+            contentRect: NSRect(x: 0, y: 0, width: 1100, height: 640),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered, defer: false))
         self.window.delegate = self
@@ -34,7 +34,7 @@ class MainWindowController: NSWindowController, NSWindowDelegate {
                 viewModel: AppDelegate.shared.contentViewModel,
                 wallpaperViewModel: AppDelegate.shared.wallpaperViewModel,
                 navigationModel: AppDelegate.shared.navigationModel
-            ).environmentObject(AppDelegate.shared.globalSettingsViewModel)
+            ).environment(AppDelegate.shared.globalSettingsViewModel)
         )
         hostingView.sizingOptions = []
         self.window.contentView = hostingView

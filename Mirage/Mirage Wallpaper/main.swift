@@ -6,6 +6,8 @@
 
 import Cocoa
 
+if WEConditionEvaluator.runWorkerIfRequested() { exit(0) }
+
 let mirageOpenWindowNotification = Notification.Name("cn.laobamac.Mirage.openMainWindow")
 let mirageLaunchAtLogin = ProcessInfo.processInfo.arguments.contains("--launch-at-login")
 

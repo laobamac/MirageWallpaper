@@ -11,11 +11,14 @@ struct ScreenSaverPage: SettingsPage {
         }
     }
 
-    @ObservedObject var viewModel: GlobalSettingsViewModel
-    @ObservedObject private var wallpaperViewModel: WallpaperViewModel
+    @Bindable var viewModel: GlobalSettingsViewModel
+    @Bindable private var wallpaperViewModel: WallpaperViewModel
+    @ObservedObject private var dynamicLockScreenManager = DynamicLockScreenManager.shared
+    @ObservedObject private var screenSaverDynamicLockScreenManager = ScreenSaverDynamicLockScreenManager.shared
     @State private var status: Status
     @State private var message = ""
     @State private var showingError = false
+    @State private var showingFullDiskAccessPrompt = false
     @State private var isWorking = false
 
     init(globalSettings viewModel: GlobalSettingsViewModel) {
@@ -63,11 +66,11 @@ struct ScreenSaverPage: SettingsPage {
 
             Section {
                 LabeledContent("当前屏保壁纸", value: status.configuredTitle)
-                LabeledContent("正在播放", value: wallpaper.isValid ? wallpaper.project.title : "无")
+                LabeledContent("正在播放", value: wallpaper.presentationIsValid ? wallpaper.project.title : "无")
                 Button("将正在播放的壁纸设为屏保") {
                     perform { try configureCurrentWallpaper() }
                 }
-                .disabled(!wallpaper.isValid || wallpaper.kind == .unsupported)
+                .disabled(!wallpaper.presentationIsValid || (wallpaper.kind != .video && wallpaper.kind != .scene))
             } header: {
                 Label("屏保壁纸", systemImage: "photo.on.rectangle.angled")
             } footer: {
@@ -76,10 +79,71 @@ struct ScreenSaverPage: SettingsPage {
             }
 
             Section {
-                Text("视频、网页和场景壁纸由 Mirage 自己的屏保宿主加载，不要求 Mirage 主程序保持运行。网页屏保不会获得网络导航权限，音频响应在屏保环境中保持静音。")
+                Text("视频和场景壁纸由 Mirage 自己的屏保宿主加载，不要求 Mirage 主程序保持运行。屏保始终保持静音。")
                     .foregroundStyle(.secondary)
             } header: {
                 Label("运行方式", systemImage: "info.circle")
+            }
+
+            Section {
+                Toggle("启用动态锁屏方案 A", isOn: Binding(
+                    get: { dynamicLockScreenManager.isEnabled },
+                    set: { dynamicLockScreenManager.setEnabled($0) }
+                ))
+                .disabled(!dynamicLockScreenManager.isAvailable)
+                if dynamicLockScreenManager.isEnabled {
+                    HStack(spacing: 8) {
+                        if dynamicLockScreenManager.connectionState == .preparing {
+                            ProgressView().controlSize(.small)
+                        }
+                        Text(dynamicLockScreenManager.connectionStatusMessage)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                if let registrationErrorMessage = dynamicLockScreenManager.registrationErrorMessage {
+                    Text(registrationErrorMessage)
+                        .foregroundStyle(.red)
+                    Button(LocalizedStringKey("重试动态锁屏连接")) {
+                        dynamicLockScreenManager.retryConnection()
+                    }
+                }
+                if !dynamicLockScreenManager.isAvailable {
+                    Text(LocalizedStringKey("动态锁屏需要 macOS 26 或更高版本。"))
+                        .foregroundStyle(.secondary)
+                } else {
+                    LabeledContent("方案 A 锁屏壁纸", value: dynamicLockScreenManager.configuredWallpaperTitle ?? L("尚未设置"))
+                    Button("将正在播放的壁纸设为动态锁屏") {
+                        performLockScreenConfiguration { try await configureCurrentDynamicLockScreen() }
+                    }
+                    .disabled(isWorking || !dynamicLockScreenManager.canUse || !wallpaper.presentationIsValid || (wallpaper.kind != .video && wallpaper.kind != .scene))
+                    Button("打开系统墙纸设置") {
+                        dynamicLockScreenManager.openSystemSettings()
+                    }
+                    Text(LocalizedStringKey("动态锁屏使用逆向得到的系统 API，可能随 macOS 更新失效。动态锁屏支持视频和场景壁纸。启用后请前往墙纸内切换为Mirage动态锁屏。"))
+                        .foregroundStyle(.secondary)
+                }
+                Toggle("启用动态锁屏方案 B", isOn: Binding(
+                    get: { screenSaverDynamicLockScreenManager.isEnabled },
+                    set: { screenSaverDynamicLockScreenManager.setEnabled($0) }
+                ))
+                .disabled(!screenSaverDynamicLockScreenManager.isAvailable)
+                if let recoveryErrorMessage = screenSaverDynamicLockScreenManager.recoveryErrorMessage {
+                    Text(recoveryErrorMessage).foregroundStyle(.red)
+                }
+                if !screenSaverDynamicLockScreenManager.isAvailable {
+                    Text(LocalizedStringKey("动态锁屏方案 B 需要 macOS 14.2 或更高版本。"))
+                        .foregroundStyle(.secondary)
+                } else {
+                    LabeledContent("方案 B 锁屏壁纸", value: screenSaverDynamicLockScreenManager.configuredWallpaperTitle ?? L("尚未设置"))
+                    Button("将正在播放的壁纸设为方案 B 锁屏") {
+                        performLockScreenConfiguration { try await configureCurrentScreenSaverDynamicLockScreen() }
+                    }
+                    .disabled(isWorking || !screenSaverDynamicLockScreenManager.isEnabled || !wallpaper.presentationIsValid || (wallpaper.kind != .video && wallpaper.kind != .scene))
+                    Text(LocalizedStringKey("方案 B 使用 Mirage 屏保组件，仅在锁屏时临时接管系统墙纸槽位，解锁后恢复原桌面配置。"))
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Label("动态锁屏", systemImage: "lock.rectangle")
             }
         }
         .formStyle(.grouped)
@@ -87,6 +151,20 @@ struct ScreenSaverPage: SettingsPage {
             Button("好", role: .cancel) {}
         } message: {
             Text(message)
+        }
+        .alert("动态锁屏需要完全磁盘访问权限", isPresented: $showingFullDiskAccessPrompt) {
+            Button("打开完全磁盘访问权限设置") {
+                dynamicLockScreenManager.openFullDiskAccessSettings()
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("由于当前 Mirage 版本未使用开发者证书签名，macOS 不允许 Mirage 与动态锁屏扩展共享部署文件。请在“隐私与安全性 > 完全磁盘访问权限”中添加并启用 Mirage，然后重新打开 Mirage 并再次设置动态锁屏。")
+        }
+        .sheet(isPresented: $dynamicLockScreenManager.isConfirmationPresented) {
+            DynamicLockScreenConfirmationSheet(manager: dynamicLockScreenManager)
+        }
+        .sheet(isPresented: $screenSaverDynamicLockScreenManager.isConfirmationPresented) {
+            ScreenSaverDynamicLockScreenConfirmationSheet(manager: screenSaverDynamicLockScreenManager)
         }
     }
 
@@ -99,12 +177,51 @@ struct ScreenSaverPage: SettingsPage {
         )
     }
 
+    private func configureCurrentDynamicLockScreen() async throws {
+        guard wallpaper.kind == .video || wallpaper.kind == .scene else {
+            throw DynamicLockScreenError.unsupportedWallpaper
+        }
+        let displayIDs = wallpaperViewModel.connectedDisplays.compactMap { DisplayRegistry.shared.displayID(for: $0.key) }
+        try await dynamicLockScreenManager.configureCurrentWallpaper(
+            wallpaperViewModel.currentWallpaper,
+            runtime: wallpaperViewModel.runtime,
+            properties: wallpaperViewModel.effectiveProperties(for: wallpaperViewModel.currentWallpaper),
+            fps: Int(viewModel.settings.fps),
+            displayIDs: displayIDs
+        )
+    }
+
+    private func configureCurrentScreenSaverDynamicLockScreen() async throws {
+        try await screenSaverDynamicLockScreenManager.configureCurrentWallpaper(
+            wallpaperViewModel.currentWallpaper,
+            runtime: wallpaperViewModel.runtime,
+            properties: wallpaperViewModel.effectiveProperties(for: wallpaperViewModel.currentWallpaper),
+            fps: Int(viewModel.settings.fps)
+        )
+    }
+
     private func perform(_ operation: () throws -> Void) {
         do {
             try operation()
             refreshStatus()
         } catch {
             show(error)
+        }
+    }
+
+    private func performLockScreenConfiguration(_ operation: @escaping @MainActor () async throws -> Void) {
+        guard !isWorking else { return }
+        isWorking = true
+        Task { @MainActor in
+            defer { isWorking = false }
+            do {
+                try await operation()
+                refreshStatus()
+            } catch is CancellationError {
+                return
+            } catch {
+                show(error)
+            }
         }
     }
 
@@ -123,6 +240,10 @@ struct ScreenSaverPage: SettingsPage {
     }
 
     private func show(_ error: Error) {
+        if case DynamicLockScreenError.fullDiskAccessRequired = error {
+            showingFullDiskAccessPrompt = true
+            return
+        }
         message = error.localizedDescription
         showingError = true
     }

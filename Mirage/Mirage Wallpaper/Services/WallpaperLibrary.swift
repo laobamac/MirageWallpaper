@@ -284,6 +284,7 @@ final class WallpaperLibrary {
     }
 
     func loadAll() -> [WEWallpaper] {
+        WallpaperViewModel.invalidatePropertyResolutionCache()
         let urls = allWallpaperURLs()
         loadCacheLock.lock()
         let previous = loadCache
@@ -318,13 +319,21 @@ final class WallpaperLibrary {
     }
 
     func additionDates(for wallpapers: [WEWallpaper]) -> [String: Date] {
+        let workshopPrefixes = librarySources.filter { $0.role != .imported }
+            .map { $0.url.standardizedFileURL.path }
         additionIndexLock.lock()
         var changed = false
         var result: [String: Date] = [:]
         result.reserveCapacity(wallpapers.count)
         for wallpaper in wallpapers {
             let path = wallpaper.wallpaperDirectory.standardizedFileURL.path
-            let workshopID = workshopID(for: wallpaper)
+            if let existing = additionIndex.paths[path] {
+                result[wallpaper.id] = existing
+                continue
+            }
+            let name = wallpaper.wallpaperDirectory.lastPathComponent
+            let isWorkshop = workshopPrefixes.contains { path == $0 || path.hasPrefix($0 + "/") }
+            let workshopID = isWorkshop && !name.isEmpty && name.allSatisfy(\.isNumber) ? name : nil
             let date: Date
             if let existing = additionIndex.paths[path] {
                 date = existing

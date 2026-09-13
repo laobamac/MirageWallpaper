@@ -5,6 +5,7 @@
 //
 
 import Foundation
+import Observation
 
 // MARK: - Workshop Item
 
@@ -477,18 +478,102 @@ enum WorkshopTypeFilter: String, CaseIterable, Identifiable {
         case .preset: return L("预设")
         }
     }
+
+    var steamTag: String? {
+        switch self {
+        case .all: return nil
+        case .scene: return "Scene"
+        case .web: return "Web"
+        case .video: return "Video"
+        case .preset: return "Preset"
+        }
+    }
+
+    func matches(_ item: WorkshopItem) -> Bool {
+        switch self {
+        case .all: return true
+        case .scene: return item.kind == .scene
+        case .web: return item.kind == .web
+        case .video: return item.kind == .video
+        case .preset: return item.isPreset
+        }
+    }
+}
+
+extension Set where Element == WorkshopTypeFilter {
+    var normalizedWorkshopTypes: Set<WorkshopTypeFilter> {
+        if isEmpty || contains(.all) { return [.all] }
+        return subtracting([.all])
+    }
+
+    var hasNoWorkshopTypeConstraint: Bool {
+        let selection = normalizedWorkshopTypes
+        return selection.contains(.all) ||
+            selection.isSuperset(of: [.scene, .web, .video])
+    }
+
+    var singleWorkshopType: WorkshopTypeFilter? {
+        let selection = normalizedWorkshopTypes
+        guard !selection.hasNoWorkshopTypeConstraint, selection.count == 1 else { return nil }
+        return selection.first
+    }
+
+    func matches(_ item: WorkshopItem) -> Bool {
+        let selection = normalizedWorkshopTypes
+        return selection.hasNoWorkshopTypeConstraint || selection.contains { $0.matches(item) }
+    }
 }
 
 // MARK: - Download Task
 
-struct DownloadTask: Identifiable, Equatable {
+@Observable
+final class DownloadTask: Identifiable, Equatable {
     var id: String { workshopItem.publishedFileId }
     var workshopItem: WorkshopItem
     var attemptID: String?
-    var state: DownloadState
+    var state: DownloadState {
+        didSet {
+            let active = Self.isActive(state)
+            if active != isActive { isActive = active }
+            refreshCompletionState()
+        }
+    }
+    private(set) var isActive: Bool
+    private(set) var isCompleted = false
+    private(set) var isClearable = false
     var startedAt: Date?
     var completedAt: Date?
     var purpose: DownloadPurpose
+
+    init(workshopItem: WorkshopItem, attemptID: String?, state: DownloadState,
+         startedAt: Date?, completedAt: Date?, purpose: DownloadPurpose) {
+        self.workshopItem = workshopItem
+        self.attemptID = attemptID
+        self.state = state
+        self.isActive = Self.isActive(state)
+        self.startedAt = startedAt
+        self.completedAt = completedAt
+        self.purpose = purpose
+        refreshCompletionState()
+    }
+
+    private func refreshCompletionState() {
+        let completed = state == .completed
+        let clearable: Bool
+        switch state {
+        case .completed, .failed: clearable = true
+        default: clearable = false
+        }
+        if isCompleted != completed { isCompleted = completed }
+        if isClearable != clearable { isClearable = clearable }
+    }
+
+    private static func isActive(_ state: DownloadState) -> Bool {
+        switch state {
+        case .resolving, .downloading, .validating: return true
+        default: return false
+        }
+    }
 
     static func == (lhs: DownloadTask, rhs: DownloadTask) -> Bool {
         lhs.id == rhs.id && lhs.attemptID == rhs.attemptID && lhs.state == rhs.state

@@ -23,6 +23,7 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <sys/event.h>
 #include <sys/types.h>
 #include <thread>
@@ -141,6 +142,8 @@ struct Options {
     std::uint32_t             input_hz { 60 };
     std::uint32_t             msaa { 1 };
     double                    render_scale { 1.0 };
+    sr::WallpaperPosition     position;
+    sr::FillMode              fill_mode { sr::FillMode::ASPECTCROP };
     std::uint32_t             screen { 0 };
     std::uint32_t             display_id { 0 };
     int                       run_seconds { 0 };
@@ -183,6 +186,33 @@ void EmitAudioDemand(bool needed) {
               << (needed ? "true" : "false") << "}\n" << std::flush;
 }
 
+std::string JsonEscaped(std::string_view text) {
+    static constexpr char kHex[] = "0123456789abcdef";
+    std::string           out;
+    out.reserve(text.size() + 8);
+    for (const char c : text) {
+        const auto byte = static_cast<unsigned char>(c);
+        if (c == '"' || c == '\\') {
+            out.push_back('\\');
+            out.push_back(c);
+        } else if (byte < 0x20) {
+            out += "\\u00";
+            out.push_back(kHex[(byte >> 4) & 0xF]);
+            out.push_back(kHex[byte & 0xF]);
+        } else {
+            out.push_back(c);
+        }
+    }
+    return out;
+}
+
+void EmitUserShortcut(std::string_view name, std::string_view target) {
+    if (target.empty()) return;
+    std::lock_guard lock(LifecycleOutputMutex());
+    std::cout << "{\"event\":\"open-shortcut\",\"name\":\"" << JsonEscaped(name)
+              << "\",\"value\":\"" << JsonEscaped(target) << "\"}\n" << std::flush;
+}
+
 /// Answers a {"cmd":"snapshot"} request. The token is echoed verbatim so the app
 /// can match the reply; it is a UUID the app generated, but quote-escape it
 /// anyway rather than trusting the shape of an inbound string.
@@ -208,6 +238,9 @@ void PrintUsage(const char* argv0) {
         << "  -f, --fps N                 Render FPS (default 30)\n"
         << "  -R, --resolution WxH        Override render resolution\n"
         << "      --render-scale S        Render scale 0.25..1.0 (default 1.0)\n"
+        << "      --fill MODE             cover, contain or stretch\n"
+        << "      --position-x N          Horizontal crop position 0..1 (default 0.5)\n"
+        << "      --position-y N          Vertical crop position 0..1 (default 0.5)\n"
         << "      --metalfx               Enable MetalFX Spatial scaling\n"
         << "  -C, --cache-path DIR        Cache directory\n"
         << "  -M, --msaa N                MSAA samples for screen RT\n"
@@ -335,6 +368,19 @@ bool ParseArgs(int argc, char** argv, Options& out) {
             const char* value = require_value(i, arg);
             if (value == nullptr || ! ParseDouble(value, out.render_scale)) return false;
             out.render_scale = std::clamp(out.render_scale, 0.25, 1.0);
+        } else if (arg == "--position-x" || arg == "--position-y") {
+            const char* value = require_value(i, arg);
+            double coordinate = 0.5;
+            if (value == nullptr || !ParseDouble(value, coordinate)) return false;
+            (arg == "--position-x" ? out.position.x : out.position.y) = std::clamp(coordinate, 0.0, 1.0);
+        } else if (arg == "--fill") {
+            const char* value = require_value(i, arg);
+            if (value == nullptr) return false;
+            const std::string_view mode(value);
+            if (mode == "cover") out.fill_mode = sr::FillMode::ASPECTCROP;
+            else if (mode == "contain") out.fill_mode = sr::FillMode::ASPECTFIT;
+            else if (mode == "stretch") out.fill_mode = sr::FillMode::STRETCH;
+            else return false;
         } else if (arg == "-C" || arg == "--cache-path") {
             const char* value = require_value(i, arg);
             if (value == nullptr) return false;
@@ -525,6 +571,8 @@ int main(int argc, char** argv) {
     config.source_pkg_path = options.scene_pkg;
     config.graphviz        = options.graphviz;
     config.fps             = options.fps;
+    config.position        = options.position;
+    config.fill_mode       = options.fill_mode;
     config.muted           = options.muted;
     config.spectrum_enabled = options.spectrum_enabled;
     config.external_spectrum = options.external_spectrum;
@@ -590,6 +638,12 @@ int main(int argc, char** argv) {
     }
 
     wallpaper->setOnAudioDemand(EmitAudioDemand);
+    wallpaper->setOnPositionAvailability([](bool x, bool y) {
+        std::lock_guard lock(LifecycleOutputMutex());
+        std::cout << "{\"event\":\"position-availability\",\"x\":" << (x ? "true" : "false")
+                  << ",\"y\":" << (y ? "true" : "false") << "}\n" << std::flush;
+    });
+    wallpaper->setOnUserShortcut(EmitUserShortcut);
     wallpaper->configure(std::move(config));
     wallpaper->initVulkan(std::move(info));
 

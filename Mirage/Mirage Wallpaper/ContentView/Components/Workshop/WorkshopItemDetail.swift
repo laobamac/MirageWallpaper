@@ -9,7 +9,7 @@ import Combine
 
 struct WorkshopItemDetail: View {
     var item: WorkshopItem?
-    @ObservedObject var workshopViewModel: WorkshopViewModel
+    @Bindable var workshopViewModel: WorkshopViewModel
     var isEmbedded: Bool = false
     var embeddedCreatorSteamId: String?
     var isActive: Bool = true
@@ -534,7 +534,7 @@ struct WorkshopItemDetail: View {
                 }
                 .buttonStyle(.borderedProminent)
             }
-        } else if !hasDownloadTask, installed?.isValid == true {
+        } else if !hasDownloadTask, installed?.presentationIsValid == true {
             Button { } label: {
                 Label(LocalizedStringKey(item.isPreset ? "预设已安装" : "已下载"), systemImage: "checkmark.circle.fill")
                     .frame(maxWidth: .infinity)
@@ -762,10 +762,9 @@ enum CreatorGridMetrics {
 
 struct CreatorProfileView: View {
     let creator: WorkshopCreator
-    @ObservedObject var workshopViewModel: WorkshopViewModel
+    @Bindable var workshopViewModel: WorkshopViewModel
     let animatedPreviewMode: GSAnimatedPreviewPlayback
     @State private var selectedDetailItem: WorkshopItem?
-    @State private var hoveredItemID: String?
     @AppStorage("CreatorIconSize") private var iconSize: Double = CreatorGridMetrics.medium
     @AppStorage("CreatorPerPage") private var creatorPageSize: Int = 10
 
@@ -910,18 +909,15 @@ struct CreatorProfileView: View {
                         ) { downloadState in
                             WorkshopItemCard(
                                 item: item,
-                                isHovered: hoveredItemID == item.id,
                                 isSelected: false,
                                 isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
                                 presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
-                                downloadState: downloadState,
+                                downloadTask: workshopViewModel.downloadTask(for: item.publishedFileId),
+                                liveDownloadState: downloadState,
                                 isFavorite: workshopViewModel.isWorkshopFavorite(item.publishedFileId),
                                 isActive: selectedDetailItem == nil,
                                 animatedPreviewMode: animatedPreviewMode
                             )
-                        }
-                        .onHover { hovering in
-                            hoveredItemID = hovering ? item.id : nil
                         }
                         .onTapGesture {
                             selectedDetailItem = item

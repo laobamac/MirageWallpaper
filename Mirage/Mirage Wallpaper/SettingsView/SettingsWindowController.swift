@@ -16,7 +16,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         window.title = L("设置")
         window.contentMinSize = minimumContentSize
         window.contentView = NSHostingView(
-            rootView: SettingsView().environmentObject(viewModel))
+            rootView: SettingsView().environment(viewModel))
     }
 
     required init?(coder: NSCoder) {

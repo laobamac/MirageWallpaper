@@ -99,3 +99,97 @@ struct Playlist: Codable, Identifiable, Equatable {
 
     mutating func touch() { updatedAt = Date() }
 }
+
+enum PlaylistDirection {
+    case previous
+    case next
+}
+
+struct PlaylistNavigation {
+    struct Target: Equatable {
+        let wallpaperID: String
+        var historyIndex: Int?
+    }
+
+    private(set) var history: [String] = []
+    private(set) var historyIndex: Int?
+    private var playlistID: UUID?
+    private var order: PlaylistOrder?
+    private var itemIDs: Set<String> = []
+
+    mutating func synchronize(with playlist: Playlist) {
+        if playlistID != playlist.id || order != playlist.settings.order {
+            history = []
+            historyIndex = nil
+        }
+        playlistID = playlist.id
+        order = playlist.settings.order
+        itemIDs = Set(playlist.items.map(\.wallpaperID))
+        let oldIndex = historyIndex
+        let retained = history.enumerated().filter { itemIDs.contains($0.element) }
+        history = retained.map(\.element)
+        historyIndex = oldIndex.flatMap { index in
+            retained.lastIndex(where: { $0.offset <= index })
+        }
+    }
+
+    mutating func observe(_ wallpaperID: String?) {
+        guard let wallpaperID, itemIDs.contains(wallpaperID) else {
+            history = []
+            historyIndex = nil
+            return
+        }
+        if let historyIndex, history[historyIndex] == wallpaperID { return }
+        history = Array(history.prefix((historyIndex ?? -1) + 1))
+        history.append(wallpaperID)
+        if history.count > 100 { history.removeFirst(history.count - 100) }
+        historyIndex = history.count - 1
+    }
+
+    mutating func commit(_ target: Target) {
+        if let index = target.historyIndex,
+           history.indices.contains(index), history[index] == target.wallpaperID {
+            historyIndex = index
+        } else {
+            observe(target.wallpaperID)
+        }
+    }
+
+    func candidates(for direction: PlaylistDirection,
+                    in playlist: Playlist,
+                    availableIDs: Set<String>,
+                    currentID: String?,
+                    pending: Target? = nil) -> [Target] {
+        let ids = playlist.items.map(\.wallpaperID)
+        let current = pending?.wallpaperID ?? currentID
+        let available = availableIDs.subtracting(current.map { [$0] } ?? [])
+        guard !ids.isEmpty, !available.isEmpty else { return [] }
+
+        if playlist.settings.order == .sorted {
+            let indices: [Int]
+            if let current, let index = ids.firstIndex(of: current) {
+                let step = direction == .next ? 1 : -1
+                indices = (1...ids.count).map { (index + step * $0 + ids.count) % ids.count }
+            } else {
+                indices = direction == .next ? Array(ids.indices) : Array(ids.indices.reversed())
+            }
+            return indices.compactMap {
+                available.contains(ids[$0]) ? Target(wallpaperID: ids[$0]) : nil
+            }
+        }
+
+        let cursor = pending.map { $0.historyIndex ?? history.count } ?? historyIndex ?? -1
+        let indices: [Int]
+        if direction == .previous {
+            indices = cursor > 0 ? Array((0..<min(cursor, history.count)).reversed()) : []
+        } else {
+            indices = cursor + 1 < history.count ? Array((cursor + 1)..<history.count) : []
+        }
+        let remembered = indices.compactMap { index -> Target? in
+            guard available.contains(history[index]) else { return nil }
+            return Target(wallpaperID: history[index], historyIndex: index)
+        }
+        if !remembered.isEmpty || direction == .previous { return remembered }
+        return ids.filter { available.contains($0) }.map { Target(wallpaperID: $0) }
+    }
+}

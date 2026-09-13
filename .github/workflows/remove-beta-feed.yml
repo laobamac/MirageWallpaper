@@ -1,0 +1,154 @@
+name: Remove beta build from Sparkle feeds
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_number:
+        description: Sparkle CFBundleVersion of the beta build to remove
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mirage-release-publication
+  cancel-in-progress: false
+
+jobs:
+  remove:
+    name: Remove beta build and re-sign feeds
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Validate build number
+        shell: bash
+        env:
+          BUILD_NUMBER: ${{ inputs.build_number }}
+        run: |
+          set -euo pipefail
+          [[ "$BUILD_NUMBER" =~ ^[1-9][0-9]*$ ]] || {
+            echo '::error::build_number must be a positive integer.'
+            exit 1
+          }
+
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Check out update feeds
+        uses: actions/checkout@v6
+        with:
+          ref: update-feeds
+          path: update-feeds
+          fetch-depth: 1
+
+      - name: Resolve Sparkle publishing tools
+        shell: bash
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project 'Mirage/Mirage Wallpaper.xcodeproj' \
+            -scheme 'Mirage Wallpaper' \
+            -derivedDataPath Mirage/build/DD
+
+      - name: Remove beta entries and re-sign appcasts
+        shell: bash
+        env:
+          BUILD_NUMBER: ${{ inputs.build_number }}
+          GH_TOKEN: ${{ github.token }}
+          MIRAGE_SPARKLE_PRIVATE_KEY: ${{ secrets.MIRAGE_SPARKLE_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          [[ -n "$MIRAGE_SPARKLE_PRIVATE_KEY" ]] || {
+            echo '::error::Repository secret MIRAGE_SPARKLE_PRIVATE_KEY is missing.'
+            exit 1
+          }
+
+          latest_release="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest")"
+          latest_tag="$(jq -r '.tag_name' <<< "$latest_release")"
+          tool='Mirage/build/DD/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_appcast'
+          test -x "$tool"
+
+          for arch in x86_64 arm64; do
+            feed="update-feeds/appcast-${arch}.xml"
+            appcast_dir="$RUNNER_TEMP/appcast-${arch}"
+            mkdir -p "$appcast_dir"
+            cp "$feed" "$appcast_dir/appcast-${arch}.xml"
+
+            python3 - "$appcast_dir/appcast-${arch}.xml" "$BUILD_NUMBER" <<'PY'
+          import pathlib
+          import re
+          import sys
+
+          path = pathlib.Path(sys.argv[1])
+          build = sys.argv[2]
+          source = path.read_text(encoding="utf-8")
+          item_pattern = re.compile(r"(?ms)^[ \t]*<item>\n.*?^[ \t]*</item>\n?")
+          removed = 0
+
+          def keep_or_remove(match: re.Match[str]) -> str:
+              global removed
+              item = match.group(0)
+              is_beta = "<sparkle:channel>beta</sparkle:channel>" in item
+              is_target = f"<sparkle:version>{build}</sparkle:version>" in item
+              if is_beta and is_target:
+                  removed += 1
+                  return ""
+              return item
+
+          updated = item_pattern.sub(keep_or_remove, source)
+          if removed != 1:
+              raise SystemExit(
+                  f"expected exactly one beta item for build {build} in {path}, removed {removed}"
+              )
+          path.write_text(updated, encoding="utf-8")
+          PY
+
+            archive_name="$(jq -r --arg arch "$arch" \
+              '[.assets[].name | select(endswith("macOS-" + $arch + ".zip"))] | if length == 1 then .[0] else error("expected one stable archive for " + $arch) end' \
+              <<< "$latest_release")"
+            gh release download "$latest_tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --pattern "$archive_name" \
+              --dir "$appcast_dir"
+
+            archive_base="${archive_name%.zip}"
+            release_notes_source=".github/release-notes/${latest_tag}.md"
+            test -f "$release_notes_source"
+            cp "$release_notes_source" "$appcast_dir/${archive_base}.md"
+
+            latest_build="${archive_name#Mirage-}"
+            latest_build="${latest_build%%-*}"
+            printf '%s' "$MIRAGE_SPARKLE_PRIVATE_KEY" | "$tool" \
+              --ed-key-file - \
+              --download-url-prefix "https://github.com/${GITHUB_REPOSITORY}/releases/download/${latest_tag}/" \
+              --link "https://github.com/${GITHUB_REPOSITORY}" \
+              --embed-release-notes \
+              --versions "$latest_build" \
+              --maximum-versions 0 \
+              --maximum-deltas 0 \
+              "$appcast_dir"
+
+            cp "$appcast_dir/appcast-${arch}.xml" "$feed"
+            xmllint --noout "$feed"
+            if grep -A 12 -B 4 "<sparkle:version>${BUILD_NUMBER}</sparkle:version>" "$feed" \
+              | grep -q '<sparkle:channel>beta</sparkle:channel>'; then
+              echo "::error::Beta build $BUILD_NUMBER remains in $feed."
+              exit 1
+            fi
+          done
+
+      - name: Publish update feeds
+        shell: bash
+        env:
+          BUILD_NUMBER: ${{ inputs.build_number }}
+        run: |
+          set -euo pipefail
+          git -C update-feeds config user.name 'github-actions[bot]'
+          git -C update-feeds config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git -C update-feeds add appcast-x86_64.xml appcast-arm64.xml
+          git -C update-feeds diff --cached --quiet && {
+            echo '::error::No feed changes were produced.'
+            exit 1
+          }
+          git -C update-feeds commit -m "chore(update): remove beta build $BUILD_NUMBER"
+          git -C update-feeds push origin HEAD:update-feeds

@@ -5,6 +5,7 @@
 //
 
 import SwiftUI
+import Observation
 import Combine
 import AppKit
 
@@ -25,7 +26,8 @@ final class WorkshopDownloadStore: ObservableObject {
     }
 }
 
-class WorkshopViewModel: ObservableObject {
+@Observable
+class WorkshopViewModel {
     struct SubscriptionDownloadPlan {
         let subscriptionCount: Int
         let remainingCount: Int
@@ -36,62 +38,63 @@ class WorkshopViewModel: ObservableObject {
 
     // MARK: - Browse State
 
-    @Published var items: [WorkshopItem] = []
-    @Published var searchText: String = ""
-    @Published var selectedTags: Set<String> = []
-    @Published var sortOrder: WorkshopSortOrder = .trending
-    @Published var trendPeriod: WorkshopTrendPeriod = .week
-    @Published var typeFilter: WorkshopTypeFilter = .all
-    @Published var workshopShowOnly: FRShowOnly = .none {
+    var items: [WorkshopItem] = []
+    var searchText: String = "" {
+        didSet {
+            if searchText != oldValue { searchChanges.send(searchText) }
+        }
+    }
+    var selectedTags: Set<String> = []
+    var sortOrder: WorkshopSortOrder = .trending
+    var trendPeriod: WorkshopTrendPeriod = .week
+    var selectedTypeFilters: Set<WorkshopTypeFilter> = [.all]
+    var workshopShowOnly: FRShowOnly = .none {
         didSet {
             guard workshopShowOnly != oldValue else { return }
             UserDefaults.standard.set(workshopShowOnly.rawValue, forKey: Self.workshopShowOnlyStorageKey)
         }
     }
-    /// `@Published` + manual persistence rather than `@AppStorage`: SwiftUI does
-    /// not route `@AppStorage` writes inside an `ObservableObject` through
-    /// `objectWillChange`, which would leave the sidebar checkboxes stale.
-    @Published var ageRatingFilter: WorkshopAgeRatingFilter = .default {
+    var ageRatingFilter: WorkshopAgeRatingFilter = .default {
         didSet {
             guard ageRatingFilter != oldValue else { return }
             UserDefaults.standard.set(ageRatingFilter.rawValue, forKey: Self.ageRatingStorageKey)
         }
     }
-    @Published var widescreenResolution = FRWidescreenResolution.all {
+    var widescreenResolution = FRWidescreenResolution.all {
         didSet { UserDefaults.standard.set(widescreenResolution.rawValue, forKey: "WorkshopWidescreenResolution") }
     }
-    @Published var ultraWidescreenResolution = FRUltraWidescreenResolution.all {
+    var ultraWidescreenResolution = FRUltraWidescreenResolution.all {
         didSet { UserDefaults.standard.set(ultraWidescreenResolution.rawValue, forKey: "WorkshopUltraWidescreenResolution") }
     }
-    @Published var dualscreenResolution = FRDualscreenResolution.all {
+    var dualscreenResolution = FRDualscreenResolution.all {
         didSet { UserDefaults.standard.set(dualscreenResolution.rawValue, forKey: "WorkshopDualscreenResolution") }
     }
-    @Published var triplescreenResolution = FRTriplescreenResolution.all {
+    var triplescreenResolution = FRTriplescreenResolution.all {
         didSet { UserDefaults.standard.set(triplescreenResolution.rawValue, forKey: "WorkshopTriplescreenResolution") }
     }
-    @Published var portraitResolution = FRPortraitScreenResolution.all {
+    var portraitResolution = FRPortraitScreenResolution.all {
         didSet { UserDefaults.standard.set(portraitResolution.rawValue, forKey: "WorkshopPortraitResolution") }
     }
-    @Published var miscResolution = FRMiscResolution.all {
+    var miscResolution = FRMiscResolution.all {
         didSet { UserDefaults.standard.set(miscResolution.rawValue, forKey: "WorkshopMiscResolution") }
     }
-    @Published var currentPage: Int = 1
-    @Published var totalItems: Int = 0
-    @Published var isLoading: Bool = false
-    @Published var error: String?
-    @Published var pageNavigationMessage: String?
-    @Published private(set) var knownCreators: [WorkshopCreator] = []
+    var currentPage: Int = 1
+    var totalItems: Int = 0
+    var isLoading: Bool = false
+    var error: String?
+    var pageNavigationMessage: String?
+    private(set) var knownCreators: [WorkshopCreator] = []
 
-    @Published var selectedItem: WorkshopItem?
-    @Published var showCustomization: Bool = false
-    @Published var selectedCreator: WorkshopCreator?
-    @Published var showCreatorProfile: Bool = false
+    var selectedItem: WorkshopItem?
+    var showCustomization: Bool = false
+    var selectedCreator: WorkshopCreator?
+    var showCreatorProfile: Bool = false
 
-    @Published var creatorItems: [WorkshopItem] = []
-    @Published var isLoadingCreatorItems = false
-    @Published var creatorItemsError: String?
-    @Published var creatorItemsPage = 1
-    @Published var creatorItemsTotal = 0
+    var creatorItems: [WorkshopItem] = []
+    var isLoadingCreatorItems = false
+    var creatorItemsError: String?
+    var creatorItemsPage = 1
+    var creatorItemsTotal = 0
     var creatorItemsPerPage: Int {
         let stored = UserDefaults.standard.integer(forKey: "CreatorPerPage")
         return stored > 0 ? stored : 10
@@ -106,13 +109,14 @@ class WorkshopViewModel: ObservableObject {
 
     // MARK: - Discover State
 
-    @Published private(set) var discoverItems: [WorkshopDiscoverCategory: [WorkshopItem]] = [:]
-    @Published var discoverTrendPeriod: WorkshopTrendPeriod = .week
-    @Published var isDiscoverLoading: Bool = false
-
-    var bannerItems: [WorkshopItem] {
-        Array((discoverItems[.trending] ?? []).prefix(5))
-    }
+    private(set) var discoverRows: [DiscoverRow] = []
+    private(set) var discoverBrowse: DiscoverBrowseState?
+    var discoverSearchText = ""
+    var isDiscoverLoading: Bool = false
+    private(set) var discoverError: String?
+    private(set) var discoverSelectedItemID: String?
+    private(set) var isDiscoverDetailLoading = false
+    private(set) var discoverDetailError: String?
 
     // MARK: - Download State
 
@@ -124,63 +128,69 @@ class WorkshopViewModel: ObservableObject {
         get { downloadStore.queue }
         set { downloadStore.queue = newValue }
     }
-    @Published var downloadHistory: [DownloadTask] = []
-    @Published var presetDependencyPrompt: PresetDependencyPrompt?
+    var downloadHistory: [DownloadTask] = []
+    var presetDependencyPrompt: PresetDependencyPrompt?
 
-    @Published private(set) var subscriptionRecords: [WorkshopSubscription] = []
-    @Published private(set) var subscriptionCatalogItems: [WorkshopItem] = []
-    @Published private(set) var subscriptionItems: [WorkshopItem] = []
-    @Published private(set) var subscriptionTotal = 0
-    @Published private(set) var subscriptionStartIndex = 0
-    @Published private(set) var isLoadingSubscriptions = false
-    @Published private(set) var subscriptionsError: String?
-    @Published var subscriptionSearchText = ""
-    @Published var subscriptionSelectedTags: Set<String> = []
-    @Published var subscriptionTypeFilter: WorkshopTypeFilter = .all
-    @Published var subscriptionShowOnly: FRShowOnly = .none {
+    private(set) var subscriptionRecords: [WorkshopSubscription] = []
+    private(set) var subscriptionCatalogItems: [WorkshopItem] = []
+    private(set) var subscriptionItems: [WorkshopItem] = []
+    private(set) var subscriptionTotal = 0
+    private(set) var subscriptionStartIndex = 0
+    private(set) var isLoadingSubscriptions = false
+    private(set) var subscriptionsError: String?
+    var subscriptionSearchText = "" {
+        didSet {
+            if subscriptionSearchText != oldValue {
+                subscriptionSearchChanges.send(subscriptionSearchText)
+            }
+        }
+    }
+    var subscriptionSelectedTags: Set<String> = []
+    var subscriptionSelectedTypeFilters: Set<WorkshopTypeFilter> = [.all]
+    var subscriptionShowOnly: FRShowOnly = .none {
         didSet {
             guard subscriptionShowOnly != oldValue else { return }
             UserDefaults.standard.set(subscriptionShowOnly.rawValue, forKey: Self.subscriptionShowOnlyStorageKey)
         }
     }
-    @Published var subscriptionAgeRatingFilter: WorkshopAgeRatingFilter = .all
-    @Published var subscriptionWidescreenResolution = FRWidescreenResolution.all
-    @Published var subscriptionUltraWidescreenResolution = FRUltraWidescreenResolution.all
-    @Published var subscriptionDualscreenResolution = FRDualscreenResolution.all
-    @Published var subscriptionTriplescreenResolution = FRTriplescreenResolution.all
-    @Published var subscriptionPortraitResolution = FRPortraitScreenResolution.all
-    @Published var subscriptionMiscResolution = FRMiscResolution.all
-    @Published private(set) var subscriptionStates: [String: WorkshopSubscriptionState] = [:]
-    @Published private(set) var checkingSubscriptionIDs: Set<String> = []
-    @Published private(set) var changingSubscriptionIDs: Set<String> = []
-    @Published private(set) var subscriptionActionError: String?
-    @Published private(set) var subscriptionActionErrorItemID: String?
-    @Published private(set) var workshopFavoriteIDs: Set<String> = []
-    @Published private(set) var changingFavoriteIDs: Set<String> = []
-    @Published private(set) var favoriteActionError: String?
-    @Published private(set) var favoriteActionErrorItemID: String?
-    @Published private(set) var isPreparingSubscriptionDownloads = false
-    @Published private(set) var subscriptionDownloadPlan: SubscriptionDownloadPlan?
+    var subscriptionAgeRatingFilter: WorkshopAgeRatingFilter = .all
+    var subscriptionWidescreenResolution = FRWidescreenResolution.all
+    var subscriptionUltraWidescreenResolution = FRUltraWidescreenResolution.all
+    var subscriptionDualscreenResolution = FRDualscreenResolution.all
+    var subscriptionTriplescreenResolution = FRTriplescreenResolution.all
+    var subscriptionPortraitResolution = FRPortraitScreenResolution.all
+    var subscriptionMiscResolution = FRMiscResolution.all
+    private(set) var subscriptionStates: [String: WorkshopSubscriptionState] = [:]
+    private(set) var checkingSubscriptionIDs: Set<String> = []
+    private(set) var changingSubscriptionIDs: Set<String> = []
+    private(set) var subscriptionActionError: String?
+    private(set) var subscriptionActionErrorItemID: String?
+    private(set) var workshopFavoriteIDs: Set<String> = []
+    private(set) var changingFavoriteIDs: Set<String> = []
+    private(set) var favoriteActionError: String?
+    private(set) var favoriteActionErrorItemID: String?
+    private(set) var isPreparingSubscriptionDownloads = false
+    private(set) var subscriptionDownloadPlan: SubscriptionDownloadPlan?
 
-    @Published private(set) var comments: [WorkshopComment] = []
-    @Published private(set) var commentsTotal = 0
-    @Published private(set) var commentsStartIndex = 0
-    @Published private(set) var commentsNextStartIndex = 0
-    @Published private(set) var commentsCanPost = false
-    @Published private(set) var commentsItemID: String?
-    @Published private(set) var isLoadingComments = false
-    @Published private(set) var commentsError: String?
-    @Published private(set) var commentAuthors: [String: WorkshopCreator] = [:]
-    @Published var commentDraft = ""
-    @Published private(set) var isPostingComment = false
+    private(set) var comments: [WorkshopComment] = []
+    private(set) var commentsTotal = 0
+    private(set) var commentsStartIndex = 0
+    private(set) var commentsNextStartIndex = 0
+    private(set) var commentsCanPost = false
+    private(set) var commentsItemID: String?
+    private(set) var isLoadingComments = false
+    private(set) var commentsError: String?
+    private(set) var commentAuthors: [String: WorkshopCreator] = [:]
+    var commentDraft = ""
+    private(set) var isPostingComment = false
 
     // MARK: - Sync State
     // MARK: - Steam service state
 
-    @Published var steamSetupState: SteamSetupState = .checking
-    @Published var steamServiceStatus = SteamServiceStatus()
-    @Published var logoutResultMessage: String?
-    @Published var isLoggingOut = false
+    var steamSetupState: SteamSetupState = .checking
+    var steamServiceStatus = SteamServiceStatus()
+    var logoutResultMessage: String?
+    var isLoggingOut = false
 
     var steamCheckingMessage: String {
         SteamServiceManager.shared.savedUsername.isEmpty
@@ -238,7 +248,7 @@ class WorkshopViewModel: ObservableObject {
         !subscriptionShowOnly.isEmpty ||
             !subscriptionSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
             (!subscriptionSelectedTags.isEmpty && !allSubscriptionTagsSelected) ||
-            subscriptionTypeFilter != .all ||
+            subscriptionSelectedTypeFilters.normalizedWorkshopTypes != [.all] ||
             (!subscriptionAgeRatingFilter.isEmpty && subscriptionAgeRatingFilter != .all) ||
             !allSubscriptionResolutionsSelected
     }
@@ -254,6 +264,8 @@ class WorkshopViewModel: ObservableObject {
 
     private var searchDebounce: AnyCancellable?
     private var subscriptionSearchDebounce: AnyCancellable?
+    private let searchChanges = CurrentValueSubject<String, Never>("")
+    private let subscriptionSearchChanges = CurrentValueSubject<String, Never>("")
     private var serviceStateCancellables = Set<AnyCancellable>()
     private var cancelledDownloadIDs: Set<String> = []
     private var pendingPresetApplication: (presetID: String, dependencyID: String, selectionGeneration: Int)?
@@ -261,6 +273,11 @@ class WorkshopViewModel: ObservableObject {
     private var backgroundAutoApplyIDs: Set<String> = []
     private var searchTask: Task<Void, Never>?
     private var discoverTask: Task<Void, Never>?
+    private var discoverRowTasks: [String: Task<Void, Never>] = [:]
+    private var discoverRowRequestIDs: [String: UUID] = [:]
+    private var discoverBrowseTask: Task<Void, Never>?
+    private var discoverBrowseRequestID: UUID?
+    private var discoverDetailTask: Task<Void, Never>?
     private var searchGeneration = 0
     private var discoverGeneration = 0
     private var subscriptionGeneration = 0
@@ -299,7 +316,7 @@ class WorkshopViewModel: ObservableObject {
             miscResolution = FRMiscResolution(rawValue: raw)
         }
 
-        searchDebounce = $searchText
+        searchDebounce = searchChanges
             .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
             .removeDuplicates()
             .sink { [weak self] _ in
@@ -307,7 +324,7 @@ class WorkshopViewModel: ObservableObject {
                 self?.search()
             }
 
-        subscriptionSearchDebounce = $subscriptionSearchText
+        subscriptionSearchDebounce = subscriptionSearchChanges
             .debounce(for: .milliseconds(300), scheduler: RunLoop.main)
             .removeDuplicates()
             .sink { [weak self] _ in
@@ -389,44 +406,55 @@ class WorkshopViewModel: ObservableObject {
     // still need their base wallpaper), rebuilt on a background queue whenever
     // the library could have changed.
 
-    @Published private(set) var installedWorkshopIDs: Set<String> = []
-    @Published private(set) var presetsNeedingDependency: Set<String> = []
+    private(set) var installedWorkshopIDs: Set<String> = []
+    private(set) var presetsNeedingDependency: Set<String> = []
     /// Workshop metadata is loaded lazily for the selected local wallpaper.
     /// Keeping it here lets the library and Workshop views share one cache
     /// without scanning or requesting metadata for the whole library.
-    @Published private(set) var installedWorkshopItems: [String: WorkshopItem] = [:]
+    private(set) var installedWorkshopItems: [String: WorkshopItem] = [:]
 
-    private let installedScanQueue = DispatchQueue(
-        label: "cn.laobamac.Mirage.workshop.installed", qos: .utility)
+    private struct InstalledSnapshot {
+        var wallpapers: [String: WEWallpaper] = [:]
+        var needsDependency: Set<String> = []
+    }
+
+    private(set) var cachedInstalledWallpapers: [String: WEWallpaper] = [:]
+    private var shouldReconcileInstalledDownloads = false
+    private let installedScanner = LatestValueWorker<Void, InstalledSnapshot>(
+        label: "cn.laobamac.Mirage.workshop.installed"
+    ) { _ in
+        var snapshot = InstalledSnapshot()
+        for url in WallpaperLibrary.shared.allWallpaperURLs() {
+            let workshopID = url.lastPathComponent
+            if snapshot.wallpapers[workshopID]?.presentationIsValid == true { continue }
+            let wallpaper = WEWallpaper.load(from: url)
+            if let previous = snapshot.wallpapers[workshopID], previous.isPreset,
+               !wallpaper.presentationIsValid { continue }
+            snapshot.wallpapers[workshopID] = wallpaper
+        }
+        snapshot.needsDependency = Set(snapshot.wallpapers.compactMap {
+            $0.value.needsPresetDependency ? $0.key : nil
+        })
+        return snapshot
+    }
     private var requestedInstalledMetadataIDs: Set<String> = []
 
     func refreshInstalledState(reconcileDownloads: Bool = false) {
-        installedScanQueue.async { [weak self] in
+        shouldReconcileInstalledDownloads = shouldReconcileInstalledDownloads || reconcileDownloads
+        installedScanner.submit(()) { [weak self] snapshot in
             guard let self else { return }
-            let directories = WallpaperLibrary.shared.allWorkshopIDDirectories()
-            var installed = Set<String>()
-            var needsDependency = Set<String>()
-            installed.reserveCapacity(directories.count)
-            for (workshopID, url) in directories {
-                installed.insert(workshopID)
-                let wallpaper = WEWallpaper.load(from: url)
-                if wallpaper.needsPresetDependency {
-                    needsDependency.insert(workshopID)
-                }
+            let installed = Set(snapshot.wallpapers.keys)
+            if self.installedWorkshopIDs != installed { self.installedWorkshopIDs = installed }
+            if self.presetsNeedingDependency != snapshot.needsDependency {
+                self.presetsNeedingDependency = snapshot.needsDependency
             }
-            DispatchQueue.main.async {
-                if self.installedWorkshopIDs != installed {
-                    self.installedWorkshopIDs = installed
-                }
-                if self.presetsNeedingDependency != needsDependency {
-                    self.presetsNeedingDependency = needsDependency
-                }
-                if reconcileDownloads {
-                    self.downloadQueue.removeAll { task in
-                        guard !installed.contains(task.id) else { return false }
-                        if case .completed = task.state { return true }
-                        return false
-                    }
+            self.cachedInstalledWallpapers = snapshot.wallpapers
+            if self.shouldReconcileInstalledDownloads {
+                self.shouldReconcileInstalledDownloads = false
+                self.downloadQueue.removeAll { task in
+                    guard !installed.contains(task.id) else { return false }
+                    if case .completed = task.state { return true }
+                    return false
                 }
             }
         }
@@ -581,7 +609,7 @@ class WorkshopViewModel: ObservableObject {
         let requestSearchText = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         let requestTags = Array(selectedTags)
         let requestSortOrder = sortOrder
-        let requestTypeFilter = typeFilter
+        let requestTypeFilters = selectedTypeFilters.normalizedWorkshopTypes
         let requestShowOnly = workshopShowOnly
         let requestFavoriteIDs = SteamServiceManager.shared.workshopFavoriteIDs
         let requestAgeRating = ageRatingFilter
@@ -629,7 +657,7 @@ class WorkshopViewModel: ObservableObject {
                         searchText: requestSearchText,
                         tags: requestTags,
                         sortOrder: requestSortOrder,
-                        typeFilter: requestTypeFilter,
+                        typeFilters: requestTypeFilters,
                         ageRating: requestAgeRating,
                         widescreenResolution: requestWidescreenResolution,
                         ultraWidescreenResolution: requestUltraWidescreenResolution,
@@ -801,6 +829,35 @@ class WorkshopViewModel: ObservableObject {
         search()
     }
 
+    private static func updatedTypeSelection(
+        _ selection: Set<WorkshopTypeFilter>,
+        filter: WorkshopTypeFilter,
+        isOn: Bool
+    ) -> Set<WorkshopTypeFilter> {
+        var updated = selection.normalizedWorkshopTypes
+        if filter == .all {
+            return isOn ? [.all] : updated
+        }
+        if isOn {
+            updated.remove(.all)
+            updated.insert(filter)
+        } else {
+            updated.remove(filter)
+            if updated.isEmpty {
+                updated = [.all]
+            }
+        }
+        return updated
+    }
+
+    func setWorkshopTypeFilter(_ filter: WorkshopTypeFilter, isOn: Bool) {
+        let updated = Self.updatedTypeSelection(selectedTypeFilters, filter: filter, isOn: isOn)
+        guard updated != selectedTypeFilters else { return }
+        selectedTypeFilters = updated
+        currentPage = 1
+        search()
+    }
+
     func applyTagFilter(_ tag: String) {
         if selectedTags.contains(tag) {
             selectedTags.remove(tag)
@@ -878,7 +935,7 @@ class WorkshopViewModel: ObservableObject {
     func clearFilters() {
         selectedTags.removeAll()
         searchText = ""
-        typeFilter = .all
+        selectedTypeFilters = [.all]
         workshopShowOnly = .none
         sortOrder = .trending
         trendPeriod = .week
@@ -898,49 +955,25 @@ class WorkshopViewModel: ObservableObject {
     func loadDiscover(force: Bool = false) {
         if isDiscoverLoading && !force { return }
         discoverTask?.cancel()
+        discoverRowTasks.values.forEach { $0.cancel() }
+        discoverRowTasks.removeAll()
+        discoverRowRequestIDs.removeAll()
         discoverGeneration += 1
         let generation = discoverGeneration
-        let period = discoverTrendPeriod
         isDiscoverLoading = true
+        discoverError = nil
 
         discoverTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            let loaded = await withTaskGroup(
-                of: (WorkshopDiscoverCategory, [WorkshopItem])?.self,
-                returning: [WorkshopDiscoverCategory: [WorkshopItem]].self
-            ) { group in
-                for category in WorkshopDiscoverCategory.allCases {
-                    group.addTask {
-                        guard !Task.isCancelled else { return nil }
-                        let items = try? await SteamWebAPI.shared.fetchDiscover(
-                            category: category,
-                            period: period,
-                            count: category == .trending ? 15 : 12
-                        )
-                        guard let items else { return nil }
-                        return (category, items)
-                    }
-                }
-                var sections: [WorkshopDiscoverCategory: [WorkshopItem]] = [:]
-                for await result in group {
-                    if let (category, items) = result {
-                        sections[category] = items
-                    }
-                }
-                return sections
+            do {
+                let definitions = try await WallpaperEngineExploreAPI.shared.fetch(force: force)
+                guard !Task.isCancelled, generation == self.discoverGeneration else { return }
+                self.discoverRows = DiscoverFeedBuilder.build(definitions: definitions)
+            } catch {
+                guard !Task.isCancelled, generation == self.discoverGeneration else { return }
+                self.discoverRows = []
+                self.discoverError = error.localizedDescription
             }
-
-            guard !Task.isCancelled, generation == self.discoverGeneration else { return }
-            let enriched = await SteamWebAPI.shared.enrichCreatorDetails(
-                in: loaded.values.flatMap { $0 }
-            )
-            guard !Task.isCancelled, generation == self.discoverGeneration else { return }
-            let byID = Dictionary(enriched.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-            self.discoverItems = loaded.mapValues { items in
-                items.map { byID[$0.id] ?? $0 }
-            }
-            self.rememberCreators(in: enriched)
-            self.refreshSubscriptionStates(for: enriched)
             if generation == self.discoverGeneration {
                 self.isDiscoverLoading = false
             }
@@ -948,7 +981,226 @@ class WorkshopViewModel: ObservableObject {
     }
 
     func refreshDiscover() {
+        if let browse = discoverBrowse {
+            loadDiscoverBrowsePage(browse.page)
+            return
+        }
         loadDiscover(force: true)
+    }
+
+    func performDiscoverSearch() {
+        let search = discoverSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !search.isEmpty else { return }
+        openDiscoverQuery(DiscoverFeedBuilder.searchRow(text: search).query)
+    }
+
+    func clearDiscoverSearch() {
+        discoverSearchText = ""
+    }
+
+    func loadDiscoverRow(id: String) {
+        requestDiscoverRow(id: id, page: 1, replacing: true)
+    }
+
+    func openDiscoverRow(id: String) {
+        guard let query = discoverRows.first(where: { $0.id == id })?.query else { return }
+        openDiscoverQuery(query)
+    }
+
+    func closeDiscoverBrowse() {
+        discoverBrowseTask?.cancel()
+        discoverBrowseTask = nil
+        discoverBrowseRequestID = nil
+        discoverBrowse = nil
+    }
+
+    func goToDiscoverBrowsePage(_ page: Int) {
+        guard let browse = discoverBrowse else { return }
+        let clamped = max(1, min(page, browse.totalPages))
+        guard clamped != browse.page else { return }
+        loadDiscoverBrowsePage(clamped)
+    }
+
+    private func openDiscoverQuery(_ query: DiscoverQuery) {
+        discoverBrowseTask?.cancel()
+        discoverBrowse = DiscoverBrowseState(query: query)
+        loadDiscoverBrowsePage(1)
+    }
+
+    private func loadDiscoverBrowsePage(_ page: Int) {
+        guard var browse = discoverBrowse else { return }
+        let clamped = max(1, min(page, browse.totalPages))
+        let requestID = UUID()
+        discoverBrowseTask?.cancel()
+        discoverBrowseRequestID = requestID
+        browse.page = clamped
+        browse.items = []
+        browse.isLoading = true
+        browse.error = nil
+        discoverBrowse = browse
+
+        discoverBrowseTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let result = try await self.fetchDiscoverResults(
+                    query: browse.query,
+                    page: clamped,
+                    perPage: 50
+                )
+                guard !Task.isCancelled,
+                      self.discoverBrowseRequestID == requestID,
+                      self.discoverBrowse?.query.id == browse.query.id else { return }
+                var updated = self.discoverBrowse ?? browse
+                updated.items = result.items
+                updated.total = result.total
+                updated.page = min(clamped, updated.totalPages)
+                updated.isLoading = false
+                self.discoverBrowse = updated
+                self.rememberCreators(in: result.items)
+                self.refreshSubscriptionStates(for: result.items)
+            } catch {
+                guard !Task.isCancelled,
+                      self.discoverBrowseRequestID == requestID,
+                      self.discoverBrowse?.query.id == browse.query.id else { return }
+                var updated = self.discoverBrowse ?? browse
+                updated.isLoading = false
+                updated.error = error.localizedDescription
+                self.discoverBrowse = updated
+            }
+        }
+    }
+
+    func selectDiscoverItem(_ item: WorkshopItem) {
+        selectionGeneration += 1
+        let generation = selectionGeneration
+        discoverDetailTask?.cancel()
+        discoverSelectedItemID = item.publishedFileId
+        discoverDetailError = nil
+        isDiscoverDetailLoading = true
+        selectedItem = nil
+        showCustomization = false
+        showCreatorProfile = false
+        selectedCreator = nil
+
+        discoverDetailTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let details = try await SteamWebAPI.shared.getFileDetails(
+                    workshopIds: [item.publishedFileId]
+                )
+                guard !Task.isCancelled,
+                      generation == self.selectionGeneration,
+                      self.discoverSelectedItemID == item.publishedFileId else { return }
+                guard let detail = details.first else {
+                    throw SteamAPIError.invalidResponse
+                }
+                self.isDiscoverDetailLoading = false
+                self.selectedItem = detail
+                self.rememberCreators(in: [detail])
+                self.prepareWorkshopInteractions(for: detail)
+            } catch {
+                guard !Task.isCancelled,
+                      generation == self.selectionGeneration,
+                      self.discoverSelectedItemID == item.publishedFileId else { return }
+                self.isDiscoverDetailLoading = false
+                self.discoverDetailError = error.localizedDescription
+            }
+        }
+    }
+
+    private func requestDiscoverRow(id: String, page: Int, replacing: Bool) {
+        guard discoverRowTasks[id] == nil,
+              let index = discoverRows.firstIndex(where: { $0.id == id }) else { return }
+        if replacing && !discoverRows[index].items.isEmpty { return }
+        let query = discoverRows[index].query
+        let generation = discoverGeneration
+        let requestID = UUID()
+        discoverRowRequestIDs[id] = requestID
+        discoverRows[index].isLoading = true
+        discoverRows[index].error = nil
+
+        discoverRowTasks[id] = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                if self.discoverRowRequestIDs[id] == requestID {
+                    self.discoverRowTasks[id] = nil
+                    self.discoverRowRequestIDs[id] = nil
+                }
+            }
+            do {
+                let result = try await self.fetchDiscoverResults(query: query, page: page, perPage: 12)
+                guard !Task.isCancelled,
+                      generation == self.discoverGeneration,
+                      let currentIndex = self.discoverRows.firstIndex(where: { $0.id == id }) else { return }
+                let visibleItems = result.items
+                if replacing {
+                    self.discoverRows[currentIndex].items = visibleItems
+                } else {
+                    let existing = Set(self.discoverRows[currentIndex].items.map(\.id))
+                    self.discoverRows[currentIndex].items.append(contentsOf: visibleItems.filter { !existing.contains($0.id) })
+                }
+                self.discoverRows[currentIndex].total = result.total
+                self.discoverRows[currentIndex].page = page
+                self.discoverRows[currentIndex].isLoading = false
+                if case .creator(_, let sortMethod) = query.kind,
+                   let creatorName = visibleItems.first?.creatorName,
+                   !creatorName.isEmpty {
+                    self.discoverRows[currentIndex].query.title = sortMethod == "newestfirst"
+                        ? L("来自 %@ 的最新壁纸", creatorName)
+                        : L("来自 %@ 的热门壁纸", creatorName)
+                }
+                self.rememberCreators(in: visibleItems)
+                self.refreshSubscriptionStates(for: visibleItems)
+            } catch {
+                guard !Task.isCancelled,
+                      generation == self.discoverGeneration,
+                      let currentIndex = self.discoverRows.firstIndex(where: { $0.id == id }) else { return }
+                self.discoverRows[currentIndex].isLoading = false
+                self.discoverRows[currentIndex].error = error.localizedDescription
+            }
+        }
+    }
+
+    private func fetchDiscoverResults(
+        query: DiscoverQuery,
+        page: Int,
+        perPage: Int
+    ) async throws -> (items: [WorkshopItem], total: Int) {
+        let result: (items: [WorkshopItem], total: Int)
+        switch query.kind {
+        case .workshop:
+            result = try await SteamWebAPI.shared.queryDiscoverFiles(
+                searchText: query.searchText,
+                sortOrder: query.sortOrder,
+                requiredTags: query.requiredTags,
+                excludedTags: query.excludedTags,
+                page: page,
+                perPage: perPage,
+                trendDays: query.trendDays
+            )
+        case .creator(let steamId, let sortMethod):
+            result = try await SteamWebAPI.shared.getUserFiles(
+                steamId: steamId,
+                page: page,
+                perPage: perPage,
+                sortMethod: sortMethod,
+                requiredTags: query.requiredTags,
+                excludedTags: query.excludedTags,
+                enrichCreatorProfiles: true
+            )
+        case .collection(let collectionId):
+            result = try await SteamWebAPI.shared.getCollectionItems(
+                collectionId: collectionId,
+                page: page,
+                perPage: perPage
+            )
+        }
+        guard query.exact else { return result }
+        let items = result.items.filter { item in
+            item.title.localizedCaseInsensitiveContains(query.searchText) ||
+                item.itemDescription.localizedCaseInsensitiveContains(query.searchText)
+        }
+        return (items, result.total)
     }
 
     func setWorkshopShowOnly(_ option: FRShowOnly, isOn: Bool) {
@@ -1094,8 +1346,14 @@ class WorkshopViewModel: ObservableObject {
         refreshSubscriptionFilters()
     }
 
-    func setSubscriptionTypeFilter(_ filter: WorkshopTypeFilter) {
-        subscriptionTypeFilter = filter
+    func setSubscriptionTypeFilter(_ filter: WorkshopTypeFilter, isOn: Bool) {
+        let updated = Self.updatedTypeSelection(
+            subscriptionSelectedTypeFilters,
+            filter: filter,
+            isOn: isOn
+        )
+        guard updated != subscriptionSelectedTypeFilters else { return }
+        subscriptionSelectedTypeFilters = updated
         refreshSubscriptionFilters()
     }
 
@@ -1169,7 +1427,7 @@ class WorkshopViewModel: ObservableObject {
     func clearSubscriptionFilters() {
         subscriptionSearchText = ""
         subscriptionSelectedTags.removeAll()
-        subscriptionTypeFilter = .all
+        subscriptionSelectedTypeFilters = [.all]
         subscriptionShowOnly = .none
         subscriptionAgeRatingFilter = .all
         subscriptionWidescreenResolution = .all
@@ -1586,18 +1844,7 @@ class WorkshopViewModel: ObservableObject {
             }
         }
 
-        switch subscriptionTypeFilter {
-        case .all:
-            break
-        case .scene:
-            guard item.kind == .scene else { return false }
-        case .web:
-            guard item.kind == .web else { return false }
-        case .video:
-            guard item.kind == .video else { return false }
-        case .preset:
-            guard item.isPreset else { return false }
-        }
+        guard subscriptionSelectedTypeFilters.matches(item) else { return false }
 
         if !subscriptionAgeRatingFilter.isEmpty,
            subscriptionAgeRatingFilter != .all,
@@ -1609,7 +1856,7 @@ class WorkshopViewModel: ObservableObject {
         if !subscriptionSelectedTags.isEmpty,
            !selectableTags.isSubset(of: subscriptionSelectedTags) {
             let itemTags = Set(item.tags.map { $0.lowercased() })
-            guard subscriptionSelectedTags.allSatisfy({ itemTags.contains($0.lowercased()) }) else {
+            guard subscriptionSelectedTags.contains(where: { itemTags.contains($0.lowercased()) }) else {
                 return false
             }
         }
@@ -1690,26 +1937,33 @@ class WorkshopViewModel: ObservableObject {
         }
     }
 
+    func downloadTask(for workshopId: String) -> DownloadTask? {
+        downloadQueue.first(where: { $0.id == workshopId })
+    }
+
     func downloadState(for workshopId: String) -> DownloadState? {
         downloadStore.state(for: workshopId)
     }
 
     func selectWorkshopItem(_ item: WorkshopItem) {
         selectionGeneration += 1
+        let generation = selectionGeneration
         showCreatorProfile = false
         selectedCreator = nil
-        let installed = installedItem(workshopId: item.publishedFileId)
-        if let wallpaper = installed, wallpaper.needsPresetDependency {
-            showCustomization = false
-            selectedItem = item
-            requestPresetDependency(for: wallpaper)
-        } else if let wallpaper = installed, wallpaper.isValid {
-            AppDelegate.shared.wallpaperViewModel.requestApply(wallpaper)
-            showCustomization = true
-            selectedItem = item
-        } else {
-            showCustomization = false
-            selectedItem = item
+        selectedItem = item
+        showCustomization = false
+        if let wallpaper = cachedInstalledWallpapers[item.publishedFileId] {
+            let model = AppDelegate.shared.wallpaperViewModel
+            let key = model.selectedDisplayKey
+            model.prepareWallpaper(wallpaper, for: key) { [weak self, weak model] fresh in
+                guard let self, let model, self.selectionGeneration == generation else { return }
+                if fresh.needsPresetDependency {
+                    self.requestPresetDependency(for: fresh)
+                } else if fresh.presentationIsValid {
+                    model.requestPreparedWallpaper(fresh, to: key)
+                    self.showCustomization = true
+                }
+            }
         }
         prepareWorkshopInteractions(for: item)
     }
@@ -1797,7 +2051,7 @@ class WorkshopViewModel: ObservableObject {
     ) {
         selectedTags = [tag]
         searchText = ""
-        typeFilter = .all
+        selectedTypeFilters = [.all]
         sortOrder = .trending
         self.trendPeriod = trendPeriod
         showCustomization = false
@@ -1811,7 +2065,7 @@ class WorkshopViewModel: ObservableObject {
     ) {
         selectedTags.removeAll()
         searchText = ""
-        typeFilter = .all
+        selectedTypeFilters = [.all]
         sortOrder = sort
         self.trendPeriod = trendPeriod
         showCustomization = false
@@ -1837,7 +2091,7 @@ class WorkshopViewModel: ObservableObject {
                 self.subscriptionStartIndex = 0
                 self.subscriptionSearchText = ""
                 self.subscriptionSelectedTags = []
-                self.subscriptionTypeFilter = .all
+                self.subscriptionSelectedTypeFilters = [.all]
                 self.subscriptionAgeRatingFilter = .all
                 self.subscriptionWidescreenResolution = .all
                 self.subscriptionUltraWidescreenResolution = .all
@@ -1875,20 +2129,25 @@ class WorkshopViewModel: ObservableObject {
     // MARK: - Auto Apply
 
     func openInstalledWallpaper(_ wallpaper: WEWallpaper) {
-        // Re-resolve first: a stale `.missingDependency` would otherwise send
-        // the user to the "download the base wallpaper" prompt for a base that
-        // is already installed, leaving the preset permanently unclickable.
-        let fresh = WEWallpaper.load(from: wallpaper.wallpaperDirectory)
-        if fresh.needsPresetDependency {
-            showCreatorProfile = false
-            selectedCreator = nil
-            requestPresetDependency(for: fresh)
-        } else if fresh.isValid {
-            showCreatorProfile = false
-            selectedCreator = nil
-            AppDelegate.shared.wallpaperViewModel.requestApply(fresh)
-            showCustomization = true
-            selectedItem = nil
+        let model = AppDelegate.shared.wallpaperViewModel
+        let key = model.selectedDisplayKey
+        selectionGeneration += 1
+        let generation = selectionGeneration
+        model.prepareWallpaper(wallpaper, for: key) { [weak self, weak model] fresh in
+            guard let self, let model else { return }
+            if fresh.needsPresetDependency {
+                guard self.selectionGeneration == generation else { return }
+                self.showCreatorProfile = false
+                self.selectedCreator = nil
+                self.requestPresetDependency(for: fresh)
+            } else if fresh.presentationIsValid {
+                model.requestPreparedWallpaper(fresh, to: key)
+                guard self.selectionGeneration == generation else { return }
+                self.showCreatorProfile = false
+                self.selectedCreator = nil
+                self.showCustomization = true
+                self.selectedItem = nil
+            }
         }
     }
 

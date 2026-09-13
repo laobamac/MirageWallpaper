@@ -8,6 +8,7 @@
 #include <cerrno>
 #include <cmath>
 #include <cstdlib>
+#include <utility>
 #include <xlocale.h>
 
 import rstd.cppstd;
@@ -27,6 +28,8 @@ extern "C" void SceneRendererSetLiveMetalFrameCallback(
     void (*cb)(void*, uint32_t, uint32_t, void*), void* userdata);
 extern "C" void* SceneRendererMacMetalDisplayCreate(GLFWwindow* window);
 extern "C" void  SceneRendererMacMetalDisplayDestroy(void* handle);
+extern "C" void* SceneRendererMacMetalTextureRetain(void* texture);
+extern "C" void  SceneRendererMacMetalTextureRelease(void* texture);
 extern "C" void  SceneRendererMacMetalDisplayDraw(void* handle, void* texture, uint32_t width,
                                                   uint32_t height, void (*presented)(void*),
                                                   void* userdata);
@@ -64,13 +67,17 @@ void live_frame_callback(const uint8_t* rgba, uint32_t width, uint32_t height, v
 void live_metal_frame_callback(void* texture, uint32_t width, uint32_t height, void* userdata) {
     auto* state = static_cast<LiveMetalFrameState*>(userdata);
     if (state == nullptr || texture == nullptr || width == 0 || height == 0) return;
+    void* retained = SceneRendererMacMetalTextureRetain(texture);
+    if (retained == nullptr) return;
+    void* previous = nullptr;
     {
         std::scoped_lock lock(state->mutex);
-        state->texture = texture;
+        previous       = std::exchange(state->texture, retained);
         state->width   = width;
         state->height  = height;
         state->dirty   = true;
     }
+    SceneRendererMacMetalTextureRelease(previous);
     glfwPostEmptyEvent();
 }
 
@@ -80,7 +87,7 @@ void draw_live_metal_frame(void* display, LiveMetalFrameState& state) {
     {
         std::scoped_lock lock(state.mutex);
         if (! state.dirty) return;
-        texture     = state.texture;
+        texture     = std::exchange(state.texture, nullptr);
         width       = state.width;
         height      = state.height;
         state.dirty = false;
@@ -88,6 +95,17 @@ void draw_live_metal_frame(void* display, LiveMetalFrameState& state) {
     if (display != nullptr && texture != nullptr) {
         SceneRendererMacMetalDisplayDraw(display, texture, width, height, nullptr, nullptr);
     }
+    SceneRendererMacMetalTextureRelease(texture);
+}
+
+void clear_live_metal_frame(LiveMetalFrameState& state) {
+    void* texture = nullptr;
+    {
+        std::scoped_lock lock(state.mutex);
+        texture     = std::exchange(state.texture, nullptr);
+        state.dirty = false;
+    }
+    SceneRendererMacMetalTextureRelease(texture);
 }
 
 void draw_live_frame(GLFWwindow* window, LiveFrameState& state) {
@@ -474,6 +492,7 @@ int main(int argc, char** argv) {
         SceneRendererMacMetalDisplayDestroy(metal_display);
     }
     delete psw;
+    if (use_metal_display_fallback) clear_live_metal_frame(live_metal_frame_state);
     glfwDestroyWindow(window);
     if (surface_window && surface_window != window) glfwDestroyWindow(surface_window);
     glfwTerminate();

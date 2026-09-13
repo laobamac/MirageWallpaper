@@ -204,6 +204,8 @@ struct SceneRenderTarget {
     // Later graph versions of this RT keep earlier color content. Use this
     // for composition targets, not transient effect outputs.
     bool preserve_on_write { false };
+    bool hdr_format { false };
+    bool inherit_scene_format { true };
 
     i32 PhysicalWidth() const { return physical_width > 0 ? physical_width : width; }
     i32 PhysicalHeight() const { return physical_height > 0 ? physical_height : height; }
@@ -945,6 +947,10 @@ public:
     }
     void SetAspect(double aspect) { m_aspect = aspect; }
     void SetFov(double value) { m_fov = value; }
+    void SetProjectionOffset(double x, double y) {
+        m_projection_offset = { std::isfinite(x) ? x : 0.0, std::isfinite(y) ? y : 0.0 };
+    }
+    std::array<double, 2> ProjectionOffset() const { return m_projection_offset; }
 
     // Explicit eye/center/up view, used by perspective scenes (general
     // isOrtho==false) whose camera is given in WE world units rather than the
@@ -988,6 +994,7 @@ public:
         m_nearClip         = cam.m_nearClip;
         m_farClip          = cam.m_farClip;
         m_fov              = cam.m_fov;
+        m_projection_offset = cam.m_projection_offset;
         m_perspective      = cam.m_perspective;
         m_allowCameraShake = cam.m_allowCameraShake;
         m_lookat           = cam.m_lookat;
@@ -1012,6 +1019,7 @@ private:
     explicit SceneCamera(PerspectiveTag, double aspect, double near, double far, double fov)
         : m_aspect(aspect), m_nearClip(near), m_farClip(far), m_fov(fov), m_perspective(true) {}
     void            CalculateViewProjectionMatrix();
+    Eigen::Matrix4d ProjectionMatrix() const;
     Eigen::Matrix4d CalculateReflectionViewProjectionMatrix();
 
     double m_width { 1.0f };
@@ -1020,6 +1028,7 @@ private:
     double m_nearClip { 0.01f };
     double m_farClip { 1000.0f };
     double m_fov { 45.0f };
+    std::array<double, 2> m_projection_offset {};
     bool   m_perspective { false };
     bool   m_allowCameraShake { true };
 
@@ -1048,10 +1057,16 @@ struct SceneAnimationKey {
 
 enum class SceneAnimationPlaybackStatus { Playing, Paused, Stopped, Completed };
 
+struct SceneAnimationEvent {
+    std::int32_t frame { 0 };
+    std::string  name;
+};
+
 class SceneAnimationPlayback {
 public:
     SceneAnimationPlayback(std::string name, float fps, std::int32_t frame_count,
-                           std::string mode, bool wraploop, bool start_paused);
+                           std::string mode, bool wraploop, bool start_paused,
+                           std::vector<SceneAnimationEvent> events = {});
 
     void Tick(double runtime);
     void Play();
@@ -1059,6 +1074,7 @@ public:
     void Pause();
     void SetFrame(double frame);
     void SetRate(double rate);
+    std::vector<SceneAnimationEvent> ConsumeEvents();
 
     float                        Frame() const;
     bool                         IsPlaying() const;
@@ -1081,6 +1097,8 @@ private:
     double                       m_phase_frame { 0.0 };
     std::optional<double>        m_last_runtime;
     SceneAnimationPlaybackStatus m_status { SceneAnimationPlaybackStatus::Playing };
+    std::vector<SceneAnimationEvent> m_events;
+    std::vector<SceneAnimationEvent> m_pending_events;
 };
 
 struct SceneAnimationCurve {
@@ -1277,6 +1295,13 @@ public:
     // reading `thisLayer.size` then fall back to the legacy 100×100 stub.
     const auto& Size() const { return m_size; }
     void        SetSize(Eigen::Vector2f v) { m_size = v; }
+
+    const auto& HitCenter() const { return m_hit_center; }
+    bool        HasHitCenter() const { return m_has_hit_center; }
+    void        SetHitCenter(Eigen::Vector2f v) {
+        m_hit_center     = v;
+        m_has_hit_center = true;
+    }
     const auto& GeometryTransform() const { return m_geometry_transform; }
     void        SetGeometryTransform(Eigen::Matrix4d transform) {
         m_geometry_transform = std::move(transform);
@@ -1303,6 +1328,7 @@ public:
         return alpha;
     }
     bool  Visible() const { return m_visible; }
+    bool  Solid() const { return m_solid; }
     float UserAlpha() const { return m_user_alpha; }
     void  SetVisible(bool v) {
         if (m_sound_control && v != m_visible) {
@@ -1314,6 +1340,7 @@ public:
         m_visible            = v;
         m_visible_overridden = true;
     }
+    void SetSolid(bool v) { m_solid = v; }
     void SetUserAlpha(float v) {
         m_user_alpha       = v;
         m_alpha_overridden = true;
@@ -1338,11 +1365,15 @@ public:
         m_alpha_curve = std::move(curve);
     }
     void TickFieldAnimations(double runtime);
+    void RegisterAnimationPlayback(const std::shared_ptr<SceneAnimationPlayback>& playback);
+    std::vector<SceneAnimationEvent> ConsumeAnimationEvents();
     std::shared_ptr<SceneAnimationPlayback> FindAnimation(std::string_view name) const;
     bool HasFieldAnimations() const {
-        return m_origin_curve || m_scale_curve || m_rotation_curve || m_alpha_curve;
+        return m_origin_curve || m_scale_curve || m_rotation_curve || m_alpha_curve ||
+               ! m_field_animation_playbacks.empty();
     }
     void SetAlphaSource(SceneNode* node) { m_alpha_source = node; }
+    SceneNode* AlphaSource() const { return m_alpha_source; }
 
     const std::string& VisibleUserKey() const { return m_visible_user_binding.key; }
     void               SetVisibleUserKey(std::string k) {
@@ -1529,6 +1560,7 @@ public:
 
     SceneNodeId                     Identity() const { return m_identity; }
     std::optional<WallpaperLayerId> WallpaperIdentity() const { return m_wallpaper_identity; }
+    bool                            SceneScriptLayer() const { return m_scene_script_layer; }
 
     i32  ID() const { return m_id; }
     i32& ID() { return m_id; }
@@ -1541,6 +1573,7 @@ private:
 
     SceneNodeId                     m_identity;
     std::optional<WallpaperLayerId> m_wallpaper_identity;
+    bool                            m_scene_script_layer { false };
     i32                             m_id { -1 };
     std::string m_name;
 
@@ -1552,9 +1585,12 @@ private:
     Eigen::Vector3f m_rotation { 0.0f, 0.0f, 0.0f };
     Eigen::Matrix4d m_local_frame { Eigen::Matrix4d::Identity() };
     Eigen::Vector2f m_size { 0.0f, 0.0f };
+    Eigen::Vector2f m_hit_center { 0.0f, 0.0f };
+    bool            m_has_hit_center { false };
     Eigen::Matrix4d m_geometry_transform { Eigen::Matrix4d::Identity() };
 
     bool                               m_visible { true };
+    bool                               m_solid { true };
     SceneUserVisibilityBinding         m_visible_user_binding {};
     bool                               m_visible_overridden { false };
     float                              m_user_alpha { 1.0f };
@@ -1799,6 +1835,7 @@ struct ScenePostProcess {
     using Step = std::variant<ScenePostProcessPass, ScenePostProcessCopy>;
     std::string       name;
     std::vector<Step> steps;
+    bool              enabled { true };
 };
 
 // SceneLight + SceneLightType live in the `sr.scene:lighting` partition
@@ -2818,6 +2855,18 @@ public:
     Map<std::string, std::vector<std::function<void(const std::string&)>>> text_user_index;
     Map<std::string, std::vector<std::function<void(double)>>>             pointsize_user_index;
 
+    struct NodeScaleUserBinding {
+        rstd::sync::Arc<SceneNode> node;
+        Eigen::Vector3f            authored { Eigen::Vector3f::Ones() };
+        std::function<void()>      on_changed;
+    };
+    Map<std::string, std::vector<NodeScaleUserBinding>> node_scale_user_index;
+
+    Map<std::string, std::vector<std::function<void(float)>>> text_maxwidth_user_index;
+
+    Map<std::string, std::vector<std::weak_ptr<struct ScenePostProcess>>>
+        post_process_enable_user_index;
+
     // user-property key → setter closures for text layers whose `color` /
     // `alpha` field was authored as `{user:"<key>"}`. Text color/alpha are
     // baked into glyph vertex colors by the layouter (not a node uniform), so
@@ -2842,10 +2891,23 @@ public:
         return out;
     }
 
+    struct MaterialSolidColorNeutralization {
+        rstd::sync::Arc<SceneNode> node;
+        Eigen::Vector3f            authored_color { Eigen::Vector3f::Zero() };
+    };
+
     struct MaterialTextureUserBinding {
-        std::shared_ptr<SceneMaterial> material;
-        uint32_t                       slot { 0 };
-        std::string                    fallback;
+        enum class Kind
+        {
+            SceneTexture,
+            System,
+            UserShortcut,
+        };
+        std::shared_ptr<SceneMaterial>                  material;
+        uint32_t                                        slot { 0 };
+        std::string                                     fallback;
+        Kind                                            kind { Kind::SceneTexture };
+        std::optional<MaterialSolidColorNeutralization> solid_color;
     };
     Map<std::string, std::vector<MaterialTextureUserBinding>> material_texture_user_index;
 
@@ -2914,6 +2976,8 @@ public:
     bool uses_audio_spectrum { false };
     bool fog_distance_enabled { false };
     bool fog_height_enabled { false };
+    bool hdr_enabled { false };
+    bool hdr_render_targets { false };
 
     SceneMesh default_effect_mesh;
 
@@ -2969,9 +3033,11 @@ public:
     void        TickCameraPaths();
     std::optional<SceneCameraTransforms> ActiveCameraTransforms() const;
     bool SetActiveCameraTransforms(const SceneCameraTransforms& transforms);
+    std::optional<std::array<double, 2>> CursorPositionOnCanvas(double x, double y) const;
     void        TickMaterialShaderAnimations();
     void        CaptureCameraPathViewports();
     void        EnablePlanarReflection();
+    void        EnsurePlanarReflectionRenderTarget();
     bool        PlanarReflectionEnabled() const { return m_planar_reflection_enabled; }
     std::string EnsureLinkRenderTarget(WallpaperLayerId source_layer, const SceneNode& source_node);
     bool        EnsureTextureDescriptor(std::string_view key);
@@ -2986,6 +3052,10 @@ public:
          SetMaterialShaderVariant(SceneMaterial& material, SceneShaderVariantMutation mutation);
     void MarkLayerStaticElidable(WallpaperLayerId id);
     void MarkLayerVisibilityElidable(WallpaperLayerId id);
+    void EnableRuntimeLayerVisibility(WallpaperLayerId id);
+    bool RuntimeLayerVisibilityEnabled(WallpaperLayerId id) const {
+        return m_runtime_layer_visibility_ids.count(id.value) != 0;
+    }
     void RegisterRenderGroup(WallpaperLayerId id, std::string camera) {
         m_render_group_cameras[id.value] = std::move(camera);
     }
@@ -2995,6 +3065,8 @@ public:
         return it->second;
     }
     bool                                 SetNodeVisible(SceneNode& node, bool visible);
+    void RegisterPuppetAnimationVisibilityBinding(
+        std::string key, std::function<void(const Json&)> setter);
     std::vector<SceneMeshDirtyEvent>     ConsumePreparedMeshDirtyEvents();
     std::vector<SceneMaterialDirtyEvent> ConsumePreparedMaterialDirtyEvents();
     void                                 ClearUserPropertyDiagnostics(std::string_view key);
@@ -3007,8 +3079,10 @@ public:
     SceneNodeId               RegisterNode(
                       SceneNode& node,
                       std::optional<WallpaperLayerId> wallpaper = std::nullopt);
+    void                      RegisterScriptLayer(SceneNode& node);
     void                      AttachRuntimeNode(SceneNode& parent,
                                                 rstd::sync::Arc<SceneNode> node);
+    void                      RegisterAuthoredLayer(WallpaperLayerId id, i32 parent_id);
     std::optional<std::size_t> LayerIndex(const SceneNode& node) const;
     bool                       SortLayer(SceneNode& node, std::size_t index);
     SceneResourceIndex&       ResourceIndex() { return m_resource_index; }
@@ -3017,15 +3091,19 @@ public:
 
 private:
     Map<std::string, std::vector<std::function<void(std::string_view)>>> m_text_user_index;
+    Map<std::string, std::vector<std::function<void(const Json&)>>> puppet_animation_visibility_index;
 
     void RebuildElidableLayerIds();
 
     uint32_t                                 m_resource_generation { 0 };
     uint32_t                                 m_next_node_index { 0 };
     std::unordered_map<i32, SceneNodeId>     m_wallpaper_node_ids;
+    Map<i32, std::vector<i32>>               m_authored_layer_order;
+    Map<i32, i32>                            m_authored_layer_parents;
     SceneResourceIndex                       m_resource_index;
     bool                                     m_render_graph_dirty { false };
     bool                                     m_dynamic_topology_dirty { false };
+    Set<i32>                                 m_runtime_layer_visibility_ids;
     bool                                     m_planar_reflection_enabled { false };
     SceneProjectionKind                      m_projection_kind {
         SceneProjectionKind::OrthographicCanvas

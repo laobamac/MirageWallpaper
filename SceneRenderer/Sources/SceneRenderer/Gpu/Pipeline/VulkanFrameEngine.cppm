@@ -87,6 +87,9 @@ struct PreparedPassDiagnostic {
 };
 
 void UpdateCameraFillModeForExtent(Scene&, sr::FillMode, unsigned width, unsigned height);
+std::array<bool, 2> UpdateCameraPositionForExtent(Scene&, sr::FillMode, WallpaperPosition,
+                                                 unsigned width, unsigned height);
+std::array<i32, 2> ProjectedLayerPhysicalExtent(Scene&, SceneNode&, unsigned width, unsigned height);
 
 class VulkanRender {
 public:
@@ -122,6 +125,7 @@ public:
     // SceneMesh set survives.
     void evictUnusedMeshes();
     void UpdateCameraFillMode(Scene&, sr::FillMode);
+    std::array<bool, 2> UpdateCameraPosition(Scene&, sr::FillMode, WallpaperPosition);
 
     bool onSwapchainReady(unsigned width, unsigned height);
 

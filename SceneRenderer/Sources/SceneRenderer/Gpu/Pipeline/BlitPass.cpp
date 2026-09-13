@@ -20,6 +20,7 @@ CopyPass::~CopyPass() {};
 
 PassInvalidationFlags CopyPass::finalizeResourceRequests(Scene& scene) {
     PassInvalidationFlags flags = PassInvalidationNone;
+    ensureDestinationRenderTarget(scene);
     auto refresh                = [&scene](std::string_view name) -> std::optional<TextureRequest> {
         if (name.empty() || ! IsSpecTex(name)) return std::nullopt;
         auto it = scene.renderTargets.find(std::string(name));
@@ -33,8 +34,9 @@ PassInvalidationFlags CopyPass::finalizeResourceRequests(Scene& scene) {
     }
     auto dst_request = refresh(m_desc.dst);
     if (m_desc.dst_matches_src && m_desc.src_request) {
-        dst_request       = *m_desc.src_request;
-        dst_request->name = m_desc.dst;
+        dst_request          = *m_desc.src_request;
+        dst_request->name    = m_desc.dst;
+        dst_request->persist = false;
     }
     if (dst_request && SetTextureRequestIfChanged(m_desc.dst_request, std::move(dst_request))) {
         flags |= ToPassInvalidationFlags(PassInvalidation::Resources);
@@ -57,6 +59,16 @@ std::vector<PassTextureRequestDiagnostic> CopyPass::textureRequestDiagnostics() 
     };
 }
 
+void CopyPass::ensureDestinationRenderTarget(Scene& scene) {
+    if (m_desc.src.empty() || m_desc.dst.empty()) return;
+    if (scene.renderTargets.count(m_desc.dst) != 0) return;
+    auto it = scene.renderTargets.find(m_desc.src);
+    if (it == scene.renderTargets.end()) return;
+    auto rt                         = it->second;
+    rt.allowReuse                   = true;
+    scene.renderTargets[m_desc.dst] = std::move(rt);
+}
+
 void CopyPass::prepare(Scene& scene, const Device& device, RenderingResources& rr) {
     RenderResourceSystem resources(device);
 
@@ -64,11 +76,7 @@ void CopyPass::prepare(Scene& scene, const Device& device, RenderingResources& r
         rstd_error("{} not found", m_desc.src);
         return;
     }
-    if (scene.renderTargets.count(m_desc.dst) == 0) {
-        auto& rt                                   = scene.renderTargets.at(m_desc.src);
-        scene.renderTargets[m_desc.dst]            = rt;
-        scene.renderTargets[m_desc.dst].allowReuse = true;
-    }
+    ensureDestinationRenderTarget(scene);
 
     std::array<std::string, 2>                    textures    = { m_desc.src, m_desc.dst };
     std::array<ImageParameters*, 2>               vk_textures = { &m_desc.vk_src, &m_desc.vk_dst };
@@ -150,7 +158,7 @@ void CopyPass::execute(const Device& device, RenderingResources& rr) {
         VkImageMemoryBarrier out_bar {
             .sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
             .pNext            = nullptr,
-            .srcAccessMask    = VK_ACCESS_MEMORY_READ_BIT,
+            .srcAccessMask    = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
             .dstAccessMask    = VK_ACCESS_TRANSFER_WRITE_BIT,
             .oldLayout        = VK_IMAGE_LAYOUT_UNDEFINED,
             .newLayout        = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
@@ -158,7 +166,7 @@ void CopyPass::execute(const Device& device, RenderingResources& rr) {
             .subresourceRange = srang,
         };
 
-        cmd.PipelineBarrier(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+        cmd.PipelineBarrier(VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
                             VK_PIPELINE_STAGE_TRANSFER_BIT,
                             VK_DEPENDENCY_BY_REGION_BIT,
                             {},

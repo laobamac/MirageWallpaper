@@ -10,6 +10,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <atomic>
 #include <os/log.h>
 
 namespace
@@ -18,6 +19,7 @@ namespace
 struct MacMetalDisplay {
     CAMetalLayer*             layer { nil };
     NSView*                   view { nil };
+    CALayer*                  root_layer { nil };
     id<MTLDevice>             device { nil };
     id<MTLCommandQueue>       queue { nil };
     id<MTLRenderPipelineState> pipeline { nil };
@@ -111,7 +113,18 @@ bool EnsurePipeline(MacMetalDisplay* display, id<MTLTexture> source_texture) {
 void UpdateDrawableSize(MacMetalDisplay* display) {
     if (display == nullptr || display->layer == nil) return;
     NSView* view = display->view;
-    if (view == nil) return;
+    if (view == nil) {
+        CALayer* root = display->root_layer;
+        if (root == nil) return;
+        const CGSize bounds = root.bounds.size;
+        const CGSize drawable = display->fixed_drawable_size;
+        if (bounds.width <= 0.0 || bounds.height <= 0.0 ||
+            drawable.width <= 0.0 || drawable.height <= 0.0) return;
+        display->layer.contentsScale = drawable.width / bounds.width;
+        display->layer.frame = root.bounds;
+        display->layer.drawableSize = drawable;
+        return;
+    }
 
     const bool has_fixed_drawable = display->fixed_drawable_size.width > 0.0 &&
                                     display->fixed_drawable_size.height > 0.0;
@@ -230,6 +243,32 @@ void* CreateForNSView(void* ns_view, CGSize fixed_drawable_size) {
     return display;
 }
 
+void* CreateForCALayer(void* ca_layer, CGSize drawable_size) {
+    if (ca_layer == nullptr || drawable_size.width <= 0.0 || drawable_size.height <= 0.0) return nullptr;
+    CALayer* root_layer = (__bridge CALayer*)ca_layer;
+    if (root_layer == nil) return nullptr;
+    auto* display = new MacMetalDisplay();
+    display->layer = [CAMetalLayer layer];
+    display->root_layer = root_layer;
+    display->fixed_drawable_size = drawable_size;
+    display->layer.contentsGravity = kCAGravityResizeAspect;
+    display->layer.opaque = YES;
+    [root_layer addSublayer:display->layer];
+    UpdateDrawableSize(display);
+    if (id<MTLDevice> default_device = MTLCreateSystemDefaultDevice()) {
+        display->layer.device = default_device;
+        display->layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+        display->layer.framebufferOnly = YES;
+        display->layer.opaque = YES;
+        display->warmup_group = dispatch_group_create();
+        dispatch_group_async(display->warmup_group,
+                             dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+          BuildPipeline(display, default_device);
+        });
+    }
+    return display;
+}
+
 } // namespace
 
 extern "C" void* SceneRendererMacMetalDisplayCreateForNSView(void* ns_view) {
@@ -240,6 +279,12 @@ extern "C" void* SceneRendererMacMetalDisplayCreateForNSViewWithDrawableSize(
     void* ns_view, std::uint32_t width, std::uint32_t height) {
     if (width == 0 || height == 0) return nullptr;
     return CreateForNSView(ns_view, CGSizeMake(width, height));
+}
+
+extern "C" void* SceneRendererMacMetalDisplayCreateForCALayerWithDrawableSize(
+    void* ca_layer, std::uint32_t width, std::uint32_t height) {
+    if (width == 0 || height == 0) return nullptr;
+    return CreateForCALayer(ca_layer, CGSizeMake(width, height));
 }
 
 #if defined(SCENERENDERER_MACMETALDISPLAY_WITH_GLFW)
@@ -258,7 +303,20 @@ extern "C" void SceneRendererMacMetalDisplayDestroy(void* handle) {
         dispatch_group_wait(display->warmup_group, DISPATCH_TIME_FOREVER);
         display->warmup_group = nil;
     }
+    [display->layer removeFromSuperlayer];
     delete display;
+}
+
+extern "C" void* SceneRendererMacMetalTextureRetain(void* texture) {
+    if (texture == nullptr) return nullptr;
+    id object = (__bridge id)texture;
+    return (__bridge void*)[object retain];
+}
+
+extern "C" void SceneRendererMacMetalTextureRelease(void* texture) {
+    if (texture == nullptr) return;
+    id object = (__bridge id)texture;
+    [object release];
 }
 
 extern "C" void SceneRendererMacMetalDisplayDraw(void* handle, void* texture,
@@ -274,7 +332,15 @@ extern "C" void SceneRendererMacMetalDisplayDraw(void* handle, void* texture,
     LogDisplayGeometryIfChanged(display, source_texture, source_width, source_height);
 
     id<CAMetalDrawable> drawable = [display->layer nextDrawable];
-    if (drawable == nil) return;
+    if (drawable == nil) {
+        static std::atomic<std::uint64_t> misses { 0 };
+        const auto count = misses.fetch_add(1, std::memory_order_relaxed) + 1;
+        if ((count % 60) == 1) {
+            static os_log_t logger = os_log_create("cn.laobamac.Mirage.ScreenSaver", "MetalDisplay");
+            os_log_error(logger, "CAMetalLayer nextDrawable returned nil (%{public}llu)", count);
+        }
+        return;
+    }
 
     MTLRenderPassDescriptor* pass = [MTLRenderPassDescriptor renderPassDescriptor];
     pass.colorAttachments[0].texture = drawable.texture;

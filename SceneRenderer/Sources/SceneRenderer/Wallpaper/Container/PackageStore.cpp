@@ -153,6 +153,19 @@ std::unique_ptr<WPPkgFs> WPPkgFs::CreatePkgFs(std::string_view pkgpath,
 
 bool WPPkgFs::Contains(RstdPath path) const { return m_files.count(PkgLookupKey(path)) > 0; }
 
+std::optional<std::string> WPPkgFs::FindUniqueByBasename(std::string_view basename) const {
+    std::optional<std::string> result;
+    for (const auto& [_, file] : m_files) {
+        const auto separator = file.path.find_last_of("/\\");
+        const auto candidate = std::string_view(file.path).substr(
+            separator == std::string::npos ? 0 : separator + 1);
+        if (candidate != basename) continue;
+        if (result) return std::nullopt;
+        result = file.path;
+    }
+    return result;
+}
+
 std::shared_ptr<IBinaryStream> WPPkgFs::Open(RstdPath path) {
     auto it = m_files.find(PkgLookupKey(path));
     if (it != m_files.end()) {

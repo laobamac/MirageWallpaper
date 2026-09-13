@@ -23,6 +23,6 @@ struct WallpaperDiscover_Previews: PreviewProvider {
             wallpaperViewModel: .init(),
             navigationModel: MainNavigationModel(selection: .discover)
         )
-            .environmentObject(GlobalSettingsViewModel())
+            .environment(GlobalSettingsViewModel())
     }
 }

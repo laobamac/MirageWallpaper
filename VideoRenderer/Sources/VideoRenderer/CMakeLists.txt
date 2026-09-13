@@ -6,6 +6,7 @@ add_library(VideoRendererEngine STATIC
     VRTranscoder.h
     VRTranscoder.mm
     VideoRendererEngine.h
+    VRVideoLayout.h
     VideoRendererEngine.mm)
 
 target_compile_features(VideoRendererEngine PUBLIC cxx_std_20)

@@ -88,6 +88,18 @@ final class DesktopOverrideService {
         AppDelegate.shared.globalSettingsViewModel.settings.shouldOverrideWallpaper
     }
 
+    private var preserveForDynamicLockScreen: Bool {
+        guard UserDefaults.standard.bool(forKey: "Mirage.DynamicLockScreen.Enabled"),
+              let container = FileManager.default.containerURL(
+                forSecurityApplicationGroupIdentifier: "group.cn.laobamac.Mirage"),
+              let data = try? Data(contentsOf: container.appendingPathComponent(
+                "dynamic-lock-screen.json")),
+              let configuration = try? JSONDecoder().decode(
+                DynamicLockScreenConfiguration.self, from: data)
+        else { return false }
+        return configuration.enabled != false && !configuration.displays.isEmpty
+    }
+
     // MARK: - Launch recovery
 
     /// Must run before anything that can restart WallpaperAgent (i.e. before the
@@ -101,7 +113,7 @@ final class DesktopOverrideService {
         migrateLegacyPlaceholders()
         migrateLegacyBackup()
 
-        if mode == .transient {
+        if mode == .transient && !preserveForDynamicLockScreen {
             // A transient marker cannot legitimately survive its own process:
             // the previous run was killed before it could restore.
             NSLog("[Mirage] 检测到上次运行未正常还原桌面图片，正在还原")
@@ -182,8 +194,16 @@ final class DesktopOverrideService {
     }
 
     func scheduleCapture(forDisplay displayID: CGDirectDisplayID, wallpaper: WEWallpaper) {
+        if UserDefaults.standard.bool(forKey: "Mirage.DynamicLockScreen.Locked") { return }
         guard wallpaper.isValid, wallpaper.kind != .unsupported else { return }
         pendingCapture[displayID]?.cancel()
+        if preserveForDynamicLockScreen && !isEnabled {
+            captureRequests[displayID] = nil
+            Task { @MainActor in
+                DynamicLockScreenManager.shared.restoreSystemDesktopFallbacks()
+            }
+            return
+        }
         let request = CaptureRequest(id: UUID(), wallpaperID: wallpaper.id)
         captureRequests[displayID] = request
         let work = DispatchWorkItem { [weak self] in
@@ -197,11 +217,28 @@ final class DesktopOverrideService {
 
     /// Re-takes the still for every screen that currently has a wallpaper.
     func scheduleCaptureForAllScreens() {
+        if UserDefaults.standard.bool(forKey: "Mirage.DynamicLockScreen.Locked") { return }
         let viewModel = AppDelegate.shared.wallpaperViewModel
         for displayID in viewModel.renderer.activeDisplayIDs {
             guard let wallpaper = viewModel.renderer.currentWallpaper(onDisplay: displayID) else { continue }
             scheduleCapture(forDisplay: displayID, wallpaper: wallpaper)
         }
+    }
+
+    @MainActor
+    func finalizeForApplicationTermination() {
+        guard preserveForDynamicLockScreen else { return }
+        guard isEnabled else {
+            DynamicLockScreenManager.shared.restoreSystemDesktopFallbacks()
+            DynamicLockScreenManager.shared.refreshExtension()
+            return
+        }
+        scheduleCaptureForAllScreens()
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline && (!pendingCapture.isEmpty || !captureRequests.isEmpty) {
+            RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.05))
+        }
+        DynamicLockScreenManager.shared.refreshExtension()
     }
 
     private func screen(for displayID: CGDirectDisplayID) -> NSScreen? {
@@ -218,7 +255,9 @@ final class DesktopOverrideService {
         // read-back is only eventually consistent, so once an override is in
         // flight it can no longer be trusted to reveal what was there before.
         guard let screen = screen(for: displayID) else { return }
-        backUpUserPictureIfNeeded(on: screen, displayID: displayID)
+        if !preserveForDynamicLockScreen {
+            backUpUserPictureIfNeeded(on: screen, displayID: displayID)
+        }
         // A new UUID every time: WallpaperAgent caches by path, so rewriting the
         // bytes under a path it already displays does not repaint.
         let target = directory.appending(path: "override-\(UUID().uuidString).heic")
@@ -243,6 +282,11 @@ final class DesktopOverrideService {
                 }
                 if ok, FileManager.default.fileExists(atPath: target.path) {
                     NSLog("[Mirage] 已捕获壁纸实时画面 (显示器=\(displayID))")
+                    if self.preserveForDynamicLockScreen {
+                        self.installDynamicLockScreenFallback(
+                            target, forDisplay: displayID, request: request)
+                        return
+                    }
                     self.install(target, forDisplay: displayID, request: request,
                                  attempt: attempt)
                     return
@@ -262,6 +306,36 @@ final class DesktopOverrideService {
         }
     }
 
+    private func installDynamicLockScreenFallback(
+        _ url: URL,
+        forDisplay displayID: CGDirectDisplayID,
+        request: CaptureRequest
+    ) {
+        Task { @MainActor [weak self] in
+            guard let self, self.captureRequests[displayID] == request else {
+                try? FileManager.default.removeItem(at: url)
+                return
+            }
+            if !self.preserveForDynamicLockScreen {
+                self.install(url, forDisplay: displayID, request: request, attempt: 0)
+                return
+            }
+            if self.isEnabled {
+                do {
+                    _ = try DynamicLockScreenManager.shared.updateDesktopFallback(
+                        from: url, forDisplay: displayID)
+                } catch {
+                    NSLog("[Mirage] 更新动态锁屏桌面备用图失败: \(error.localizedDescription)")
+                }
+            } else {
+                DynamicLockScreenManager.shared.restoreSystemDesktopFallbacks()
+            }
+            self.pendingTargets.remove(url)
+            self.captureRequests[displayID] = nil
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
+
     /// Points `screenIndex` at `url`, recording the user's own picture first and
     /// deleting every override file that is no longer displayed.
     private func install(_ url: URL, forDisplay displayID: CGDirectDisplayID,
@@ -269,6 +343,11 @@ final class DesktopOverrideService {
         guard captureRequests[displayID] == request else {
             try? FileManager.default.removeItem(at: url)
             pendingTargets.remove(url)
+            return
+        }
+        if preserveForDynamicLockScreen {
+            installDynamicLockScreenFallback(
+                url, forDisplay: displayID, request: request)
             return
         }
         guard let screen = screen(for: displayID) else {
@@ -316,6 +395,9 @@ final class DesktopOverrideService {
         pendingTargets.remove(url)
         installedByScreen[displayID] = url
         captureRequests[displayID] = nil
+        Task { @MainActor in
+            DynamicLockScreenManager.shared.refreshDesktopFallback(forDisplay: displayID)
+        }
         verifyDesktopImage(url, forDisplay: displayID, screen: screen)
     }
 
@@ -345,6 +427,7 @@ final class DesktopOverrideService {
     /// alone would restore an override the user asked to keep if the two ever
     /// disagreed.
     func restoreIfTransient() {
+        guard !preserveForDynamicLockScreen else { return }
         guard !isEnabled else {
             // Leave the desktop alone, but make sure what the next launch finds
             // says "keep", so recovery does not undo a wanted override.
@@ -454,6 +537,51 @@ final class DesktopOverrideService {
         storedBackups()[backupKey(for: displayID)]
     }
 
+    func dynamicLockScreenFallbackURL(forDisplay displayID: CGDirectDisplayID) -> URL? {
+        if isEnabled,
+           let installed = installedByScreen[displayID],
+           FileManager.default.fileExists(atPath: installed.path) {
+            return installed
+        }
+        if !isEnabled, let backup = backupURL(for: displayID) {
+            return backup
+        }
+        if let screen = screen(for: displayID),
+           let current = NSWorkspace.shared.desktopImageURL(for: screen) {
+            var isDirectory: ObjCBool = false
+            if FileManager.default.fileExists(atPath: current.path, isDirectory: &isDirectory),
+               !isDirectory.boolValue,
+               isEnabled || !isMirageGenerated(current) {
+                return current
+            }
+        }
+        let fallback = Self.systemFallbackPicture()
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: fallback.path, isDirectory: &isDirectory),
+              !isDirectory.boolValue else { return nil }
+        return fallback
+    }
+
+    func dynamicLockScreenSystemFallbackURL(forDisplay displayID: CGDirectDisplayID) -> URL? {
+        if let backup = backupURL(for: displayID) {
+            return backup
+        }
+        if let screen = screen(for: displayID),
+           let current = NSWorkspace.shared.desktopImageURL(for: screen),
+           !isMirageGenerated(current) {
+            var isDirectory: ObjCBool = false
+            if FileManager.default.fileExists(atPath: current.path, isDirectory: &isDirectory),
+               !isDirectory.boolValue {
+                return current
+            }
+        }
+        let fallback = Self.systemFallbackPicture()
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: fallback.path, isDirectory: &isDirectory),
+              !isDirectory.boolValue else { return nil }
+        return fallback
+    }
+
     private func storedOverrideDisplayKeys() -> Set<String> {
         Set(defaults.stringArray(forKey: Key.displays) ?? [])
     }
@@ -508,11 +636,22 @@ final class DesktopOverrideService {
         url.lastPathComponent.hasPrefix("staticWP_")
     }
 
+    private func isDynamicLockScreenFallback(_ url: URL) -> Bool {
+        guard let container = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: "group.cn.laobamac.Mirage")
+        else { return false }
+        let directory = container.appendingPathComponent(
+            "DynamicLockScreen/DesktopFallbacks", isDirectory: true)
+        return url.resolvingSymlinksInPath().path
+            .hasPrefix(directory.resolvingSymlinksInPath().path + "/")
+    }
+
     /// Any file Mirage generated, past or present. Used everywhere a value must
     /// not be mistaken for the user's own picture — above all the backup key,
     /// which is what a restore ultimately points the desktop back at.
     private func isMirageGenerated(_ url: URL) -> Bool {
         isGeneratedOverride(url) || isLegacyPlaceholder(url)
+            || isDynamicLockScreenFallback(url)
     }
 
     /// Keeps only the files currently on screen — one per active display — so
@@ -576,6 +715,11 @@ final class DesktopOverrideService {
     func didChangeEnabled(_ enabled: Bool) {
         if mode != .none {
             mode = enabled ? .persistent : .transient
+        }
+        if preserveForDynamicLockScreen && !enabled {
+            Task { @MainActor in
+                DynamicLockScreenManager.shared.restoreSystemDesktopFallbacks()
+            }
         }
         guard enabled else { return }
         scheduleCaptureForAllScreens()

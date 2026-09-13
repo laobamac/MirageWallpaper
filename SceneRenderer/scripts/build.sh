@@ -98,10 +98,12 @@ command -v pkg-config >/dev/null || die "pkg-config not found. brew install pkg-
 BREW_PREFIX="$(brew --prefix)"
 [[ -n "$BREW_PREFIX" ]] || die "brew --prefix returned empty."
 
+LLVM_FORMULA="${LLVM_FORMULA:-llvm}"
+
 # --- prerequisite Homebrew formulas (build + runtime) ---
 # Each entry: "formula|description"
 REQUIRED_FORMULAS=(
-    "llvm|Clang 22+ compiler (C++20 modules)"
+    "$LLVM_FORMULA|Clang 22 compiler (C++20 modules)"
     "molten-vk|MoltenVK Vulkan ICD"
     "vulkan-loader|libvulkan loader"
     "vulkan-headers|Vulkan headers"
@@ -129,14 +131,10 @@ if [[ ${#missing[@]} -gt 0 ]]; then
 fi
 command -v glslangValidator >/dev/null || die "glslangValidator not found. Run: brew install glslang"
 
-# --- compiler: always use Homebrew LLVM. ---
-# The preset pins /usr/local/opt/llvm/bin/clang (Intel Mac path). On Apple
-# Silicon that path is absent, so pass -D to redirect to the actual Homebrew
-# LLVM prefix. On Intel this is the same path, so it's a no-op override.
-LLVM_PREFIX="$(brew --prefix llvm)"
+LLVM_PREFIX="$(brew --prefix "$LLVM_FORMULA")"
 CLANG_BIN="$LLVM_PREFIX/bin/clang"
 CLANGXX_BIN="$LLVM_PREFIX/bin/clang++"
-[[ -x "$CLANG_BIN" && -x "$CLANGXX_BIN" ]] || die "Homebrew clang not at $LLVM_PREFIX/bin (brew install llvm)"
+[[ -x "$CLANG_BIN" && -x "$CLANGXX_BIN" ]] || die "Homebrew clang not at $LLVM_PREFIX/bin (brew install $LLVM_FORMULA)"
 
 # --- MoltenVK ICD (runtime Vulkan device discovery) ---
 ICD_JSON="$BREW_PREFIX/etc/vulkan/icd.d/MoltenVK_icd.json"

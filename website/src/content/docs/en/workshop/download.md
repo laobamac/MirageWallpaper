@@ -23,7 +23,9 @@ Speed comes from bytes actually received from Steam CDN HTTP response streams, n
 
 ## Concurrency and cancellation
 
-Mirage handles up to three items at once. Each item can use up to four chunk requests, with a global limit of eight requests so one item cannot monopolize the connection. Each item has its own cancellation token; cancelling one does not terminate the Steam session or another download.
+Mirage handles up to three items at once, with a global limit of eight chunk requests. A single item can use all available chunk connections; concurrent items share that limit. Each item has its own cancellation token; cancelling one does not terminate the Steam session or another download.
+
+When a Steam connection is interrupted temporarily, Mirage keeps the staged content and automatically restores the session and active downloads. Re-login is required only when Steam explicitly rejects the saved session.
 
 ## Validation and installation
 

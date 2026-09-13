@@ -22,9 +22,9 @@ final class MirageLocalization: ObservableObject {
     func apply(_ requestedLanguage: GSLocalization) {
         let resolved = Self.resolve(requestedLanguage)
         let changed = language != requestedLanguage || locale.identifier != resolved.identifier
+        guard changed else { return }
         language = requestedLanguage
         locale = resolved
-        guard changed else { return }
         NotificationCenter.default.post(name: Self.didChangeNotification, object: self)
     }
 

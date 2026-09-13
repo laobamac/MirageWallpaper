@@ -3,6 +3,7 @@ module;
 export module sr.pkg.puppet;
 import eigen;
 import sr.core;
+import sr.json;
 import rstd.cppstd;
 
 export namespace sr
@@ -255,6 +256,20 @@ class WPPuppetLayer {
     friend class WPPuppet;
 
 public:
+    using AnimationHandle = std::uint64_t;
+
+    struct AnimationState {
+        double      fps { 0.0 };
+        std::int32_t frame_count { 0 };
+        double      duration { 0.0 };
+        std::string name;
+        double      rate { 1.0 };
+        double      blend { 1.0 };
+        double      frame { 0.0 };
+        bool        visible { false };
+        bool        playing { false };
+    };
+
     WPPuppetLayer();
     WPPuppetLayer(std::shared_ptr<WPPuppet>);
     ~WPPuppetLayer();
@@ -275,9 +290,29 @@ public:
         bool        blendin { false };  // PKGV0021+
         bool        blendout { false }; // PKGV0021+
         double      blendtime { 0.0 };  // PKGV0021+
+        std::string visible_user;
+        std::shared_ptr<sr::Json> visible_condition;
+        bool         visible_has_condition { false };
     };
 
     void prepared(std::span<AnimationLayer>);
+
+    std::size_t                    animationLayerCount() const noexcept;
+    std::optional<AnimationHandle> animationLayer(std::size_t index) const noexcept;
+    std::optional<AnimationHandle> animationLayer(std::string_view name) const noexcept;
+    std::optional<AnimationHandle> playSingleAnimation(std::string_view name) noexcept;
+    std::optional<AnimationState>  animationState(AnimationHandle handle) const noexcept;
+    bool                           setAnimationName(AnimationHandle handle,
+                                                    std::string name) noexcept;
+    bool                           setAnimationRate(AnimationHandle handle, double rate) noexcept;
+    bool                           setAnimationBlend(AnimationHandle handle, double blend) noexcept;
+    bool                           setAnimationVisible(AnimationHandle handle, bool visible) noexcept;
+    bool                           setAnimationFrame(AnimationHandle handle, double frame) noexcept;
+    bool                           playAnimation(AnimationHandle handle) noexcept;
+    bool                           pauseAnimation(AnimationHandle handle) noexcept;
+    bool                           stopAnimation(AnimationHandle handle) noexcept;
+    void                           applyUserProperty(std::string_view key, const sr::Json& property) noexcept;
+    std::vector<std::string>       animationVisibilityKeys() const;
 
     std::span<const Eigen::Affine3f> genFrame(double time) noexcept;
     // Per-bone opacity matching the most recent genFrame(). Call genFrame()
@@ -295,15 +330,26 @@ private:
         AnimationLayer                         anim_layer;
         const WPPuppet::Animation*             anim { nullptr };
         WPPuppet::Animation::InterpolationInfo interp_info {};
+        AnimationHandle                        handle { 0 };
+        bool                                   playing { false };
+        bool                                   completed { false };
+        bool                                   force_single { false };
+        bool                                   temporary { false };
+        bool                                   retire { false };
 
         operator bool() const noexcept { return anim != nullptr; };
     };
+
+    Layer*       findAnimation(AnimationHandle handle) noexcept;
+    const Layer* findAnimation(AnimationHandle handle) const noexcept;
 
     // Absolute scene elapsed time of the last advance. Guards against
     // multi-pass nodes (e.g. puppet with mask pre-pass + clipped-main)
     // advancing animation N× per frame.
     double m_last_elapsed { -1.0 };
 
+    AnimationHandle           m_next_animation_handle { 1 };
+    std::vector<AnimationHandle> m_animation_order;
     std::vector<Layer>        m_layers;
     std::shared_ptr<WPPuppet> m_puppet;
 };

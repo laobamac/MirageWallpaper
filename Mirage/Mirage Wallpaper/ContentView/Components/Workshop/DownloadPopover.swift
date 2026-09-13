@@ -7,7 +7,7 @@
 import SwiftUI
 
 struct DownloadPopover: View {
-    let workshopViewModel: WorkshopViewModel
+    @Bindable var workshopViewModel: WorkshopViewModel
     @ObservedObject private var downloadStore: WorkshopDownloadStore
     @State private var revealError: String?
 

@@ -26,6 +26,7 @@ internal sealed class ServiceCommand
     public string? Text { get; set; }
     public int? StartIndex { get; set; }
     public int? Count { get; set; }
+    public uint? LoginId { get; set; }
 }
 
 internal sealed class ProtocolWriter

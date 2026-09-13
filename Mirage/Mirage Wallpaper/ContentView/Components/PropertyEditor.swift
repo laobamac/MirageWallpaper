@@ -13,8 +13,9 @@ import UniformTypeIdentifiers
 // Faithful Wallpaper Engine customization sidebar: every property type,
 // condition-driven show/hide, official localization, and real HTML labels.
 struct PropertyEditor: View {
-    @EnvironmentObject var wallpaperViewModel: WallpaperViewModel
+    @Environment(WallpaperViewModel.self) var wallpaperViewModel
     let wallpaper: WEWallpaper
+    var isActive = true
 
     @StateObject private var conditions = ConditionStore()
 
@@ -31,6 +32,7 @@ struct PropertyEditor: View {
     }
 
     var body: some View {
+        @Bindable var wallpaperViewModel = wallpaperViewModel
         Group {
             if sortedProperties.isEmpty {
                 HStack {
@@ -44,51 +46,97 @@ struct PropertyEditor: View {
                     ForEach(visibleProperties, id: \.key) { entry in
                         PropertyRow(wallpaper: wallpaper, key: entry.key,
                                     property: entry.property, conditions: conditions)
-                            .environmentObject(wallpaperViewModel)
+                            .environment(wallpaperViewModel)
                     }
                 }
             }
         }
         .onAppear { refreshConditions() }
-        .onChange(of: wallpaperViewModel.runtime.propertyOverrides) { _, _ in refreshConditions() }
+        .onChange(of: isActive ? wallpaperViewModel.runtime.propertyOverrides : [:]) { _, _ in refreshConditions() }
         .onChange(of: wallpaper.id) { _, _ in refreshConditions() }
+        .onChange(of: allProperties) { _, _ in refreshConditions() }
+        .onChange(of: isActive) { _, active in
+            if active { refreshConditions() } else { conditions.cancel() }
+        }
+        .onDisappear { conditions.cancel() }
     }
 
     private func refreshConditions() {
-        conditions.update(properties: allProperties,
+        guard isActive else { return }
+        conditions.update(identity: wallpaper.id, properties: allProperties,
                           overrides: wallpaperViewModel.runtime.propertyOverrides)
     }
 }
 
-// Wraps the evaluator so value changes re-run condition visibility.
 final class ConditionStore: ObservableObject {
     private let evaluator = WEConditionEvaluator()
-    @Published private(set) var generation = 0
+    @Published private(set) var verdicts: [String: Bool] = [:]
+    private var identity: String?
+    private var lastProperties: [String: WEProjectProperty]?
+    private var lastOverrides: [String: WEPropertyValue]?
 
-    // Order matters: updateContext also drops the evaluator's cached verdicts,
-    // so the generation bump that follows re-renders against fresh results.
-    func update(properties: [String: WEProjectProperty], overrides: [String: WEPropertyValue]) {
-        evaluator.updateContext(properties: properties, overrides: overrides)
-        generation &+= 1
+    func update(identity: String, properties: [String: WEProjectProperty],
+                overrides: [String: WEPropertyValue]) {
+        guard self.identity != identity || lastProperties != properties || lastOverrides != overrides else {
+            return
+        }
+        if self.identity != identity {
+            evaluator.cancel()
+            verdicts = [:]
+        }
+        self.identity = identity
+        lastProperties = properties
+        lastOverrides = overrides
+        var expressions = Set<String>()
+        var values: [String: Any] = [:]
+        for (key, property) in properties {
+            for expression in [property.condition] + (property.options ?? []).map(\.condition) {
+                if let expression, !expression.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    expressions.insert(expression)
+                }
+            }
+            let raw = overrides[key] ?? property.value
+            let value: Any
+            switch raw {
+            case .bool(let flag): value = flag
+            case .number(let number): value = number
+            case .string(let string):
+                if property.propertyType == .bool { value = (string as NSString).boolValue }
+                else if let integer = Int(string) { value = integer }
+                else if let number = Double(string) { value = number }
+                else if string == "true" { value = true }
+                else if string == "false" { value = false }
+                else { value = string }
+            }
+            values[key] = ["value": value]
+        }
+        evaluator.evaluate(identity: identity, conditions: expressions.sorted(), values: values) { [weak self] result in
+            guard let self, self.identity == identity, self.verdicts != result else { return }
+            self.verdicts = result
+        }
     }
 
-    // Called once per row and once per combo option on every body pass; within
-    // one generation the evaluator answers repeats from its cache instead of
-    // re-entering JavaScriptCore.
     func isVisible(_ condition: String?) -> Bool {
-        _ = generation // establish dependency
-        return evaluator.evaluate(condition)
+        guard let condition else { return true }
+        return verdicts[condition] ?? true
+    }
+
+    func cancel() {
+        evaluator.cancel()
+        lastProperties = nil
+        lastOverrides = nil
     }
 }
 
 // MARK: - Property row
 
 struct PropertyRow: View {
-    @EnvironmentObject var wallpaperViewModel: WallpaperViewModel
+    @Environment(WallpaperViewModel.self) var wallpaperViewModel
     let wallpaper: WEWallpaper
     let key: String
     let property: WEProjectProperty
     @ObservedObject var conditions: ConditionStore
+    @State private var pickerError: String?
 
     private var currentValue: WEPropertyValue {
         wallpaperViewModel.runtime.propertyOverrides[key] ?? property.value
@@ -111,7 +159,9 @@ struct PropertyRow: View {
     }
 
     var body: some View {
-        switch property.propertyType {
+        @Bindable var wallpaperViewModel = wallpaperViewModel
+        Group {
+            switch property.propertyType {
         case .bool:
             Toggle(isOn: Binding(
                 get: { currentValue.boolValue },
@@ -205,10 +255,26 @@ struct PropertyRow: View {
                     set: { wallpaperViewModel.setProperty(key: key, value: .string($0)) }))
                     .textFieldStyle(.roundedBorder)
                     .frame(maxWidth: 170)
+                Button {
+                    pickUserShortcut()
+                } label: {
+                    Image(systemName: "folder")
+                }
+                .buttonStyle(.borderless)
+                .help(L("选择快捷方式"))
             }
 
         case .unknown:
             EmptyView()
+            }
+        }
+        .alert(L("无法使用所选文件"), isPresented: Binding(
+            get: { pickerError != nil },
+            set: { if !$0 { pickerError = nil } }
+        )) {
+            Button(L("好"), role: .cancel) { pickerError = nil }
+        } message: {
+            Text(pickerError ?? "")
         }
     }
 
@@ -259,7 +325,29 @@ struct PropertyRow: View {
             panel.allowedContentTypes = [.image] // scenetexture: images only
         }
         if panel.runModal() == .OK, let url = panel.url {
-            wallpaperViewModel.setProperty(key: key, value: .string(url.path))
+            if property.propertyType == .scenetexture {
+                do {
+                    let cached = try UserTextureCache.shared.importImage(at: url)
+                    wallpaperViewModel.setProperty(key: key, value: .string(cached.path))
+                } catch {
+                    pickerError = error.localizedDescription
+                }
+            } else {
+                wallpaperViewModel.setProperty(key: key, value: .string(url.path))
+            }
+        }
+    }
+
+    private func pickUserShortcut() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.treatsFilePackagesAsDirectories = false
+        panel.allowsMultipleSelection = false
+        if panel.runModal() == .OK, let url = panel.url {
+            wallpaperViewModel.setProperty(
+                key: key,
+                value: .string(url.standardizedFileURL.path))
         }
     }
 

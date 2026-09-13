@@ -38,6 +38,7 @@ VkFormat ToVkType(TextureFormat tf) {
     case TextureFormat::RG8: return VK_FORMAT_R8G8_UNORM;
     case TextureFormat::RGB8: return VK_FORMAT_R8G8B8_UNORM;
     case TextureFormat::RGBA8: return VK_FORMAT_R8G8B8A8_UNORM;
+    case TextureFormat::RGBA16F: return VK_FORMAT_R16G16B16A16_SFLOAT;
     case TextureFormat::D32F: return VK_FORMAT_D32_SFLOAT;
     default: rstd_assert(false); return VK_FORMAT_R8G8B8A8_UNORM;
     }
@@ -80,7 +81,7 @@ VkSamplerCreateInfo GenSamplerInfo(TextureKey key) {
                                        .compareEnable    = (false),
                                        .compareOp        = VK_COMPARE_OP_NEVER,
                                        .minLod           = (0.0f),
-                                       .maxLod           = (1.0f),
+                                       .maxLod = (float)std::max(1u, key.mipmap_level),
                                        .borderColor      = VK_BORDER_COLOR_INT_OPAQUE_BLACK,
                                        .unnormalizedCoordinates = (false) };
     return sampler_info;
@@ -193,13 +194,22 @@ CreateImage(const Device& device, VkExtent3D extent, u32 miplevel, VkFormat form
     return std::nullopt;
 }
 
+std::uint32_t MipExtent(std::uint32_t base, std::uint32_t level) {
+    return level >= 32 ? 1u : std::max(1u, base >> level);
+}
+
 void RecordQueuedImageUpload(vvk::CommandBuffer& cmd, const ImageParameters& image,
                              VkBuffer buffer, VkDeviceSize buffer_offset,
                              VkOffset3D image_offset, VkExtent3D image_extent,
                              VkImageLayout old_layout, VkImageLayout final_layout,
                              std::uint32_t mip_level) {
+    const auto mip_width  = MipExtent(image.extent.width, mip_level);
+    const auto mip_height = MipExtent(image.extent.height, mip_level);
     if (image.handle == VK_NULL_HANDLE || buffer == VK_NULL_HANDLE || image_extent.width == 0 ||
-        image_extent.height == 0)
+        image_extent.height == 0 || mip_level >= image.mipmap_level ||
+        image_offset.x < 0 || image_offset.y < 0 ||
+        static_cast<std::uint64_t>(image_offset.x) + image_extent.width > mip_width ||
+        static_cast<std::uint64_t>(image_offset.y) + image_extent.height > mip_height)
         return;
 
     VkImageSubresourceRange range {
@@ -400,7 +410,8 @@ ImageSlotsRef TextureCache::CreateTex(Image& image,
         auto  mipmap_levels = image_slot.mipmaps.size();
 
         // check data
-        if (! image_slot) return fail();
+        if (image_slot.width <= 0 || image_slot.height <= 0 || mipmap_levels == 0)
+            return fail();
         VkSamplerCreateInfo sampler_info {
             .sType                   = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
             .pNext                   = nullptr,
@@ -449,8 +460,11 @@ ImageSlotsRef TextureCache::CreateTex(Image& image,
         VkDeviceSize              staging_size = 0;
         for (usize j = 0; j < image_slot.mipmaps.size(); j++) {
             auto& image_data = image_slot.mipmaps[j];
+            const auto expected_width = MipExtent(static_cast<u32>(image_slot.width), j);
+            const auto expected_height = MipExtent(static_cast<u32>(image_slot.height), j);
             if (image_data.size == 0 || image_data.data == nullptr || image_data.width <= 0 ||
-                image_data.height <= 0) {
+                image_data.height <= 0 || static_cast<u32>(image_data.width) != expected_width ||
+                static_cast<u32>(image_data.height) != expected_height) {
                 return fail();
             }
             staging_size = (staging_size + upload_alignment - 1) / upload_alignment *
@@ -1293,6 +1307,11 @@ bool TextureCache::UploadFontAtlasRegion(const std::string& key, const std::uint
     return true;
 }
 
+bool TextureCache::HasFontAtlasImage(const std::string& key) const {
+    auto it = m_tex_map.find(key);
+    return it != m_tex_map.end() && ! it->second.slots.empty();
+}
+
 TextureCache::TextureCache(const Device& device): m_device(device) {}
 
 TextureCache::~TextureCache() {};
@@ -1398,27 +1417,33 @@ std::optional<ImageParameters> TextureCache::Query(std::string_view key, Texture
 
         if (query.content_hash != tex_hash) {
             query.query_keys.erase(query_key);
-            query.share_ready = ! query.persist && query.query_keys.empty();
             m_query_map.erase(it);
+            if (query.query_keys.empty()) {
+                query.persist     = false;
+                query.share_ready = true;
+            }
         } else {
             query.share_ready = false;
-            query.persist     = persist;
+            query.persist     = query.persist || persist;
+            query.query_keys.insert(query_key);
 
             return ToImageParameters(query.image);
         }
     }
 
-    for (auto& query : m_query_texs) {
-        if (! (query->share_ready)) continue;
-        if (query->content_hash != tex_hash) continue;
+    if (! persist) {
+        for (auto& query : m_query_texs) {
+            if (! (query->share_ready)) continue;
+            if (query->persist) continue;
+            if (query->content_hash != tex_hash) continue;
 
-        query->share_ready = false;
-        query->persist     = persist;
-        query->query_keys.insert(query_key);
+            query->share_ready = false;
+            query->query_keys.insert(query_key);
 
-        m_query_map[query_key] = &(*query);
+            m_query_map[query_key] = &(*query);
 
-        return ToImageParameters(query->image);
+            return ToImageParameters(query->image);
+        }
     }
 
     m_query_texs.emplace_back(std::make_unique<QueryTex>());
@@ -1439,11 +1464,10 @@ std::optional<ImageParameters> TextureCache::Query(std::string_view key, Texture
 void TextureCache::MarkShareReady(std::string_view key) {
     auto it = m_query_map.find(key);
     if (it != m_query_map.end()) {
-        auto& query = it->second;
+        auto* query = it->second;
         if (query->persist) return;
         query->query_keys.erase(std::string(key));
         query->share_ready = query->query_keys.empty();
-        m_query_map.erase(it);
     }
 }
 

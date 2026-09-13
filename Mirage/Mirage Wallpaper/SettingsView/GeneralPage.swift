@@ -7,7 +7,7 @@
 import SwiftUI
 
 struct GeneralPage: SettingsPage {
-    @ObservedObject var viewModel: GlobalSettingsViewModel
+    @Bindable var viewModel: GlobalSettingsViewModel
 
     @State private var librarySources: [WallpaperLibrarySource]
     @State private var showMirrorWarning = false
@@ -116,6 +116,14 @@ struct GeneralPage: SettingsPage {
     var body: some View {
         Form {
             Section {
+                Picker("启动时显示", selection: $viewModel.settings.startupSection) {
+                    ForEach(MainSection.allCases, id: \.self) { section in
+                        Text(section.title).tag(section)
+                    }
+                }
+                Text("保存后在下次启动 Mirage 时生效。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 Toggle("开机时自动启动 Mirage", isOn: $viewModel.settings.autoStart)
                 if viewModel.loginItemStatus == .requiresApproval {
                     HStack {

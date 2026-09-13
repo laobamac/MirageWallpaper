@@ -7,192 +7,310 @@
 import SwiftUI
 
 struct DiscoverView: View {
-    @EnvironmentObject private var globalSettingsViewModel: GlobalSettingsViewModel
-    @ObservedObject var workshopViewModel: WorkshopViewModel
-    @ObservedObject var viewModel: ContentViewModel
-    @ObservedObject var wallpaperViewModel: WallpaperViewModel
+    @Environment(GlobalSettingsViewModel.self) private var globalSettingsViewModel
+    @Bindable var workshopViewModel: WorkshopViewModel
+    @Bindable var viewModel: ContentViewModel
+    @Bindable var wallpaperViewModel: WallpaperViewModel
     let navigationModel: MainNavigationModel
     let isActive: Bool
 
-    @State private var showAPIKeyReminder = false
+    @State private var discoverReturnRowID: String?
 
     var body: some View {
-        VStack(spacing: 8) {
-            HStack(spacing: 8) {
-                Text("趋势范围")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                Picker("趋势范围", selection: $workshopViewModel.discoverTrendPeriod) {
-                    ForEach(WorkshopTrendPeriod.allCases) { period in
-                        Text(period.label).tag(period)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
-                .frame(width: 110)
-                .onChange(of: workshopViewModel.discoverTrendPeriod) { _, _ in
-                    workshopViewModel.loadDiscover(force: true)
-                }
-
-                Spacer()
-
-                Button {
-                    workshopViewModel.refreshDiscover()
-                } label: {
-                    Group {
-                        if workshopViewModel.isDiscoverLoading {
-                            ProgressView()
-                                .controlSize(.small)
-                        } else {
-                            Image(systemName: "arrow.triangle.2.circlepath")
-                        }
-                    }
-                    .frame(width: 16, height: 16)
-                }
-                .disabled(workshopViewModel.isDiscoverLoading)
-                .help("刷新发现")
-                WallpaperGridViewMenu(viewModel: viewModel)
-            }
-            .padding(.horizontal)
-
-            ScrollView {
-                if !globalSettingsViewModel.settings.hasValidCustomSteamAPIKey {
-                    SteamAPIKeyReminderBanner()
-                        .padding(.horizontal)
-                }
-
-                if workshopViewModel.isDiscoverLoading && workshopViewModel.discoverItems.isEmpty {
-                    VStack(spacing: 20) {
-                        ProgressView()
-                            .scaleEffect(1.5)
-                        Text("正在加载推荐内容...")
-                            .foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding(.top, 100)
-                } else if workshopViewModel.discoverItems.values.allSatisfy(\.isEmpty) {
-                    VStack(spacing: 12) {
-                        Image(systemName: "line.3.horizontal.decrease.circle")
-                            .font(.system(size: 40))
-                            .foregroundStyle(.tertiary)
-                        Text("没有找到壁纸")
-                            .font(.title3)
-                            .foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 100)
-                } else {
-                    LazyVStack(spacing: 24) {
-                        ForEach(WorkshopDiscoverCategory.allCases) { category in
-                            if let items = workshopViewModel.discoverItems[category], !items.isEmpty {
-                                DiscoverSectionView(
-                                    title: category.title(period: workshopViewModel.discoverTrendPeriod),
-                                    icon: category.icon,
-                                    iconColor: category.iconColor,
-                                    items: items,
-                                    workshopViewModel: workshopViewModel,
-                                    contentViewModel: viewModel,
-                                    wallpaperViewModel: wallpaperViewModel,
-                                    isActive: isActive,
-                                    animatedPreviewMode: globalSettingsViewModel.settings.animatedPreviewPlaybackMode,
-                                    onSeeAll: { showAll(category) }
-                                )
-                            }
-                        }
-
-                        Spacer(minLength: 20)
-                    }
-                    .padding(.horizontal)
-                }
+        @Bindable var globalSettingsViewModel = globalSettingsViewModel
+        VStack(spacing: 0) {
+            if let browse = workshopViewModel.discoverBrowse {
+                browseToolbar(browse)
+                Divider()
+                browseContent(browse)
+            } else {
+                feedToolbar
+                Divider()
+                feedContent
             }
         }
         .contextMenu {
             WallpaperGridViewMenu(viewModel: viewModel)
         }
         .onAppear {
-            if !globalSettingsViewModel.settings.hasValidCustomSteamAPIKey {
-                showAPIKeyReminder = SteamAPIKeyReminderPolicy.shouldPresent()
-            }
-            if workshopViewModel.discoverItems.isEmpty {
+            if workshopViewModel.discoverRows.isEmpty {
                 workshopViewModel.loadDiscover()
             }
         }
-        .alert("建议设置专属 Steam API Key", isPresented: $showAPIKeyReminder) {
-            Button("立即设置") { AppDelegate.shared.openSteamAPIKeySettings() }
-            Button("暂时使用内置 Key", role: .cancel) { }
-        } message: {
-            Text("内置 Key 由所有 Mirage 用户共享，繁忙时可能导致创意工坊无法加载。设置您自己的免费 API Key 后将不再提醒。此 Key 只影响浏览，不影响登录和下载。")
+    }
+
+    private var feedToolbar: some View {
+        HStack(spacing: 10) {
+            HStack(spacing: 7) {
+                Image(systemName: "magnifyingglass")
+                    .font(.title3)
+                TextField("查找壁纸", text: $workshopViewModel.discoverSearchText)
+                    .textFieldStyle(.plain)
+                    .onSubmit {
+                        workshopViewModel.performDiscoverSearch()
+                    }
+                if !workshopViewModel.discoverSearchText.isEmpty {
+                    Button {
+                        workshopViewModel.clearDiscoverSearch()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("清除搜索")
+                }
+            }
+            .padding(.horizontal, 10)
+            .frame(width: 250, height: 36)
+            .background(Color.primary.opacity(0.08))
+            .clipShape(RoundedRectangle(cornerRadius: 3))
+
+            Button {
+                workshopViewModel.performDiscoverSearch()
+            } label: {
+                Label("查找", systemImage: "magnifyingglass")
+                    .font(.headline)
+                    .frame(height: 36)
+                    .padding(.horizontal, 9)
+            }
+            .buttonStyle(.borderless)
+            .disabled(workshopViewModel.discoverSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+            Spacer()
+
+            if workshopViewModel.isDiscoverDetailLoading {
+                ProgressView()
+                    .controlSize(.small)
+                    .help("正在加载壁纸详情")
+            }
+
+            Button {
+                workshopViewModel.refreshDiscover()
+            } label: {
+                Image(systemName: "arrow.clockwise")
+                    .frame(width: 18, height: 18)
+            }
+            .buttonStyle(.borderless)
+            .disabled(workshopViewModel.isDiscoverLoading)
+            .help("刷新发现")
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 10)
+    }
+
+    private func browseToolbar(_ browse: DiscoverBrowseState) -> some View {
+        HStack(spacing: 10) {
+            Button {
+                workshopViewModel.closeDiscoverBrowse()
+            } label: {
+                Image(systemName: "arrow.left")
+                    .font(.headline)
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.borderless)
+            .help("返回发现")
+
+            Text(browse.query.title)
+                .font(.title3.weight(.semibold))
+                .lineLimit(1)
+
+            if browse.total > 0 {
+                Text(L("共 %d 项", browse.total))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            if workshopViewModel.isDiscoverDetailLoading {
+                ProgressView()
+                    .controlSize(.small)
+                    .help("正在加载壁纸详情")
+            }
+
+            Button {
+                workshopViewModel.refreshDiscover()
+            } label: {
+                Image(systemName: "arrow.clockwise")
+                    .frame(width: 18, height: 18)
+            }
+            .buttonStyle(.borderless)
+            .disabled(browse.isLoading)
+            .help("刷新")
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 10)
+    }
+
+    private var feedContent: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                Group {
+                    if workshopViewModel.isDiscoverLoading && workshopViewModel.discoverRows.isEmpty {
+                        loadingState
+                    } else if let error = workshopViewModel.discoverError,
+                              workshopViewModel.discoverRows.isEmpty {
+                        errorState(error)
+                    } else if workshopViewModel.discoverRows.isEmpty {
+                        emptyState
+                    } else {
+                        LazyVStack(alignment: .leading, spacing: 34) {
+                            ForEach(workshopViewModel.discoverRows) { row in
+                                DiscoverSectionView(
+                                    row: row,
+                                    workshopViewModel: workshopViewModel,
+                                    contentViewModel: viewModel,
+                                    wallpaperViewModel: wallpaperViewModel,
+                                    isActive: isActive,
+                                    animatedPreviewMode: globalSettingsViewModel.animatedPreviewPlaybackMode,
+                                    onSeeAll: {
+                                        discoverReturnRowID = row.id
+                                        workshopViewModel.openDiscoverRow(id: row.id)
+                                    }
+                                )
+                                .id(row.id)
+                            }
+                            Spacer(minLength: 24)
+                        }
+                        .padding(.horizontal, 18)
+                        .padding(.top, 20)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .onAppear {
+                guard let rowID = discoverReturnRowID else { return }
+                DispatchQueue.main.async {
+                    proxy.scrollTo(rowID, anchor: .top)
+                    discoverReturnRowID = nil
+                }
+            }
         }
     }
 
-    private func showAll(_ category: WorkshopDiscoverCategory) {
-        if let tag = category.tag {
-            workshopViewModel.navigateToWorkshopWithTag(
-                tag,
-                trendPeriod: workshopViewModel.discoverTrendPeriod
-            )
-        } else if let sortOrder = category.sortOrder {
-            workshopViewModel.navigateToWorkshopWithSort(
-                sortOrder,
-                trendPeriod: workshopViewModel.discoverTrendPeriod
-            )
-        }
-        navigationModel.selection = .workshop
-    }
-}
+    private func browseContent(_ browse: DiscoverBrowseState) -> some View {
+        ScrollViewReader { proxy in
+            ZStack(alignment: .bottom) {
+                if browse.isLoading && browse.items.isEmpty {
+                    loadingState
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if let error = browse.error, browse.items.isEmpty {
+                    errorState(error)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if browse.items.isEmpty {
+                    emptyState
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ScrollView {
+                        Color.clear
+                            .frame(height: 0)
+                            .id("discoverBrowseTop")
 
-private extension WorkshopDiscoverCategory {
-    func title(period: WorkshopTrendPeriod) -> String {
-        switch self {
-        case .trending: return L("%@最热门", period.label)
-        case .mostSubscribed: return L("订阅最多")
-        case .topRated: return L("评分最高")
-        case .lastUpdated: return L("最近更新")
-        case .playtimeTrend: return L("%@播放时长最多", period.label)
-        case .averagePlaytimeTrend: return L("%@平均播放时长最长", period.label)
-        case .sessionsTrend: return L("%@播放次数最多", period.label)
-        case .totalPlaytime: return L("总播放时长最多")
-        case .lifetimeAveragePlaytime: return L("终身平均播放时长")
-        case .lifetimeSessions: return L("总播放次数最多")
-        case .anime: return L("动漫精选")
-        case .nature: return L("自然风光")
-        case .abstract: return L("抽象艺术")
-        case .landscape: return L("风景壁纸")
+                        LazyVGrid(
+                            columns: [GridItem(.adaptive(
+                                minimum: viewModel.explorerIconSize,
+                                maximum: viewModel.explorerIconSize * 2
+                            ), spacing: 14)],
+                            alignment: .leading,
+                            spacing: 14
+                        ) {
+                            ForEach(browse.items) { item in
+                                WorkshopItemCard(
+                                    item: item,
+
+                                    isSelected: workshopViewModel.discoverSelectedItemID == item.id,
+                                    isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
+                                    presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
+                                    downloadTask: workshopViewModel.downloadTask(for: item.publishedFileId),
+                                    isFavorite: workshopViewModel.isWorkshopFavorite(item.publishedFileId),
+                                    isActive: isActive,
+                                    animatedPreviewMode: globalSettingsViewModel.animatedPreviewPlaybackMode
+                                )
+                                .onTapGesture {
+                                    workshopViewModel.selectDiscoverItem(item)
+                                }
+                                .contextMenu {
+                                    if let wallpaper = workshopViewModel.cachedInstalledWallpapers[item.publishedFileId] {
+                                        ExplorerItemMenu(
+                                            contentViewModel: viewModel,
+                                            wallpaperViewModel: wallpaperViewModel,
+                                            workshopViewModel: workshopViewModel,
+                                            current: wallpaper
+                                        )
+                                        ExplorerGlobalMenu(
+                                            contentViewModel: viewModel,
+                                            wallpaperViewModel: wallpaperViewModel
+                                        )
+                                    } else {
+                                        WorkshopCardContextMenu(
+                                            item: item,
+                                            workshopViewModel: workshopViewModel
+                                        )
+                                        WallpaperGridViewMenu(viewModel: viewModel)
+                                    }
+                                }
+                            }
+                        }
+                        .padding(18)
+
+                        if browse.totalPages > 1 {
+                            Color.clear.frame(height: 58)
+                        }
+                    }
+                }
+
+                if browse.totalPages > 1 {
+                    PageNavigator(
+                        currentPage: browse.page,
+                        pageCount: browse.totalPages,
+                        onSelect: workshopViewModel.goToDiscoverBrowsePage
+                    )
+                    .padding(.bottom, 12)
+                }
+            }
+            .onChange(of: browse.page) { _, _ in
+                withAnimation(.easeOut(duration: 0.2)) {
+                    proxy.scrollTo("discoverBrowseTop", anchor: .top)
+                }
+            }
         }
     }
 
-    var icon: String {
-        switch self {
-        case .trending: return "flame.fill"
-        case .mostSubscribed: return "arrow.down.circle.fill"
-        case .topRated: return "star.fill"
-        case .lastUpdated: return "clock.arrow.circlepath"
-        case .playtimeTrend, .totalPlaytime: return "hourglass"
-        case .averagePlaytimeTrend, .lifetimeAveragePlaytime: return "timer"
-        case .sessionsTrend, .lifetimeSessions: return "repeat.circle.fill"
-        case .anime: return "sparkles"
-        case .nature: return "leaf.fill"
-        case .abstract: return "circle.hexagongrid.fill"
-        case .landscape: return "mountain.2.fill"
+    private var loadingState: some View {
+        VStack(spacing: 16) {
+            ProgressView()
+                .controlSize(.large)
+            Text("正在加载推荐内容...")
+                .foregroundStyle(.secondary)
         }
+        .padding(.top, 100)
     }
 
-    var iconColor: Color {
-        switch self {
-        case .trending: return .orange
-        case .mostSubscribed: return .green
-        case .topRated: return .yellow
-        case .lastUpdated: return .indigo
-        case .playtimeTrend: return .mint
-        case .averagePlaytimeTrend: return .cyan
-        case .sessionsTrend: return .teal
-        case .totalPlaytime: return .purple
-        case .lifetimeAveragePlaytime: return .blue
-        case .lifetimeSessions: return .green
-        case .anime: return .purple
-        case .nature: return .green
-        case .abstract: return .cyan
-        case .landscape: return .teal
+    private func errorState(_ error: String) -> some View {
+        VStack(spacing: 12) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 34))
+                .foregroundStyle(.secondary)
+            Text(error)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            Button("重试") {
+                workshopViewModel.refreshDiscover()
+            }
         }
+        .padding(.horizontal, 30)
+        .padding(.top, 100)
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "rectangle.stack")
+                .font(.system(size: 36))
+                .foregroundStyle(.tertiary)
+            Text("没有找到壁纸")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.top, 100)
     }
 }

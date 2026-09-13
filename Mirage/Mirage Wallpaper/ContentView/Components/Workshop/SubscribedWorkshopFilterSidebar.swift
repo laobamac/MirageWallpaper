@@ -7,7 +7,7 @@
 import SwiftUI
 
 struct SubscribedWorkshopFilterSidebar: View {
-    @ObservedObject var workshopViewModel: WorkshopViewModel
+    @Bindable var workshopViewModel: WorkshopViewModel
 
     var body: some View {
         VStack {
@@ -33,8 +33,8 @@ struct SubscribedWorkshopFilterSidebar: View {
                         VStack(alignment: .leading, spacing: 8) {
                             ForEach(WorkshopTypeFilter.allCases) { filter in
                                 Toggle(filter.label, isOn: Binding(
-                                    get: { workshopViewModel.subscriptionTypeFilter == filter },
-                                    set: { if $0 { workshopViewModel.setSubscriptionTypeFilter(filter) } }
+                                    get: { workshopViewModel.subscriptionSelectedTypeFilters.contains(filter) },
+                                    set: { workshopViewModel.setSubscriptionTypeFilter(filter, isOn: $0) }
                                 ))
                                 .toggleStyle(.checkbox)
                             }

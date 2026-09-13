@@ -5,14 +5,30 @@
 //
 
 import SwiftUI
+import Observation
 import CoreGraphics
+import Combine
 
 struct WallpaperRuntimeState: Codable, Equatable {
     var volume: Float = 1.0
     var speed: Float = 1.0
     var muted: Bool = false
     var fillMode: FillMode = .cover
+    var position: WallpaperPosition = .center
     var propertyOverrides: [String: WEPropertyValue] = [:]
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        volume = try values.decodeIfPresent(Float.self, forKey: .volume) ?? 1
+        speed = try values.decodeIfPresent(Float.self, forKey: .speed) ?? 1
+        muted = try values.decodeIfPresent(Bool.self, forKey: .muted) ?? false
+        fillMode = try values.decodeIfPresent(FillMode.self, forKey: .fillMode) ?? .cover
+        position = try values.decodeIfPresent(WallpaperPosition.self, forKey: .position) ?? .center
+        propertyOverrides = try values.decodeIfPresent([String: WEPropertyValue].self,
+                                                        forKey: .propertyOverrides) ?? [:]
+    }
 }
 
 struct DisplayWallpaperState: Codable, Equatable {
@@ -20,7 +36,8 @@ struct DisplayWallpaperState: Codable, Equatable {
     var runtime: WallpaperRuntimeState
 }
 
-class WallpaperViewModel: ObservableObject {
+@Observable
+class WallpaperViewModel: PlaylistPlayback {
     let renderer = RendererController()
 
     private struct AppliedPlaybackState: Equatable {
@@ -37,6 +54,21 @@ class WallpaperViewModel: ObservableObject {
         let key: DisplayKey
         let state: DisplayWallpaperState
         let restoreFocus: Bool
+        let completion: AssignmentCompletion?
+    }
+
+    private final class AssignmentCompletion {
+        private var callback: ((Bool) -> Void)?
+
+        init(_ callback: @escaping (Bool) -> Void) {
+            self.callback = callback
+        }
+
+        func finish(_ success: Bool) {
+            let callback = callback
+            self.callback = nil
+            callback?(success)
+        }
     }
 
     private struct FailedAssignmentRecovery {
@@ -50,20 +82,35 @@ class WallpaperViewModel: ObservableObject {
     private static let selectedDisplayDefaultsKey = "SelectedDisplay"
     private static let legacyWallpaperDefaultsKey = "CurrentWallpaper"
     private static let runtimeKeyPrefix = "Runtime_"
+    private static let positionDefaultsKey = "WallpaperPositionsByDisplay"
     private static let sessionPauseRepairDefaultsKey = "DidRepairSessionPausedRuntimes"
 
-    @Published private(set) var displayStates: [DisplayKey: DisplayWallpaperState] = [:]
+    private(set) var displayStates: [DisplayKey: DisplayWallpaperState] = [:] {
+        didSet {
+            refreshSelectedState()
+            displayStatesChanges.send(displayStates)
+        }
+    }
 
-    @Published var selectedDisplayKey: DisplayKey {
+    let displayStatesChanges = CurrentValueSubject<[DisplayKey: DisplayWallpaperState], Never>([:])
+    let wallpaperChangeRequests = PassthroughSubject<DisplayKey, Never>()
+    private var selectedWallpaperSnapshot = WallpaperViewModel.invalidWallpaper
+    private var selectedRuntimeSnapshot = WallpaperRuntimeState()
+    private var positionAvailabilityGeneration: UInt64 = 0
+    private var pendingPreparations: [DisplayKey: UUID] = [:]
+    private var preparationWorkers: [DisplayKey: LatestValueWorker<URL, WEWallpaper>] = [:]
+
+    var selectedDisplayKey: DisplayKey {
         didSet {
             guard selectedDisplayKey != oldValue else { return }
             UserDefaults.standard.set(selectedDisplayKey.rawValue,
                                       forKey: Self.selectedDisplayDefaultsKey)
+            refreshSelectedState()
             syncStatusItems()
         }
     }
 
-    @Published var currentByScreen: [Int: WEWallpaper] = [:]
+    var currentByScreen: [Int: WEWallpaper] = [:]
 
     private var pendingScreenAssignments: [CGDirectDisplayID: UUID] = [:]
     private var pendingAssignmentProposals: [CGDirectDisplayID: [PendingAssignmentProposal]] = [:]
@@ -71,12 +118,24 @@ class WallpaperViewModel: ObservableObject {
     private var committedAssignmentIDs: [DisplayKey: UUID] = [:]
     private var lastAppliedPlayback: [DisplayKey: AppliedPlaybackState] = [:]
     private var stoppedByPlaybackPolicy: Set<DisplayKey> = []
+    private let persistenceQueue = CoalescingWorkQueue(label: "cn.laobamac.Mirage.wallpaper.persistence")
+    private var savedRuntimeSnapshots: [String: WallpaperRuntimeState] = [:]
     private var statesSaveWorkItem: DispatchWorkItem?
     private var runtimeSaveWorkItems: [DisplayKey: DispatchWorkItem] = [:]
     private var playbackCommandWorkItems: [DisplayKey: DispatchWorkItem] = [:]
     private var propertyCommandWorkItems: [DisplayKey: DispatchWorkItem] = [:]
+    private var positionCommandWorkItems: [DisplayKey: DispatchWorkItem] = [:]
+    private var positionCaptureWorkItems: [DisplayKey: DispatchWorkItem] = [:]
+    private var positionsByDisplay: [String: [String: WallpaperPosition]] = {
+        guard let data = UserDefaults.standard.data(forKey: WallpaperViewModel.positionDefaultsKey),
+              let positions = try? JSONDecoder().decode([String: [String: WallpaperPosition]].self,
+                                                        from: data) else { return [:] }
+        return positions
+    }()
     private var pendingPropertyCommands: [DisplayKey: [String: WEProjectProperty]] = [:]
     private var sessionPaused = false
+    private var dynamicLockScreenPaused = false
+    private var externalLockScreenSuspended = false
     private var sessionMuted = false
 
     static var invalidWallpaper: WEWallpaper {
@@ -111,9 +170,15 @@ class WallpaperViewModel: ObservableObject {
             }
         }
         displayStates = loaded
+        refreshSelectedState()
+        displayStatesChanges.send(loaded)
         committedAssignmentIDs = Dictionary(uniqueKeysWithValues: loaded.keys.map { ($0, UUID()) })
 
         renderer.isWallpaperTrusted = { WallpaperViewModel.isWallpaperTrusted($0) }
+        renderer.onPositionAvailabilityChanged = { [weak self] displayID in
+            guard let self, self.selectedDisplay?.displayID == displayID else { return }
+            self.positionAvailabilityGeneration &+= 1
+        }
         NotificationCenter.default.addObserver(
             self, selector: #selector(displayTopologyChanged),
             name: NSApplication.didChangeScreenParametersNotification, object: nil)
@@ -162,8 +227,20 @@ class WallpaperViewModel: ObservableObject {
     // MARK: 选中显示器的门面
 
     var currentWallpaper: WEWallpaper {
-        get { wallpaper(for: selectedDisplayKey) }
+        get { selectedWallpaperSnapshot }
         set { assign(newValue, to: selectedDisplayKey, restoreFocus: true) }
+    }
+
+    private func refreshSelectedState() {
+        let state = displayStates[selectedDisplayKey]
+        let wallpaper = state?.wallpaper ?? Self.invalidWallpaper
+        let runtime = state?.runtime ?? WallpaperRuntimeState()
+        if !selectedWallpaperSnapshot.hasSamePresentation(as: wallpaper) {
+            selectedWallpaperSnapshot = wallpaper
+        }
+        if selectedRuntimeSnapshot != runtime {
+            selectedRuntimeSnapshot = runtime
+        }
     }
 
     @discardableResult
@@ -197,7 +274,8 @@ class WallpaperViewModel: ObservableObject {
                 var state = proposal.state
                 state.wallpaper = updated
                 return PendingAssignmentProposal(id: proposal.id, key: proposal.key, state: state,
-                                                restoreFocus: proposal.restoreFocus)
+                                                restoreFocus: proposal.restoreFocus,
+                                                completion: proposal.completion)
             }
         }
         persistStates()
@@ -205,7 +283,7 @@ class WallpaperViewModel: ObservableObject {
     }
 
     var runtime: WallpaperRuntimeState {
-        get { runtime(for: selectedDisplayKey) }
+        get { selectedRuntimeSnapshot }
         set {
             guard var state = displayStates[selectedDisplayKey] else { return }
             state.runtime = Self.normalizedRuntime(newValue, for: state.wallpaper)
@@ -215,12 +293,12 @@ class WallpaperViewModel: ObservableObject {
     }
 
     var playVolume: Float {
-        get { runtime(for: selectedDisplayKey).volume }
+        get { selectedRuntimeSnapshot.volume }
         set { setVolume(newValue, for: selectedDisplayKey) }
     }
 
     var playRate: Float {
-        get { runtime(for: selectedDisplayKey).speed }
+        get { selectedRuntimeSnapshot.speed }
         set { setSpeed(newValue, for: selectedDisplayKey) }
     }
 
@@ -239,11 +317,12 @@ class WallpaperViewModel: ObservableObject {
         AppDelegate.shared.globalSettingsViewModel.settings.enableSpectrum
     }
     private func currentPlaybackPolicy(for key: DisplayKey) -> GSPlayback {
-        AppDelegate.shared.globalSettingsViewModel.effectivePlaybackAction(for: key)
+        externalLockScreenSuspended ? .stop
+            : AppDelegate.shared.globalSettingsViewModel.effectivePlaybackAction(for: key)
     }
 
     private func isPaused(_ state: WallpaperRuntimeState, action: GSPlayback) -> Bool {
-        sessionPaused || state.speed == 0 || action == .pause
+        sessionPaused || dynamicLockScreenPaused || state.speed == 0 || action == .pause
     }
 
     private func isMuted(_ state: WallpaperRuntimeState, action: GSPlayback) -> Bool {
@@ -301,7 +380,28 @@ class WallpaperViewModel: ObservableObject {
     }
 
     func requestApply(_ wallpaper: WEWallpaper, to key: DisplayKey) {
-        guard wallpaper.isValid, wallpaper.kind != .unsupported else { return }
+        wallpaperChangeRequests.send(key)
+        prepareWallpaper(wallpaper, for: key) { [weak self] fresh in
+            self?.requestPreparedWallpaper(fresh, to: key)
+        }
+    }
+
+    func prepareWallpaper(_ wallpaper: WEWallpaper, for key: DisplayKey,
+                          completion: @escaping (WEWallpaper) -> Void) {
+        let token = UUID()
+        pendingPreparations[key] = token
+        let worker = preparationWorkers[key] ?? LatestValueWorker<URL, WEWallpaper>(
+            label: "cn.laobamac.Mirage.wallpaper.prepare.\(key.rawValue)", process: WEWallpaper.load)
+        preparationWorkers[key] = worker
+        worker.submit(wallpaper.wallpaperDirectory) { [weak self] fresh in
+            guard let self, self.pendingPreparations[key] == token else { return }
+            self.pendingPreparations[key] = nil
+            completion(fresh)
+        }
+    }
+
+    func requestPreparedWallpaper(_ wallpaper: WEWallpaper, to key: DisplayKey) {
+        guard wallpaper.presentationIsValid, wallpaper.kind != .unsupported else { return }
         if wallpaper.kind == .web, !isTrusted(wallpaper) {
             guard let displayID = DisplayRegistry.shared.displayID(for: key) else { return }
             AppDelegate.shared.contentViewModel.warningUnsafeWallpaperModal(
@@ -313,18 +413,25 @@ class WallpaperViewModel: ObservableObject {
 
     // MARK: 指派与停止
 
-    func assign(_ wallpaper: WEWallpaper, to key: DisplayKey, restoreFocus: Bool = false) {
-        guard wallpaper.isValid, wallpaper.kind != .unsupported else {
+    func assign(_ wallpaper: WEWallpaper, to key: DisplayKey, restoreFocus: Bool = false,
+                preservingPlaybackState: Bool = false, completion: ((Bool) -> Void)? = nil) {
+        if !preservingPlaybackState { wallpaperChangeRequests.send(key) }
+        let completion = completion.map(AssignmentCompletion.init)
+        pendingPreparations[key] = nil
+        preparationWorkers[key]?.cancel()
+        guard wallpaper.presentationIsValid, wallpaper.kind != .unsupported else {
             clear(key)
+            completion?.finish(false)
             return
         }
         let previous = displayStates[key]
-        clearSessionPlaybackOverrides()
-        let resolved: WallpaperRuntimeState
+        if !preservingPlaybackState { clearSessionPlaybackOverrides() }
+        var resolved: WallpaperRuntimeState
         if let previous, previous.wallpaper.id == wallpaper.id {
             resolved = previous.runtime
         } else {
-            resolved = Self.loadPersistedRuntime(for: wallpaper)
+            resolved = savedRuntimeSnapshots[wallpaper.id] ?? Self.loadPersistedRuntime(for: wallpaper)
+            resolved.position = positionsByDisplay[key.rawValue]?[wallpaper.id] ?? .center
         }
         let state = DisplayWallpaperState(wallpaper: wallpaper, runtime: resolved)
         cancelPendingProperties(for: key)
@@ -336,6 +443,7 @@ class WallpaperViewModel: ObservableObject {
             commitAssignmentState(state, assignmentID: UUID(), for: key)
             if shouldRestoreFocus { AppDelegate.shared.restoreMainWindowFocus() }
             syncStatusItems()
+            completion?.finish(true)
             return
         }
         if currentPlaybackPolicy(for: key) == .stop {
@@ -343,9 +451,10 @@ class WallpaperViewModel: ObservableObject {
             pendingAssignmentProposals[displayID] = nil
             commitAssignmentState(state, assignmentID: UUID(), for: key)
             if shouldRestoreFocus { AppDelegate.shared.restoreMainWindowFocus() }
+            completion?.finish(true)
         } else {
             submitAssignment(state, to: displayID, key: key, reuseActive: true,
-                             restoreFocus: shouldRestoreFocus)
+                             restoreFocus: shouldRestoreFocus, completion: completion)
             if shouldRestoreFocus { AppDelegate.shared.restoreMainWindowFocus() }
         }
         syncStatusItems()
@@ -355,10 +464,11 @@ class WallpaperViewModel: ObservableObject {
                                   to displayID: CGDirectDisplayID,
                                   key: DisplayKey,
                                   reuseActive: Bool,
-                                  restoreFocus: Bool) {
+                                  restoreFocus: Bool,
+                                  completion: AssignmentCompletion? = nil) {
         let requestID = UUID()
         let proposal = PendingAssignmentProposal(id: requestID, key: key, state: state,
-                                                 restoreFocus: restoreFocus)
+                                                 restoreFocus: restoreFocus, completion: completion)
         cancelFailedAssignmentRecovery(for: key)
         pendingAssignmentProposals[displayID, default: []].append(proposal)
         apply(state, to: displayID, key: key, reuseActive: reuseActive,
@@ -371,7 +481,10 @@ class WallpaperViewModel: ObservableObject {
                                     on displayID: CGDirectDisplayID,
                                     success: Bool) {
         guard var proposals = pendingAssignmentProposals[displayID],
-              let index = proposals.firstIndex(where: { $0.id == proposal.id }) else { return }
+              let index = proposals.firstIndex(where: { $0.id == proposal.id }) else {
+            proposal.completion?.finish(false)
+            return
+        }
         let wasLatest = proposals.last?.id == proposal.id
         proposals.remove(at: index)
         if proposals.isEmpty {
@@ -401,6 +514,7 @@ class WallpaperViewModel: ObservableObject {
             }
         }
         syncStatusItems()
+        proposal.completion?.finish(success)
     }
 
     private func assignmentStateMergingCurrentRuntime(
@@ -428,7 +542,7 @@ class WallpaperViewModel: ObservableObject {
                                        for key: DisplayKey) {
         if let previous = displayStates[key], previous.wallpaper.id != state.wallpaper.id {
             cancelRuntimeSave(for: key)
-            persistRuntime(previous.runtime, for: previous.wallpaper)
+            persistRuntime(previous.runtime, for: previous.wallpaper, on: key)
         }
         displayStates[key] = state
         cancelFailedAssignmentRecovery(for: key)
@@ -482,10 +596,13 @@ class WallpaperViewModel: ObservableObject {
     }
 
     func clear(_ key: DisplayKey) {
+        wallpaperChangeRequests.send(key)
+        pendingPreparations[key] = nil
+        preparationWorkers[key]?.cancel()
         discardPendingAssignment(for: key)
         if let state = displayStates[key] {
             cancelRuntimeSave(for: key)
-            persistRuntime(state.runtime, for: state.wallpaper)
+            persistRuntime(state.runtime, for: state.wallpaper, on: key)
         }
         displayStates[key] = nil
         cancelFailedAssignmentRecovery(for: key)
@@ -509,9 +626,12 @@ class WallpaperViewModel: ObservableObject {
     }
 
     func stopAllWallpapers() {
+        for info in DisplayRegistry.shared.connected { wallpaperChangeRequests.send(info.key) }
+        pendingPreparations.removeAll()
+        preparationWorkers.values.forEach { $0.cancel() }
         for (key, state) in displayStates {
             cancelRuntimeSave(for: key)
-            persistRuntime(state.runtime, for: state.wallpaper)
+            persistRuntime(state.runtime, for: state.wallpaper, on: key)
             cancelPendingProperties(for: key)
         }
         cancelAllFailedAssignmentRecoveries()
@@ -703,7 +823,9 @@ class WallpaperViewModel: ObservableObject {
         opts.volume = state.volume * masterVolume
         opts.speed = state.speed
         opts.fillMode = state.fillMode
-        opts.userProperties = effectiveProperties(for: w, runtime: state)
+        opts.position = state.position
+        opts.userProperties = Self.propertyValues(for: w, runtime: state)
+        opts.developerModeEnabled = settings.isDeveloperModeEnabled
         let throttledFps = AppDelegate.shared.globalSettingsViewModel
             .throttledFps(base: globalFps)
         let paused = isPaused(state, action: action)
@@ -891,7 +1013,12 @@ class WallpaperViewModel: ObservableObject {
     }
 
     func loadRuntime(for w: WEWallpaper) -> WallpaperRuntimeState {
-        Self.loadPersistedRuntime(for: w)
+        if let current = displayStates[selectedDisplayKey], current.wallpaper.id == w.id {
+            return current.runtime
+        }
+        var state = savedRuntimeSnapshots[w.id] ?? Self.loadPersistedRuntime(for: w)
+        state.position = positionsByDisplay[selectedDisplayKey.rawValue]?[w.id] ?? .center
+        return state
     }
 
     private static func loadPersistedRuntime(for w: WEWallpaper) -> WallpaperRuntimeState {
@@ -916,23 +1043,45 @@ class WallpaperViewModel: ObservableObject {
         }
         for (key, state) in displayStates {
             cancelRuntimeSave(for: key)
-            persistRuntime(state.runtime, for: state.wallpaper)
+            persistRuntime(state.runtime, for: state.wallpaper, on: key)
         }
         persistStates()
     }
 
-    private func persistRuntime(_ state: WallpaperRuntimeState, for wallpaper: WEWallpaper) {
-        guard wallpaper.isValid else { return }
+    func flushPendingSaves() {
+        persistenceQueue.flush()
+    }
+
+    private func persistRuntime(_ state: WallpaperRuntimeState, for wallpaper: WEWallpaper,
+                                on key: DisplayKey) {
+        guard wallpaper.presentationIsValid else { return }
         let normalized = Self.normalizedRuntime(state, for: wallpaper)
-        guard let data = try? JSONEncoder().encode(normalized) else { return }
-        UserDefaults.standard.set(data, forKey: Self.runtimeKey(for: wallpaper))
-        if ScreenSaverManager.shared.configuredWallpaperID() == wallpaper.id {
-            try? ScreenSaverManager.shared.configure(
-                with: wallpaper,
-                runtime: normalized,
-                properties: effectiveProperties(for: wallpaper, runtime: normalized),
-                fps: Int(AppDelegate.shared.globalSettingsViewModel.settings.fps)
-            )
+        positionsByDisplay[key.rawValue, default: [:]][wallpaper.id] = normalized.position
+        let storedPositions = positionsByDisplay
+        persistenceQueue.submit(key: "positions") {
+            if let data = try? JSONEncoder().encode(storedPositions) {
+                UserDefaults.standard.set(data, forKey: Self.positionDefaultsKey)
+            }
+        }
+        var shared = normalized
+        shared.position = .center
+        savedRuntimeSnapshots[wallpaper.id] = shared
+        let properties = Self.propertyValues(for: wallpaper, runtime: normalized)
+        let context = ScreenSaverManager.ConfigurationContext(
+            wallpaperID: wallpaper.id, runtime: normalized,
+            fps: Int(AppDelegate.shared.globalSettingsViewModel.settings.fps))
+        persistenceQueue.submit(key: "runtime:" + wallpaper.id) {
+            guard let data = try? JSONEncoder().encode(shared) else { return }
+            UserDefaults.standard.set(data, forKey: Self.runtimeKey(for: wallpaper))
+            ScreenSaverManager.shared.updateRuntimeIfConfigured(
+                wallpaper: wallpaper, runtime: normalized, properties: properties, context: context)
+        }
+        if let displayID = DisplayRegistry.shared.displayID(for: key) {
+            MainActor.assumeIsolated {
+                DynamicLockScreenManager.shared.updatePosition(
+                    normalized.position, fillMode: normalized.fillMode,
+                    wallpaperID: wallpaper.id, displayID: displayID)
+            }
         }
     }
 
@@ -942,7 +1091,7 @@ class WallpaperViewModel: ObservableObject {
             guard let self else { return }
             self.runtimeSaveWorkItems[key] = nil
             guard let state = self.displayStates[key] else { return }
-            self.persistRuntime(state.runtime, for: state.wallpaper)
+            self.persistRuntime(state.runtime, for: state.wallpaper, on: key)
         }
         runtimeSaveWorkItems[key] = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
@@ -971,18 +1120,17 @@ class WallpaperViewModel: ObservableObject {
     }
 
     private func writeStates() {
-        var raw: [String: DisplayWallpaperState] = [:]
-        for (key, state) in displayStates {
-            raw[key.rawValue] = state
-        }
-        if let data = try? JSONEncoder().encode(raw) {
-            UserDefaults.standard.set(data, forKey: Self.assignmentsDefaultsKey)
-        }
+        let raw = Dictionary(uniqueKeysWithValues: displayStates.map { ($0.key.rawValue, $0.value) })
         let mainState = DisplayRegistry.shared.mainKey.flatMap { displayStates[$0] }
-        if let mainState, let data = try? JSONEncoder().encode(mainState.wallpaper) {
-            UserDefaults.standard.set(data, forKey: Self.legacyWallpaperDefaultsKey)
-        } else if mainState == nil {
-            UserDefaults.standard.removeObject(forKey: Self.legacyWallpaperDefaultsKey)
+        persistenceQueue.submit(key: "assignments") {
+            if let data = try? JSONEncoder().encode(raw) {
+                UserDefaults.standard.set(data, forKey: Self.assignmentsDefaultsKey)
+            }
+            if let mainState, let data = try? JSONEncoder().encode(mainState.wallpaper) {
+                UserDefaults.standard.set(data, forKey: Self.legacyWallpaperDefaultsKey)
+            } else if mainState == nil {
+                UserDefaults.standard.removeObject(forKey: Self.legacyWallpaperDefaultsKey)
+            }
         }
     }
 
@@ -1022,12 +1170,57 @@ class WallpaperViewModel: ObservableObject {
 
     func effectiveProperties(for w: WEWallpaper,
                              runtime runtimeState: WallpaperRuntimeState) -> [String: WEProjectProperty] {
-        var result = w.project.general?.properties?.items ?? [:]
-        for (key, override) in runtimeState.propertyOverrides {
-            if var prop = result[key] {
-                prop.value = prop.normalizedComboValue(override)
-                result[key] = prop
+        Self.resolveProperties(Self.propertyValues(for: w, runtime: runtimeState), for: w)
+    }
+
+    private static func propertyValues(for wallpaper: WEWallpaper,
+                                       runtime: WallpaperRuntimeState) -> [String: WEProjectProperty] {
+        var result = wallpaper.project.general?.properties?.items ?? [:]
+        for (key, override) in runtime.propertyOverrides {
+            if var property = result[key] {
+                property.value = property.normalizedComboValue(override)
+                result[key] = property
             }
+        }
+        return result
+    }
+
+    private final class ResolvedProperties {
+        let wallpaper: WEWallpaper
+        let input: [String: WEProjectProperty]
+        let result: [String: WEProjectProperty]
+
+        init(wallpaper: WEWallpaper, input: [String: WEProjectProperty], result: [String: WEProjectProperty]) {
+            self.wallpaper = wallpaper
+            self.input = input
+            self.result = result
+        }
+    }
+
+    private static let propertyResolutionCache: NSCache<NSString, ResolvedProperties> = {
+        let cache = NSCache<NSString, ResolvedProperties>()
+        cache.countLimit = 32
+        return cache
+    }()
+
+    static func invalidatePropertyResolutionCache() {
+        propertyResolutionCache.removeAllObjects()
+    }
+
+    static func resolveProperties(_ input: [String: WEProjectProperty],
+                                   for w: WEWallpaper) -> [String: WEProjectProperty] {
+        let cacheKey = w.id as NSString
+        if let cached = propertyResolutionCache.object(forKey: cacheKey),
+           cached.wallpaper == w, cached.wallpaper.renderDirectory == w.renderDirectory,
+           cached.wallpaper.assetOverlayDirectories == w.assetOverlayDirectories,
+           cached.input == input {
+            return cached.result
+        }
+        var result = input
+        for (key, var property) in result where property.propertyType == .usershortcut {
+            property.mirageShortcutIcon = UserTextureCache.shared.shortcutIconPath(
+                for: property.value.stringValue)
+            result[key] = property
         }
         if !w.assetOverlayDirectories.isEmpty {
             let baseProperties = loadBaseProperties(for: w)
@@ -1054,6 +1247,8 @@ class WallpaperViewModel: ObservableObject {
                 }
             }
         }
+        propertyResolutionCache.setObject(ResolvedProperties(wallpaper: w, input: input, result: result),
+                                          forKey: cacheKey)
         return result
     }
 
@@ -1068,18 +1263,18 @@ class WallpaperViewModel: ObservableObject {
         return result
     }
 
-    private func loadBaseProperties(for wallpaper: WEWallpaper) -> [String: WEProjectProperty] {
+    private static func loadBaseProperties(for wallpaper: WEWallpaper) -> [String: WEProjectProperty] {
         let url = wallpaper.renderDirectory.appending(path: "project.json")
         guard let data = try? Data(contentsOf: url),
               let project = try? JSONDecoder().decode(WEProject.self, from: data) else { return [:] }
         return project.general?.properties?.items ?? [:]
     }
 
-    private func isWindowsAbsolutePath(_ path: String) -> Bool {
+    private static func isWindowsAbsolutePath(_ path: String) -> Bool {
         path.range(of: "^[A-Za-z]:[\\\\/]", options: .regularExpression) != nil
     }
 
-    private func resolvedPresetAsset(_ relativePath: String, in directories: [URL]) -> URL? {
+    private static func resolvedPresetAsset(_ relativePath: String, in directories: [URL]) -> URL? {
         for directory in directories {
             let root = directory.standardizedFileURL.resolvingSymlinksInPath()
             let candidate = root.appending(path: relativePath).standardizedFileURL.resolvingSymlinksInPath()
@@ -1102,6 +1297,10 @@ class WallpaperViewModel: ObservableObject {
               var prop = state.wallpaper.project.general?.properties?.items[propertyKey] else { return }
         let normalizedValue = prop.normalizedComboValue(value)
         prop.value = normalizedValue
+        if prop.propertyType == .usershortcut {
+            prop.mirageShortcutIcon = UserTextureCache.shared.shortcutIconPath(
+                for: normalizedValue.stringValue)
+        }
         mutateRuntime(for: displayKey) { $0.propertyOverrides[propertyKey] = normalizedValue }
 
         switch state.wallpaper.kind {
@@ -1138,6 +1337,8 @@ class WallpaperViewModel: ObservableObject {
     }
 
     private func cancelPendingProperties(for key: DisplayKey) {
+        positionCommandWorkItems.removeValue(forKey: key)?.cancel()
+        positionCaptureWorkItems.removeValue(forKey: key)?.cancel()
         propertyCommandWorkItems[key]?.cancel()
         propertyCommandWorkItems[key] = nil
         pendingPropertyCommands[key] = nil
@@ -1161,6 +1362,63 @@ class WallpaperViewModel: ObservableObject {
             renderer.setFillMode(
                 mode, onDisplay: displayID, assignmentID: assignmentID)
         }
+        schedulePositionCapture(for: key, wallpaperID: wallpaperID)
+    }
+
+    var positionAvailability: WallpaperPositionAvailability {
+        _ = positionAvailabilityGeneration
+        guard let state = displayStates[selectedDisplayKey],
+              let displayID = selectedDisplay?.displayID else { return .init() }
+        return renderer.positionAvailability(onDisplay: displayID, wallpaperID: state.wallpaper.id)
+    }
+
+    func positions(for wallpaperID: String) -> [String: WallpaperPosition] {
+        var result = positionsByDisplay.compactMapValues { $0[wallpaperID] }
+        for (key, state) in displayStates where state.wallpaper.id == wallpaperID {
+            result[key.rawValue] = state.runtime.position
+        }
+        return result
+    }
+
+    func setPosition(_ position: WallpaperPosition) {
+        let key = selectedDisplayKey
+        guard let state = displayStates[key], state.runtime.position != position else { return }
+        let wallpaperID = state.wallpaper.id
+        mutateRuntime(for: key) { $0.position = position }
+        if positionCommandWorkItems[key] == nil {
+            let work = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.positionCommandWorkItems[key] = nil
+                guard let current = self.displayStates[key], current.wallpaper.id == wallpaperID,
+                      let displayID = DisplayRegistry.shared.displayID(for: key) else { return }
+                var assignments: Set<UUID> = [self.ensureCommittedAssignmentID(for: key)]
+                for proposal in self.pendingAssignmentProposals[displayID] ?? []
+                where proposal.key == key && proposal.state.wallpaper.id == wallpaperID {
+                    assignments.insert(proposal.id)
+                }
+                for assignmentID in assignments {
+                    self.renderer.setPosition(current.runtime.position, onDisplay: displayID,
+                                              assignmentID: assignmentID)
+                }
+            }
+            positionCommandWorkItems[key] = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0 / 60.0, execute: work)
+        }
+        schedulePositionCapture(for: key, wallpaperID: wallpaperID)
+    }
+
+    private func schedulePositionCapture(for key: DisplayKey, wallpaperID: String) {
+        positionCaptureWorkItems[key]?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.positionCaptureWorkItems[key] = nil
+            guard let state = self.displayStates[key], state.wallpaper.id == wallpaperID,
+                  let displayID = DisplayRegistry.shared.displayID(for: key) else { return }
+            DesktopOverrideService.shared.scheduleCapture(forDisplay: displayID,
+                                                          wallpaper: state.wallpaper)
+        }
+        positionCaptureWorkItems[key] = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
     }
 
     func resetProperties() {
@@ -1171,9 +1429,24 @@ class WallpaperViewModel: ObservableObject {
         lastAppliedPlayback[key] = nil
         persistStates()
         cancelRuntimeSave(for: key)
-        persistRuntime(state.runtime, for: state.wallpaper)
+        persistRuntime(state.runtime, for: state.wallpaper, on: key)
+        if state.wallpaper.kind == .scene {
+            if let displayID = DisplayRegistry.shared.displayID(for: key) {
+                renderer.resetScriptStorage(onDisplay: displayID)
+            }
+            clearSceneScriptStorage(for: state.wallpaper)
+        }
         reapply(for: key)
         syncStatusItems()
+    }
+
+    private func clearSceneScriptStorage(for wallpaper: WEWallpaper) {
+        let sceneID = wallpaper.resolvedEntryURL.deletingLastPathComponent().lastPathComponent
+        guard !sceneID.isEmpty else { return }
+        let file = FileManager.default.homeDirectoryForCurrentUser
+            .appending(path: "Library/Application Support/Mirage/SceneStorage")
+            .appending(path: "\(sceneID).json")
+        try? FileManager.default.removeItem(at: file)
     }
 
     // MARK: 播放控制
@@ -1181,7 +1454,9 @@ class WallpaperViewModel: ObservableObject {
     private func mutateRuntime(for key: DisplayKey,
                                _ transform: (inout WallpaperRuntimeState) -> Void) {
         guard var state = displayStates[key] else { return }
+        let previous = state.runtime
         transform(&state.runtime)
+        guard state.runtime != previous else { return }
         displayStates[key] = state
         scheduleStatesSave()
         scheduleRuntimeSave(for: key)
@@ -1237,6 +1512,38 @@ class WallpaperViewModel: ObservableObject {
         syncStatusItems()
     }
 
+    func setDynamicLockScreenPaused(_ paused: Bool) {
+        guard dynamicLockScreenPaused != paused else { return }
+        dynamicLockScreenPaused = paused
+        applyPlaybackPolicies(
+            AppDelegate.shared.globalSettingsViewModel.effectivePlaybackActions,
+            force: true)
+    }
+
+    func suspendForExternalLockScreen() {
+        guard !externalLockScreenSuspended else { return }
+        externalLockScreenSuspended = true
+        for info in DisplayRegistry.shared.connected { wallpaperChangeRequests.send(info.key) }
+        pendingPreparations.removeAll()
+        preparationWorkers.values.forEach { $0.cancel() }
+        pendingScreenAssignments.removeAll()
+        pendingAssignmentProposals.removeAll()
+        cancelAllFailedAssignmentRecoveries()
+        lastAppliedPlayback.removeAll()
+        UserDefaults.standard.set(true, forKey: "Mirage.DynamicLockScreen.Locked")
+        UserDefaults.standard.synchronize()
+        renderer.suspendAllAndWait()
+        currentByScreen.removeAll()
+    }
+
+    func resumeAfterExternalLockScreen() {
+        guard externalLockScreenSuspended, renderer.resumeAfterSuspension() else { return }
+        externalLockScreenSuspended = false
+        UserDefaults.standard.set(false, forKey: "Mirage.DynamicLockScreen.Locked")
+        UserDefaults.standard.synchronize()
+        restoreAllDisplays()
+    }
+
     private func clearSessionPlaybackOverrides() {
         guard sessionPaused || sessionMuted else { return }
         sessionPaused = false
@@ -1245,6 +1552,13 @@ class WallpaperViewModel: ObservableObject {
             AppDelegate.shared.globalSettingsViewModel.effectivePlaybackActions,
             force: true)
         syncStatusItems()
+    }
+
+    func allowsPlaylistAdvance(on key: DisplayKey, manually: Bool, updateOnPause: Bool) -> Bool {
+        guard DisplayRegistry.shared.info(for: key) != nil else { return false }
+        let policy = currentPlaybackPolicy(for: key)
+        guard policy != .stop else { return false }
+        return manually || updateOnPause || !isPaused(runtime(for: key), action: policy)
     }
 
     private func schedulePlaybackPolicyApplication(for key: DisplayKey) {
@@ -1273,8 +1587,8 @@ class WallpaperViewModel: ObservableObject {
         applyPlaybackPolicies(
             AppDelegate.shared.globalSettingsViewModel.effectivePlaybackActions,
             force: true)
-        for state in displayStates.values where state.wallpaper.kind == .video {
-            persistRuntime(state.runtime, for: state.wallpaper)
+        for (key, state) in displayStates where state.wallpaper.kind == .video {
+            persistRuntime(state.runtime, for: state.wallpaper, on: key)
         }
     }
 
@@ -1289,13 +1603,14 @@ class WallpaperViewModel: ObservableObject {
         if let previous = displayStates[proposal.key],
            previous.wallpaper.id != committed.wallpaper.id {
             cancelRuntimeSave(for: proposal.key)
-            persistRuntime(previous.runtime, for: previous.wallpaper)
+            persistRuntime(previous.runtime, for: previous.wallpaper, on: key)
         }
         displayStates[proposal.key] = committed
         committedAssignmentIDs[proposal.key] = proposal.id
         lastAppliedPlayback[proposal.key] = nil
         persistStates()
         syncStatusItems()
+        proposal.completion?.finish(true)
     }
 
     func applyPlaybackPolicy(_ action: GSPlayback, force: Bool = false) {
@@ -1314,6 +1629,7 @@ class WallpaperViewModel: ObservableObject {
 
     private func applyPlaybackPolicy(_ action: GSPlayback, for key: DisplayKey,
                                      force: Bool = false) {
+        guard !externalLockScreenSuspended else { return }
         guard let displayID = DisplayRegistry.shared.displayID(for: key) else { return }
         if action == .stop {
             if stoppedByPlaybackPolicy.insert(key).inserted {
@@ -1377,7 +1693,7 @@ class WallpaperViewModel: ObservableObject {
 
     // MARK: 状态栏菜单项文字同步
 
-    private func syncStatusItems() {
+    func syncStatusItems() {
         syncStatusPauseItem(isPaused: sessionPaused)
         syncStatusMuteItem(isMuted: sessionMuted)
     }

@@ -30,37 +30,42 @@ enum WEHTML {
                        options: [.regularExpression, .caseInsensitive]) != nil
     }
 
-    /// Parse a rich label into an `AttributedString`.
-    ///
-    /// Imported fonts and colours are dropped so the surrounding SwiftUI
-    /// environment styles the text, which also keeps it legible in dark mode —
-    /// the importer otherwise hardcodes Times at black.
-    static func attributed(_ raw: String) -> AttributedString? {
+    @MainActor private static var pendingImports: [String: Task<AttributedString?, Never>] = [:]
+    @MainActor private static var importSlots: [Task<AttributedString?, Never>?] = [nil, nil]
+    @MainActor private static var nextImportSlot = 0
+
+    @MainActor
+    static func attributed(_ raw: String) async -> AttributedString? {
         let key = raw as NSString
         if let cached = attributedCache.object(forKey: key) { return cached.value }
-
-        let normalized = normalizeAngles(raw)
-        guard let data = normalized.data(using: .utf8) else { return nil }
-        guard let parsed = try? NSAttributedString(
-            data: data,
-            options: [
-                .documentType: NSAttributedString.DocumentType.html,
-                .characterEncoding: String.Encoding.utf8.rawValue,
-            ],
-            documentAttributes: nil
-        ) else { return nil }
-
-        var result = AttributedString(parsed)
-        for run in result.runs {
-            result[run.range].foregroundColor = nil
-            result[run.range].backgroundColor = nil
-            result[run.range].font = nil
+        if let pending = pendingImports[raw] { return await pending.value }
+        let slot = nextImportSlot
+        nextImportSlot = (slot + 1) % importSlots.count
+        let previous = importSlots[slot]
+        let task = Task { @MainActor () -> AttributedString? in
+            _ = await previous?.value
+            let parsed: NSAttributedString? = await withCheckedContinuation { continuation in
+                NSAttributedString.loadFromHTML(string: normalizeAngles(raw), options: [.timeout: 2.0]) {
+                    value, _, _ in continuation.resume(returning: value)
+                }
+            }
+            guard let parsed else { return nil }
+            var result = AttributedString(parsed)
+            for run in result.runs {
+                result[run.range].foregroundColor = nil
+                result[run.range].backgroundColor = nil
+                result[run.range].font = nil
+            }
+            while let last = result.characters.last, last.isNewline || last == " " {
+                result.removeSubrange(result.index(beforeCharacter: result.endIndex)..<result.endIndex)
+            }
+            attributedCache.setObject(Box(result), forKey: key)
+            return result
         }
-        // Trailing newlines are an artefact of block-level tags closing.
-        while let last = result.characters.last, last.isNewline || last == " " {
-            result.removeSubrange(result.index(beforeCharacter: result.endIndex)..<result.endIndex)
-        }
-        attributedCache.setObject(Box(result), forKey: key)
+        pendingImports[raw] = task
+        importSlots[slot] = task
+        let result = await task.value
+        pendingImports[raw] = nil
         return result
     }
 
@@ -82,7 +87,14 @@ enum WEHTML {
             .replacingOccurrences(of: "＞", with: ">")
     }
 
+    private static let plainCache: NSCache<NSString, NSString> = {
+        let cache = NSCache<NSString, NSString>()
+        cache.countLimit = 1024
+        return cache
+    }()
+
     static func plain(_ raw: String) -> String {
+        if let cached = plainCache.object(forKey: raw as NSString) { return cached as String }
         var s = raw
             .replacingOccurrences(of: "＜", with: "<")
             .replacingOccurrences(of: "＞", with: ">")
@@ -98,7 +110,9 @@ enum WEHTML {
         s = decodeEntities(s)
         rx("[ \\t]+", " ")
         rx("\\n{3,}", "\n\n")
-        return s.trimmingCharacters(in: .whitespacesAndNewlines)
+        let result = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        plainCache.setObject(result as NSString, forKey: raw as NSString)
+        return result
     }
 
     static func decodeEntities(_ s: String) -> String {
@@ -151,20 +165,26 @@ enum WEHTML {
 // forwarded to the enclosing ScrollView.
 struct RichHTMLText: View {
     let html: String
+    @State private var attributed: AttributedString?
+    @State private var loadedHTML: String?
 
     var body: some View {
-        // Only labels referencing remote resources still pay for a web view.
-        // A property panel with fifteen rich labels used to spin up fifteen
-        // WebKit content processes; now that is normally zero.
-        if WEHTML.needsWebView(html) {
-            RichHTMLWebViewHost(html: html)
-        } else if let attributed = WEHTML.attributed(html) {
-            Text(attributed)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .textSelection(.enabled)
-        } else {
-            Text(WEHTML.plain(html))
-                .frame(maxWidth: .infinity, alignment: .leading)
+        Group {
+            if WEHTML.needsWebView(html) {
+                RichHTMLWebViewHost(html: html)
+            } else {
+                Text(loadedHTML == html ? (attributed ?? AttributedString(WEHTML.plain(html)))
+                     : AttributedString(WEHTML.plain(html)))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+        }
+        .task(id: html) {
+            guard !WEHTML.needsWebView(html) else { return }
+            let result = await WEHTML.attributed(html)
+            guard !Task.isCancelled else { return }
+            attributed = result
+            loadedHTML = html
         }
     }
 }

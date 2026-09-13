@@ -64,6 +64,7 @@ struct WPPreprocessorInfo {
     Map<std::string, std::string> uniforms; // name -> "TYPE"
 
     Set<unsigned> active_tex_slots;
+    Set<unsigned> referenced_tex_slots;
 };
 
 struct WPShaderTexInfo {

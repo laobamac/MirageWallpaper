@@ -105,6 +105,11 @@ RenderBufferResolver::prepareDrawBuffers(const DrawBufferRequest& request) {
         if (vertex_dynamic) {
             if (! m_dynamic_buffer.allocateSubRef(vertex.CapacitySizeOf(), out.dynamic_vertices[i]))
                 return std::nullopt;
+            if (const auto size = vertex.DataSizeOf(); size > 0) {
+                if (! m_dynamic_buffer.writeToBuf(out.dynamic_vertices[i],
+                                                  mutableBytesOf(vertex.Data(), size)))
+                    return std::nullopt;
+            }
             out.dynamic = true;
         } else {
             auto ref = mesh_cache.QueryOrUpload({ &vertex, vertex.DataGeneration() },
@@ -122,6 +127,11 @@ RenderBufferResolver::prepareDrawBuffers(const DrawBufferRequest& request) {
         if (mesh.Dynamic() && ! index.StaticTopology()) {
             if (! m_dynamic_buffer.allocateSubRef(index.CapacitySizeof(), out.dynamic_index))
                 return std::nullopt;
+            if (const auto size = index.DataSizeOf(); size > 0) {
+                if (! m_dynamic_buffer.writeToBuf(out.dynamic_index,
+                                                  mutableBytesOf(index.Data(), size)))
+                    return std::nullopt;
+            }
             out.dynamic = true;
         } else {
             auto ref = mesh_cache.QueryOrUpload({ &index, index.DataGeneration() },

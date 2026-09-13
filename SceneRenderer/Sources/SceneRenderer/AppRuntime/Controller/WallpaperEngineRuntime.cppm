@@ -28,6 +28,8 @@ using RenderPassDiagnosticCallback =
 // rendered frame is always opaque.
 using ClearColorCallback = std::function<void(float r, float g, float b)>;
 using AudioDemandCallback = std::function<void(bool needed)>;
+using PositionAvailabilityCallback = std::function<void(bool x, bool y)>;
+using UserShortcutCallback = std::function<void(std::string_view name, std::string_view target)>;
 
 inline bool IsValidScenePlaybackSpeed(float speed) noexcept {
     return std::isfinite(speed) && speed > 0.0f;
@@ -39,20 +41,29 @@ struct MediaStatus {
     std::string artist;
     std::string album;
     std::string album_artist;
+    double      position { 0.0 };
+    double      duration { 0.0 };
     std::string art_url;
     std::string previous_art_url;
+    std::array<float, 3> primary_color { 1.0f, 1.0f, 1.0f };
+    std::array<float, 3> secondary_color { 0.0f, 0.0f, 0.0f };
+    std::array<float, 3> tertiary_color { 0.0f, 0.0f, 0.0f };
+    std::array<float, 3> text_color { 0.0f, 0.0f, 0.0f };
+    std::array<float, 3> high_contrast_color { 0.0f, 0.0f, 0.0f };
 };
 
 struct SceneWallpaperConfig {
     std::string                             source_pkg_path;
     std::string                             assets_dir;
     std::string                             cache_dir;
+    std::string                             script_storage_dir;
     std::shared_ptr<wpscene::SceneDocument> scene_document;
     rstd::json::Map                         user_properties;
     uint32_t                                fps { 30 };
     float                                   volume { 1.0f };
     bool                                    muted { false };
     FillMode                                fill_mode { FillMode::ASPECTCROP };
+    WallpaperPosition                       position;
     float                                   speed { 1.0f };
     bool                                    graphviz { false };
     bool                                    spectrum_enabled { true };
@@ -89,6 +100,7 @@ public:
     void setVolumeScale(float, uint32_t fade_ms);
     void setMuted(bool);
     void setFillMode(FillMode);
+    void setPosition(WallpaperPosition);
     void setSpeed(float);
     void setMediaStatus(MediaStatus);
     void setAudioSpectrum(std::array<float, 64>, std::array<float, 64>);
@@ -97,12 +109,15 @@ public:
     void setOnFirstFrame(FirstFrameCallback);
     void setOnUserPropertyDiagnostics(UserPropertyDiagnosticCallback);
     void requestPreparedPassDiagnostics(RenderPassDiagnosticCallback);
+    void resetScriptStorage();
 
     // Install (or clear, with `nullptr`) a callback invoked on the
     // main thread after each scene is parsed, carrying the scene's
     // `general.clearcolor`. Set once before initVulkan.
     void setOnClearColor(ClearColorCallback);
     void setOnAudioDemand(AudioDemandCallback);
+    void setOnPositionAvailability(PositionAvailabilityCallback);
+    void setOnUserShortcut(UserShortcutCallback);
 
     ExSwapchain* exSwapchain() const;
 

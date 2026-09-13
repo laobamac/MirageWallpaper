@@ -130,7 +130,7 @@ struct PageNavigator: View {
 }
 
 struct WallpaperGridViewMenu: View {
-    @ObservedObject var viewModel: ContentViewModel
+    @Bindable var viewModel: ContentViewModel
     var showsPageSize = false
 
     var body: some View {

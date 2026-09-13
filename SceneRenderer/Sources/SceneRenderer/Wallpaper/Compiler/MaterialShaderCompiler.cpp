@@ -44,6 +44,14 @@ struct DeclMatch {
 
 // Try to match `[ws]<storage_kw> <type> <name>[opt-array][ws];` on the line
 // starting at `line_start`. Anchored — leading non-whitespace fails it.
+inline bool IsSwizzleWord(std::string_view s) noexcept {
+    if (s.empty() || s.size() > 4) return false;
+    for (char ch : s) {
+        if (std::string_view("xyzwrgbastpq").find(ch) == std::string_view::npos) return false;
+    }
+    return true;
+}
+
 inline std::optional<DeclMatch>
 TryParseDeclLine(std::string_view src, std::size_t line_start,
                  std::initializer_list<std::string_view> storage_kws) {
@@ -68,7 +76,27 @@ TryParseDeclLine(std::string_view src, std::size_t line_start,
     c.SkipHSpace();
     auto array = c.ReadArraySuffix();
     c.SkipHSpace();
+    std::string_view swizzle;
+    if (c.Peek() == '.') {
+        auto save = c.Save();
+        c.Advance();
+        auto sw = c.ReadIdent();
+        if (sw && IsSwizzleWord(*sw)) {
+            swizzle = *sw;
+            c.SkipHSpace();
+        } else {
+            c.Restore(save);
+        }
+    }
     if (! c.MatchChar(';')) return std::nullopt;
+    if (! swizzle.empty()) {
+        rstd_warn("shader decl '{} {} {}.{};' has a swizzled declarator, using '{}'",
+                  kw,
+                  tn->type,
+                  tn->name,
+                  swizzle,
+                  tn->type);
+    }
 
     DeclMatch m;
     m.start       = line_start;
@@ -106,6 +134,36 @@ inline void ForEachDeclLine(std::string_view                        src,
 inline bool IsSamplerType(std::string_view t) {
     return t == "sampler2D" || t == "sampler3D" || t == "samplerCube" ||
            t == "sampler2DComparison" || t == "sampler2DShadow";
+}
+
+inline Set<unsigned> ScanReferencedTexSlots(std::string_view                              src,
+                                            std::span<const std::pair<unsigned, DeclMatch>> decls) {
+    Set<unsigned> referenced;
+    if (decls.empty()) return referenced;
+
+    constexpr std::string_view kTex { "g_Texture" };
+    for (std::size_t pos = 0; (pos = src.find(kTex, pos)) != std::string_view::npos;
+         pos += kTex.size()) {
+        if (pos > 0) {
+            const char prev = src[pos - 1];
+            if (std::isalnum(static_cast<unsigned char>(prev)) != 0 || prev == '_') continue;
+        }
+        std::string_view rest   = src.substr(pos + kTex.size());
+        std::size_t      digits = 0;
+        while (digits < rest.size() && std::isdigit(static_cast<unsigned char>(rest[digits])) != 0)
+            ++digits;
+        if (digits == 0) continue;
+        unsigned slot  = 0;
+        auto [ptr, ec] = std::from_chars(rest.data(), rest.data() + digits, slot);
+        if (ec != std::errc()) continue;
+        for (const auto& [decl_slot, decl] : decls) {
+            if (decl_slot != slot) continue;
+            if (pos >= decl.start && pos < decl.end) break;
+            referenced.insert(slot);
+            break;
+        }
+    }
+    return referenced;
 }
 
 // Replace every occurrence of `needle` in `body` with `repl`. The placeholder
@@ -792,6 +850,124 @@ inline void NormalizeExpandedShaderSource(std::string& src) {
     src = std::move(out);
 }
 
+inline bool IsShaderIdentChar(char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+}
+
+inline usize SkipShaderBlank(const std::string& src, usize pos) {
+    while (pos < src.size() &&
+           (src[pos] == ' ' || src[pos] == '\t' || src[pos] == '\r' || src[pos] == '\n'))
+        ++pos;
+    return pos;
+}
+
+inline bool MatchShaderTokenSeq(const std::string& src, usize pos,
+                                std::span<const std::string_view> tokens, usize& end) {
+    for (auto token : tokens) {
+        pos = SkipShaderBlank(src, pos);
+        if (pos + token.size() > src.size()) return false;
+        if (src.compare(pos, token.size(), token) != 0) return false;
+        pos += token.size();
+        if (IsShaderIdentChar(token.back()) && pos < src.size() && IsShaderIdentChar(src[pos]))
+            return false;
+    }
+    end = pos;
+    return true;
+}
+
+inline bool ReplaceShaderTokenSeq(std::string& src, std::span<const std::string_view> tokens,
+                                  std::string_view repl) {
+    bool  hit = false;
+    usize pos = 0;
+    for (;;) {
+        usize next = src.find(tokens.front(), pos);
+        if (next == std::string::npos) break;
+        if (next > 0 && IsShaderIdentChar(src[next - 1])) {
+            pos = next + 1;
+            continue;
+        }
+        usize end = 0;
+        if (! MatchShaderTokenSeq(src, next, tokens, end)) {
+            pos = next + 1;
+            continue;
+        }
+        src.replace(next, end - next, repl);
+        pos = next + repl.size();
+        hit = true;
+    }
+    return hit;
+}
+
+inline std::string PatchLegacyPremultipliedLighting(const std::string& src) {
+    static constexpr std::string_view kLegacy { "g_LightsColorPremultiplied" };
+    if (src.find(kLegacy) == std::string::npos) return src;
+    if (src.find("ComputePBRLight(") == std::string::npos) return src;
+    if (src.find("vec3 ComputePBRLight(") != std::string::npos) return src;
+    if (src.find("g_LightsColorRadius") != std::string::npos) return src;
+    if (src.find("g_LightsConeExponent") != std::string::npos) return src;
+
+    std::string out = src;
+
+    static constexpr std::string_view kPacked[] = {
+        "vec3", "(",  "g_LightsColorPremultiplied", "[", "0", "]", ".", "w",
+        ",",    "g_LightsColorPremultiplied",       "[", "1", "]", ".", "w",
+        ",",    "g_LightsColorPremultiplied",       "[", "2", "]", ".", "w",
+        ")"
+    };
+    ReplaceShaderTokenSeq(out, kPacked, "g_LightsColorRadius[3], g_LightsConeExponent[3].z");
+
+    static constexpr std::string_view kIndices[]  = { "0", "1", "2" };
+    static constexpr std::string_view kSwizzles[] = { "rgb", "xyz" };
+    for (auto index : kIndices) {
+        const std::string repl = "g_LightsColorRadius[" + std::string(index) +
+                                 "], g_LightsConeExponent[" + std::string(index) + "].z";
+        for (auto swizzle : kSwizzles) {
+            const std::string_view tokens[] = { kLegacy, "[", index, "]", ".", swizzle };
+            ReplaceShaderTokenSeq(out, tokens, repl);
+        }
+    }
+
+    static constexpr std::string_view kDeclRepl {
+        "uniform vec4 g_LightsColorRadius[4];\nuniform vec4 g_LightsConeExponent[4];"
+    };
+    static constexpr std::string_view kDecl4[] = { "uniform", "vec4", "g_LightsColorPremultiplied",
+                                                  "[",       "3",    "]",
+                                                  ";" };
+    static constexpr std::string_view kDecl3[] = { "uniform", "vec3", "g_LightsColorPremultiplied",
+                                                  "[",       "3",    "]",
+                                                  ";" };
+    if (! ReplaceShaderTokenSeq(out, kDecl4, kDeclRepl))
+        ReplaceShaderTokenSeq(out, kDecl3, kDeclRepl);
+
+    if (out.find(kLegacy) != std::string::npos) return src;
+
+    static constexpr std::string_view kCall[] = { "ComputePBRLight", "(" };
+    if (! ReplaceShaderTokenSeq(out, kCall, "_ww_ComputePBRLightBounded(")) return src;
+
+    return out;
+}
+
+inline std::string PatchCommonPbrInclude(std::string_view include_name, std::string src) {
+    if (include_name != "common_pbr.h") return src;
+    if (src.find("_ww_ComputePBRLightBounded") != std::string::npos) return src;
+    if (src.find("vec3 ComputePBRLight(") == std::string::npos) return src;
+
+    static constexpr std::string_view helper = R"(
+vec3 _ww_ComputePBRLightBounded(vec3 N, vec3 L, vec3 V, vec3 albedo, vec4 lightColorRadius,
+	float lightExponent, vec3 baseReflectance, float roughness, float metallic)
+{
+	float lightDistance = max(length(L), 0.0001);
+	float falloff = saturate(1.0 - lightDistance / max(lightColorRadius.w, 0.0001));
+	vec3 boundedColor = lightColorRadius.rgb *
+		pow(falloff + 1.17549435e-38, max(lightExponent, 0.0)) *
+		(lightDistance * lightDistance);
+	return ComputePBRLight(N, L, V, albedo, boundedColor, baseReflectance, roughness, metallic);
+}
+)";
+    src.append(helper);
+    return src;
+}
+
 inline std::string PatchCommonPerspectiveInclude(std::string_view include_name, std::string src) {
     if (include_name != "common_perspective.h") return src;
     if (src.find("_ww_perspective_mat") != std::string::npos) return src;
@@ -856,6 +1032,7 @@ inline std::string LoadGlslInclude(fs::VFS& vfs, const std::string& input) {
         std::string includeName = line.substr(in_p + 1, in_e - in_p - 1);
         std::string includeSrc  = fs::GetFileContent(vfs, "/assets/shaders/" + includeName);
         includeSrc              = PatchCommonPerspectiveInclude(includeName, std::move(includeSrc));
+        includeSrc              = PatchCommonPbrInclude(includeName, std::move(includeSrc));
         output.append("\n//-----include ");
         output.append(includeName);
         output.append("\n");
@@ -1044,6 +1221,7 @@ inline std::string Preprocessor(const std::string& in_src, ShaderType type, cons
     // Non-sampler uniform decls feed Finalprocessor's shared cbuffer.
     // Sampler-typed uniforms are emitted as Texture/SamplerState pairs and
     // captured in active_tex_slots instead.
+    std::vector<std::pair<unsigned, DeclMatch>> sampler_decls;
     ForEachDeclLine(src, { "uniform" }, [&](const DeclMatch& m) {
         if (IsSamplerType(m.type)) {
             // Track active sampler slot if it's a `g_TextureN`.
@@ -1052,12 +1230,16 @@ inline std::string Preprocessor(const std::string& in_src, ShaderType type, cons
                 std::string_view num  = m.name.substr(kTex.size());
                 unsigned         slot = 0;
                 auto [ptr, ec]        = std::from_chars(num.data(), num.data() + num.size(), slot);
-                if (ec == std::errc()) process_info.active_tex_slots.insert(slot);
+                if (ec == std::errc()) {
+                    process_info.active_tex_slots.insert(slot);
+                    sampler_decls.emplace_back(slot, m);
+                }
             }
             return;
         }
         process_info.uniforms[std::string(m.name)] = std::string(m.type) + std::string(m.array);
     });
+    process_info.referenced_tex_slots = ScanReferencedTexSlots(src, sampler_decls);
     return src;
 }
 
@@ -1881,9 +2063,10 @@ inline bool SaveShaderToFile(std::span<const ShaderCode> codes, fs::IBinaryStrea
 
 } // namespace
 
-std::string WPShaderParser::PreShaderSrc(fs::VFS& vfs, const std::string& src,
+std::string WPShaderParser::PreShaderSrc(fs::VFS& vfs, const std::string& in_src,
                                          WPShaderInfo*                       pWPShaderInfo,
                                          const std::vector<WPShaderTexInfo>& texinfos) {
+    const std::string src = PatchLegacyPremultipliedLighting(in_src);
     // Expand `#include "FILE"` in place: replace each include line with its
     // resolved content (recursively expanded). Preserves the include's
     // original position so a `struct Grid { ... }; #include "common.h"`

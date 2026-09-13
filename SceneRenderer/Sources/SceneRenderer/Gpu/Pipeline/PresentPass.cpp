@@ -1,6 +1,7 @@
 module;
 
 #include <atomic>
+#include <cmath>
 #include <cstdlib>
 #include <fstream>
 #include <mutex>
@@ -125,9 +126,49 @@ const char* FrameDumpPath() {
     static const char* v = EnvPath("SCENERENDERER_DUMP_FRAME");
     return v;
 }
+uint32_t FrameDumpDelay() {
+    static const uint32_t v = [] {
+        const char* raw = EnvPath("SCENERENDERER_DUMP_FRAME_AT");
+        if (raw == nullptr) return 0u;
+        char*               end   = nullptr;
+        const unsigned long value = std::strtoul(raw, &end, 10);
+        if (end == raw) return 0u;
+        return static_cast<uint32_t>(value);
+    }();
+    return v;
+}
 const char* PresentDumpPath() {
     static const char* v = EnvPath("SCENERENDERER_DUMP_PRESENT");
     return v;
+}
+
+uint32_t FormatBytesPerPixel(VkFormat format) {
+    return format == VK_FORMAT_R16G16B16A16_SFLOAT ? 8u : 4u;
+}
+
+uint8_t HalfFloatToByte(uint16_t h) {
+    if (((h >> 15) & 0x1u) != 0) return 0;
+    const uint32_t exp  = (h >> 10) & 0x1Fu;
+    const uint32_t mant = h & 0x3FFu;
+    if (exp == 0x1Fu) return mant == 0 ? 255 : 0;
+    const float value = exp == 0
+                            ? std::ldexp(static_cast<float>(mant), -24)
+                            : std::ldexp(static_cast<float>(mant | 0x400u),
+                                         static_cast<int>(exp) - 25);
+    if (value <= 0.0f) return 0;
+    if (value >= 1.0f) return 255;
+    return static_cast<uint8_t>(value * 255.0f + 0.5f);
+}
+
+void DecodeHalfRgbaToBytes(const uint8_t* src, uint8_t* dst, std::size_t texels) {
+    for (std::size_t i = 0; i < texels; ++i) {
+        const uint8_t* s = src + i * 8;
+        for (std::size_t c = 0; c < 4; ++c) {
+            const uint16_t h = static_cast<uint16_t>(static_cast<uint16_t>(s[c * 2]) |
+                                                     (static_cast<uint16_t>(s[c * 2 + 1]) << 8));
+            dst[i * 4 + c] = HalfFloatToByte(h);
+        }
+    }
 }
 
 void WritePpm(std::ofstream& out, const uint8_t* pixels, uint32_t width, uint32_t height,
@@ -192,12 +233,14 @@ void FinPass::recordFrameDump(const Device& device, RenderingResources& rr) {
     if ((m_dump_done && ! live_frame) || m_dump_pending) return;
     const char* dump_path = FrameDumpPath();
     if ((dump_path == nullptr || dump_path[0] == '\0') && ! live_frame) return;
+    if (! live_frame && m_dump_frame_index++ < FrameDumpDelay()) return;
 
     const uint32_t width  = m_desc.vk_result.extent.width;
     const uint32_t height = m_desc.vk_result.extent.height;
     if (width == 0 || height == 0) return;
 
-    const std::size_t dump_size = static_cast<std::size_t>(width) * height * 4;
+    const std::size_t dump_size =
+        static_cast<std::size_t>(width) * height * FormatBytesPerPixel(m_desc.result_format);
     if (! m_dump_buffer || m_dump_size != dump_size) {
         VkBufferCreateInfo ci {
             .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
@@ -331,6 +374,13 @@ void FinPass::finishFrameDump(const Device& device) {
             vmaInvalidateAllocation(device.vma_allocator(), m_dump_buffer.Allocation(), 0, m_dump_size);
 
             const auto* rgba = static_cast<const uint8_t*>(mapped);
+            if (m_desc.result_format == VK_FORMAT_R16G16B16A16_SFLOAT) {
+                const std::size_t texels =
+                    static_cast<std::size_t>(m_dump_width) * m_dump_height;
+                m_dump_rgba.resize(texels * 4);
+                DecodeHalfRgbaToBytes(rgba, m_dump_rgba.data(), texels);
+                rgba = m_dump_rgba.data();
+            }
             if (! m_dump_done && ! m_dump_path.empty()) {
                 std::ofstream out(m_dump_path, std::ios::binary);
                 if (! out) {
@@ -402,6 +452,8 @@ void FinPass::prepare(Scene& scene, const Device& device, RenderingResources& /*
         return;
     }
     m_desc.vk_result = opt.value();
+    m_desc.result_format =
+        rt.hdr_format ? VK_FORMAT_R16G16B16A16_SFLOAT : VK_FORMAT_R8G8B8A8_UNORM;
     setPrepared();
 }
 
@@ -464,11 +516,9 @@ void FinPass::execute(const Device& device, RenderingResources& rr) {
     }
 
     {
-        // Result is always R8G8B8A8_UNORM (screen RT). We can copy when
-        // present matches that and dimensions are identical; otherwise
-        // fall back to blit which handles size/format mismatch.
         const bool can_copy = m_desc.vk_result.extent.width == m_desc.vk_present.extent.width &&
                               m_desc.vk_result.extent.height == m_desc.vk_present.extent.height &&
+                              m_desc.result_format == VK_FORMAT_R8G8B8A8_UNORM &&
                               m_desc.present_format == VK_FORMAT_R8G8B8A8_UNORM;
 
         const bool present_test = PresentTestEnabled();

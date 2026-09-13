@@ -557,9 +557,10 @@ void ParticleSubSystem::Advance(double frame_time, bool update_mesh) {
     }
     if (m_uses_mouse_controlpoint) {
         const auto pointer = m_sys.scene.pointerPosition;
+        const auto canvas = m_sys.scene.CursorPositionOnCanvas(pointer[0], pointer[1]);
         const Eigen::Vector3d mouse_world {
-            static_cast<double>(pointer[0]) * static_cast<double>(m_sys.scene.ortho[0]),
-            (1.0 - static_cast<double>(pointer[1])) * static_cast<double>(m_sys.scene.ortho[1]),
+            canvas ? (*canvas)[0] : static_cast<double>(pointer[0]) * static_cast<double>(m_sys.scene.ortho[0]),
+            canvas ? (*canvas)[1] : (1.0 - static_cast<double>(pointer[1])) * static_cast<double>(m_sys.scene.ortho[1]),
             0.0,
         };
         const Eigen::Vector4d mouse_local =

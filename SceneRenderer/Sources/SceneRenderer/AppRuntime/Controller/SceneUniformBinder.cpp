@@ -177,6 +177,131 @@ void SceneUniformUpdater::InitUniforms(SceneNode* pNode, const ExistsUniformOp& 
     });
 }
 
+std::optional<SceneNodeRenderTransform>
+SceneUniformUpdater::NodeRenderTransform(SceneNode* pNode, SceneRenderViewKind render_view) {
+    return NodeTransform(pNode, render_view, false, true);
+}
+
+std::optional<SceneNodeRenderTransform>
+SceneUniformUpdater::NodeScreenTransform(SceneNode* pNode, SceneRenderViewKind render_view) {
+    const bool offset_in_hit_center = pNode != nullptr && pNode->HasHitCenter();
+    return NodeTransform(pNode, render_view, true, ! offset_in_hit_center);
+}
+
+std::optional<SceneNodeRenderTransform>
+SceneUniformUpdater::NodeTransform(SceneNode* pNode, SceneRenderViewKind render_view,
+                                   bool screen_camera, bool apply_geometry_transform) {
+    if (pNode == nullptr) return std::nullopt;
+    pNode->UpdateTrans();
+
+    SceneCamera*     camera { nullptr };
+    std::string_view cam_name = pNode->Camera();
+    if (screen_camera) {
+        SceneCamera* perspective { nullptr };
+        if (auto it = m_scene->cameras.find("global_perspective"); it != m_scene->cameras.end())
+            perspective = it->second.get();
+        SceneCamera* own { nullptr };
+        if (! cam_name.empty()) {
+            if (auto it = m_scene->cameras.find(std::string(cam_name));
+                it != m_scene->cameras.end())
+                own = it->second.get();
+        }
+        if (own != nullptr && (own == m_scene->activeCamera || own == perspective)) {
+            camera = own;
+        } else if (pNode->Perspective() && perspective != nullptr) {
+            camera   = perspective;
+            cam_name = "global_perspective";
+        } else {
+            camera   = m_scene->activeCamera;
+            cam_name = {};
+        }
+    } else if (! pNode->Camera().empty()) {
+        auto it = m_scene->cameras.find(std::string(cam_name));
+        if (it != m_scene->cameras.end()) camera = it->second.get();
+    } else if (pNode->Perspective()) {
+        cam_name = "global_perspective";
+        auto it  = m_scene->cameras.find(std::string(cam_name));
+        if (it != m_scene->cameras.end()) camera = it->second.get();
+    } else {
+        camera = m_scene->activeCamera;
+    }
+    if (camera == nullptr) return std::nullopt;
+
+    Matrix4d view_projection = camera->GetViewProjectionMatrix(render_view);
+    if (m_cameraShake.enable && camera == m_scene->activeCamera && camera->AllowCameraShake() &&
+        m_cameraShake.amplitude > 0.0f && m_cameraShake.speed > 0.0f) {
+        const float base_extent =
+            static_cast<float>(std::min(m_scene->ortho[0], m_scene->ortho[1]));
+        const float scale = m_cameraShake.amplitude * base_extent * 0.01f;
+        const float t =
+            static_cast<float>(m_scene->elapsingTime) * m_cameraShake.speed * 2.0f;
+        auto offset = ShakeOffset(t, m_cameraShake.roughness);
+        Vector3d shake {
+            static_cast<double>(offset.x() * scale),
+            static_cast<double>(offset.y() * scale),
+            0.0,
+        };
+        view_projection =
+            view_projection * Affine3d(Translation3d(shake)).matrix();
+    }
+
+    auto node_data_it = m_nodeDataMap.find(pNode);
+    const bool has_node_data = node_data_it != m_nodeDataMap.end();
+    const auto* node_data = has_node_data ? std::addressof(node_data_it->second) : nullptr;
+    Matrix4d model = has_node_data && node_data->vertices_in_world_space && ! screen_camera
+                         ? Matrix4d::Identity()
+                         : pNode->ModelTrans();
+    if (has_node_data && cam_name != "effect" &&
+        (screen_camera || ! node_data->vertices_in_world_space)) {
+        auto camera_node = camera->GetAttachedNode();
+        const bool layer_local_effect_source =
+            camera->HasImgEffect() && camera_node.is_some() &&
+            (*camera_node == pNode || (*camera_node)->Parent() == pNode);
+        if (m_parallax.enable && ! layer_local_effect_source) {
+            auto*       parallax_node = pNode;
+            const auto* parallax_data = node_data;
+            for (auto* parent = pNode->Parent(); parent != nullptr; parent = parent->Parent()) {
+                auto it = m_nodeDataMap.find(parent);
+                if (it == m_nodeDataMap.end()) continue;
+                if (! it->second.propagate_parallax_to_children) break;
+                parallax_node = parent;
+                parallax_data = std::addressof(it->second);
+            }
+            Matrix4d parallax_transform = model;
+            if (parallax_node != pNode) {
+                parallax_node->UpdateTrans();
+                parallax_transform = parallax_node->ModelTrans();
+            }
+            Vector3f node_position =
+                parallax_transform.block<3, 1>(0, 3).cast<float>();
+            Vector2f depth(&parallax_data->propagatedParallaxDepth[0]);
+            Vector2f ortho { static_cast<float>(m_scene->ortho[0]),
+                             static_cast<float>(m_scene->ortho[1]) };
+            Vector2f mouse =
+                Scaling(1.0f, -1.0f) *
+                (Vector2f { 0.5f, 0.5f } - Vector2f(&m_parallaxMousePos[0]));
+            mouse = mouse.cwiseProduct(ortho) * m_parallax.mouseinfluence;
+            Vector3f camera_position = camera->GetPosition(render_view).cast<float>();
+            Vector2f offset =
+                (node_position.head<2>() - camera_position.head<2>() + mouse)
+                    .cwiseProduct(depth) *
+                m_parallax.amount;
+            model = Affine3d(Translation3d(Vector3d(offset.x(), offset.y(), 0.0f))).matrix() *
+                    model;
+        }
+    }
+
+    if (apply_geometry_transform) {
+        model *= pNode->GeometryTransform();
+        if (pNode->Mesh()) model *= pNode->Mesh()->GeometryTransform();
+    }
+    return SceneNodeRenderTransform {
+        .model                 = model,
+        .view_projection       = view_projection,
+        .model_view_projection = view_projection * model,
+    };
+}
+
 void SceneUniformUpdater::UpdateUniforms(SceneNode* pNode, sprite_map_t& sprites,
                                          const UpdateUniformOp& updateOp,
                                          SceneRenderViewKind render_view,
@@ -267,22 +392,9 @@ void SceneUniformUpdater::UpdateUniforms(SceneNode* pNode, sprite_map_t& sprites
     bool reqETVP  = info.has_ETVP;
     bool reqETVPI = info.has_ETVPI;
 
-    Matrix4d viewProTrans = camera->GetViewProjectionMatrix(render_view);
-    if (m_cameraShake.enable && camera == m_scene->activeCamera && camera->AllowCameraShake() &&
-        m_cameraShake.amplitude > 0.0f && m_cameraShake.speed > 0.0f) {
-        const float base_extent =
-            static_cast<float>(std::min(m_scene->ortho[0], m_scene->ortho[1]));
-        const float scale = m_cameraShake.amplitude * base_extent * 0.01f;
-
-        const float t      = static_cast<float>(m_scene->elapsingTime) * m_cameraShake.speed * 2.0f;
-        auto        offset = ShakeOffset(t, m_cameraShake.roughness);
-        Vector3d    shake {
-            static_cast<double>(offset.x() * scale),
-            static_cast<double>(offset.y() * scale),
-            0.0,
-        };
-        viewProTrans = viewProTrans * Affine3d(Translation3d(shake)).matrix();
-    }
+    auto node_render_transform = NodeRenderTransform(pNode, render_view);
+    if (! node_render_transform) return;
+    Matrix4d viewProTrans = node_render_transform->view_projection;
 
     if (info.has_VP) {
         updateOp(G_VP, ShaderValue::fromMatrix(viewProTrans));
@@ -296,54 +408,7 @@ void SceneUniformUpdater::UpdateUniforms(SceneNode* pNode, sprite_map_t& sprites
         }
     }
     if (reqM || info.has_NORMALMODELMATRIX || reqMVP || reqMI || reqMVPI || reqEffectModel) {
-        Matrix4d modelTrans = hasNodeData && nodeDataPtr->vertices_in_world_space
-                                  ? Matrix4d::Identity()
-                                  : pNode->ModelTrans();
-        if (hasNodeData && cam_name != "effect" && ! nodeDataPtr->vertices_in_world_space) {
-            const auto& nodeData   = *nodeDataPtr;
-            auto        cameraNode = camera->GetAttachedNode();
-            const bool  layerLocalEffectSource =
-                camera->HasImgEffect() && cameraNode.is_some() && *cameraNode == pNode;
-            if (m_parallax.enable && ! layerLocalEffectSource) {
-                auto*       parallaxNode = pNode;
-                const auto* parallaxData = &nodeData;
-                for (auto* parent = pNode->Parent(); parent != nullptr; parent = parent->Parent()) {
-                    auto it = m_nodeDataMap.find(parent);
-                    if (it == m_nodeDataMap.end()) continue;
-                    if (! it->second.propagate_parallax_to_children) break;
-                    parallaxNode = parent;
-                    parallaxData = &it->second;
-                }
-                Matrix4d parallaxTrans = modelTrans;
-                if (parallaxNode != pNode) {
-                    parallaxNode->UpdateTrans();
-                    parallaxTrans = parallaxNode->ModelTrans();
-                }
-                // World position, not local. Image-effect composite nodes
-                // inherit transform via SetParentAnchor and keep identity
-                // local trans — Translate() would return (0,0) and put the
-                // parallax shift around canvas origin instead of the layer's
-                // actual world position.
-                Vector3f nodePos = parallaxTrans.block<3, 1>(0, 3).cast<float>();
-                Vector2f depth(&parallaxData->propagatedParallaxDepth[0]);
-                Vector2f ortho { (float)m_scene->ortho[0], (float)m_scene->ortho[1] };
-                // flip mouse y axis
-                Vector2f mouseVec =
-                    Scaling(1.0f, -1.0f) *
-                    (Vector2f { 0.5f, 0.5f } - Vector2f(&m_parallaxMousePos[0]));
-                mouseVec        = mouseVec.cwiseProduct(ortho) * m_parallax.mouseinfluence;
-                Vector3f camPos = camera->GetPosition(render_view).cast<float>();
-                Vector2f paraVec =
-                    (nodePos.head<2>() - camPos.head<2>() + mouseVec).cwiseProduct(depth) *
-                    m_parallax.amount;
-                modelTrans =
-                    Affine3d(Translation3d(Vector3d(paraVec.x(), paraVec.y(), 0.0f))).matrix() *
-                    modelTrans;
-            }
-        }
-
-        modelTrans *= pNode->GeometryTransform();
-        modelTrans *= pNode->Mesh()->GeometryTransform();
+        Matrix4d modelTrans = node_render_transform->model;
 
         if (reqM) updateOp(G_M, ShaderValue::fromMatrix(modelTrans));
         if (info.has_NORMALMODELMATRIX) {
@@ -362,13 +427,16 @@ void SceneUniformUpdater::UpdateUniforms(SceneNode* pNode, sprite_map_t& sprites
             if (reqMVPI) updateOp(G_MVPI, ShaderValue::fromMatrix(mvpTrans.inverse()));
         }
         if (reqEffectModel) {
+            const bool composites_to_screen =
+                cam_name.empty() && camera == m_scene->activeCamera;
             Matrix4d layerModel  = modelTrans;
             Matrix4d effectModel = modelTrans;
-            if (hasNodeData && nodeDataPtr->effect_projection_node != nullptr) {
+            if (! composites_to_screen && hasNodeData &&
+                nodeDataPtr->effect_projection_node != nullptr) {
                 const auto& nodeData = *nodeDataPtr;
                 auto*       source   = nodeData.effect_projection_node;
                 source->UpdateTrans();
-                layerModel  = source->ModelTrans();
+                layerModel  = source->ModelTrans() * source->GeometryTransform();
                 effectModel = layerModel;
                 if (nodeData.effect_projection_size[0] > 0.0f &&
                     nodeData.effect_projection_size[1] > 0.0f) {
@@ -386,9 +454,14 @@ void SceneUniformUpdater::UpdateUniforms(SceneNode* pNode, sprite_map_t& sprites
             if (info.has_EFFECTMODELMATRIX)
                 updateOp(G_EFFECTMODELMATRIX, ShaderValue::fromMatrix(effectModel));
             if (reqEMVP || reqEMVPI) {
-                SceneCamera* effect_camera = m_scene->activeCamera ? m_scene->activeCamera : camera;
-                const Matrix4d effect_mvp =
-                    effect_camera->GetViewProjectionMatrix(render_view) * effectModel;
+                const Matrix4d effect_mvp = composites_to_screen
+                                                ? viewProTrans * effectModel
+                                                : m_scene->activeCamera
+                                                      ? m_scene->activeCamera->GetViewProjectionMatrix(
+                                                            render_view) *
+                                                            effectModel
+                                                      : camera->GetViewProjectionMatrix(render_view) *
+                                                            effectModel;
                 if (reqEMVP) updateOp(G_EMVP, ShaderValue::fromMatrix(effect_mvp));
                 if (reqEMVPI)
                     updateOp(G_EFFECTMODELVIEWPROJECTIONMATRIXINVERSE,
@@ -586,6 +659,11 @@ void SceneUniformUpdater::UpdateUniforms(SceneNode* pNode, sprite_map_t& sprites
 
 void SceneUniformUpdater::SetNodeData(void* nodeAddr, const SceneUniformNodeData& data) {
     m_nodeDataMap[nodeAddr] = data;
+}
+
+std::shared_ptr<WPPuppetLayer> SceneUniformUpdater::PuppetLayerForNode(void* nodeAddr) const {
+    auto it = m_nodeDataMap.find(nodeAddr);
+    return it == m_nodeDataMap.end() ? nullptr : it->second.puppet_layer;
 }
 
 void SceneUniformUpdater::CopyNodeData(void* src, void* dst) {

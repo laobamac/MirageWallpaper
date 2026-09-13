@@ -7,19 +7,19 @@
 import SwiftUI
 
 struct WorkshopView: View {
-    @EnvironmentObject private var globalSettingsViewModel: GlobalSettingsViewModel
-    @ObservedObject var workshopViewModel: WorkshopViewModel
-    @ObservedObject var viewModel: ContentViewModel
-    @ObservedObject var wallpaperViewModel: WallpaperViewModel
+    @Environment(GlobalSettingsViewModel.self) private var globalSettingsViewModel
+    @Bindable var workshopViewModel: WorkshopViewModel
+    @Bindable var viewModel: ContentViewModel
+    @Bindable var wallpaperViewModel: WallpaperViewModel
     let isActive: Bool
 
-    @State private var hoveredId: String?
     @State private var isDownloadPopoverPresented = false
     @State private var showAPIKeyReminder = false
 
     var body: some View {
+        @Bindable var globalSettingsViewModel = globalSettingsViewModel
         VStack(spacing: 8) {
-            if !globalSettingsViewModel.settings.hasValidCustomSteamAPIKey {
+            if !globalSettingsViewModel.hasValidCustomSteamAPIKey {
                 SteamAPIKeyReminderBanner()
             }
 
@@ -184,26 +184,21 @@ struct WorkshopView: View {
                                     ) { downloadState in
                                         WorkshopItemCard(
                                             item: item,
-                                            isHovered: hoveredId == item.id,
                                             isSelected: workshopViewModel.selectedItem?.id == item.id,
                                             isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
                                             presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
-                                            downloadState: downloadState,
+                                            downloadTask: workshopViewModel.downloadTask(for: item.publishedFileId),
+                                            liveDownloadState: downloadState,
                                             isFavorite: workshopViewModel.isWorkshopFavorite(item.publishedFileId),
                                             isActive: isActive,
                                             animatedPreviewMode: globalSettingsViewModel.settings.animatedPreviewPlaybackMode
                                         )
                                     }
-                                    .onHover { hovered in
-                                        hoveredId = hovered ? item.id : nil
-                                    }
                                     .onTapGesture {
                                         workshopViewModel.selectWorkshopItem(item)
                                     }
                                     .contextMenu {
-                                        if let wallpaper = workshopViewModel.installedItem(
-                                            workshopId: item.publishedFileId
-                                        ) {
+                                        if let wallpaper = workshopViewModel.cachedInstalledWallpapers[item.publishedFileId] {
                                             ExplorerItemMenu(
                                                 contentViewModel: viewModel,
                                                 wallpaperViewModel: wallpaperViewModel,
@@ -392,7 +387,7 @@ struct WorkshopView: View {
     }
 
     private func presentAPIKeyReminderIfNeeded() {
-        guard !globalSettingsViewModel.settings.hasValidCustomSteamAPIKey else { return }
+        guard !globalSettingsViewModel.hasValidCustomSteamAPIKey else { return }
         showAPIKeyReminder = SteamAPIKeyReminderPolicy.shouldPresent()
     }
 

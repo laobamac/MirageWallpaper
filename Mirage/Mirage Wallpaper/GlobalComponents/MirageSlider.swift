@@ -12,6 +12,7 @@ import SwiftUI
 // Mirage actually uses, so it drops straight into existing call sites.
 struct MirageSlider<V: BinaryFloatingPoint>: View {
     @Binding var value: V
+    @Environment(\.isEnabled) private var isEnabled
     let range: ClosedRange<V>
     let step: V?
 
@@ -79,6 +80,7 @@ struct MirageSlider<V: BinaryFloatingPoint>: View {
     }
 
     private func update(fromX rawX: CGFloat, usable: CGFloat) {
+        guard isEnabled else { return }
         let f = min(max(Double(rawX / usable), 0), 1)
         let span = Double(range.upperBound - range.lowerBound)
         var newValue = V(Double(range.lowerBound) + f * span)

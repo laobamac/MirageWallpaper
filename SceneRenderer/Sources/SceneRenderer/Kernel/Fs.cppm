@@ -240,6 +240,9 @@ public:
     virtual bool                            Contains(RstdPath path) const = 0;
     virtual std::shared_ptr<IBinaryStream>  Open(RstdPath path)           = 0;
     virtual std::shared_ptr<IBinaryStreamW> OpenW(RstdPath path)          = 0;
+    virtual std::optional<std::string> FindUniqueByBasename(std::string_view) const {
+        return std::nullopt;
+    }
     virtual bool Publish(RstdPath path, const BinaryStreamWriter& writer) {
         auto stream = OpenW(path);
         return stream && writer(*stream) && stream->Flush();
@@ -618,6 +621,22 @@ public:
         }
         return false;
     }
+    std::optional<std::string> FindUniqueByBasenameInTopMount(
+        std::string_view mountpoint, std::string_view basename) const {
+        auto mount_path = ToPath(mountpoint);
+        for (auto iter = m_mountedFss.rbegin(); iter < m_mountedFss.rend(); iter++) {
+            if (! MountedFs::SamePath(iter->path(), mount_path)) continue;
+            auto local = iter->fs->FindUniqueByBasename(basename);
+            if (! local) return std::nullopt;
+            std::string full = ToStdString(iter->path());
+            if (! full.ends_with('/')) full.push_back('/');
+            std::string_view relative = *local;
+            while (relative.starts_with('/')) relative.remove_prefix(1);
+            full.append(relative);
+            return full;
+        }
+        return std::nullopt;
+    }
 
 private:
     std::vector<MountedFs> m_mountedFss;
@@ -655,6 +674,27 @@ public:
         std::filesystem::path full_path { *fullpath };
         std::filesystem::create_directories(full_path.parent_path());
         return CreateCBinaryStreamW(full_path.native());
+    }
+    std::optional<std::string> FindUniqueByBasename(std::string_view basename) const override {
+        const auto root = NormalizedRoot();
+        std::optional<std::string> result;
+        std::error_code ec;
+        for (auto iter = std::filesystem::recursive_directory_iterator(
+                 root, std::filesystem::directory_options::skip_permission_denied, ec);
+             iter != std::filesystem::recursive_directory_iterator();
+             iter.increment(ec)) {
+            if (ec) {
+                ec.clear();
+                continue;
+            }
+            if (! iter->is_regular_file(ec) || iter->path().filename().native() != basename)
+                continue;
+            auto relative = iter->path().lexically_relative(root).generic_string();
+            if (relative.empty()) continue;
+            if (result) return std::nullopt;
+            result = "/" + relative;
+        }
+        return result;
     }
     bool Publish(RstdPath path, const BinaryStreamWriter& writer) override {
         auto target = FullPath(path);

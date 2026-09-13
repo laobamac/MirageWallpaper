@@ -36,8 +36,13 @@ public:
         m_user_properties = properties;
     }
 
+    void SetScriptPersistencePath(std::string path) {
+        m_script_persistence_path = std::move(path);
+    }
+
 private:
     rstd::Option<rstd::ref<rstd::json::Map>> m_user_properties;
+    std::string                              m_script_persistence_path;
 };
 
 } // namespace sr

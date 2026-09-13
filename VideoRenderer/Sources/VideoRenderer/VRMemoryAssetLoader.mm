@@ -2,7 +2,10 @@
 
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
-static const NSUInteger kVRMemoryAssetChunkSize = 4 * 1024 * 1024;
+#include <cerrno>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 @interface VRMemoryAssetLoader ()
 - (void)serveLoadingRequest:(AVAssetResourceLoadingRequest *)loadingRequest;
@@ -10,23 +13,67 @@ static const NSUInteger kVRMemoryAssetChunkSize = 4 * 1024 * 1024;
 
 @implementation VRMemoryAssetLoader {
     NSData *_data;
-    dispatch_data_t _backing;
     NSURL *_assetURL;
     NSString *_contentType;
     dispatch_queue_t _loaderQueue;
 }
 
 + (instancetype)loaderWithFileURL:(NSURL *)fileURL error:(NSError **)error {
-    // Map, don't read. A 2 GB video used to be pulled into anonymous memory in
-    // full and synchronously — on the main thread, since this runs before
-    // [app run] — and NSDataReadingUncached explicitly told the kernel it may
-    // not reclaim any of it, so the whole file stayed resident for the lifetime
-    // of the wallpaper. Mapped pages fault in on demand and evict under
-    // pressure, which is exactly the behaviour wanted for linear playback.
-    NSData *data = [NSData dataWithContentsOfURL:fileURL
-                                         options:NSDataReadingMappedIfSafe
-                                           error:error];
-    if (data == nil) return nil;
+    int descriptor = open(fileURL.fileSystemRepresentation, O_RDONLY | O_CLOEXEC);
+    if (descriptor < 0) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:NSPOSIXErrorDomain code:errno userInfo:nil];
+        }
+        return nil;
+    }
+
+    struct stat status = {};
+    if (fstat(descriptor, &status) != 0 || status.st_size <= 0 ||
+        (uint64_t)status.st_size > (uint64_t)NSUIntegerMax) {
+        int code = errno != 0 ? errno : EINVAL;
+        close(descriptor);
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:NSPOSIXErrorDomain code:code userInfo:nil];
+        }
+        return nil;
+    }
+
+    NSUInteger length = (NSUInteger)status.st_size;
+    void *bytes = malloc(length);
+    if (bytes == NULL) {
+        close(descriptor);
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:NSPOSIXErrorDomain code:ENOMEM userInfo:nil];
+        }
+        return nil;
+    }
+
+    NSUInteger offset = 0;
+    while (offset < length) {
+        ssize_t count = read(descriptor, (uint8_t *)bytes + offset, length - offset);
+        if (count > 0) {
+            offset += (NSUInteger)count;
+            continue;
+        }
+        if (count < 0 && errno == EINTR) continue;
+        int code = count == 0 ? EIO : errno;
+        free(bytes);
+        close(descriptor);
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:NSPOSIXErrorDomain code:code userInfo:nil];
+        }
+        return nil;
+    }
+    close(descriptor);
+
+    NSData *data = [NSData dataWithBytesNoCopy:bytes length:length freeWhenDone:YES];
+    if (data == nil) {
+        free(bytes);
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:NSPOSIXErrorDomain code:ENOMEM userInfo:nil];
+        }
+        return nil;
+    }
 
     NSURLComponents *components = [NSURLComponents componentsWithURL:fileURL
                                                 resolvingAgainstBaseURL:NO];
@@ -36,17 +83,6 @@ static const NSUInteger kVRMemoryAssetChunkSize = 4 * 1024 * 1024;
 
     VRMemoryAssetLoader *loader = [VRMemoryAssetLoader new];
     loader->_data = data;
-    // Wrapped once so range requests can be answered with zero-copy subranges.
-    // AVFoundation asks for the whole resource at offset 0, and the previous
-    // subdataWithRange: answered that by allocating and copying a second full
-    // copy of the file — peak memory was twice the file size. The destructor
-    // block captures `data`, so every outstanding subrange keeps the mapping
-    // alive even if this loader is replaced.
-    loader->_backing = dispatch_data_create(
-        data.bytes, data.length,
-        dispatch_get_global_queue(QOS_CLASS_UTILITY, 0),
-        ^{ (void)data; });
-    if (loader->_backing == nil) return nil;
     loader->_assetURL = assetURL;
     UTType *type = [UTType typeWithFilenameExtension:fileURL.pathExtension];
     loader->_contentType = type.identifier ?: UTTypeMovie.identifier;
@@ -72,6 +108,7 @@ static const NSUInteger kVRMemoryAssetChunkSize = 4 * 1024 * 1024;
             ? _contentType : allowed.firstObject;
         content.contentLength = (long long)_data.length;
         content.byteRangeAccessSupported = YES;
+        content.entireLengthAvailableOnDemand = YES;
     }
 
     if (loadingRequest.dataRequest == nil) {
@@ -79,9 +116,7 @@ static const NSUInteger kVRMemoryAssetChunkSize = 4 * 1024 * 1024;
         return YES;
     }
 
-    dispatch_async(_loaderQueue, ^{
-        [self serveLoadingRequest:loadingRequest];
-    });
+    [self serveLoadingRequest:loadingRequest];
     return YES;
 }
 
@@ -117,24 +152,25 @@ static const NSUInteger kVRMemoryAssetChunkSize = 4 * 1024 * 1024;
         return;
     }
 
-    NSUInteger length = MIN(kVRMemoryAssetChunkSize, end - offset);
-    dispatch_data_t slice = dispatch_data_create_subrange(_backing, offset, length);
+    NSUInteger length = end - offset;
+    NSData *backing = _data;
+    NSData *slice = [[NSData alloc]
+        initWithBytesNoCopy:(uint8_t *)backing.bytes + offset
+                     length:length
+                deallocator:^(void * _Nonnull bytes, NSUInteger length) {
+        (void)bytes;
+        (void)length;
+        (void)backing;
+    }];
     if (slice == nil) {
         [loadingRequest finishLoadingWithError:[NSError
             errorWithDomain:NSURLErrorDomain code:NSURLErrorCannotDecodeContentData userInfo:nil]];
         return;
     }
 
-    [request respondWithData:(NSData *)(id)slice];
+    [request respondWithData:slice];
     if (loadingRequest.cancelled || loadingRequest.finished) return;
-    if (offset + length >= end) {
-        [loadingRequest finishLoading];
-        return;
-    }
-
-    dispatch_async(_loaderQueue, ^{
-        [self serveLoadingRequest:loadingRequest];
-    });
+    [loadingRequest finishLoading];
 }
 
 @end
