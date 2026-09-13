@@ -53,35 +53,51 @@ NSString* ShaderSource() {
             "}\n";
 }
 
-bool BuildPipeline(MacMetalDisplay* display, id<MTLDevice> device) {
-    if (display == nullptr || device == nil) return false;
+void ReleasePipeline(MacMetalDisplay* display) {
+    [display->pipeline release];
+    [display->sampler release];
+    [display->queue release];
+    [display->device release];
     display->pipeline = nil;
     display->sampler  = nil;
     display->queue    = nil;
+    display->device   = nil;
+}
 
-    display->device = device;
-
-    display->queue = [device newCommandQueue];
-    if (display->queue == nil) return false;
+bool BuildPipeline(MacMetalDisplay* display, id<MTLDevice> device) {
+    if (display == nullptr || device == nil) return false;
+    id<MTLCommandQueue> queue = [device newCommandQueue];
+    if (queue == nil) return false;
 
     NSError* error = nil;
     id<MTLLibrary> library = [device newLibraryWithSource:ShaderSource() options:nil error:&error];
     if (library == nil) {
         NSLog(@"SceneRenderer Metal display shader compile failed: %@", error);
+        [queue release];
         return false;
     }
 
     id<MTLFunction> vs = [library newFunctionWithName:@"vs_main"];
     id<MTLFunction> fs = [library newFunctionWithName:@"fs_main"];
-    if (vs == nil || fs == nil) return false;
+    [library release];
+    if (vs == nil || fs == nil) {
+        [vs release];
+        [fs release];
+        [queue release];
+        return false;
+    }
 
     MTLRenderPipelineDescriptor* desc = [[MTLRenderPipelineDescriptor alloc] init];
     desc.vertexFunction = vs;
     desc.fragmentFunction = fs;
     desc.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
-    display->pipeline = [device newRenderPipelineStateWithDescriptor:desc error:&error];
-    if (display->pipeline == nil) {
+    id<MTLRenderPipelineState> pipeline = [device newRenderPipelineStateWithDescriptor:desc error:&error];
+    [desc release];
+    [vs release];
+    [fs release];
+    if (pipeline == nil) {
         NSLog(@"SceneRenderer Metal display pipeline creation failed: %@", error);
+        [queue release];
         return false;
     }
 
@@ -90,40 +106,68 @@ bool BuildPipeline(MacMetalDisplay* display, id<MTLDevice> device) {
     sampler_desc.magFilter = MTLSamplerMinMagFilterLinear;
     sampler_desc.sAddressMode = MTLSamplerAddressModeClampToEdge;
     sampler_desc.tAddressMode = MTLSamplerAddressModeClampToEdge;
-    display->sampler = [device newSamplerStateWithDescriptor:sampler_desc];
-    return display->sampler != nil;
+    id<MTLSamplerState> sampler = [device newSamplerStateWithDescriptor:sampler_desc];
+    [sampler_desc release];
+    if (sampler == nil) {
+        [pipeline release];
+        [queue release];
+        return false;
+    }
+    display->queue = queue;
+    display->pipeline = pipeline;
+    display->sampler = sampler;
+    return true;
+}
+
+void BeginPipelineBuild(MacMetalDisplay* display, id<MTLDevice> device) {
+    ReleasePipeline(display);
+    display->device = [device retain];
+    display->layer.device = device;
+    display->layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+    display->layer.framebufferOnly = YES;
+    display->layer.opaque = YES;
+    display->warmup_group = dispatch_group_create();
+    dispatch_group_async(display->warmup_group,
+                         dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        @autoreleasepool {
+            BuildPipeline(display, device);
+        }
+    });
 }
 
 bool EnsurePipeline(MacMetalDisplay* display, id<MTLTexture> source_texture) {
     if (display == nullptr || source_texture == nil) return false;
     if (display->warmup_group != nil) {
-        dispatch_group_wait(display->warmup_group, DISPATCH_TIME_FOREVER);
+        if (dispatch_group_wait(display->warmup_group, DISPATCH_TIME_NOW) != 0) return false;
+        dispatch_release(display->warmup_group);
         display->warmup_group = nil;
     }
     id<MTLDevice> device = source_texture.device;
     if (device == nil) return false;
-    display->layer.device = device;
-    display->layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
-    display->layer.framebufferOnly = YES;
-    display->layer.opaque = YES;
-    if (display->pipeline != nil && display->device == device) return true;
-    return BuildPipeline(display, device);
+    if (display->device == device) return display->pipeline != nil;
+    BeginPipelineBuild(display, device);
+    return false;
 }
 
-void UpdateDrawableSize(MacMetalDisplay* display) {
-    if (display == nullptr || display->layer == nil) return;
+bool IsValidSize(CGSize size) {
+    return std::isfinite(size.width) && std::isfinite(size.height) &&
+           size.width > 0.0 && size.height > 0.0;
+}
+
+bool UpdateDrawableSize(MacMetalDisplay* display) {
+    if (display == nullptr || display->layer == nil) return false;
     NSView* view = display->view;
     if (view == nil) {
         CALayer* root = display->root_layer;
-        if (root == nil) return;
+        if (root == nil) return false;
         const CGSize bounds = root.bounds.size;
         const CGSize drawable = display->fixed_drawable_size;
-        if (bounds.width <= 0.0 || bounds.height <= 0.0 ||
-            drawable.width <= 0.0 || drawable.height <= 0.0) return;
+        if (!IsValidSize(bounds) || !IsValidSize(drawable)) return false;
+        if (!std::isfinite(drawable.width / bounds.width)) return false;
         display->layer.contentsScale = drawable.width / bounds.width;
         display->layer.frame = root.bounds;
         display->layer.drawableSize = drawable;
-        return;
+        return true;
     }
 
     const bool has_fixed_drawable = display->fixed_drawable_size.width > 0.0 &&
@@ -138,13 +182,13 @@ void UpdateDrawableSize(MacMetalDisplay* display) {
         // the dynamic path below and are never constrained to a display size.
         NSScreen* screen = view.window.screen ?: NSScreen.mainScreen;
         const CGFloat backing_scale = screen.backingScaleFactor;
-        if (backing_scale > 0.0) {
+        if (std::isfinite(backing_scale) && backing_scale > 0.0) {
             const CGSize expected_bounds = CGSizeMake(
                 display->fixed_drawable_size.width / backing_scale,
                 display->fixed_drawable_size.height / backing_scale);
             NSRect normalized_bounds = view.bounds;
             const CGSize reported_bounds = normalized_bounds.size;
-            if (expected_bounds.width > 0.0 && expected_bounds.height > 0.0 &&
+            if (IsValidSize(expected_bounds) &&
                 (std::fabs(reported_bounds.width - expected_bounds.width) > 0.5 ||
                  std::fabs(reported_bounds.height - expected_bounds.height) > 0.5)) {
                 normalized_bounds.size = expected_bounds;
@@ -170,16 +214,17 @@ void UpdateDrawableSize(MacMetalDisplay* display) {
     const CGSize bounds = view.bounds.size;
     const CGSize backing = [view convertRectToBacking:view.bounds].size;
     const CGSize drawable = has_fixed_drawable ? display->fixed_drawable_size : backing;
-    if (bounds.width <= 0.0 || bounds.height <= 0.0 ||
-        drawable.width <= 0.0 || drawable.height <= 0.0) return;
+    if (!IsValidSize(bounds) || !IsValidSize(drawable)) return false;
     // Screen-saver ViewBridge occasionally reports physical pixel dimensions
     // as logical view bounds. Its caller therefore supplies the owning
     // CGDisplay's authoritative pixel extent. Desktop windows keep the dynamic
     // AppKit backing conversion by leaving fixed_drawable_size empty.
     const CGFloat scale = drawable.width / bounds.width;
+    if (!std::isfinite(scale)) return false;
     display->layer.contentsScale = scale;
     display->layer.frame = view.bounds;
     display->layer.drawableSize = drawable;
+    return true;
 }
 
 void LogDisplayGeometryIfChanged(MacMetalDisplay* display, id<MTLTexture> source_texture,
@@ -215,7 +260,7 @@ void* CreateForNSView(void* ns_view, CGSize fixed_drawable_size) {
     NSView* content_view = (__bridge NSView*)ns_view;
     if (content_view == nil) return nullptr;
     auto* display = new MacMetalDisplay();
-    display->layer = [CAMetalLayer layer];
+    display->layer = [CAMetalLayer new];
     display->view = content_view;
     display->fixed_drawable_size = fixed_drawable_size;
     display->layer.contentsGravity = kCAGravityResizeAspect;
@@ -225,30 +270,19 @@ void* CreateForNSView(void* ns_view, CGSize fixed_drawable_size) {
     content_view.layer = display->layer;
     UpdateDrawableSize(display);
 
-    // Shader source compilation used to happen synchronously on the very first
-    // scene frame. Prewarm it on a background queue while Vulkan, the VFS and
-    // the scene graph initialize. EnsurePipeline joins only if that work has
-    // not completed by the time the first exported texture arrives.
     if (id<MTLDevice> default_device = MTLCreateSystemDefaultDevice()) {
-        display->layer.device = default_device;
-        display->layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
-        display->layer.framebufferOnly = YES;
-        display->layer.opaque = YES;
-        display->warmup_group = dispatch_group_create();
-        dispatch_group_async(display->warmup_group,
-                             dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-          BuildPipeline(display, default_device);
-        });
+        BeginPipelineBuild(display, default_device);
+        [default_device release];
     }
     return display;
 }
 
 void* CreateForCALayer(void* ca_layer, CGSize drawable_size) {
-    if (ca_layer == nullptr || drawable_size.width <= 0.0 || drawable_size.height <= 0.0) return nullptr;
+    if (ca_layer == nullptr || !IsValidSize(drawable_size)) return nullptr;
     CALayer* root_layer = (__bridge CALayer*)ca_layer;
     if (root_layer == nil) return nullptr;
     auto* display = new MacMetalDisplay();
-    display->layer = [CAMetalLayer layer];
+    display->layer = [CAMetalLayer new];
     display->root_layer = root_layer;
     display->fixed_drawable_size = drawable_size;
     display->layer.contentsGravity = kCAGravityResizeAspect;
@@ -256,15 +290,8 @@ void* CreateForCALayer(void* ca_layer, CGSize drawable_size) {
     [root_layer addSublayer:display->layer];
     UpdateDrawableSize(display);
     if (id<MTLDevice> default_device = MTLCreateSystemDefaultDevice()) {
-        display->layer.device = default_device;
-        display->layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
-        display->layer.framebufferOnly = YES;
-        display->layer.opaque = YES;
-        display->warmup_group = dispatch_group_create();
-        dispatch_group_async(display->warmup_group,
-                             dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-          BuildPipeline(display, default_device);
-        });
+        BeginPipelineBuild(display, default_device);
+        [default_device release];
     }
     return display;
 }
@@ -299,11 +326,23 @@ extern "C" void* SceneRendererMacMetalDisplayCreate(GLFWwindow* window) {
 extern "C" void SceneRendererMacMetalDisplayDestroy(void* handle) {
     auto* display = static_cast<MacMetalDisplay*>(handle);
     if (display == nullptr) return;
+    auto detach = ^{
+        if (display->view != nil && display->view.layer == display->layer) {
+            display->view.layer = nil;
+        }
+        [display->layer removeFromSuperlayer];
+        display->view = nil;
+        display->root_layer = nil;
+    };
+    if (NSThread.isMainThread) detach();
+    else dispatch_sync(dispatch_get_main_queue(), detach);
     if (display->warmup_group != nil) {
         dispatch_group_wait(display->warmup_group, DISPATCH_TIME_FOREVER);
+        dispatch_release(display->warmup_group);
         display->warmup_group = nil;
     }
-    [display->layer removeFromSuperlayer];
+    ReleasePipeline(display);
+    [display->layer release];
     delete display;
 }
 
@@ -328,7 +367,7 @@ extern "C" void SceneRendererMacMetalDisplayDraw(void* handle, void* texture,
 
     id<MTLTexture> source_texture = (__bridge id<MTLTexture>)texture;
     if (! EnsurePipeline(display, source_texture)) return;
-    UpdateDrawableSize(display);
+    if (!UpdateDrawableSize(display)) return;
     LogDisplayGeometryIfChanged(display, source_texture, source_width, source_height);
 
     id<CAMetalDrawable> drawable = [display->layer nextDrawable];

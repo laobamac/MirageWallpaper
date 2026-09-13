@@ -101,14 +101,14 @@ extern "C" void MirageSceneSaverHostPresent(void* handle, void* texture,
 extern "C" void MirageSceneSaverHostDestroy(void* handle) {
     auto* host = static_cast<SaverHost*>(handle);
     if (host == nullptr) return;
-    host->reference.host = nullptr;
-    void* texture = host->texture.exchange(nullptr);
-    SceneRendererMacMetalTextureRelease(texture);
-    auto destroy = ^{
-        SceneRendererMacMetalDisplayDestroy(host->display);
+    void* display = host->display;
+    auto detach = ^{
+        host->reference.host = nullptr;
+        SceneRendererMacMetalTextureRelease(host->texture.exchange(nullptr));
         host->display = nullptr;
     };
-    if (NSThread.isMainThread) destroy();
-    else dispatch_sync(dispatch_get_main_queue(), destroy);
+    if (NSThread.isMainThread) detach();
+    else dispatch_sync(dispatch_get_main_queue(), detach);
+    SceneRendererMacMetalDisplayDestroy(display);
     delete host;
 }
