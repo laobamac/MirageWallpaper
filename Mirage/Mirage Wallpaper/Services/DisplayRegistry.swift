@@ -39,6 +39,38 @@ struct DisplayInfo: Identifiable, Equatable {
     var id: DisplayKey { key }
 }
 
+struct DisplayTopologySnapshot: Equatable {
+    struct Screen: Equatable {
+        let displayID: CGDirectDisplayID
+        let frame: CGRect
+        let backingScaleFactor: CGFloat
+        let maximumFramesPerSecond: Int
+        let isMain: Bool
+    }
+
+    let screens: [Screen]
+
+    init(screens: [Screen]) {
+        self.screens = screens.sorted { $0.displayID < $1.displayID }
+    }
+
+    static func capture() -> DisplayTopologySnapshot {
+        let mainDisplayID = CGMainDisplayID()
+        let screens = NSScreen.screens.compactMap { screen -> Screen? in
+            guard let number = screen.deviceDescription[
+                NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { return nil }
+            let displayID = number.uint32Value
+            return Screen(
+                displayID: displayID,
+                frame: screen.frame,
+                backingScaleFactor: screen.backingScaleFactor,
+                maximumFramesPerSecond: screen.maximumFramesPerSecond,
+                isMain: displayID == mainDisplayID)
+        }
+        return DisplayTopologySnapshot(screens: screens)
+    }
+}
+
 final class DisplayRegistry {
     static let shared = DisplayRegistry()
 
