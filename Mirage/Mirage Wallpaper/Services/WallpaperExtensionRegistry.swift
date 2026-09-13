@@ -81,6 +81,55 @@ struct WallpaperExtensionRecord: Equatable {
     }
 }
 
+enum WallpaperSettingsCache {
+    enum Policy {
+        case all, emptyDesktop
+    }
+
+    static func directory() throws -> URL {
+        let length = confstr(_CS_DARWIN_USER_CACHE_DIR, nil, 0)
+        guard length > 0 else { throw MirageLockBridge.failure("The user cache directory is unavailable") }
+        var path = [CChar](repeating: 0, count: length)
+        guard confstr(_CS_DARWIN_USER_CACHE_DIR, &path, length) == length else {
+            throw MirageLockBridge.failure("The user cache directory could not be read")
+        }
+        return URL(fileURLWithPath: String(cString: path), isDirectory: true)
+            .appendingPathComponent("com.apple.wallpaper.agent/com.apple.wallpaper.view-model-cache", isDirectory: true)
+    }
+
+    @discardableResult
+    static func invalidate(identifier: String, policy: Policy, directory: URL? = nil,
+                           isCurrent: () -> Bool) throws -> Bool {
+        let directory = try directory ?? Self.directory()
+        let desktop = directory.appendingPathComponent("extension-\(identifier)-desktop")
+        let screenSaver = directory.appendingPathComponent("extension-\(identifier)-screenSaver")
+        guard isCurrent() else { throw CancellationError() }
+        if policy == .emptyDesktop {
+            let data: Data
+            do {
+                data = try Data(contentsOf: desktop)
+            } catch CocoaError.fileReadNoSuchFile {
+                return false
+            }
+            guard let root = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+                  let viewModel = root["viewModel"] as? [String: Any],
+                  let groups = viewModel["groups"] as? [Any], groups.isEmpty else { return false }
+        }
+        var removed = false
+        for url in [desktop, screenSaver] {
+            guard isCurrent() else { throw CancellationError() }
+            do {
+                try FileManager.default.removeItem(at: url)
+                removed = true
+                NSLog("[MirageLock] invalidated cached wallpaper settings: %@", url.lastPathComponent)
+            } catch CocoaError.fileNoSuchFile {
+                continue
+            }
+        }
+        return removed
+    }
+}
+
 final class WallpaperExtensionRequest: @unchecked Sendable {
     private let lock = NSLock()
     private var current: UUID?

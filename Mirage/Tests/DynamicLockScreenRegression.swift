@@ -113,14 +113,27 @@ private final class RegistrySimulation {
     var restarts = 0
     var duplicate = false
     var responds = true
+    var selection = WallpaperExtensionController.SelectionState.selected
+    var respondsAfter: TimeInterval = 0
+    var requiresRegistryRecovery = false
+    var hasEmptySettingsCache = false
+    var requiresCacheInvalidation = false
+    var cacheInvalidations = 0
+    var readyDisplayIDs: [UInt32] = [7]
+    var failingArgument: String?
+    var transformReport: ((MirageLockReport) -> MirageLockReport)?
     var time: TimeInterval = 0
     var onCommand: (() -> Void)?
+    var onSleep: ((TimeInterval) -> Void)?
 
     func system(extensionURL: URL, identifier: String) -> WallpaperExtensionController.System {
         let path = MirageLockBridge.normalizedPath(extensionURL)
         return .init(run: { [self] executable, arguments in
             commands.append([executable] + arguments)
             onCommand?()
+            if let failingArgument, arguments.first == failingArgument {
+                return (false, "Simulated registration failure")
+            }
             if arguments.first?.hasPrefix("-m") == true {
                 var output = "+    \(identifier)(1)\t11111111-1111-1111-1111-111111111111\t2026-09-12 00:00:00 +0000\t\(path)\n"
                 if duplicate, arguments.first == "-mADv" {
@@ -133,13 +146,27 @@ private final class RegistrySimulation {
         }, restart: { [self] _, isCurrent in
             if !isCurrent() { throw CancellationError() }
             restarts += 1
-        }, selected: { _ in true }, reports: { [self] probe, url, fingerprint, _ in
-            guard responds else { return [] }
-            return [MirageLockReport(probeID: probe.id, instanceID: UUID(), processID: getpid(),
+        }, selection: { [self] _ in selection }, reports: { [self] probe, url, fingerprint, container in
+            guard responds, time >= respondsAfter else { return [] }
+            if requiresRegistryRecovery,
+               (restarts == 0 || !commands.contains(where: { $0.first?.hasSuffix("/lsregister") == true })) { return [] }
+            if requiresCacheInvalidation, cacheInvalidations == 0 || restarts == 0 { return [] }
+            let data = try? Data(contentsOf: container.appendingPathComponent(MirageLockBridge.configurationName))
+            let report = MirageLockReport(probeID: probe.id, instanceID: UUID(), processID: getpid(),
                 extensionPath: MirageLockBridge.normalizedPath(url), fingerprint: fingerprint,
-                version: "2", configurationDigest: probe.configurationDigest,
-                settingsReady: true, readyDisplayIDs: [7], error: nil)]
-        }, now: { [self] in time }, sleep: { [self] duration in time += duration })
+                version: "2", configurationDigest: data.map(MirageLockBridge.digest),
+                settingsReady: true, readyDisplayIDs: readyDisplayIDs, error: nil)
+            return [transformReport?(report) ?? report]
+        }, invalidateSettingsCache: { [self] _, policy, isCurrent in
+            if !isCurrent() { throw CancellationError() }
+            if policy == .emptyDesktop, !hasEmptySettingsCache { return false }
+            cacheInvalidations += 1
+            hasEmptySettingsCache = false
+            return true
+        }, notify: {}, now: { [self] in time }, sleep: { [self] duration in
+            time += duration
+            onSleep?(time)
+        })
     }
 }
 
@@ -160,13 +187,15 @@ private struct DynamicLockScreenRegression {
             try testRegistry()
             try testRequestCancellation()
             try testConfigurationAndSettings()
+            try testSelectionState()
+            try testSettingsCacheInvalidation()
             try testRegistrationLifecycle()
             try testExtensionProcessDiscovery()
             try testToolTimeout()
             try testSnapshotAcrossProcesses()
             try testConfiguredSnapshotsAcrossProcesses()
             try testSettingsAcrossProcesses()
-            print("PASS: registry, cancellation, configuration preservation, disabled catalog, registration lifecycle, extension process discovery, tool timeout, cross-process snapshot and settings")
+            print("PASS: registry, cancellation, configuration preservation, disabled catalog, selection state, settings cache invalidation, registration and discovery recovery, extension process discovery, tool timeout, cross-process snapshot and settings")
         } catch {
             fputs("FAIL: \(error)\n", stderr)
             exit(1)
@@ -214,11 +243,17 @@ private struct DynamicLockScreenRegression {
         let models = try buildMirageSettingsViewModels(configuration: loaded.configuration)
         let groups = Mirror(reflecting: models).descendant("box", "rawValue", "desktop", "some", "groups") as? [Any]
         try require(groups?.isEmpty == true, "A disabled lock screen still publishes wallpaper choices")
+        let disabledPolicy = Mirror(reflecting: models).descendant("box", "rawValue", "desktop", "some", "refreshPolicy")
+        try require(disabledPolicy.map { String(describing: $0) } == "discretionary",
+                    "Disabling the lock screen published an indefinitely cached empty catalog")
         let enabled = MirageLockConfiguration(version: configuration.version, enabled: true, displays: configuration.displays)
         try JSONEncoder().encode(enabled).write(to: url, options: .atomic)
         let restored = try store.load()
         let restoredModels = try buildMirageSettingsViewModels(configuration: restored.configuration)
         let restoredGroups = Mirror(reflecting: restoredModels).descendant("box", "rawValue", "desktop", "some", "groups") as? [Any]
+        let enabledPolicy = Mirror(reflecting: restoredModels).descendant("box", "rawValue", "desktop", "some", "refreshPolicy")
+        try require(enabledPolicy.map { String(describing: $0) } == "discretionary",
+                    "The system did not decode the dynamic catalog refresh policy")
         let items = restoredGroups?.first.flatMap { Mirror(reflecting: $0).descendant("items") as? [Any] }
         let identifier = items?.first.flatMap { Mirror(reflecting: $0).descendant("id", "id") as? String }
         try require(identifier == "display-7", "Re-enabling did not restore the same system choice identity")
@@ -245,6 +280,76 @@ private struct DynamicLockScreenRegression {
         let result = WallpaperExtensionController.runTool("/bin/sleep", arguments: ["5"], timeout: 0.1)
         try require(!result.success && result.output.contains("timed out"), "Tool timeout was not reported")
         try require(ProcessInfo.processInfo.systemUptime - start < 3, "Tool timeout blocked the lifecycle worker")
+    }
+
+    static func testSelectionState() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("mirage-selection-fixture-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = root.appendingPathComponent("Index.plist")
+        let identifier = "cn.laobamac.Mirage.RegressionExtension"
+        try require(WallpaperExtensionController.selectionState(identifier: identifier, storeURL: store) == .unknown,
+                    "A missing wallpaper store was treated as an unselected extension")
+        try Data("invalid plist".utf8).write(to: store)
+        try require(WallpaperExtensionController.selectionState(identifier: identifier, storeURL: store) == .unknown,
+                    "A corrupt wallpaper store was treated as an unselected extension")
+        let other: [String: Any] = ["Displays": ["display": ["Desktop": ["Content": ["Choices": [["Provider": "other"]]]]]]]
+        try PropertyListSerialization.data(fromPropertyList: other, format: .binary, options: 0).write(to: store)
+        try require(WallpaperExtensionController.selectionState(identifier: identifier, storeURL: store) == .notSelected,
+                    "An unrelated wallpaper was treated as the Mirage extension")
+        let spaces: [String: Any] = ["Spaces": ["space": ["Desktop": ["Content": ["Choices": [["Provider": identifier]]]]]]]
+        try PropertyListSerialization.data(fromPropertyList: spaces, format: .binary, options: 0).write(to: store)
+        try require(WallpaperExtensionController.selectionState(identifier: identifier, storeURL: store) == .selected,
+                    "A wallpaper selected for a Space was not detected")
+    }
+
+    static func testSettingsCacheInvalidation() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("mirage-settings-cache-fixture-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let identifier = "cn.laobamac.Mirage.RegressionExtension"
+        let desktop = root.appendingPathComponent("extension-\(identifier)-desktop")
+        let screenSaver = root.appendingPathComponent("extension-\(identifier)-screenSaver")
+        let other = root.appendingPathComponent("extension-\(identifier).Other-desktop")
+        let selection = root.appendingPathComponent("Index.plist")
+        let empty = try PropertyListSerialization.data(fromPropertyList: [
+            "viewModel": ["groups": [], "refreshPolicy": ["default": [:]]], "osBuildVersion": "fixture"
+        ], format: .binary, options: 0)
+        let populated = try PropertyListSerialization.data(fromPropertyList: [
+            "viewModel": ["groups": [["localizedName": "Mirage"]]]
+        ], format: .binary, options: 0)
+        try empty.write(to: desktop)
+        try populated.write(to: screenSaver)
+        try populated.write(to: other)
+        try populated.write(to: selection)
+        let removed = try WallpaperSettingsCache.invalidate(identifier: identifier, policy: .emptyDesktop,
+                                                           directory: root, isCurrent: { true })
+        try require(removed && !FileManager.default.fileExists(atPath: desktop.path)
+                    && !FileManager.default.fileExists(atPath: screenSaver.path),
+                    "An empty cached catalog was not invalidated for the current provider")
+        let otherData = try Data(contentsOf: other)
+        let selectionData = try Data(contentsOf: selection)
+        try require(otherData == populated && selectionData == populated,
+                    "Cache recovery changed another provider or the user's wallpaper selection")
+        let absent = try WallpaperSettingsCache.invalidate(identifier: identifier, policy: .all,
+                                                          directory: root, isCurrent: { true })
+        try require(!absent, "Missing cache files were reported as invalidated")
+        try populated.write(to: desktop)
+        let retained = try WallpaperSettingsCache.invalidate(identifier: identifier, policy: .emptyDesktop,
+                                                            directory: root, isCurrent: { true })
+        let retainedData = try Data(contentsOf: desktop)
+        try require(!retained && retainedData == populated, "A populated catalog was purged during passive registration")
+        var cancelled = false
+        do {
+            try WallpaperSettingsCache.invalidate(identifier: identifier, policy: .all,
+                                                 directory: root, isCurrent: { false })
+        } catch is CancellationError { cancelled = true }
+        try require(cancelled && FileManager.default.fileExists(atPath: desktop.path),
+                    "A cancelled request invalidated the settings cache")
+        let forced = try WallpaperSettingsCache.invalidate(identifier: identifier, policy: .all,
+                                                          directory: root, isCurrent: { true })
+        try require(forced && !FileManager.default.fileExists(atPath: desktop.path),
+                    "Forced discovery recovery retained a stale populated catalog")
     }
 
     static func testRegistrationLifecycle() throws {
@@ -307,6 +412,157 @@ private struct DynamicLockScreenRegression {
             system: missing.system(extensionURL: extensionURL, identifier: identifier), isCurrent: { true })
         try require(failed.errorMessage != nil && failed.report == nil && missing.restarts == 1,
                     "A missing runtime acknowledgement was reported as success or retried without a bound")
+        try require(missing.commands.contains { $0.first?.hasSuffix("/lsregister") == true },
+                    "Recovery restarted the host without repairing registration")
+        let unopened = RegistrySimulation()
+        unopened.selection = .notSelected
+        unopened.responds = false
+        let pending = try WallpaperExtensionController.register(appURL: app, extensionURL: extensionURL,
+            container: root, previousFingerprint: fingerprint, forceRestart: false,
+            system: unopened.system(extensionURL: extensionURL, identifier: identifier), isCurrent: { true })
+        guard case .awaitingSystemSettings = pending.outcome else {
+            throw RegressionFailure(description: "A dormant extension was reported as connected or failed before opening settings")
+        }
+        try require(pending.report == nil && unopened.restarts == 0,
+                    "Passive registration required a running extension or unnecessarily restarted the host")
+        let emptyCache = RegistrySimulation()
+        emptyCache.selection = .notSelected
+        emptyCache.hasEmptySettingsCache = true
+        emptyCache.requiresCacheInvalidation = true
+        emptyCache.readyDisplayIDs = []
+        let refreshedCache = try WallpaperExtensionController.register(appURL: app, extensionURL: extensionURL,
+            container: root, previousFingerprint: fingerprint, forceRestart: false,
+            system: emptyCache.system(extensionURL: extensionURL, identifier: identifier), isCurrent: { true })
+        try require(refreshedCache.report?.settingsReady == true && emptyCache.cacheInvalidations == 1
+                    && emptyCache.restarts == 1 && emptyCache.commands.count == 1,
+                    "Re-enabling left the system's empty wallpaper catalog cached")
+        let undiscovered = RegistrySimulation()
+        undiscovered.selection = .notSelected
+        undiscovered.responds = false
+        let notLoaded = try WallpaperExtensionController.register(appURL: app, extensionURL: extensionURL,
+            container: root, previousFingerprint: fingerprint, forceRestart: false, requireAcknowledgement: true,
+            system: undiscovered.system(extensionURL: extensionURL, identifier: identifier), isCurrent: { true })
+        try require(notLoaded.errorMessage != nil && notLoaded.report == nil && undiscovered.restarts == 1,
+                    "An unselected extension missing from settings was left waiting without recovery")
+        try require(undiscovered.time < 85,
+                    "Discovery recovery exceeded its bounded acknowledgement waits")
+        let delayed = RegistrySimulation()
+        delayed.selection = .notSelected
+        delayed.respondsAfter = 3
+        delayed.readyDisplayIDs = []
+        let loaded = try WallpaperExtensionController.register(appURL: app, extensionURL: extensionURL,
+            container: root, previousFingerprint: fingerprint, forceRestart: false, requireAcknowledgement: true,
+            system: delayed.system(extensionURL: extensionURL, identifier: identifier), isCurrent: { true })
+        try require(loaded.report?.settingsReady == true && loaded.selection == .notSelected
+                    && loaded.report?.readyDisplayIDs.isEmpty == true && delayed.restarts == 0,
+                    "A delayed settings acknowledgement required wallpaper selection, rendering, or a service restart")
+        let deferred = RegistrySimulation()
+        deferred.selection = .notSelected
+        deferred.respondsAfter = 61
+        deferred.readyDisplayIDs = []
+        var checkedServiceLock = false
+        var serviceLockAvailable = false
+        deferred.onSleep = { _ in
+            guard !checkedServiceLock else { return }
+            checkedServiceLock = true
+            let available = DispatchSemaphore(value: 0)
+            DispatchQueue.global().async {
+                if WallpaperServiceCoordinator.lock.try() {
+                    WallpaperServiceCoordinator.lock.unlock()
+                    available.signal()
+                }
+            }
+            serviceLockAvailable = available.wait(timeout: .now() + 1) == .success
+        }
+        let deferredLoad = try WallpaperExtensionController.register(appURL: app, extensionURL: extensionURL,
+            container: root, previousFingerprint: fingerprint, forceRestart: true,
+            forceRegistration: true, requireAcknowledgement: true,
+            system: deferred.system(extensionURL: extensionURL, identifier: identifier), isCurrent: { true })
+        try require(deferredLoad.report?.settingsReady == true && deferred.restarts == 1 && deferred.time < 75,
+                    "The system's deferred catalog refresh was reported as a connection failure")
+        try require(serviceLockAvailable, "Waiting for the system held the shared wallpaper service lock")
+        let recoverable = RegistrySimulation()
+        recoverable.selection = .notSelected
+        recoverable.requiresRegistryRecovery = true
+        recoverable.requiresCacheInvalidation = true
+        let recovered = try WallpaperExtensionController.register(appURL: app, extensionURL: extensionURL,
+            container: root, previousFingerprint: fingerprint, forceRestart: false, requireAcknowledgement: true,
+            system: recoverable.system(extensionURL: extensionURL, identifier: identifier), isCurrent: { true })
+        try require(recovered.report != nil && recoverable.restarts == 1 && recoverable.cacheInvalidations == 1,
+                    "An unchanged registered extension could not recover discovery without a reboot")
+        let forced = RegistrySimulation()
+        forced.selection = .notSelected
+        forced.responds = false
+        let forcedFailure = try WallpaperExtensionController.register(appURL: app, extensionURL: extensionURL,
+            container: root, previousFingerprint: fingerprint, forceRestart: true,
+            forceRegistration: true, requireAcknowledgement: true,
+            system: forced.system(extensionURL: extensionURL, identifier: identifier), isCurrent: { true })
+        try require(forcedFailure.errorMessage != nil && forced.restarts == 1
+                    && forced.commands.filter { $0.first?.hasSuffix("/lsregister") == true }.count == 1,
+                    "Explicit retry skipped registration or repeated its forced recovery")
+        let unknown = RegistrySimulation()
+        unknown.selection = .unknown
+        unknown.responds = false
+        let unknownResult = try WallpaperExtensionController.register(appURL: app, extensionURL: extensionURL,
+            container: root, previousFingerprint: fingerprint, forceRestart: false,
+            system: unknown.system(extensionURL: extensionURL, identifier: identifier), isCurrent: { true })
+        try require(unknownResult.selection == .unknown && unknownResult.errorMessage != nil && unknown.restarts == 1,
+                    "An unknown selection bypassed acknowledgement and recovery")
+        let newlySelected = RegistrySimulation()
+        newlySelected.selection = .notSelected
+        newlySelected.responds = false
+        newlySelected.onSleep = { [weak newlySelected] elapsed in
+            if elapsed >= 0.3 { newlySelected?.selection = .selected }
+        }
+        let newlySelectedResult = try WallpaperExtensionController.register(appURL: app, extensionURL: extensionURL,
+            container: root, previousFingerprint: fingerprint, forceRestart: false,
+            system: newlySelected.system(extensionURL: extensionURL, identifier: identifier), isCurrent: { true })
+        try require(newlySelectedResult.errorMessage != nil && newlySelected.restarts == 1,
+                    "Selection changes during registration were ignored")
+        let changed = RegistrySimulation()
+        changed.respondsAfter = 2
+        let replacement = configuration + Data("\n".utf8)
+        var updateError: Error?
+        changed.onSleep = { elapsed in
+            guard elapsed >= 0.3 else { return }
+            do { try replacement.write(to: configurationURL, options: .atomic) }
+            catch { updateError = error }
+        }
+        let currentConfiguration = try WallpaperExtensionController.register(appURL: app, extensionURL: extensionURL,
+            container: root, previousFingerprint: fingerprint, forceRestart: false,
+            system: changed.system(extensionURL: extensionURL, identifier: identifier), isCurrent: { true })
+        if let updateError { throw updateError }
+        try require(currentConfiguration.report?.configurationDigest == MirageLockBridge.digest(replacement)
+                    && currentConfiguration.report?.configurationDigest != currentConfiguration.probe.configurationDigest
+                    && changed.restarts == 0,
+                    "A configuration update during registration invalidated the current extension acknowledgement")
+        try configuration.write(to: configurationURL, options: .atomic)
+        for invalidField in ["probe", "path", "fingerprint", "configuration", "settings"] {
+            let stale = RegistrySimulation()
+            stale.transformReport = { report in
+                MirageLockReport(probeID: invalidField == "probe" ? UUID() : report.probeID,
+                    instanceID: report.instanceID, processID: report.processID,
+                    extensionPath: invalidField == "path" ? "/tmp/Obsolete.appex" : report.extensionPath,
+                    fingerprint: invalidField == "fingerprint" ? "old-build" : report.fingerprint,
+                    version: report.version,
+                    configurationDigest: invalidField == "configuration" ? "old-configuration" : report.configurationDigest,
+                    settingsReady: invalidField != "settings", readyDisplayIDs: report.readyDisplayIDs, error: nil)
+            }
+            let rejected = try WallpaperExtensionController.register(appURL: app, extensionURL: extensionURL,
+                container: root, previousFingerprint: fingerprint, forceRestart: false,
+                system: stale.system(extensionURL: extensionURL, identifier: identifier), isCurrent: { true })
+            try require(rejected.report == nil && rejected.errorMessage != nil,
+                        "An invalid \(invalidField) acknowledgement was accepted")
+        }
+        let brokenRegistry = RegistrySimulation()
+        brokenRegistry.responds = false
+        brokenRegistry.failingArgument = "-a"
+        let registryError = try WallpaperExtensionController.register(appURL: app, extensionURL: extensionURL,
+            container: root, previousFingerprint: fingerprint, forceRestart: false,
+            system: brokenRegistry.system(extensionURL: extensionURL, identifier: identifier), isCurrent: { true })
+        try require(registryError.errorMessage?.contains("Simulated registration failure") == true
+                    && brokenRegistry.restarts == 0,
+                    "A failed repair lost its diagnostic or continued to restart services")
         let cancellation = RegistrySimulation()
         let requests = WallpaperExtensionRequest()
         let request = requests.begin()
@@ -320,6 +576,20 @@ private struct DynamicLockScreenRegression {
         } catch is CancellationError { cancelled = true }
         try require(cancelled && cancellation.restarts == 0 && cancellation.commands.count == 1,
                     "A cancelled enable request continued changing system services")
+        let waiting = RegistrySimulation()
+        waiting.selection = .notSelected
+        waiting.responds = false
+        let waitingRequest = requests.begin()
+        waiting.onSleep = { elapsed in if elapsed >= 0.3 { requests.cancel() } }
+        cancelled = false
+        do {
+            _ = try WallpaperExtensionController.register(appURL: app, extensionURL: extensionURL,
+                container: root, previousFingerprint: fingerprint, forceRestart: false, requireAcknowledgement: true,
+                system: waiting.system(extensionURL: extensionURL, identifier: identifier),
+                isCurrent: { requests.isCurrent(waitingRequest) })
+        } catch is CancellationError { cancelled = true }
+        try require(cancelled && waiting.restarts == 0 && waiting.commands.count == 1,
+                    "Disabling during discovery allowed a later registration repair")
     }
 
     static func testSnapshotAcrossProcesses() throws {

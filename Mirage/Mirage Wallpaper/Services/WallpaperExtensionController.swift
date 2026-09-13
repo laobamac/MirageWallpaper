@@ -9,111 +9,210 @@ import Darwin
 import Foundation
 
 enum WallpaperExtensionController {
+    enum SelectionState: String {
+        case selected, notSelected, unknown
+    }
+
     struct Registration {
+        enum Outcome {
+            case awaitingSystemSettings
+            case acknowledged(MirageLockReport)
+            case failed(String)
+        }
+
         let fingerprint: String
         let probe: MirageLockProbe
-        let report: MirageLockReport?
-        var errorMessage: String? = nil
+        let selection: SelectionState
+        let outcome: Outcome
+
+        var report: MirageLockReport? {
+            if case .acknowledged(let report) = outcome { return report }
+            return nil
+        }
+
+        var errorMessage: String? {
+            if case .failed(let message) = outcome { return message }
+            return nil
+        }
     }
 
     struct System {
         var run: (String, [String]) -> (success: Bool, output: String)
         var restart: (String, () -> Bool) throws -> Void
-        var selected: (String) -> Bool
+        var selection: (String) -> SelectionState
         var reports: (MirageLockProbe, URL, String, URL) -> [MirageLockReport]
+        var invalidateSettingsCache: (String, WallpaperSettingsCache.Policy, () -> Bool) throws -> Bool
+        var notify: () -> Void
         var now: () -> TimeInterval
         var sleep: (TimeInterval) -> Void
 
         static var live: Self {
             Self(run: { runTool($0, arguments: $1) }, restart: restartServices,
-                 selected: isSelected, reports: liveReports,
+                 selection: selectionState, reports: liveReports,
+                 invalidateSettingsCache: { try WallpaperSettingsCache.invalidate(identifier: $0, policy: $1, isCurrent: $2) },
+                 notify: { MirageLockBridge.post(MirageLockBridge.probeNotification) },
                  now: { ProcessInfo.processInfo.systemUptime }, sleep: Thread.sleep(forTimeInterval:))
         }
     }
 
     static func register(appURL: URL, extensionURL: URL, container: URL,
                          previousFingerprint: String?, forceRestart: Bool,
+                         forceRegistration: Bool = false, requireAcknowledgement: Bool = false,
                          system: System = .live,
                          isCurrent: () -> Bool) throws -> Registration {
-        WallpaperServiceCoordinator.lock.lock()
-        defer { WallpaperServiceCoordinator.lock.unlock() }
         try check(isCurrent)
         let fingerprint = try MirageLockBridge.fingerprint(at: extensionURL)
         guard let identifier = Bundle(url: extensionURL)?.bundleIdentifier else {
             throw MirageLockBridge.failure("Wallpaper extension identifier is missing")
         }
         let targetPath = MirageLockBridge.normalizedPath(extensionURL)
-        let previous = try records(identifier: identifier, all: true, run: system.run)
-        let conflicts = previous.filter { $0.path != targetPath }
         let versionChanged = previousFingerprint != fingerprint
-        let registrationNeeded = versionChanged || !conflicts.isEmpty
-            || !previous.contains(where: { $0.path == targetPath && $0.elected })
-        if registrationNeeded {
-            for record in conflicts {
-                try check(isCurrent)
-                NSLog("[MirageLock] removing duplicate registration: %@", record.path)
-                try runRequired("/usr/bin/pluginkit", ["-r", record.path], run: system.run)
+        let registrationNeeded = try withServiceLock(isCurrent: isCurrent) {
+            let previous = try records(identifier: identifier, all: true, run: system.run)
+            let needed = forceRegistration || versionChanged || previous.contains { $0.path != targetPath }
+                || !previous.contains(where: { $0.path == targetPath && $0.elected })
+            if needed {
+                try updateRegistration(appURL: appURL, extensionURL: extensionURL, identifier: identifier,
+                                       previous: previous, system: system, isCurrent: isCurrent)
             }
-            try check(isCurrent)
-            try runRequired("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister",
-                            ["-f", appURL.path], run: system.run)
-            var found = false
-            for attempt in 0..<3 {
-                try check(isCurrent)
-                if attempt > 0 { system.sleep(0.3) }
-                try runRequired("/usr/bin/pluginkit", ["-a", extensionURL.path], run: system.run)
-                try runRequired("/usr/bin/pluginkit", ["-e", "use", "-i", identifier], run: system.run)
-                let selected = try records(identifier: identifier, all: false, run: system.run)
-                if selected.contains(where: { $0.path == targetPath && $0.elected }) {
-                    found = true
-                    break
-                }
-            }
-            guard found else {
-                throw MirageLockBridge.failure("The system selected a different copy of the wallpaper extension")
-            }
+            return needed
         }
         try check(isCurrent)
         let data = try Data(contentsOf: container.appendingPathComponent(MirageLockBridge.configurationName))
         let probe = MirageLockProbe(configurationData: data)
         try MirageLockBridge.writeProbe(probe, in: container)
-        let selected = system.selected(identifier)
+        var selection = system.selection(identifier)
+        var needsAcknowledgement = requireAcknowledgement || selection != .notSelected
         var restarted = false
-        if versionChanged || forceRestart || registrationNeeded {
-            try system.restart(identifier, isCurrent)
-            restarted = true
-        }
-        for recovery in 0..<2 {
-            try check(isCurrent)
-            MirageLockBridge.post(MirageLockBridge.probeNotification)
-            let deadline = system.now() + (selected ? 5 : 1)
-            var reportedError: String?
-            while system.now() < deadline {
-                try check(isCurrent)
-                let reports = system.reports(probe, extensionURL, fingerprint, container)
-                reportedError = reports.compactMap(\.error).first
-                if reportedError == nil,
-                   let report = reports.filter({
-                       $0.settingsReady && $0.configurationDigest == probe.configurationDigest
-                   }).max(by: { $0.readyDisplayIDs.count < $1.readyDisplayIDs.count }) {
-                    NSLog("[MirageLock] extension connected: %@ build %@ pid %d",
-                          report.extensionPath, report.version, report.processID)
-                    return Registration(fingerprint: fingerprint, probe: probe, report: report)
+        var recovered = forceRegistration && forceRestart
+        var lastReportSummary = "no matching extension reports"
+        do {
+            if forceRestart || registrationNeeded {
+                try withServiceLock(isCurrent: isCurrent) {
+                    _ = try system.invalidateSettingsCache(identifier, .all, isCurrent)
+                    try check(isCurrent)
+                    try system.restart(identifier, isCurrent)
                 }
-                system.sleep(0.1)
+                restarted = true
             }
-            if let reportedError {
-                return Registration(fingerprint: fingerprint, probe: probe, report: nil, errorMessage: reportedError)
+            for recovery in 0..<2 {
+                try check(isCurrent)
+                system.notify()
+                let acknowledgementTimeout: TimeInterval = restarted ? 75 : 8
+                var deadline = system.now() + (needsAcknowledgement ? acknowledgementTimeout : 1)
+                var reportedError: String?
+                while system.now() < deadline {
+                    try check(isCurrent)
+                    selection = system.selection(identifier)
+                    if !needsAcknowledgement, selection != .notSelected {
+                        needsAcknowledgement = true
+                        deadline = system.now() + acknowledgementTimeout
+                    }
+                    let configurationData = try Data(contentsOf: container.appendingPathComponent(MirageLockBridge.configurationName))
+                    let digest = MirageLockBridge.digest(configurationData)
+                    let reports = system.reports(probe, extensionURL, fingerprint, container).filter {
+                        $0.probeID == probe.id && $0.extensionPath == targetPath && $0.fingerprint == fingerprint
+                    }
+                    if !reports.isEmpty {
+                        lastReportSummary = reports.map {
+                            "pid=\($0.processID) build=\($0.version) settingsReady=\($0.settingsReady) digest=\($0.configurationDigest ?? "nil") error=\($0.error ?? "nil")"
+                        }.joined(separator: "; ")
+                    }
+                    let health = connectionHealth(reports: reports, configurationDigest: digest)
+                    if let report = health.report {
+                        NSLog("[MirageLock] settings acknowledged: %@ build %@ pid %d selection %@",
+                              report.extensionPath, report.version, report.processID, selection.rawValue)
+                        return Registration(fingerprint: fingerprint, probe: probe, selection: selection,
+                                            outcome: .acknowledged(report))
+                    }
+                    if let error = health.errorMessage { reportedError = error }
+                    system.sleep(0.1)
+                }
+                try check(isCurrent)
+                if let reportedError {
+                    return Registration(fingerprint: fingerprint, probe: probe, selection: selection,
+                                        outcome: .failed(reportedError))
+                }
+                if !needsAcknowledgement {
+                    if recovery == 0, !recovered {
+                        let refreshed = try withServiceLock(isCurrent: isCurrent) {
+                            guard try system.invalidateSettingsCache(identifier, .emptyDesktop, isCurrent) else { return false }
+                            try check(isCurrent)
+                            try system.restart(identifier, isCurrent)
+                            return true
+                        }
+                        if refreshed {
+                            restarted = true
+                            recovered = true
+                            continue
+                        }
+                    }
+                    NSLog("[MirageLock] registration recorded; awaiting System Wallpaper Settings: %@ probe %@",
+                          targetPath, probe.id.uuidString)
+                    return Registration(fingerprint: fingerprint, probe: probe, selection: selection,
+                                        outcome: .awaitingSystemSettings)
+                }
+                guard recovery == 0, !recovered else { break }
+                try check(isCurrent)
+                NSLog("[MirageLock] settings acknowledgement timed out; repairing registration: %@ selection %@; %@",
+                      targetPath, selection.rawValue, lastReportSummary)
+                try withServiceLock(isCurrent: isCurrent) {
+                    let current = try records(identifier: identifier, all: true, run: system.run)
+                    try updateRegistration(appURL: appURL, extensionURL: extensionURL, identifier: identifier,
+                                           previous: current, system: system, isCurrent: isCurrent)
+                    try check(isCurrent)
+                    _ = try system.invalidateSettingsCache(identifier, .all, isCurrent)
+                    try check(isCurrent)
+                    try system.restart(identifier, isCurrent)
+                }
+                restarted = true
+                recovered = true
             }
-            if !selected {
-                return Registration(fingerprint: fingerprint, probe: probe, report: nil)
-            }
-            guard recovery == 0, !restarted else { break }
-            try system.restart(identifier, isCurrent)
-            restarted = true
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            return Registration(fingerprint: fingerprint, probe: probe, selection: selection,
+                                outcome: .failed(error.localizedDescription))
         }
-        return Registration(fingerprint: fingerprint, probe: probe, report: nil,
-                            errorMessage: "The selected wallpaper extension did not acknowledge its configuration")
+        return Registration(fingerprint: fingerprint, probe: probe, selection: selection,
+                            outcome: .failed("Wallpaper settings were not acknowledged after recovery: \(targetPath); selection=\(selection.rawValue); \(lastReportSummary)"))
+    }
+
+    static func connectionHealth(reports: [MirageLockReport], configurationDigest: String?)
+        -> (report: MirageLockReport?, errorMessage: String?) {
+        let current = reports.filter { $0.configurationDigest == configurationDigest || $0.configurationDigest == nil }
+        if let error = current.compactMap(\.error).first { return (nil, error) }
+        guard let configurationDigest else { return (nil, nil) }
+        return (current.filter { $0.settingsReady && $0.configurationDigest == configurationDigest }
+            .max(by: { $0.readyDisplayIDs.count < $1.readyDisplayIDs.count }), nil)
+    }
+
+    private static func updateRegistration(appURL: URL, extensionURL: URL, identifier: String,
+                                           previous: [WallpaperExtensionRecord], system: System,
+                                           isCurrent: () -> Bool) throws {
+        let targetPath = MirageLockBridge.normalizedPath(extensionURL)
+        for record in previous where record.path != targetPath {
+            try check(isCurrent)
+            NSLog("[MirageLock] removing duplicate registration: %@", record.path)
+            try runRequired("/usr/bin/pluginkit", ["-r", record.path], run: system.run)
+        }
+        try check(isCurrent)
+        try runRequired("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister",
+                        ["-f", appURL.path], run: system.run)
+        for attempt in 0..<3 {
+            if attempt > 0 { system.sleep(0.3) }
+            try check(isCurrent)
+            try runRequired("/usr/bin/pluginkit", ["-a", extensionURL.path], run: system.run)
+            try check(isCurrent)
+            try runRequired("/usr/bin/pluginkit", ["-e", "use", "-i", identifier], run: system.run)
+            try check(isCurrent)
+            let current = try records(identifier: identifier, all: false, run: system.run)
+            if current.count == 1, current[0].path == targetPath, current[0].elected {
+                NSLog("[MirageLock] registration verified: %@", targetPath)
+                return
+            }
+        }
+        throw MirageLockBridge.failure("The system selected a different copy of the wallpaper extension")
     }
 
     static func liveReports(probe: MirageLockProbe, extensionURL: URL,
@@ -176,6 +275,13 @@ enum WallpaperExtensionController {
         if !isCurrent() { throw CancellationError() }
     }
 
+    private static func withServiceLock<T>(isCurrent: () -> Bool, _ work: () throws -> T) throws -> T {
+        WallpaperServiceCoordinator.lock.lock()
+        defer { WallpaperServiceCoordinator.lock.unlock() }
+        try check(isCurrent)
+        return try work()
+    }
+
     private static func restartServices(identifier: String, isCurrent: () -> Bool) throws {
         try check(isCurrent)
         let agentID = "com.apple.wallpaper.agent"
@@ -211,11 +317,16 @@ enum WallpaperExtensionController {
         application.isTerminated || (Darwin.kill(application.processIdentifier, 0) != 0 && errno == ESRCH)
     }
 
-    private static func isSelected(identifier: String) -> Bool {
+    static func selectionState(identifier: String) -> SelectionState {
         let url = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/com.apple.wallpaper/Store/Index.plist")
-        guard let data = try? Data(contentsOf: url),
-              let root = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else { return false }
+        return selectionState(identifier: identifier, storeURL: url)
+    }
+
+    static func selectionState(identifier: String, storeURL: URL) -> SelectionState {
+        guard let data = try? Data(contentsOf: storeURL),
+              let root = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              ["Displays", "Spaces", "SystemDefault"].contains(where: { root[$0] != nil }) else { return .unknown }
         func contains(_ value: Any) -> Bool {
             if let dictionary = value as? [String: Any] {
                 if dictionary["Provider"] as? String == identifier { return true }
@@ -223,6 +334,7 @@ enum WallpaperExtensionController {
             }
             return (value as? [Any])?.contains(where: contains) ?? false
         }
-        return [root["Displays"], root["SystemDefault"]].compactMap { $0 }.contains(where: contains)
+        return [root["Displays"], root["Spaces"], root["SystemDefault"]].compactMap { $0 }.contains(where: contains)
+            ? .selected : .notSelected
     }
 }
