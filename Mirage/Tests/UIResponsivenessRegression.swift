@@ -134,6 +134,7 @@ private struct UIResponsivenessRegression {
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             NSApplication.shared.setActivationPolicy(.accessory)
             NSApplication.shared.finishLaunching()
+            try testDisplayTopologySnapshots()
             if CommandLine.arguments.contains("--playback-policy") {
                 try testPlaybackPolicyEvaluation()
                 try testPlaybackPolicyInputs()
@@ -174,6 +175,38 @@ private struct UIResponsivenessRegression {
             fputs("UIResponsivenessRegression: \(error)\n", stderr)
             exit(1)
         }
+    }
+
+    static func testDisplayTopologySnapshots() throws {
+        let main = DisplayTopologySnapshot.Screen(
+            displayID: 1, frame: CGRect(x: 0, y: 0, width: 1728, height: 1117),
+            backingScaleFactor: 2, maximumFramesPerSecond: 60, isMain: true)
+        let secondary = DisplayTopologySnapshot.Screen(
+            displayID: 2, frame: CGRect(x: 1728, y: 0, width: 2560, height: 1440),
+            backingScaleFactor: 1, maximumFramesPerSecond: 144, isMain: false)
+        let baseline = DisplayTopologySnapshot(screens: [main, secondary])
+        try require(baseline == DisplayTopologySnapshot(screens: [secondary, main]),
+                    "Display enumeration order was treated as a topology change")
+
+        let changes = [
+            DisplayTopologySnapshot.Screen(
+                displayID: 2, frame: CGRect(x: -2560, y: 0, width: 2560, height: 1440),
+                backingScaleFactor: 1, maximumFramesPerSecond: 144, isMain: false),
+            DisplayTopologySnapshot.Screen(
+                displayID: 2, frame: secondary.frame,
+                backingScaleFactor: 2, maximumFramesPerSecond: 144, isMain: false),
+            DisplayTopologySnapshot.Screen(
+                displayID: 2, frame: secondary.frame,
+                backingScaleFactor: 1, maximumFramesPerSecond: 60, isMain: false),
+            DisplayTopologySnapshot.Screen(
+                displayID: 2, frame: secondary.frame,
+                backingScaleFactor: 1, maximumFramesPerSecond: 144, isMain: true)
+        ]
+        for changed in changes {
+            try require(baseline != DisplayTopologySnapshot(screens: [main, changed]),
+                        "A meaningful display topology change was ignored")
+        }
+        print("PASS: unchanged display topology filtering and meaningful change detection")
     }
 
     static func testPlaybackPolicyEvaluation() throws {
