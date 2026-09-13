@@ -98,6 +98,30 @@ private enum MirageSaverLocalization {
     }
 }
 
+struct MirageSaverRenderSize {
+    let drawableWidth: UInt32
+    let drawableHeight: UInt32
+    let renderWidth: UInt32
+    let renderHeight: UInt32
+
+    init?(size: CGSize, isPreview: Bool) {
+        guard size.width.isFinite, size.height.isFinite,
+              size.width > 0, size.height > 0,
+              let width = UInt32(exactly: max(1, size.width.rounded())),
+              let height = UInt32(exactly: max(1, size.height.rounded())) else { return nil }
+        let scale = isPreview ? max(1, 500 / min(size.width, size.height)) : 1
+        guard scale.isFinite else { return nil }
+        let scaledWidth = size.width >= 8192 / scale ? 8192 : ceil(size.width * scale)
+        let scaledHeight = size.height >= 8192 / scale ? 8192 : ceil(size.height * scale)
+        guard let renderWidth = UInt32(exactly: max(1, scaledWidth)),
+              let renderHeight = UInt32(exactly: max(1, scaledHeight)) else { return nil }
+        drawableWidth = isPreview ? 0 : width
+        drawableHeight = isPreview ? 0 : height
+        self.renderWidth = renderWidth
+        self.renderHeight = renderHeight
+    }
+}
+
 private final class MirageSceneLibrary {
     typealias Create = @convention(c) (
         UnsafeMutableRawPointer?, UnsafePointer<CChar>?, UnsafePointer<CChar>?, UnsafePointer<CChar>?,
@@ -114,10 +138,11 @@ private final class MirageSceneLibrary {
     init?(bundle: Bundle) {
         guard let frameworkDirectory = bundle.privateFrameworksURL else { return nil }
         let libraryURL = frameworkDirectory.appendingPathComponent("libMirageSceneSaver.dylib")
-        guard let handle = dlopen(libraryURL.path, RTLD_NOW | RTLD_LOCAL),
-              let createSymbol = dlsym(handle, "MirageSceneSaverCreateWithPosition"),
+        guard let handle = dlopen(libraryURL.path, RTLD_NOW | RTLD_LOCAL) else { return nil }
+        guard let createSymbol = dlsym(handle, "MirageSceneSaverCreateWithPosition"),
               let pauseSymbol = dlsym(handle, "MirageSceneSaverSetPaused"),
               let destroySymbol = dlsym(handle, "MirageSceneSaverDestroy") else {
+            dlclose(handle)
             return nil
         }
         self.handle = handle
@@ -129,6 +154,119 @@ private final class MirageSceneLibrary {
     deinit { dlclose(handle) }
 }
 
+private final class MirageSaverSceneSession {
+    private final class Request: @unchecked Sendable {
+        private let lock = NSLock()
+        private var cancelled = false
+
+        var isCancelled: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return cancelled
+        }
+
+        func cancel() {
+            lock.lock()
+            cancelled = true
+            lock.unlock()
+        }
+    }
+
+    private final class Resources {
+        let view: Unmanaged<NSView>
+        var library: MirageSceneLibrary?
+        var engine: UnsafeMutableRawPointer?
+
+        init(view: NSView) {
+            self.view = .passRetained(view)
+        }
+
+        deinit {
+            let view = view, library = library, engine = engine
+            MirageSaverSceneSession.queue.async {
+                autoreleasepool {
+                    if let library, let engine { library.destroy(engine) }
+                }
+                DispatchQueue.main.async { view.release() }
+            }
+        }
+    }
+
+    private static let queue = DispatchQueue(label: "cn.laobamac.Mirage.ScreenSaver.Scene", qos: .userInitiated)
+    private let request = Request()
+    private var resources: Resources?
+    private var paused = true
+
+    init(view: NSView, bundle: Bundle, configuration: MirageSaverConfiguration,
+         size: MirageSaverRenderSize, position: WallpaperPosition,
+         completion: @escaping (String?) -> Void) {
+        let request = request
+        let resources = Resources(view: view)
+        let data = (try? JSONSerialization.data(withJSONObject: configuration.rawProperties)) ?? Data("{}".utf8)
+        let properties = String(data: data, encoding: .utf8) ?? "{}"
+        Self.queue.async { [weak self] in
+            let failure: String? = autoreleasepool {
+                guard !request.isCancelled else { return nil }
+                guard let directory = bundle.resourceURL,
+                      let library = MirageSceneLibrary(bundle: bundle) else {
+                    return "场景屏保组件不可用"
+                }
+                resources.library = library
+                let assets = directory.appendingPathComponent("assets", isDirectory: true)
+                let icd = directory.appendingPathComponent("vulkan/icd.d/MoltenVK_icd.json")
+                guard FileManager.default.fileExists(atPath: assets.path),
+                      FileManager.default.fileExists(atPath: icd.path) else {
+                    return "场景屏保资源不完整"
+                }
+                guard !request.isCancelled else { return nil }
+                setenv("VK_ICD_FILENAMES", icd.path, 1)
+                setenv("VK_DRIVER_FILES", icd.path, 1)
+                resources.engine = assets.path.withCString { assetsPath in
+                    configuration.entryURL.path.withCString { packagePath in
+                        properties.withCString { properties in
+                            configuration.fillMode.withCString { fill in
+                                library.create(resources.view.toOpaque(), assetsPath, packagePath, properties,
+                                               size.renderWidth, size.renderHeight,
+                                               size.drawableWidth, size.drawableHeight,
+                                               UInt32(configuration.fps), fill, position.x, position.y)
+                            }
+                        }
+                    }
+                }
+                return resources.engine == nil ? "场景壁纸加载失败" : nil
+            }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !request.isCancelled else { return }
+                if resources.engine != nil {
+                    self.resources = resources
+                    self.setPaused(self.paused)
+                }
+                completion(failure)
+            }
+        }
+    }
+
+    func setPaused(_ paused: Bool) {
+        self.paused = paused
+        if let resources, let engine = resources.engine {
+            resources.library?.setPaused(engine, paused ? 1 : 0)
+        }
+    }
+
+    func stop() {
+        request.cancel()
+        setPaused(true)
+        resources = nil
+    }
+
+    deinit {
+        request.cancel()
+        if let resources, let engine = resources.engine {
+            resources.library?.setPaused(engine, 1)
+        }
+    }
+}
+
 @objc(MirageScreenSaverView)
 final class MirageScreenSaverView: ScreenSaverView {
     private var player: AVQueuePlayer?
@@ -138,10 +276,12 @@ final class MirageScreenSaverView: ScreenSaverView {
     private var videoLayout: WallpaperVideoLayout?
     private var messageLabel: NSTextField?
     private var configuration: MirageSaverConfiguration?
-    private var sceneLibrary: MirageSceneLibrary?
-    private var sceneEngine: UnsafeMutableRawPointer?
+    private var sceneSession: MirageSaverSceneSession?
+    private var sceneView: NSView?
+    private var wallpaperLoadWorkItem: DispatchWorkItem?
     private var didLoadWallpaper = false
     private var isAnimatingWallpaper = false
+    private var isWaitingForLayout = false
     private var videoLoadTask: Task<Void, Never>?
     private var videoLoadID = UUID()
     private var hostReportedSize = CGSize.zero
@@ -163,14 +303,8 @@ final class MirageScreenSaverView: ScreenSaverView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        guard window != nil else { return }
-        // legacyScreenSaver attaches the view before its final layout pass.
-        // Defer one run-loop turn so the first Vulkan extent is derived from
-        // the host's settled bounds/backing coordinate space.
-        DispatchQueue.main.async { [weak self] in
-            guard let self, self.window != nil else { return }
-            self.loadWallpaper()
-        }
+        if window == nil { releaseWallpaper() }
+        else { scheduleWallpaperLoad() }
     }
 
     deinit {
@@ -178,20 +312,43 @@ final class MirageScreenSaverView: ScreenSaverView {
         looper?.disableLooping()
         player?.removeAllItems()
         looper = nil
+        playerLayer?.player = nil
         memoryAssetLoader = nil
         videoLoadTask?.cancel()
-        if let sceneEngine { sceneLibrary?.destroy(sceneEngine) }
+        wallpaperLoadWorkItem?.cancel()
+        sceneSession?.stop()
     }
 
     private func localized(_ key: String) -> String {
         MirageSaverLocalization.string(key, language: configuration?.language)
     }
 
+    private func scheduleWallpaperLoad() {
+        guard isAnimatingWallpaper, !didLoadWallpaper, window != nil,
+              wallpaperLoadWorkItem == nil else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            defer { self.wallpaperLoadWorkItem = nil }
+            self.loadWallpaper()
+        }
+        wallpaperLoadWorkItem = work
+        DispatchQueue.main.async(execute: work)
+    }
+
     private func loadWallpaper() {
-        guard !didLoadWallpaper, window != nil else { return }
+        guard isAnimatingWallpaper, !didLoadWallpaper, window != nil else { return }
         layoutSubtreeIfNeeded()
         normalizeFullScreenBoundsIfNeeded()
         layoutSubtreeIfNeeded()
+        guard hasValidBounds,
+              MirageSaverRenderSize(size: convertToBacking(bounds).size, isPreview: isPreview) != nil else {
+            if !isWaitingForLayout {
+                screenSaverLogger.info("Waiting for valid screen saver layout: \(self.bounds.width, privacy: .public)x\(self.bounds.height, privacy: .public)")
+                isWaitingForLayout = true
+            }
+            return
+        }
+        isWaitingForLayout = false
         didLoadWallpaper = true
         guard let configuration = MirageSaverConfiguration.load() else {
             showMessage(MirageSaverLocalization.string("请先在 Mirage 设置中选择屏保壁纸"))
@@ -216,60 +373,31 @@ final class MirageScreenSaverView: ScreenSaverView {
 
     private func loadScene(_ configuration: MirageSaverConfiguration) {
         let bundle = Bundle(for: MirageScreenSaverView.self)
-        guard let resources = bundle.resourceURL,
-              let library = MirageSceneLibrary(bundle: bundle) else {
-            showMessage(localized("场景屏保组件不可用"))
-            return
-        }
-        let assets = resources.appendingPathComponent("assets", isDirectory: true)
-        let icd = resources.appendingPathComponent("vulkan/icd.d/MoltenVK_icd.json")
-        guard FileManager.default.fileExists(atPath: assets.path),
-              FileManager.default.fileExists(atPath: icd.path) else {
-            showMessage(localized("场景屏保资源不完整"))
-            return
-        }
-        setenv("VK_ICD_FILENAMES", icd.path, 1)
-        setenv("VK_DRIVER_FILES", icd.path, 1)
-        let data = (try? JSONSerialization.data(withJSONObject: configuration.rawProperties)) ?? Data("{}".utf8)
-        let json = String(data: data, encoding: .utf8) ?? "{}"
-        // ScreenSaverView uses logical points while Vulkan renders pixels.
-        // Ask AppKit for this view's actual backing rect so mixed-DPI displays
-        // and System Settings' preview both retain the correct aspect ratio.
         let backingSize = convertToBacking(bounds).size
         let drawableSize = isPreview ? backingSize : displayPixelSize() ?? backingSize
-        let drawableWidth = UInt32(max(1, drawableSize.width.rounded()))
-        let drawableHeight = UInt32(max(1, drawableSize.height.rounded()))
-        let fixedDrawableWidth = isPreview ? 0 : drawableWidth
-        let fixedDrawableHeight = isPreview ? 0 : drawableHeight
-        let previewScale = isPreview
-            ? max(1, 500 / min(drawableSize.width, drawableSize.height))
-            : 1
-        let renderWidth = UInt32(min(ceil(drawableSize.width * previewScale), 8192))
-        let renderHeight = UInt32(min(ceil(drawableSize.height * previewScale), 8192))
-        let build = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
-        screenSaverLogger.notice(
-            "MirageScreenSaver build=\(build, privacy: .public) preview=\(self.isPreview, privacy: .public) host=\(Int(self.hostReportedSize.width), privacy: .public)x\(Int(self.hostReportedSize.height), privacy: .public) points=\(Int(self.bounds.width), privacy: .public)x\(Int(self.bounds.height), privacy: .public) backing=\(Int(backingSize.width), privacy: .public)x\(Int(backingSize.height), privacy: .public) drawable=\(drawableWidth, privacy: .public)x\(drawableHeight, privacy: .public) render=\(renderWidth, privacy: .public)x\(renderHeight, privacy: .public)"
-        )
-        let viewPointer = Unmanaged.passUnretained(self).toOpaque()
-        let position = position(for: configuration)
-        let engine = assets.path.withCString { assetsPath in
-            configuration.entryURL.path.withCString { packagePath in
-                json.withCString { properties in
-                    configuration.fillMode.withCString { fill in
-                        library.create(viewPointer, assetsPath, packagePath, properties,
-                                       renderWidth, renderHeight,
-                                       fixedDrawableWidth, fixedDrawableHeight,
-                                       UInt32(configuration.fps), fill, position.x, position.y)
-                    }
-                }
-            }
-        }
-        guard let engine else {
-            showMessage(localized("场景壁纸加载失败"))
+        guard let size = MirageSaverRenderSize(size: drawableSize, isPreview: isPreview) else {
+            didLoadWallpaper = false
             return
         }
-        sceneLibrary = library
-        sceneEngine = engine
+        let build = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
+        screenSaverLogger.notice(
+            "MirageScreenSaver build=\(build, privacy: .public) preview=\(self.isPreview, privacy: .public) host=\(self.hostReportedSize.width, privacy: .public)x\(self.hostReportedSize.height, privacy: .public) points=\(self.bounds.width, privacy: .public)x\(self.bounds.height, privacy: .public) backing=\(backingSize.width, privacy: .public)x\(backingSize.height, privacy: .public) drawable=\(drawableSize.width, privacy: .public)x\(drawableSize.height, privacy: .public) render=\(size.renderWidth, privacy: .public)x\(size.renderHeight, privacy: .public)"
+        )
+        let view = NSView(frame: bounds)
+        view.autoresizingMask = [.width, .height]
+        addSubview(view)
+        sceneView = view
+        sceneSession = MirageSaverSceneSession(view: view, bundle: bundle, configuration: configuration,
+                                              size: size, position: position(for: configuration)) { [weak self] failure in
+            guard let self else { return }
+            if let failure {
+                screenSaverLogger.error("Scene screen saver initialization failed: \(failure, privacy: .public)")
+                self.showMessage(self.localized(failure))
+            } else {
+                screenSaverLogger.info("Scene screen saver initialized")
+            }
+        }
+        sceneSession?.setPaused(!isAnimatingWallpaper)
     }
 
     private func normalizeFullScreenBoundsIfNeeded() {
@@ -278,13 +406,14 @@ final class MirageScreenSaverView: ScreenSaverView {
         }
         guard !isPreview else { return }
         guard let screen = window?.screen ?? NSScreen.main else { return }
-        guard screen.backingScaleFactor > 0 else { return }
+        guard screen.backingScaleFactor.isFinite, screen.backingScaleFactor > 0 else { return }
         let backingSize = screen.convertRectToBacking(screen.frame).size
         let logicalSize = CGSize(
             width: backingSize.width / screen.backingScaleFactor,
             height: backingSize.height / screen.backingScaleFactor
         )
-        guard logicalSize.width > 0, logicalSize.height > 0 else { return }
+        guard logicalSize.width.isFinite, logicalSize.height.isFinite,
+              logicalSize.width > 0, logicalSize.height > 0 else { return }
         if !approximatelyEqual(bounds.size, logicalSize) {
             var normalizedBounds = bounds
             normalizedBounds.size = logicalSize
@@ -306,28 +435,35 @@ final class MirageScreenSaverView: ScreenSaverView {
     private func displayPixelSize() -> CGSize? {
         guard let screen = window?.screen ?? NSScreen.main else { return nil }
         let size = screen.convertRectToBacking(screen.frame).size
-        guard size.width > 0, size.height > 0 else { return nil }
+        guard size.width.isFinite, size.height.isFinite,
+              size.width > 0, size.height > 0 else { return nil }
         return size
+    }
+
+    private var hasValidBounds: Bool {
+        bounds.width.isFinite && bounds.height.isFinite && bounds.width > 0 && bounds.height > 0
     }
 
     private func loadVideo(_ configuration: MirageSaverConfiguration) {
         videoLoadTask?.cancel()
         let loadID = UUID()
         videoLoadID = loadID
-        videoLoadTask = Task { [weak self] in
+        videoLoadTask = Task.detached(priority: .userInitiated) { [weak self] in
             let candidates = [configuration.playbackEntryURL, configuration.fallbackEntryURL]
                 .compactMap { $0 }
             var playableAsset: AVURLAsset?
             var playableLoader: MirageMemoryVideoAssetLoader?
             for url in candidates {
+                guard !Task.isCancelled else { return }
                 let loader: MirageMemoryVideoAssetLoader?
                 let asset: AVURLAsset
                 if configuration.loadFromMemory {
                     do {
-                        let candidateLoader = try MirageMemoryVideoAssetLoader(fileURL: url)
+                        let candidateLoader = try MirageMemoryVideoAssetLoader(fileURL: url, isCancelled: { Task.isCancelled })
                         loader = candidateLoader
                         asset = candidateLoader.makeAsset()
                     } catch {
+                        guard !Task.isCancelled else { return }
                         screenSaverLogger.error("In-memory video load failed: \(error.localizedDescription, privacy: .public)")
                         loader = nil
                         asset = AVURLAsset(url: url)
@@ -336,34 +472,45 @@ final class MirageScreenSaverView: ScreenSaverView {
                     loader = nil
                     asset = AVURLAsset(url: url)
                 }
-                guard let playable = try? await asset.load(.isPlayable), playable,
-                      let duration = try? await asset.load(.duration),
-                      duration.isNumeric, CMTimeCompare(duration, .zero) > 0,
-                      let tracks = try? await asset.loadTracks(withMediaType: .video),
-                      !tracks.isEmpty else { continue }
-                var decodable = true
-                for track in tracks {
-                    guard let value = try? await track.load(.isDecodable), value else {
-                        decodable = false
-                        break
+                let decodable = try? await withTaskCancellationHandler {
+                    try Task.checkCancellation()
+                    guard try await asset.load(.isPlayable) else { return false }
+                    try Task.checkCancellation()
+                    let duration = try await asset.load(.duration)
+                    guard duration.isNumeric, CMTimeCompare(duration, .zero) > 0 else { return false }
+                    try Task.checkCancellation()
+                    let tracks = try await asset.loadTracks(withMediaType: .video)
+                    guard !tracks.isEmpty else { return false }
+                    for track in tracks {
+                        try Task.checkCancellation()
+                        guard try await track.load(.isDecodable) else { return false }
                     }
+                    return true
+                } onCancel: {
+                    asset.cancelLoading()
                 }
-                if decodable {
+                guard !Task.isCancelled else { return }
+                if decodable == true {
                     playableAsset = asset
                     playableLoader = loader
                     break
                 }
             }
+            guard !Task.isCancelled else { return }
             guard let asset = playableAsset else {
-                await MainActor.run {
-                    guard let self, self.videoLoadID == loadID else { return }
+                await MainActor.run { [weak self] in
+                    guard let self, self.videoLoadID == loadID,
+                          self.isAnimatingWallpaper, self.window != nil else { return }
+                    self.videoLoadTask = nil
                     self.showMessage(self.localized("此视频格式无法播放，请先在 Mirage 中播放一次以完成转换"))
                 }
                 return
             }
             guard !Task.isCancelled else { return }
-            await MainActor.run {
-                guard let self, self.videoLoadID == loadID else { return }
+            await MainActor.run { [weak self, playableLoader] in
+                guard let self, self.videoLoadID == loadID,
+                      self.isAnimatingWallpaper, self.window != nil else { return }
+                self.videoLoadTask = nil
                 let item = AVPlayerItem(asset: asset)
                 let player = AVQueuePlayer()
                 player.automaticallyWaitsToMinimizeStalling = true
@@ -388,6 +535,11 @@ final class MirageScreenSaverView: ScreenSaverView {
     override func layout() {
         super.layout()
         normalizeFullScreenBoundsIfNeeded()
+        guard hasValidBounds else {
+            releaseWallpaper()
+            return
+        }
+        scheduleWallpaperLoad()
         guard let rootLayer = layer else { return }
         rootLayer.contentsScale = window?.backingScaleFactor ?? rootLayer.contentsScale
         videoLayout?.update(bounds: videoPresentationBounds)
@@ -395,6 +547,53 @@ final class MirageScreenSaverView: ScreenSaverView {
         if let playerLayer, let configuration {
             applyVideoDynamicRange(to: playerLayer, enabled: configuration.enableHDRVideo)
         }
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        scheduleWallpaperLoad()
+    }
+
+    override func setBoundsSize(_ newSize: NSSize) {
+        super.setBoundsSize(newSize)
+        scheduleWallpaperLoad()
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        needsLayout = true
+        scheduleWallpaperLoad()
+    }
+
+    private func releaseWallpaper() {
+        if didLoadWallpaper {
+            screenSaverLogger.info("Releasing screen saver resources, preview=\(self.isPreview, privacy: .public)")
+        }
+        if !isAnimatingWallpaper || window == nil { isWaitingForLayout = false }
+        wallpaperLoadWorkItem?.cancel()
+        wallpaperLoadWorkItem = nil
+        videoLoadID = UUID()
+        videoLoadTask?.cancel()
+        videoLoadTask = nil
+        player?.pause()
+        looper?.disableLooping()
+        playerLayer?.player = nil
+        player?.removeAllItems()
+        videoLayout = nil
+        playerLayer?.removeFromSuperlayer()
+        playerLayer = nil
+        looper = nil
+        player = nil
+        memoryAssetLoader = nil
+        sceneSession?.stop()
+        sceneSession = nil
+        sceneView?.removeFromSuperview()
+        sceneView = nil
+        messageLabel?.removeFromSuperview()
+        messageLabel = nil
+        configuration = nil
+        didLoadWallpaper = false
+        hostReportedSize = .zero
     }
 
     private var videoPresentationBounds: CGRect {
@@ -419,6 +618,7 @@ final class MirageScreenSaverView: ScreenSaverView {
     }
 
     private func showMessage(_ text: String) {
+        messageLabel?.removeFromSuperview()
         let label = NSTextField(labelWithString: text)
         label.textColor = .secondaryLabelColor
         label.font = .systemFont(ofSize: 18, weight: .medium)
@@ -437,15 +637,14 @@ final class MirageScreenSaverView: ScreenSaverView {
     override func startAnimation() {
         super.startAnimation()
         isAnimatingWallpaper = true
-        loadWallpaper()
+        scheduleWallpaperLoad()
         player?.play()
-        if let sceneEngine { sceneLibrary?.setPaused(sceneEngine, 0) }
+        sceneSession?.setPaused(false)
     }
 
     override func stopAnimation() {
         isAnimatingWallpaper = false
-        player?.pause()
-        if let sceneEngine { sceneLibrary?.setPaused(sceneEngine, 1) }
+        releaseWallpaper()
         super.stopAnimation()
     }
 

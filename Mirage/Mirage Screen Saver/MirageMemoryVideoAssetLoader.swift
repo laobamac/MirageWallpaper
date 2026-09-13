@@ -15,7 +15,8 @@ final class MirageMemoryVideoAssetLoader: NSObject, AVAssetResourceLoaderDelegat
     private let contentType: String
     private let queue = DispatchQueue(label: "cn.laobamac.Mirage.MemoryVideoAsset")
 
-    init(fileURL: URL) throws {
+    init(fileURL: URL, isCancelled: () -> Bool = { false }) throws {
+        if isCancelled() { throw CancellationError() }
         let descriptor = open(fileURL.path, O_RDONLY | O_CLOEXEC)
         guard descriptor >= 0 else {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
@@ -37,7 +38,12 @@ final class MirageMemoryVideoAssetLoader: NSObject, AVAssetResourceLoaderDelegat
 
         var offset = 0
         while offset < length {
-            let count = read(descriptor, bytes.advanced(by: offset), length - offset)
+            if isCancelled() {
+                free(bytes)
+                close(descriptor)
+                throw CancellationError()
+            }
+            let count = read(descriptor, bytes.advanced(by: offset), min(length - offset, 1024 * 1024))
             if count > 0 {
                 offset += count
                 continue
