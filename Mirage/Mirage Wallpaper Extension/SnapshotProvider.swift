@@ -4,26 +4,33 @@
 //  Copyright © 2026 王孝慈. All rights reserved.
 //
 
-import AVFoundation
 import CoreGraphics
 import Foundation
 @preconcurrency import IOSurface
 import ImageIO
 
 enum MirageSnapshotProvider {
-    static func makeSnapshot(from configuration: MirageLockConfiguration?) -> AnyObject? {
-        guard let display = configuration?.displays.values.first else { return nil }
-        let locked = currentScreenLockState()
+    static func makeSnapshot(from configuration: MirageLockConfiguration?, displayID: UInt32? = nil,
+                             showWallpaper: Bool? = nil) -> AnyObject? {
+        guard let configuration,
+              let display = displayID.flatMap({ configuration.displays["display-\($0)"] })
+                ?? configuration.displays.values.sorted(by: { $0.displayID < $1.displayID }).first else { return nil }
         let image: CGImage?
-        if locked && configuration?.enabled != false {
-            image = display.previewPath.flatMap(loadImage)
-                ?? (display.kind == "video" ? loadVideoFrame(at: URL(fileURLWithPath: display.entryPath)) : nil)
+        if (showWallpaper ?? currentScreenLockState()) && configuration.enabled != false {
+            image = previewImage(for: display)
         } else {
             image = display.desktopFallbackPath.flatMap(loadImage)
                 ?? systemFallbackImage()
         }
         guard let image else { return nil }
         return makeSnapshot(from: image)
+    }
+
+    static func previewImage(for display: MirageLockDisplayConfiguration?) -> CGImage? {
+        if let image = display?.renderedPreviewPath.flatMap(loadImage) { return image }
+        let fallback = Bundle.main.url(forResource: "thumbnail", withExtension: "png")
+            ?? URL(fileURLWithPath: "/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/SidebarDisplay.icns")
+        return loadImage(fallback.path)
     }
 
     private static func currentScreenLockState() -> Bool {
@@ -55,12 +62,6 @@ enum MirageSnapshotProvider {
         let url = URL(fileURLWithPath: path)
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
         return CGImageSourceCreateImageAtIndex(source, 0, nil)
-    }
-
-    private static func loadVideoFrame(at url: URL) -> CGImage? {
-        let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
-        generator.appliesPreferredTrackTransform = true
-        return try? generator.copyCGImage(at: .zero, actualTime: nil)
     }
 
     static func makeSnapshot(from image: CGImage) -> AnyObject? {

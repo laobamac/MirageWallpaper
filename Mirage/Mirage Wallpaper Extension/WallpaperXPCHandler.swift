@@ -10,19 +10,26 @@ import QuartzCore
 
 private final class MirageLockContext {
     let id: UInt32
+    let wallpaperID: UUID?
     let context: CAContext
     let rootLayer: CALayer
     var renderer: MirageLockRenderer?
     let displayID: UInt32
+    let configurationKey: String?
+    let isPreview: Bool
     var isLocked: Bool
 
-    init(id: UInt32, context: CAContext, rootLayer: CALayer,
-         renderer: MirageLockRenderer?, displayID: UInt32, isLocked: Bool) {
+    init(id: UInt32, wallpaperID: UUID?, context: CAContext, rootLayer: CALayer,
+         renderer: MirageLockRenderer?, displayID: UInt32, configurationKey: String?,
+         isPreview: Bool, isLocked: Bool) {
         self.id = id
+        self.wallpaperID = wallpaperID
         self.context = context
         self.rootLayer = rootLayer
         self.renderer = renderer
         self.displayID = displayID
+        self.configurationKey = configurationKey
+        self.isPreview = isPreview
         self.isLocked = isLocked
     }
 }
@@ -59,6 +66,10 @@ final class MirageWallpaperXPCHandler: NSObject, WallpaperExtensionXPCProtocol {
             guard let object else { return }
             Unmanaged<MirageWallpaperXPCHandler>.fromOpaque(object).takeUnretainedValue().reloadContexts()
         }, MirageLockBridge.configurationNotification as CFString, nil, .deliverImmediately)
+        CFNotificationCenterAddObserver(center, retained, { _, object, _, _, _ in
+            guard let object else { return }
+            Unmanaged<MirageWallpaperXPCHandler>.fromOpaque(object).takeUnretainedValue().reloadPreviews()
+        }, MirageLockBridge.previewNotification as CFString, nil, .deliverImmediately)
         CFNotificationCenterAddObserver(center, retained, { _, object, _, _, _ in
             guard let object else { return }
             Unmanaged<MirageWallpaperXPCHandler>.fromOpaque(object).takeUnretainedValue().reloadDesktopFallbacks()
@@ -164,15 +175,20 @@ final class MirageWallpaperXPCHandler: NSObject, WallpaperExtensionXPCProtocol {
         let size = geometry.size ?? CGSize(width: CGDisplayBounds(displayID).width, height: CGDisplayBounds(displayID).height)
         let scale = geometry.scale ?? 1
         let presentationMode = Self.enumCase(named: "presentationMode", in: request)
+        let isPreview = Self.field(named: "isPreview", in: request) as? Bool ?? false
+        let configurationKey = (Self.field(named: "configuration", in: request) as? Data)
+            .flatMap { String(data: $0, encoding: .utf8) }
         let work = {
             guard !self.invalidated else {
                 reply(nil, MirageLockBridge.failure("Wallpaper connection is invalidated"))
                 return
             }
-            if let presentationMode {
-                self.isLocked = presentationMode == "locked"
-            } else if let locked = Self.currentScreenLockState() {
-                self.isLocked = locked
+            if !isPreview {
+                if let presentationMode {
+                    self.isLocked = presentationMode == "locked"
+                } else if let locked = Self.currentScreenLockState() {
+                    self.isLocked = locked
+                }
             }
             let options: [String: Any] = ["displayId": NSNumber(value: displayID)]
             guard let context = CAContext.perform(NSSelectorFromString("remoteContextWithOptions:"), with: options)?.takeUnretainedValue() as? CAContext,
@@ -190,22 +206,30 @@ final class MirageWallpaperXPCHandler: NSObject, WallpaperExtensionXPCProtocol {
             context.layer = rootLayer
             CATransaction.commit()
             CATransaction.flush()
-            let identifier = Self.uint32(from: id) ?? context.contextId
-            guard let renderer = self.renderer(
-                for: displayID, rootLayer: rootLayer, size: size,
-                scale: scale, locked: self.isLocked, contextID: identifier) else {
-                self.reloadSettings()
-                reply(nil, MirageLockBridge.failure("Lock screen configuration is unavailable"))
-                return
+            let identifier = self.contextID(from: id) ?? context.contextId
+            let renderer: MirageLockRenderer?
+            if isPreview {
+                renderer = nil
+            } else {
+                guard let activeRenderer = self.renderer(
+                    for: displayID, rootLayer: rootLayer, size: size,
+                    scale: scale, locked: self.isLocked, contextID: identifier) else {
+                    self.reloadSettings()
+                    reply(nil, MirageLockBridge.failure("Lock screen configuration is unavailable"))
+                    return
+                }
+                renderer = activeRenderer
             }
             let active = MirageLockContext(
-                id: identifier, context: context, rootLayer: rootLayer,
-                renderer: renderer, displayID: displayID, isLocked: self.isLocked)
+                id: identifier, wallpaperID: Self.uuid(from: id), context: context, rootLayer: rootLayer,
+                renderer: renderer, displayID: displayID, configurationKey: configurationKey,
+                isPreview: isPreview, isLocked: self.isLocked)
             self.lock.lock()
             let previous = self.contexts[identifier]?.renderer
             self.contexts[identifier] = active
             self.lock.unlock()
             previous?.stop()
+            if isPreview { self.updatePreview(active, configuration: Self.loadConfiguration()) }
             reply(remote, nil)
             self.reloadSettings()
         }
@@ -213,15 +237,19 @@ final class MirageWallpaperXPCHandler: NSObject, WallpaperExtensionXPCProtocol {
     }
 
     func update(withId id: Any?, request: Any?, reply: @escaping ((any Error)?) -> Void) {
-        if let mode = Self.enumCase(named: "presentationMode", in: request) {
-            setLocked(mode == "locked", contextID: Self.uint32(from: id))
+        let mode = Self.enumCase(named: "presentationMode", in: request)
+        let work = {
+            if let mode, let identifier = self.contextID(from: id) {
+                self.setLocked(mode == "locked", contextID: identifier)
+            }
+            reply(nil)
         }
-        reply(nil)
+        if Thread.isMainThread { work() } else { DispatchQueue.main.async(execute: work) }
     }
 
     func invalidate(withId id: Any?, reply: @escaping ((any Error)?) -> Void) {
-        let identifier = Self.uint32(from: id)
         let work = {
+            let identifier = self.contextID(from: id)
             self.lock.lock()
             let removed = identifier.flatMap { self.contexts.removeValue(forKey: $0) }
             self.lock.unlock()
@@ -240,7 +268,11 @@ final class MirageWallpaperXPCHandler: NSObject, WallpaperExtensionXPCProtocol {
         let work = {
             do {
                 let stored = try MirageLockConfigurationStore.shared.load()
-                guard let snapshot = MirageSnapshotProvider.makeSnapshot(from: stored.configuration) else {
+                let active = self.contextID(from: id).flatMap { self.contexts[$0] }
+                let displayID = active.flatMap { self.display(for: $0, configuration: stored.configuration)?.displayID }
+                guard let snapshot = MirageSnapshotProvider.makeSnapshot(
+                    from: stored.configuration, displayID: displayID,
+                    showWallpaper: active.map { $0.isPreview || $0.isLocked }) else {
                     throw MirageLockBridge.failure("Unable to create wallpaper snapshot")
                 }
                 reply(snapshot, nil)
@@ -289,7 +321,7 @@ final class MirageWallpaperXPCHandler: NSObject, WallpaperExtensionXPCProtocol {
             return
         }
         guard !invalidated else { return }
-        reloadSettings()
+        reloadSettings(invalidateSnapshots: true)
         lock.lock()
         let values = Array(contexts.values)
         lock.unlock()
@@ -308,6 +340,10 @@ final class MirageWallpaperXPCHandler: NSObject, WallpaperExtensionXPCProtocol {
             $0.renderer = nil
         }
         values.forEach { context in
+            if context.isPreview {
+                updatePreview(context, configuration: configuration)
+                return
+            }
             let renderer = self.renderer(
                 for: context.displayID, rootLayer: context.rootLayer,
                 size: context.rootLayer.bounds.size,
@@ -341,6 +377,39 @@ final class MirageWallpaperXPCHandler: NSObject, WallpaperExtensionXPCProtocol {
         agentProxy?.invalidateSnapshots { error in
             if let error { NSLog("[MirageLock] snapshot invalidation failed: %@", error.localizedDescription) }
         }
+    }
+
+    private func reloadPreviews() {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in self?.reloadPreviews() }
+            return
+        }
+        guard !invalidated else { return }
+        let configuration = Self.loadConfiguration()
+        lock.lock()
+        let previews = contexts.values.filter(\.isPreview)
+        lock.unlock()
+        previews.forEach { updatePreview($0, configuration: configuration) }
+        reloadSettings(invalidateSnapshots: true)
+    }
+
+    private func display(for context: MirageLockContext,
+                         configuration: MirageLockConfiguration?) -> MirageLockDisplayConfiguration? {
+        guard let configuration else { return nil }
+        return context.configurationKey.flatMap { configuration.displays[$0] }
+            ?? configuration.displays["display-\(context.displayID)"]
+            ?? configuration.displays.values.sorted(by: { $0.displayID < $1.displayID }).first
+    }
+
+    private func updatePreview(_ context: MirageLockContext, configuration: MirageLockConfiguration?) {
+        let entry = configuration?.enabled == false ? nil : display(for: context, configuration: configuration)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        context.rootLayer.contents = MirageSnapshotProvider.previewImage(for: entry)
+        context.rootLayer.contentsGravity = .resizeAspect
+        context.rootLayer.masksToBounds = true
+        CATransaction.commit()
+        CATransaction.flush()
     }
 
     private func scheduleWakeRecovery() {
@@ -387,7 +456,7 @@ final class MirageWallpaperXPCHandler: NSObject, WallpaperExtensionXPCProtocol {
         agentProxy?.invalidateSnapshots { _ in }
     }
 
-    private func reloadSettings() {
+    private func reloadSettings(invalidateSnapshots: Bool = false) {
         guard !invalidated, let proxy = agentProxy else { return }
         let requestID = UUID()
         settingsRequestID = requestID
@@ -403,6 +472,11 @@ final class MirageWallpaperXPCHandler: NSObject, WallpaperExtensionXPCProtocol {
                     self.settingsReady = error == nil
                     self.settingsError = error?.localizedDescription
                     self.publishHealth()
+                    if error == nil, invalidateSnapshots {
+                        proxy.invalidateSnapshots { error in
+                            if let error { NSLog("[MirageLock] preview invalidation failed: %@", error.localizedDescription) }
+                        }
+                    }
                 }
             }
         } catch {
@@ -441,14 +515,18 @@ final class MirageWallpaperXPCHandler: NSObject, WallpaperExtensionXPCProtocol {
             return
         }
         let effectiveLocked = locked && (Self.loadConfiguration().map { $0.enabled != false } ?? false)
-        isLocked = locked
         lock.lock()
-        let values = contextID.flatMap { identifier in
-            contexts[identifier].map { [$0] }
-        } ?? Array(contexts.values)
-        values.forEach { $0.isLocked = locked }
+        let values: [MirageLockContext]
+        if let contextID {
+            values = contexts[contextID].map { [$0] } ?? []
+        } else {
+            isLocked = locked
+            values = Array(contexts.values)
+        }
+        let renderers = values.filter { !$0.isPreview }
+        renderers.forEach { $0.isLocked = locked }
         lock.unlock()
-        values.forEach { $0.renderer?.setLocked(effectiveLocked) }
+        renderers.forEach { $0.renderer?.setLocked(effectiveLocked) }
     }
 
     private func renderer(for displayID: UInt32, rootLayer: CALayer,
@@ -512,6 +590,17 @@ final class MirageWallpaperXPCHandler: NSObject, WallpaperExtensionXPCProtocol {
         return false
     }
 
+    private func contextID(from value: Any?) -> UInt32? {
+        guard let uuid = Self.uuid(from: value) else { return Self.uint32(from: value) }
+        lock.lock()
+        defer { lock.unlock() }
+        return contexts.values.first { $0.wallpaperID == uuid }?.id
+    }
+
+    private static func uuid(from value: Any?) -> UUID? {
+        value as? UUID ?? field(named: "id", in: value) as? UUID
+    }
+
     private static func uint32(from value: Any?) -> UInt32? {
         guard let value else { return nil }
         if let number = value as? NSNumber { return number.uint32Value }
@@ -532,47 +621,34 @@ final class MirageWallpaperXPCHandler: NSObject, WallpaperExtensionXPCProtocol {
     }
 
     private static func geometry(from request: Any?) -> (displayID: UInt32?, size: CGSize?, scale: CGFloat?) {
-        var descriptions: [String] = []
-        func collect(_ value: Any, depth: Int) {
-            guard depth < 3, descriptions.count < 32 else { return }
-            descriptions.append(String(describing: value))
-            Mirror(reflecting: value).children.forEach { collect($0.value, depth: depth + 1) }
-        }
-        if let request { collect(request, depth: 0) }
-        func number(after marker: String) -> Double? {
-            for text in descriptions {
-                guard let range = text.range(of: marker) else { continue }
-                let suffix = text[range.upperBound...].drop(while: { $0 == " " })
-                let token = suffix.prefix { $0.isNumber || $0 == "." || $0 == "-" }
-                if let value = Double(token) { return value }
-            }
-            return nil
-        }
-        let displayID = number(after: "directDisplayID: ").flatMap { UInt32(exactly: Int($0)) }
-            ?? number(after: "displayID: ").flatMap { UInt32(exactly: Int($0)) }
-        let width = number(after: "width: ").map { CGFloat($0) }
-        let height = number(after: "height: ").map { CGFloat($0) }
-        let scale = number(after: "scaleFactor: ").flatMap { $0 > 0 ? CGFloat($0) : nil }
-        let size = width.flatMap { w in height.flatMap { h in
-            w > 0 && h > 0 ? CGSize(width: w, height: h) : nil
-        } }
-        return (displayID, size, scale)
+        let displayID = field(named: "directDisplayID", in: request) as? UInt32
+            ?? field(named: "displayID", in: request) as? UInt32
+        let size = field(named: "size", in: request) as? CGSize
+        let scale = (field(named: "scaleFactor", in: request) as? NSNumber).map { CGFloat($0.doubleValue) }
+        return (displayID, size.flatMap { $0.width > 0 && $0.height > 0 ? $0 : nil },
+                scale.flatMap { $0 > 0 ? $0 : nil })
     }
 
     private static func enumCase(named name: String, in value: Any?) -> String? {
-        guard let value else { return nil }
-        func find(_ value: Any, depth: Int) -> Any? {
-            guard depth < 6 else { return nil }
-            let mirror = Mirror(reflecting: value)
-            for child in mirror.children {
-                if child.label == name { return child.value }
-                if let found = find(child.value, depth: depth + 1) { return found }
-            }
-            return nil
-        }
-        guard let found = find(value, depth: 0) else { return nil }
+        guard let found = field(named: name, in: value) else { return nil }
         let mirror = Mirror(reflecting: found)
         if mirror.displayStyle == .enum, let label = mirror.children.first?.label { return label }
         return String(describing: found).split(separator: "(").first.map(String.init)
+    }
+
+    private static func field(named name: String, in value: Any?, depth: Int = 0) -> Any? {
+        guard let value, depth < 8 else { return nil }
+        for child in Mirror(reflecting: value).children {
+            if child.label == name {
+                var result = child.value
+                while Mirror(reflecting: result).displayStyle == .optional {
+                    guard let wrapped = Mirror(reflecting: result).children.first else { return nil }
+                    result = wrapped.value
+                }
+                return result
+            }
+            if let result = field(named: name, in: child.value, depth: depth + 1) { return result }
+        }
+        return nil
     }
 }
