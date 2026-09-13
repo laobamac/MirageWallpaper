@@ -134,6 +134,10 @@ private struct UIResponsivenessRegression {
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             NSApplication.shared.setActivationPolicy(.accessory)
             NSApplication.shared.finishLaunching()
+            if let index = CommandLine.arguments.firstIndex(of: "--lock-preview-fixtures"), index + 1 < CommandLine.arguments.count {
+                try await testRealLockPreviews(in: URL(fileURLWithPath: CommandLine.arguments[index + 1], isDirectory: true))
+                return
+            }
             if CommandLine.arguments.contains("--startup-playlist") {
                 try testStartupAndPlaylistNavigation()
                 try await testPlaylistControls()
@@ -479,11 +483,11 @@ private struct UIResponsivenessRegression {
         print("PASS: queued transition cancellation and superseded animation callbacks")
     }
 
-    static func pngData() throws -> Data {
-        let context = CGContext(data: nil, width: 128, height: 128, bitsPerComponent: 8, bytesPerRow: 512,
+    static func pngData(color: NSColor = .systemTeal, width: Int = 128, height: Int = 128) throws -> Data {
+        let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
                                 space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
-        context.setFillColor(NSColor.systemTeal.cgColor)
-        context.fill(CGRect(x: 0, y: 0, width: 128, height: 128))
+        context.setFillColor(color.cgColor)
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
         let data = NSMutableData()
         let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil)!
         CGImageDestinationAddImage(destination, context.makeImage()!, nil)
@@ -609,15 +613,17 @@ private struct UIResponsivenessRegression {
         let scene = WEWallpaper.load(from: sceneDirectory)
         let asset = root.appending(path: "lock-property.png")
         try ImageProtocol.imageData.write(to: asset)
-        try ImageProtocol.imageData.write(to: scene.previewURL)
+        try pngData(color: .red).write(to: scene.previewURL)
+        let otherFrame = root.appending(path: "lock-rendered-frame.png")
+        try pngData(color: .blue, width: 160, height: 90).write(to: otherFrame)
         let properties = ["texture": WEProjectProperty(type: "scenetexture", value: .string(asset.path))]
         let container = root.appending(path: "LockDeployment")
         let configurationURL = container.appending(path: "dynamic-lock-screen.json")
         let displays = [
             DynamicLockScreenManager.DisplaySnapshot(displayID: 9001, fallbackSource: asset,
-                systemFallbackSource: asset, position: WallpaperPosition(x: 0.1)),
+                systemFallbackSource: asset, position: WallpaperPosition(x: 0.1), renderedPreviewSource: asset),
             DynamicLockScreenManager.DisplaySnapshot(displayID: 9002, fallbackSource: asset,
-                systemFallbackSource: nil, position: WallpaperPosition(x: 0.9))
+                systemFallbackSource: nil, position: WallpaperPosition(x: 0.9), renderedPreviewSource: otherFrame)
         ]
         let prepared = try await Task.detached {
             try DynamicLockScreenManager.prepareConfiguration(scene, runtime: WallpaperRuntimeState(),
@@ -642,11 +648,22 @@ private struct UIResponsivenessRegression {
             try require(display.wallpaperID == scene.id && display.fps == 60 && display.loadFromMemory == true,
                         "Lock configuration did not preserve its settings snapshot")
             let paths = [display.renderDirectory, display.entryPath, display.previewPath,
-                         display.desktopFallbackPath, display.systemFallbackPath].compactMap { $0 }
+                         display.renderedPreviewPath, display.desktopFallbackPath, display.systemFallbackPath].compactMap { $0 }
             for path in paths {
                 try require(path.hasPrefix(prepared.root.path + "/") && fm.fileExists(atPath: path),
                             "A deployed lock asset still points into staging or is missing: \(path)")
             }
+            guard let previewPath = display.renderedPreviewPath,
+                  let preview = NSBitmapImageRep(data: try Data(contentsOf: URL(fileURLWithPath: previewPath))) else {
+                throw RegressionFailure(description: "The deployed rendered preview cannot be decoded")
+            }
+            let expectedWidth = display.displayID == 9001 ? 128 : 160
+            let expectedHeight = display.displayID == 9001 ? 128 : 90
+            try require(preview.pixelsWide == expectedWidth && preview.pixelsHigh == expectedHeight,
+                        "A display received the project preview or another display's frame")
+            try require(display.previewPath == previewPath, "Lock snapshots do not use the rendered frame")
+            let color = preview.colorAt(x: 0, y: 0)!.usingColorSpace(.deviceRGB)!
+            try require(color.redComponent < 0.5, "The wallpaper's red project preview was deployed")
             guard case .object(let property) = display.rawProperties["texture"],
                   case .string(let path) = property["value"] else {
                 throw RegressionFailure(description: "Lock scene property was not serialized")
@@ -676,6 +693,60 @@ private struct UIResponsivenessRegression {
         let remaining = try fm.contentsOfDirectory(atPath: container.appending(path: "DynamicLockScreen/Staging").path)
         try require(rejected && remaining.isEmpty, "A failed preparation retained staging files")
 
+        let corruptFrame = root.appending(path: "corrupt-rendered-frame.png")
+        try Data("invalid frame".utf8).write(to: corruptFrame)
+        let unavailableFrames: [URL?] = [nil, corruptFrame, root.appending(path: "missing-frame.png"), root]
+        let unavailableDisplays = unavailableFrames.enumerated().map { index, source in
+            DynamicLockScreenManager.DisplaySnapshot(displayID: UInt32(index + 9001), fallbackSource: nil,
+                systemFallbackSource: nil, position: .center, renderedPreviewSource: source)
+        }
+        let withoutFrames = try await Task.detached {
+            try DynamicLockScreenManager.prepareConfiguration(scene, runtime: WallpaperRuntimeState(),
+                properties: [:], fps: 30, displays: unavailableDisplays, loadFromMemory: false, container: container)
+        }.value
+        let fallbackConfiguration = try JSONDecoder().decode(DynamicLockScreenConfiguration.self, from: withoutFrames.data)
+        try require(fallbackConfiguration.displays.values.allSatisfy {
+            guard let path = $0.renderedPreviewPath else { return false }
+            return path == $0.previewPath && path.hasPrefix(withoutFrames.root.path + "/")
+                && !fm.fileExists(atPath: path)
+        }, "An unavailable rendered frame fell back to the wallpaper's project preview")
+        try DynamicLockScreenManager.commitConfiguration(withoutFrames, configurationURL: configurationURL)
+        let pendingPreviewData = try Data(contentsOf: configurationURL)
+        let blueFrame = try pngData(color: .blue, width: 160, height: 90)
+        let redFrame = try pngData(color: .red, width: 160, height: 90)
+        let firstPreview = unavailableDisplays[0]
+        try require(DynamicLockScreenManager.publishPreviews([(firstPreview, blueFrame)],
+            deployment: withoutFrames.root, configurationURL: configurationURL,
+            wallpaperID: scene.id, fillMode: .cover), "A background preview was not published after deployment completed")
+        let previewURL = URL(fileURLWithPath: fallbackConfiguration.displays["display-9001"]!.renderedPreviewPath!)
+        let publishedFrame = try Data(contentsOf: previewURL)
+        let afterPreview = try Data(contentsOf: configurationURL)
+        try require(publishedFrame == blueFrame && afterPreview == pendingPreviewData,
+                    "Publishing a preview overwrote the lock configuration")
+        var changed = fallbackConfiguration
+        changed.displays["display-9001"]?.position = WallpaperPosition(x: 0.9)
+        try JSONEncoder().encode(changed).write(to: configurationURL, options: .atomic)
+        try require(!DynamicLockScreenManager.publishPreviews([(firstPreview, redFrame)],
+            deployment: withoutFrames.root, configurationURL: configurationURL,
+            wallpaperID: scene.id, fillMode: .cover), "A stale preview overwrote a newer crop setting")
+        changed = fallbackConfiguration
+        changed.enabled = false
+        try JSONEncoder().encode(changed).write(to: configurationURL, options: .atomic)
+        try require(!DynamicLockScreenManager.publishPreviews([(firstPreview, redFrame)],
+            deployment: withoutFrames.root, configurationURL: configurationURL,
+            wallpaperID: scene.id, fillMode: .cover), "A disabled lock screen accepted a pending preview")
+        let replacement = try await Task.detached {
+            try DynamicLockScreenManager.prepareConfiguration(scene, runtime: WallpaperRuntimeState(),
+                properties: [:], fps: 30, displays: unavailableDisplays, loadFromMemory: false, container: container)
+        }.value
+        try DynamicLockScreenManager.commitConfiguration(replacement, configurationURL: configurationURL)
+        try require(!DynamicLockScreenManager.publishPreviews([(firstPreview, redFrame)],
+            deployment: withoutFrames.root, configurationURL: configurationURL,
+            wallpaperID: scene.id, fillMode: .cover), "An old capture was published after reconfiguring the same wallpaper")
+        let preservedFrame = try Data(contentsOf: previewURL)
+        try require(preservedFrame == blueFrame, "A rejected capture changed a published frame")
+        print("PASS: deployment before preview completion, background publication and stale capture rejection")
+
         let saver = ScreenSaverManager(configurationDirectory: root.appending(path: "LockSaverConfiguration"))
         let context = ScreenSaverManager.ConfigurationContext(
             positions: ["a": WallpaperPosition(x: 0.2)], selectedPosition: WallpaperPosition(x: 0.2),
@@ -697,6 +768,8 @@ private struct UIResponsivenessRegression {
 
     static func runRenderer() {
         let fails = CommandLine.arguments.dropFirst().first?.contains("fail-activate") == true
+        var activated = false
+        var snapshotRequests = 0
         func emit(_ event: String, _ fields: [String: Any] = [:]) {
             var object = fields
             object["event"] = event
@@ -705,13 +778,38 @@ private struct UIResponsivenessRegression {
             try? FileHandle.standardOutput.write(contentsOf: data)
         }
         usleep(50_000)
-        emit("prepared")
+        emit(CommandLine.arguments.contains("--no-spectrum") ? "first-frame-presented" : "prepared")
         while let line = readLine(), let data = line.data(using: .utf8) {
             guard let command = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
             switch command["cmd"] as? String {
             case "activate":
+                activated = true
                 emit(fails ? "activation-failed" : "activated")
                 if !fails { emit("position-availability", ["x": true, "y": false]) }
+            case "snapshot":
+                guard let path = command["path"] as? String, let token = command["token"] as? String else { continue }
+                snapshotRequests += 1
+                if path.contains("retry-preview"), snapshotRequests < 3 {
+                    emit("snapshot-done", ["token": token, "ok": false])
+                    continue
+                }
+                if path.contains("stalled-preview") {
+                    try? Data().write(to: URL(fileURLWithPath: path + ".requested"))
+                    continue
+                }
+                var details: [String: Any] = ["arguments": CommandLine.arguments, "activated": activated,
+                                               "snapshotRequests": snapshotRequests]
+                if let index = CommandLine.arguments.firstIndex(of: "--user-properties"),
+                   index + 1 < CommandLine.arguments.count,
+                   let data = try? Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[index + 1])),
+                   let properties = try? JSONSerialization.jsonObject(with: data) {
+                    details["properties"] = properties
+                }
+                let saved = (try? pngData(color: .blue).write(to: URL(fileURLWithPath: path))) != nil
+                if let data = try? JSONSerialization.data(withJSONObject: details) {
+                    try? data.write(to: URL(fileURLWithPath: path + ".json"))
+                }
+                emit("snapshot-done", ["token": token, "ok": saved && !activated])
             case "deactivate": emit("deactivated")
             case "quit": return
             default: break
@@ -726,6 +824,42 @@ private struct UIResponsivenessRegression {
         options.assignmentID = UUID()
         return await withCheckedContinuation { continuation in
             controller.render(wallpaper, onDisplay: display, options: options) { continuation.resume(returning: $0) }
+        }
+    }
+
+    static func testRealLockPreviews(in directory: URL) async throws {
+        guard let screen = NSScreen.main,
+              let displayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
+            throw RegressionFailure(description: "A connected display is required")
+        }
+        let controller = RendererController()
+        defer { controller.stopAllAndWait() }
+        for kind in ["video", "scene"] {
+            let wallpaper = WEWallpaper.load(from: directory.appending(path: kind))
+            try require(wallpaper.isValid, "Real \(kind) fixture is not valid")
+            for (index, position) in [0.0, 0.5, 1.0].enumerated() {
+                var options = RenderOptions()
+                options.position = WallpaperPosition(x: position)
+                options.enableSpectrum = false
+                let output = directory.appending(path: "\(kind)-\(index).heic")
+                let success = await withCheckedContinuation { continuation in
+                    controller.snapshot(wallpaper: wallpaper, onDisplay: displayID.uint32Value,
+                                        options: options, path: output.path) { continuation.resume(returning: $0) }
+                }
+                try require(success, "Real \(kind) preview failed at position \(position)")
+                guard let image = NSBitmapImageRep(data: try Data(contentsOf: output)),
+                      let color = image.colorAt(x: image.pixelsWide / 2, y: image.pixelsHigh / 2)?.usingColorSpace(.sRGB) else {
+                    throw RegressionFailure(description: "Real preview cannot be decoded")
+                }
+                let channels = [color.redComponent, color.greenComponent, color.blueComponent]
+                try require(channels[index] > 0.7 && channels[index] - max(channels[(index + 1) % 3], channels[(index + 2) % 3]) > 0.5,
+                            "Real \(kind) preview crop is incorrect: \(channels)")
+                try require(abs(Double(image.pixelsWide) / Double(image.pixelsHigh) - screen.frame.width / screen.frame.height) < 0.02,
+                            "Real preview lost the display aspect ratio")
+                try require(controller.activeDisplayIDs.isEmpty, "Preview rendering became desktop playback")
+                try await waitUntil("temporary preview renderer exit") { controller.processIdentifiers.isEmpty }
+                print("PASS: real \(kind) preview, position \(position), \(image.pixelsWide)x\(image.pixelsHigh), RGB \(channels)")
+            }
         }
     }
 
@@ -749,6 +883,45 @@ private struct UIResponsivenessRegression {
                     "Activation failure did not restore the previous wallpaper")
         let otherDisplay = await render(controller, first, display: 9002)
         try require(otherDisplay, "Second display did not activate")
+        try FileManager.default.createSymbolicLink(at: directory.appending(path: "SceneWallpaper"),
+                                                   withDestinationURL: Bundle.main.executableURL!)
+        let previewScene = WEWallpaper.load(from: root.appending(path: "lock-scene"))
+        var previewOptions = RenderOptions()
+        previewOptions.position = WallpaperPosition(x: 0.2, y: 0.8)
+        previewOptions.fillMode = .contain
+        previewOptions.userProperties = ["tint": WEProjectProperty(type: "color", value: .string("0 1 0"))]
+        for wallpaper in [second, previewScene] {
+            let target = root.appending(path: "rendered-\(wallpaper.kind.rawValue).heic")
+            let captured = await withCheckedContinuation { continuation in
+                controller.snapshot(wallpaper: wallpaper, onDisplay: 9003, options: previewOptions, path: target.path) {
+                    continuation.resume(returning: $0)
+                }
+            }
+            try require(captured && NSImage(contentsOf: target)?.isValid == true, "Hidden rendering did not return a readable frame")
+            let details = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: target.path + ".json"))) as! [String: Any]
+            let arguments = details["arguments"] as! [String]
+            try require(details["activated"] as? Bool == false && arguments.contains("--muted"),
+                        "Generating a preview showed or unmuted the temporary renderer")
+            for (option, value) in [("--display-id", "9003"), ("--fill", "contain"), ("--position-x", "0.2"), ("--position-y", "0.8")] {
+                let index = arguments.firstIndex(of: option)!
+                try require(arguments[index + 1] == value, "A preview lost its display or crop settings")
+            }
+            if wallpaper.kind == .scene {
+                let properties = details["properties"] as? [String: [String: String]]
+                try require(properties?["tint"]?["value"] == "0 1 0", "The scene preview lost its configured properties")
+            }
+            try require(controller.currentWallpaper(onDisplay: 9001)?.id == first.id &&
+                        controller.currentWallpaper(onDisplay: 9002)?.id == first.id &&
+                        !controller.hasCoverageOrWork(onDisplay: 9003), "Preview generation changed desktop playback")
+        }
+        let retryPreview = root.appending(path: "retry-preview.heic")
+        let retried = await withCheckedContinuation { continuation in
+            controller.snapshot(wallpaper: second, onDisplay: 9003, options: RenderOptions(), path: retryPreview.path) {
+                continuation.resume(returning: $0)
+            }
+        }
+        let retryDetails = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: retryPreview.path + ".json"))) as! [String: Any]
+        try require(retried && retryDetails["snapshotRequests"] as? Int == 3, "A frame that was not ready was not retried")
         var completions = 0
         var latestSucceeded = false
         var options = RenderOptions()
@@ -802,12 +975,37 @@ private struct UIResponsivenessRegression {
                         controller.currentWallpaper(onDisplay: 9002)?.id == first.id,
                         "An obsolete lock transition overwrote the restored wallpapers")
         }
+        let cancelledPreview = root.appending(path: "stalled-preview-cancel.heic")
+        try await waitUntil("desktop renderer cleanup before preview cancellation") { controller.processIdentifiers.count == 2 }
+        let desktopPIDs = controller.processIdentifiers
+        var cancelledPreviewCompletions: [Bool] = []
+        let cancelledToken = controller.snapshot(wallpaper: second, onDisplay: 9003,
+            options: RenderOptions(), path: cancelledPreview.path) { cancelledPreviewCompletions.append($0) }
+        try await waitUntil("cancellable preview") { FileManager.default.fileExists(atPath: cancelledPreview.path + ".requested") }
+        controller.cancelPreview(cancelledToken)
+        controller.cancelPreview(cancelledToken)
+        try await waitUntil("cancelled preview cleanup") {
+            cancelledPreviewCompletions.count == 1 && controller.processIdentifiers == desktopPIDs
+        }
+        try require(cancelledPreviewCompletions == [false] && controller.isRendering(onDisplay: 9001)
+            && controller.isRendering(onDisplay: 9002), "Cancelling a preview changed desktop playback or completed more than once")
+        let stalled = root.appending(path: "stalled-preview.heic")
+        var previewCompletions: [Bool] = []
+        controller.snapshot(wallpaper: second, onDisplay: 9003, options: RenderOptions(), path: stalled.path) {
+            previewCompletions.append($0)
+        }
+        try await waitUntil("pending preview") { FileManager.default.fileExists(atPath: stalled.path + ".requested") }
+        let previewPIDs = controller.processIdentifiers
         controller.stopAllAndWait()
+        try await waitUntil("preview shutdown acknowledgement") { previewCompletions.count == 1 }
+        try require(previewCompletions == [false] && previewPIDs.allSatisfy { Darwin.kill($0, 0) == -1 && errno == ESRCH },
+                    "Shutdown left a preview renderer or an unresolved preview request")
         try require(!controller.resumeAfterSuspension(), "App termination became resumable")
         let afterTermination = await render(controller, first, display: 9001)
         try require(!afterTermination, "Rendering was accepted after app termination")
         print("PASS: repeated lock suspension, in-flight cancellation, unlock switching and terminal shutdown")
         print("PASS: renderer activation, failure rollback, 100 rapid requests, display isolation and stop ordering")
+        print("PASS: hidden video and scene previews, crop and property propagation, desktop isolation and preview shutdown")
     }
 
     static func testLogs() async throws {

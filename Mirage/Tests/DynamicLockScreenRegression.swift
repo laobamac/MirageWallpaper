@@ -10,7 +10,9 @@ import IOSurface
 
 @objc protocol SnapshotRegressionProtocol {
     func snapshot(reply: @escaping (NSObject?, Int32, NSError?) -> Void)
-    func settings(enabled: Bool, reply: @escaping (NSObject?, Int32, NSError?) -> Void)
+    func configuredSnapshot(_ configuration: Data, displayID: UInt32, showWallpaper: Bool,
+                            reply: @escaping (NSObject?, Int32, NSError?) -> Void)
+    func settings(enabled: Bool, previewPaths: [String], reply: @escaping (NSObject?, Int32, NSError?) -> Void)
 }
 
 private struct RegressionFailure: Error, CustomStringConvertible {
@@ -22,13 +24,29 @@ private func require(_ condition: @autoclosure () -> Bool, _ message: String) th
 }
 
 private final class SnapshotService: NSObject, SnapshotRegressionProtocol {
-    func settings(enabled: Bool, reply: @escaping (NSObject?, Int32, NSError?) -> Void) {
+    func configuredSnapshot(_ configuration: Data, displayID: UInt32, showWallpaper: Bool,
+                            reply: @escaping (NSObject?, Int32, NSError?) -> Void) {
         do {
-            let display = MirageLockDisplayConfiguration(displayID: 7, wallpaperID: "preserved-wallpaper",
-                title: "Preserved wallpaper", kind: "scene", renderDirectory: "/tmp/fixture",
-                entryPath: "/tmp/fixture/scene.pkg", previewPath: nil, desktopFallbackPath: nil,
-                rawProperties: [:], fps: 30, fillMode: "cover", loadFromMemory: true)
-            let configuration = MirageLockConfiguration(version: 2, enabled: enabled, displays: ["display-7": display])
+            let configuration = try JSONDecoder().decode(MirageLockConfiguration.self, from: configuration)
+            guard let snapshot = MirageSnapshotProvider.makeSnapshot(from: configuration, displayID: displayID,
+                showWallpaper: showWallpaper) as? NSObject else {
+                throw MirageLockBridge.failure("Configured snapshot construction failed")
+            }
+            reply(snapshot, getpid(), nil)
+        } catch { reply(nil, getpid(), error as NSError) }
+    }
+
+    func settings(enabled: Bool, previewPaths: [String], reply: @escaping (NSObject?, Int32, NSError?) -> Void) {
+        do {
+            let displays = Dictionary(uniqueKeysWithValues: previewPaths.enumerated().map { index, path in
+                let id = UInt32(index + 7)
+                return ("display-\(id)", MirageLockDisplayConfiguration(displayID: id, wallpaperID: "wallpaper-\(id)",
+                    title: "Wallpaper \(id)", kind: "scene", renderDirectory: "/tmp/fixture",
+                    entryPath: "/tmp/fixture/scene.pkg", previewPath: previewPaths.first, desktopFallbackPath: nil,
+                    rawProperties: [:], fps: 30, fillMode: "cover", loadFromMemory: true,
+                    renderedPreviewPath: path.isEmpty ? nil : path))
+            })
+            let configuration = MirageLockConfiguration(version: 2, enabled: enabled, displays: displays)
             let models = try buildMirageSettingsViewModels(configuration: configuration)
             reply(models as? NSObject, getpid(), nil)
         } catch {
@@ -53,9 +71,14 @@ private func snapshotInterface() -> NSXPCInterface {
     let classes = NSSet(objects: NSClassFromString("WallpaperSnapshotXPC")!, NSError.self) as! Set<AnyHashable>
     interface.setClasses(classes, for: #selector(SnapshotRegressionProtocol.snapshot(reply:)),
                          argumentIndex: 0, ofReply: true)
-    let settingsClasses = NSSet(objects: NSClassFromString("WallpaperSettingsViewModelsXPC")!, NSError.self) as! Set<AnyHashable>
-    interface.setClasses(settingsClasses, for: #selector(SnapshotRegressionProtocol.settings(enabled:reply:)),
+    interface.setClasses(classes, for: #selector(SnapshotRegressionProtocol.configuredSnapshot(_:displayID:showWallpaper:reply:)),
                          argumentIndex: 0, ofReply: true)
+    let settingsClasses = NSSet(objects: NSClassFromString("WallpaperSettingsViewModelsXPC")!, NSError.self) as! Set<AnyHashable>
+    interface.setClasses(settingsClasses, for: #selector(SnapshotRegressionProtocol.settings(enabled:previewPaths:reply:)),
+                         argumentIndex: 0, ofReply: true)
+    interface.setClasses(NSSet(objects: NSArray.self, NSString.self) as! Set<AnyHashable>,
+                         for: #selector(SnapshotRegressionProtocol.settings(enabled:previewPaths:reply:)),
+                         argumentIndex: 1, ofReply: false)
     return interface
 }
 
@@ -141,6 +164,7 @@ private struct DynamicLockScreenRegression {
             try testExtensionProcessDiscovery()
             try testToolTimeout()
             try testSnapshotAcrossProcesses()
+            try testConfiguredSnapshotsAcrossProcesses()
             try testSettingsAcrossProcesses()
             print("PASS: registry, cancellation, configuration preservation, disabled catalog, registration lifecycle, extension process discovery, tool timeout, cross-process snapshot and settings")
         } catch {
@@ -363,20 +387,102 @@ private struct DynamicLockScreenRegression {
         try require(!discovered.isRunning, "An exited extension is still treated as running")
     }
 
-    static func testSettingsAcrossProcesses() throws {
-        for enabled in [true, false, true] {
-            try testSettingsAcrossProcesses(enabled: enabled)
+    static func testConfiguredSnapshotsAcrossProcesses() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("mirage-snapshot-routing-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var paths: [String] = []
+        for (index, color) in [NSColor.red, .blue, .green].enumerated() {
+            let context = CGContext(data: nil, width: 8, height: 4, bitsPerComponent: 8, bytesPerRow: 32,
+                space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+            context.setFillColor(color.cgColor)
+            context.fill(CGRect(x: 0, y: 0, width: 8, height: 4))
+            let path = root.appendingPathComponent("frame-\(index).png")
+            try NSBitmapImageRep(cgImage: context.makeImage()!).representation(using: .png, properties: [:])!.write(to: path)
+            paths.append(path.path)
         }
+        let displays = Dictionary(uniqueKeysWithValues: (0..<2).map { index in
+            let id = UInt32(index + 7)
+            return ("display-\(id)", MirageLockDisplayConfiguration(displayID: id, wallpaperID: "fixture-\(id)",
+                title: "Fixture \(id)", kind: "scene", renderDirectory: root.path,
+                entryPath: root.appendingPathComponent("scene.pkg").path, previewPath: paths[2],
+                desktopFallbackPath: paths[2], rawProperties: [:], fps: 30, fillMode: "cover",
+                loadFromMemory: false, renderedPreviewPath: paths[index]))
+        })
+        let cases: [(UInt32, Bool, Bool, [UInt8])] = [
+            (7, true, true, [0, 0, 255, 255]),
+            (8, true, true, [255, 0, 0, 255]),
+            (7, false, true, [0, 255, 0, 255]),
+            (8, true, false, [0, 255, 0, 255])
+        ]
+        for (displayID, showWallpaper, enabled, expected) in cases {
+            let result = SnapshotResult()
+            let connection = NSXPCConnection(serviceName: Bundle.main.bundleIdentifier! + ".Service")
+            connection.remoteObjectInterface = snapshotInterface()
+            connection.resume()
+            defer { connection.invalidate() }
+            let proxy = connection.remoteObjectProxyWithErrorHandler { result.finish(.failure($0)) } as! SnapshotRegressionProtocol
+            let configuration = MirageLockConfiguration(version: 2, enabled: enabled, displays: displays)
+            proxy.configuredSnapshot(try JSONEncoder().encode(configuration), displayID: displayID,
+                showWallpaper: showWallpaper) { snapshot, processID, error in
+                result.finish(Result {
+                    if let error { throw error }
+                    try require(processID != getpid(), "Configured snapshot did not cross a process boundary")
+                    guard let snapshot, let cls = object_getClass(snapshot),
+                          let storage = class_getInstanceVariable(cls, "rawValue") else {
+                        throw RegressionFailure(description: "Configured snapshot was not decoded")
+                    }
+                    let pointer = Unmanaged.passUnretained(snapshot).toOpaque()
+                        .advanced(by: ivar_getOffset(storage)).load(as: UnsafeMutableRawPointer.self)
+                    let surface = Unmanaged<IOSurface>.fromOpaque(pointer).takeUnretainedValue()
+                    try require(surface.width == 8 && surface.height == 4, "A configured snapshot used the default image")
+                    surface.lock(options: .readOnly, seed: nil)
+                    defer { surface.unlock(options: .readOnly, seed: nil) }
+                    let pixel = surface.baseAddress.assumingMemoryBound(to: UInt8.self)
+                    try require(Array(UnsafeBufferPointer(start: pixel, count: 4)) == expected,
+                                "A preview used another display, a project cover or the desktop fallback")
+                })
+            }
+            let deadline = Date().addingTimeInterval(15)
+            while result.read() == nil, Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
+            guard let value = result.read() else { throw RegressionFailure(description: "Configured snapshot timed out") }
+            try value.get()
+        }
+        print("PASS: per-display rendered previews and desktop fallback isolation across XPC")
     }
 
-    static func testSettingsAcrossProcesses(enabled: Bool) throws {
+    static func testSettingsAcrossProcesses() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("mirage-preview-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var previewPaths: [String] = []
+        for (index, color) in [NSColor.red, .blue].enumerated() {
+            let context = CGContext(data: nil, width: 8, height: 4, bitsPerComponent: 8, bytesPerRow: 32,
+                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+            context.setFillColor(color.cgColor)
+            context.fill(CGRect(x: 0, y: 0, width: 8, height: 4))
+            let data = NSBitmapImageRep(cgImage: context.makeImage()!).representation(using: .png, properties: [:])!
+            let url = root.appendingPathComponent("预览 \(index).png")
+            try data.write(to: url)
+            previewPaths.append(url.path)
+        }
+        let corrupt = root.appendingPathComponent("corrupt.png")
+        try Data("invalid image".utf8).write(to: corrupt)
+        previewPaths += ["", root.appendingPathComponent("missing.png").path, corrupt.path, root.path]
+        try testSettingsAcrossProcesses(enabled: true, previewPaths: previewPaths)
+        try testSettingsAcrossProcesses(enabled: false, previewPaths: previewPaths)
+        previewPaths.swapAt(0, 1)
+        try testSettingsAcrossProcesses(enabled: true, previewPaths: previewPaths)
+    }
+
+    static func testSettingsAcrossProcesses(enabled: Bool, previewPaths: [String]) throws {
         let result = SnapshotResult()
         let connection = NSXPCConnection(serviceName: Bundle.main.bundleIdentifier! + ".Service")
         connection.remoteObjectInterface = snapshotInterface()
         connection.resume()
         defer { connection.invalidate() }
         let proxy = connection.remoteObjectProxyWithErrorHandler { result.finish(.failure($0)) } as! SnapshotRegressionProtocol
-        proxy.settings(enabled: enabled) { models, processID, error in
+        proxy.settings(enabled: enabled, previewPaths: previewPaths) { models, processID, error in
             result.finish(Result {
                 if let error { throw error }
                 try require(processID != getpid(), "Settings did not cross a process boundary")
@@ -386,9 +492,25 @@ private struct DynamicLockScreenRegression {
                     try require(groups?.isEmpty == true, "The disabled desktop catalog still contains choices after XPC decoding")
                     return
                 }
-                let items = groups?.first.flatMap { Mirror(reflecting: $0).descendant("items") as? [Any] }
-                let identifier = items?.first.flatMap { Mirror(reflecting: $0).descendant("id", "id") as? String }
-                try require(identifier == "display-7", "The desktop catalog was lost across XPC")
+                let items = groups?.first.flatMap { Mirror(reflecting: $0).descendant("items") as? [Any] } ?? []
+                try require(items.count == previewPaths.count, "A missing preview removed a wallpaper choice across XPC")
+                for (index, item) in items.enumerated() {
+                    let mirror = Mirror(reflecting: item)
+                    try require(mirror.descendant("id", "id") as? String == "display-\(index + 7)",
+                                "Updating a preview changed the system choice identity")
+                    guard let thumbnail = mirror.descendant("thumbnail", "image", "url") as? URL,
+                          let choiceThumbnail = mirror.descendant("choice", "thumbnail", "image", "url") as? URL else {
+                        throw RegressionFailure(description: "Image URLs were lost across XPC")
+                    }
+                    try require(thumbnail == choiceThumbnail, "The item and selected choice use different previews")
+                    try require(NSImage(contentsOf: thumbnail)?.isValid == true, "The receiving process cannot decode the preview")
+                    if index < 2 {
+                        try require(thumbnail == URL(fileURLWithPath: previewPaths[index]), "The preview belongs to another display or deployment")
+                    } else {
+                        try require(thumbnail.path != previewPaths[index], "An invalid preview did not fall back")
+                        try require(thumbnail.path != previewPaths[0], "A legacy project preview was used instead of a rendered frame")
+                    }
+                }
             })
         }
         let deadline = Date().addingTimeInterval(15)
