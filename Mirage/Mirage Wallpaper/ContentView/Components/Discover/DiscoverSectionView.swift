@@ -92,17 +92,23 @@ struct DiscoverSectionView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     LazyHStack(spacing: 8) {
                         ForEach(row.items) { item in
-                            DiscoverCard(
-                                item: item,
-
-                                isSelected: workshopViewModel.discoverSelectedItemID == item.id,
-                                isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
-                                presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
-                                downloadTask: workshopViewModel.downloadTask(for: item.publishedFileId),
-                                cardWidth: cardWidth,
-                                isActive: isActive,
-                                animatedPreviewMode: animatedPreviewMode
-                            )
+                            WorkshopItemDownloadStatus(
+                                workshopID: item.publishedFileId,
+                                downloadStore: workshopViewModel.downloadStore
+                            ) { downloadState in
+                                DiscoverCard(
+                                    item: item,
+                                    isSelected: workshopViewModel.discoverSelectedItemID == item.id,
+                                    isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
+                                    presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
+                                    downloadTask: workshopViewModel.downloadTask(for: item.publishedFileId),
+                                    liveDownloadState: downloadState,
+                                    isFavorite: workshopViewModel.isWorkshopFavorite(item.publishedFileId),
+                                    cardWidth: cardWidth,
+                                    isActive: isActive,
+                                    animatedPreviewMode: animatedPreviewMode
+                                )
+                            }
                             .id(item.id)
                             .onTapGesture {
                                 workshopViewModel.selectDiscoverItem(item)
@@ -187,8 +193,10 @@ struct DiscoverCard: View {
     var isDownloaded: Bool
     var presetNeedsDependency: Bool
     var downloadTask: DownloadTask?
+    var liveDownloadState: DownloadState? = nil
 
-    private var downloadState: DownloadState? { isActive ? downloadTask?.state : nil }
+    private var downloadState: DownloadState? { isActive ? (liveDownloadState ?? downloadTask?.state) : nil }
+    var isFavorite: Bool = false
     var cardWidth: CGFloat
     var isActive: Bool
     var animatedPreviewMode: GSAnimatedPreviewPlayback
@@ -226,15 +234,21 @@ struct DiscoverCard: View {
             }
         }
         .overlay(alignment: .bottom) {
-            Text(item.title)
-                .font(.caption)
-                .foregroundStyle(.white)
-                .lineLimit(2)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: .infinity)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 7)
-                .background(.black.opacity(0.58))
+            HStack(spacing: 4) {
+                Text(item.title)
+                    .lineLimit(2)
+                if isFavorite {
+                    Image(systemName: "heart.fill")
+                        .foregroundStyle(.red)
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.white)
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 7)
+            .background(.black.opacity(0.58))
         }
         .overlay {
             Rectangle()

@@ -8,6 +8,8 @@
 	<string>$(MIRAGE_GIT_COMMIT)</string>
 	<key>NSAudioCaptureUsageDescription</key>
 	<string>Mirage captures system audio to drive audio-responsive wallpapers.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Mirage 需要访问本地网络，以发现、配对 Android 设备并向设备发送壁纸。</string>
 	<key>SUAutomaticallyUpdate</key>
 	<true/>
 	<key>SUEnableAutomaticChecks</key>

@@ -9,6 +9,23 @@ import Observation
 import Combine
 import AppKit
 
+final class WorkshopDownloadStore: ObservableObject {
+    @Published var queue: [DownloadTask] = []
+
+    func state(for workshopID: String) -> DownloadState? {
+        queue.first(where: { $0.id == workshopID })?.state
+    }
+
+    var activeCount: Int {
+        queue.filter {
+            if case .downloading = $0.state { return true }
+            if case .resolving = $0.state { return true }
+            if case .validating = $0.state { return true }
+            return false
+        }.count
+    }
+}
+
 @Observable
 class WorkshopViewModel {
     struct SubscriptionDownloadPlan {
@@ -103,7 +120,14 @@ class WorkshopViewModel {
 
     // MARK: - Download State
 
-    var downloadQueue: [DownloadTask] = []
+    /// Download progress has its own observable channel. Publishing byte-level
+    /// progress through the main workshop view model invalidated every browse
+    /// grid and any native context menu currently attached to a card.
+    let downloadStore = WorkshopDownloadStore()
+    var downloadQueue: [DownloadTask] {
+        get { downloadStore.queue }
+        set { downloadStore.queue = newValue }
+    }
     var downloadHistory: [DownloadTask] = []
     var presetDependencyPrompt: PresetDependencyPrompt?
 
@@ -179,7 +203,7 @@ class WorkshopViewModel {
     }
 
     var activeDownloadCount: Int {
-        downloadQueue.filter(\.isActive).count
+        downloadStore.activeCount
     }
 
     var canLoadPreviousSubscriptions: Bool {
@@ -1918,7 +1942,7 @@ class WorkshopViewModel {
     }
 
     func downloadState(for workshopId: String) -> DownloadState? {
-        downloadTask(for: workshopId)?.state
+        downloadStore.state(for: workshopId)
     }
 
     func selectWorkshopItem(_ item: WorkshopItem) {

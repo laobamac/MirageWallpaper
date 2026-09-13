@@ -329,17 +329,22 @@ struct SubscribedWorkshopView: View {
                         spacing: 14
                     ) {
                         ForEach(workshopViewModel.subscriptionItems) { item in
-                            WorkshopItemCard(
-                                item: item,
-
-                                isSelected: workshopViewModel.selectedItem?.id == item.id,
-                                isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
-                                presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
-                                downloadTask: workshopViewModel.downloadTask(for: item.publishedFileId),
-                                isFavorite: workshopViewModel.isWorkshopFavorite(item.publishedFileId),
-                                isActive: isActive,
-                                animatedPreviewMode: globalSettingsViewModel.animatedPreviewPlaybackMode
-                            )
+                            WorkshopItemDownloadStatus(
+                                workshopID: item.publishedFileId,
+                                downloadStore: workshopViewModel.downloadStore
+                            ) { downloadState in
+                                WorkshopItemCard(
+                                    item: item,
+                                    isSelected: workshopViewModel.selectedItem?.id == item.id,
+                                    isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
+                                    presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
+                                    downloadTask: workshopViewModel.downloadTask(for: item.publishedFileId),
+                                    liveDownloadState: downloadState,
+                                    isFavorite: workshopViewModel.isWorkshopFavorite(item.publishedFileId),
+                                    isActive: isActive,
+                                    animatedPreviewMode: globalSettingsViewModel.settings.animatedPreviewPlaybackMode
+                                )
+                            }
                             .onTapGesture {
                                 workshopViewModel.selectWorkshopItem(item)
                             }

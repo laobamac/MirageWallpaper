@@ -92,6 +92,7 @@ class MainWindowController: NSWindowController, NSWindowDelegate {
     
     func windowDidBecomeKey(_ notification: Notification) {
         DispatchQueue.main.async {
+            guard !AppDelegate.shared.contentViewModel.isStaging else { return }
             withAnimation {
                 AppDelegate.shared.contentViewModel.isStaging = true
             }

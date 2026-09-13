@@ -28,6 +28,7 @@ enum MainSection: String, CaseIterable, Hashable {
 
 final class MainNavigationModel: ObservableObject {
     @Published var selection: MainSection
+    @Published var isMobileDevicesPresented = false
 
     init(selection: MainSection = .installed) {
         self.selection = selection
@@ -79,6 +80,7 @@ struct ContentView: View {
     @ObservedObject private var screenSaverDynamicLockScreenManager = ScreenSaverDynamicLockScreenManager.shared
     @StateObject private var steamSetupViewModel = SteamSetupViewModel()
     @State private var loadedSections: Set<MainSection>
+    @State private var pendingSceneFileExport: WEWallpaper?
 
     init(
         viewModel: ContentViewModel,
@@ -309,6 +311,28 @@ struct ContentView: View {
             FirstLaunchView()
                 .environment(globalSettingsViewModel)
         }
+        .sheet(isPresented: $navigationModel.isMobileDevicesPresented) {
+            MobileDevicesView(viewModel: AppDelegate.shared.mobileDevicesViewModel)
+        }
+        .sheet(item: $viewModel.pendingSceneMobileExport, onDismiss: {
+            guard let wallpaper = pendingSceneFileExport else { return }
+            pendingSceneFileExport = nil
+            DispatchQueue.main.async {
+                viewModel.presentMobileMPKGSavePanel(for: wallpaper)
+            }
+        }) { request in
+            SceneMobileExportOptionsView(request: request) {
+                switch request.destination {
+                case .device(let device):
+                    AppDelegate.shared.mobileDevicesViewModel.send(
+                        wallpaper: request.wallpaper,
+                        to: device
+                    ) { _ in }
+                case .file:
+                    pendingSceneFileExport = request.wallpaper
+                }
+            }
+        }
         .sheet(item: $shortcutManager.recordingWallpaper, onDismiss: {
             shortcutManager.cancelRecording()
         }) { wallpaper in
@@ -332,6 +356,9 @@ struct ContentView: View {
         .overlay(alignment: .bottomTrailing) {
             VideoTranscodeOverlay()
                 .allowsHitTesting(false)
+        }
+        .overlay(alignment: .bottom) {
+            MobileTransferOverlay()
         }
         .environment(\.locale, localization.locale)
         .frame(minWidth: 1100, minHeight: 640)
