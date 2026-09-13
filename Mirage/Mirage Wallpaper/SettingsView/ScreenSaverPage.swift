@@ -103,6 +103,8 @@ struct ScreenSaverPage: SettingsPage {
                 if let registrationErrorMessage = dynamicLockScreenManager.registrationErrorMessage {
                     Text(registrationErrorMessage)
                         .foregroundStyle(.red)
+                }
+                if dynamicLockScreenManager.canRetryConnection {
                     Button(LocalizedStringKey("重试动态锁屏连接")) {
                         dynamicLockScreenManager.retryConnection()
                     }

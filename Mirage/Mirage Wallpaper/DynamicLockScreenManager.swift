@@ -110,7 +110,7 @@ final class DynamicLockScreenManager: ObservableObject {
     @Published private(set) var connectionState = ConnectionState.disabled
 
     enum ConnectionState {
-        case disabled, needsWallpaper, preparing, registered, connected, ready, failed
+        case disabled, needsWallpaper, preparing, awaitingSystemSettings, awaitingSelection, connected, ready, failed
     }
 
     private let enabledKey = "Mirage.DynamicLockScreen.Enabled"
@@ -120,7 +120,9 @@ final class DynamicLockScreenManager: ObservableObject {
     private let registeredExtensionFingerprintKey =
         "Mirage.DynamicLockScreen.RegisteredExtensionFingerprint"
     private let extensionQueue = WallpaperServiceCoordinator.queue
+    private let registrationQueue = DispatchQueue(label: "cn.laobamac.Mirage.dynamicLockScreen.registration", qos: .utility)
     private let extensionRequests = WallpaperExtensionRequest()
+    private var requiresSettingsAcknowledgement = false
     private var activeProbe: (probe: MirageLockProbe, url: URL, fingerprint: String, container: URL)?
     private let configurationUpdates = CoalescingWorkQueue(label: "cn.laobamac.Mirage.dynamicLockScreen.configuration")
     private let statusUpdates = CoalescingWorkQueue(label: "cn.laobamac.Mirage.dynamicLockScreen.status")
@@ -166,10 +168,18 @@ final class DynamicLockScreenManager: ObservableObject {
         case .disabled: return L("动态锁屏已关闭")
         case .needsWallpaper: return L("已启用，请设置锁屏壁纸")
         case .preparing: return L("正在连接动态锁屏")
-        case .registered: return L("已注册，等待系统载入动态锁屏")
+        case .awaitingSystemSettings: return L("请打开系统墙纸设置以载入动态锁屏")
+        case .awaitingSelection: return L("动态锁屏已载入，请在系统墙纸设置中选择 Mirage")
         case .connected: return L("动态锁屏已连接，等待画面就绪")
         case .ready: return L("动态锁屏已就绪")
         case .failed: return L("动态锁屏恢复失败")
+        }
+    }
+
+    var canRetryConnection: Bool {
+        switch connectionState {
+        case .awaitingSystemSettings, .awaitingSelection, .connected, .failed: return true
+        default: return false
         }
     }
 
@@ -232,6 +242,7 @@ final class DynamicLockScreenManager: ObservableObject {
             UserDefaults.standard.set(false, forKey: enabledKey)
             DynamicLockScreenModeStore.deactivate(.extensionMode)
             extensionRequests.cancel()
+            requiresSettingsAcknowledgement = false
             activeProbe = nil
             connectionState = .disabled
             registrationErrorMessage = nil
@@ -694,6 +705,13 @@ final class DynamicLockScreenManager: ObservableObject {
     }
 
     func openSystemSettings() {
+        if canUse, isConfigured {
+            restoreConfigurationAndRegister(requireAcknowledgement: true)
+        }
+        showSystemSettings()
+    }
+
+    private func showSystemSettings() {
         guard let url = URL(string: "x-apple.systempreferences:com.apple.Wallpaper-Settings.extension") else { return }
         NSWorkspace.shared.open(url)
     }
@@ -881,40 +899,45 @@ final class DynamicLockScreenManager: ObservableObject {
         }
     }
 
-    private func registerExtension(forceRestart: Bool = false) {
+    private func registerExtension(forceRestart: Bool = false, forceRegistration: Bool = false,
+                                   requireAcknowledgement: Bool = false) {
         guard canUse, let container = sharedContainerURL else { return }
         let appURL = Bundle.main.bundleURL
         let extensionURL = appURL.appendingPathComponent("Contents/Extensions/MirageWallpaperExtension.appex")
         let requests = extensionRequests
         let requestID = requests.begin()
         let previousFingerprint = UserDefaults.standard.string(forKey: registeredExtensionFingerprintKey)
+        let needsAcknowledgement = requireAcknowledgement || requiresSettingsAcknowledgement
+        requiresSettingsAcknowledgement = needsAcknowledgement
         activeProbe = nil
         connectionState = .preparing
         registrationErrorMessage = nil
-        extensionQueue.async { [weak self] in
+        registrationQueue.async { [weak self] in
             guard requests.isCurrent(requestID) else { return }
             let result = Result {
                 try WallpaperExtensionController.register(
                     appURL: appURL, extensionURL: extensionURL, container: container,
                     previousFingerprint: previousFingerprint, forceRestart: forceRestart,
+                    forceRegistration: forceRegistration, requireAcknowledgement: needsAcknowledgement,
                     isCurrent: { requests.isCurrent(requestID) })
             }
             Task { @MainActor [weak self] in
                 guard let self, self.canUse, requests.isCurrent(requestID) else { return }
+                self.requiresSettingsAcknowledgement = false
                 switch result {
                 case .success(let registration):
                     self.activeProbe = (registration.probe, extensionURL, registration.fingerprint, container)
-                    if let error = registration.errorMessage {
+                    UserDefaults.standard.set(registration.fingerprint, forKey: self.registeredExtensionFingerprintKey)
+                    switch registration.outcome {
+                    case .awaitingSystemSettings:
+                        self.connectionState = .awaitingSystemSettings
+                    case .acknowledged(let report):
+                        self.applyConnectionReport(report, selection: registration.selection)
+                    case .failed(let error):
                         self.connectionState = .failed
                         self.registrationErrorMessage = L("动态锁屏恢复失败，请重试；详细原因已写入日志")
                         MirageLogService.shared.append(error, source: "wallpaper-extension")
-                        self.refreshConnectionStatus()
-                        return
                     }
-                    UserDefaults.standard.set(registration.fingerprint, forKey: self.registeredExtensionFingerprintKey)
-                    self.connectionState = registration.report.map {
-                        $0.readyDisplayIDs.isEmpty ? .connected : .ready
-                    } ?? .registered
                     self.refreshConnectionStatus()
                 case .failure(let error):
                     self.connectionState = .failed
@@ -927,9 +950,20 @@ final class DynamicLockScreenManager: ObservableObject {
 
     func retryConnection() {
         if isEnabled {
-            restoreConfigurationAndRegister(forceRestart: true)
+            restoreConfigurationAndRegister(forceRestart: true, forceRegistration: true, requireAcknowledgement: true)
+            showSystemSettings()
         } else {
             clearConfiguration()
+        }
+    }
+
+    private func applyConnectionReport(_ report: MirageLockReport,
+                                       selection: WallpaperExtensionController.SelectionState) {
+        registrationErrorMessage = nil
+        if selection == .notSelected {
+            connectionState = .awaitingSelection
+        } else {
+            connectionState = report.readyDisplayIDs.isEmpty ? .connected : .ready
         }
     }
 
@@ -939,39 +973,49 @@ final class DynamicLockScreenManager: ObservableObject {
             let reports = WallpaperExtensionController.liveReports(
                 probe: active.probe, extensionURL: active.url,
                 fingerprint: active.fingerprint, container: active.container)
-            let data = try? Data(contentsOf: active.container.appendingPathComponent(MirageLockBridge.configurationName))
-            let digest = data.map(MirageLockBridge.digest)
+            let selection = WallpaperExtensionController.selectionState(
+                identifier: Bundle(url: active.url)?.bundleIdentifier ?? "cn.laobamac.Mirage.WallpaperExtension")
+            let health: (report: MirageLockReport?, errorMessage: String?)
+            do {
+                let data = try Data(contentsOf: active.container.appendingPathComponent(MirageLockBridge.configurationName))
+                health = WallpaperExtensionController.connectionHealth(
+                    reports: reports, configurationDigest: MirageLockBridge.digest(data))
+            } catch {
+                health = (nil, error.localizedDescription)
+            }
             Task { @MainActor [weak self] in
                 guard let self, self.canUse, self.activeProbe?.probe.id == active.probe.id else { return }
-                if let error = reports.compactMap(\.error).first {
+                if let error = health.errorMessage {
                     self.connectionState = .failed
                     self.registrationErrorMessage = L("动态锁屏恢复失败，请重试；详细原因已写入日志")
                     MirageLogService.shared.append(error, source: "wallpaper-extension")
                 } else {
-                    let acknowledged = reports.filter { $0.settingsReady && $0.configurationDigest == digest }
-                    guard !acknowledged.isEmpty else {
-                        if reports.isEmpty, self.registrationErrorMessage == nil { self.connectionState = .registered }
+                    guard let report = health.report else {
+                        if self.registrationErrorMessage == nil { self.connectionState = .awaitingSystemSettings }
                         return
                     }
                     UserDefaults.standard.set(active.fingerprint, forKey: self.registeredExtensionFingerprintKey)
-                    self.registrationErrorMessage = nil
-                    self.connectionState = acknowledged.contains { !$0.readyDisplayIDs.isEmpty } ? .ready : .connected
+                    self.applyConnectionReport(report, selection: selection)
                 }
             }
         }
     }
 
-    private func restoreConfigurationAndRegister(forceRestart: Bool = false) {
+    private func restoreConfigurationAndRegister(forceRestart: Bool = false, forceRegistration: Bool = false,
+                                                  requireAcknowledgement: Bool = false) {
         extensionRequests.cancel()
         activeProbe = nil
         registrationErrorMessage = nil
         do {
             if try activateStoredConfiguration() {
-                registerExtension(forceRestart: forceRestart)
+                registerExtension(forceRestart: forceRestart, forceRegistration: forceRegistration,
+                                  requireAcknowledgement: requireAcknowledgement)
             } else {
+                requiresSettingsAcknowledgement = false
                 connectionState = .needsWallpaper
             }
         } catch {
+            requiresSettingsAcknowledgement = false
             connectionState = .failed
             registrationErrorMessage = L("动态锁屏配置无法读取，请检查文件访问权限或重新设置壁纸")
             MirageLogService.shared.append(error.localizedDescription, source: "wallpaper-extension")

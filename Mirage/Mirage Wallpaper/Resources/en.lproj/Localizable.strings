@@ -967,7 +967,9 @@
 
 "正在连接动态锁屏" = "Connecting to the dynamic lock screen…";
 
-"已注册，等待系统载入动态锁屏" = "Registered. Waiting for macOS to load the dynamic lock screen.";
+"请打开系统墙纸设置以载入动态锁屏" = "Open System Wallpaper Settings to load the dynamic lock screen.";
+
+"动态锁屏已载入，请在系统墙纸设置中选择 Mirage" = "Dynamic lock screen loaded. Select Mirage in System Wallpaper Settings.";
 
 "动态锁屏已连接，等待画面就绪" = "Connected. Waiting for the wallpaper to become ready.";
 
