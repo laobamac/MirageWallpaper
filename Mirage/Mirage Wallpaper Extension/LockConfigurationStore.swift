@@ -62,6 +62,7 @@ struct MirageLockDisplayConfiguration: Codable {
     let fillMode: String
     var position: WallpaperPosition? = nil
     let loadFromMemory: Bool?
+    var renderedPreviewPath: String? = nil
 }
 
 struct MirageLockConfiguration: Codable {

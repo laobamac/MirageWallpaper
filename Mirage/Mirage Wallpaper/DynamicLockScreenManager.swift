@@ -8,6 +8,30 @@ import AppKit
 import CryptoKit
 import Darwin
 import Foundation
+import ImageIO
+
+private final class MiragePreviewCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var action: (() -> Void)?
+    private var cancelled = false
+
+    func install(_ action: @escaping () -> Void) {
+        lock.lock()
+        let shouldCancel = cancelled
+        if !shouldCancel { self.action = action }
+        lock.unlock()
+        if shouldCancel { action() }
+    }
+
+    func cancel() {
+        lock.lock()
+        cancelled = true
+        let action = self.action
+        self.action = nil
+        lock.unlock()
+        action?()
+    }
+}
 
 struct DynamicLockScreenDisplayConfiguration: Codable {
     let displayID: UInt32
@@ -24,6 +48,7 @@ struct DynamicLockScreenDisplayConfiguration: Codable {
     var fillMode: String
     var position: WallpaperPosition? = nil
     var loadFromMemory: Bool?
+    var renderedPreviewPath: String? = nil
 }
 
 struct DynamicLockScreenConfiguration: Codable {
@@ -101,13 +126,16 @@ final class DynamicLockScreenManager: ObservableObject {
     private let statusUpdates = CoalescingWorkQueue(label: "cn.laobamac.Mirage.dynamicLockScreen.status")
     private let configurationLock = NSRecursiveLock()
     private let deploymentQueue = DispatchQueue(label: "cn.laobamac.Mirage.dynamicLockScreen.deployment", qos: .userInitiated)
+    private let previewQueue = DispatchQueue(label: "cn.laobamac.Mirage.dynamicLockScreen.preview", qos: .utility)
     private var configurationRequestID: UUID?
+    private var previewTask: Task<Void, Never>?
 
     struct DisplaySnapshot {
         let displayID: UInt32
         let fallbackSource: URL?
         let systemFallbackSource: URL?
         let position: WallpaperPosition
+        var renderedPreviewSource: URL? = nil
     }
 
     struct PreparedConfiguration {
@@ -233,6 +261,10 @@ final class DynamicLockScreenManager: ObservableObject {
                                    fps: Int,
                                    displayIDs: [UInt32]) async throws {
         guard canUse else { throw DynamicLockScreenError.notEnabled }
+        guard wallpaper.isValid else { throw DynamicLockScreenError.noWallpaper }
+        guard wallpaper.kind == .video || wallpaper.kind == .scene else {
+            throw DynamicLockScreenError.unsupportedWallpaper
+        }
         guard let container = sharedContainerURL else { throw DynamicLockScreenError.appGroupUnavailable }
         let positions = AppDelegate.shared.wallpaperViewModel.positions(for: wallpaper.id)
         let displays = Array(Set(displayIDs)).map { displayID in
@@ -285,6 +317,103 @@ final class DynamicLockScreenManager: ObservableObject {
         cleanupDeployments(except: prepared.root)
         cleanupDesktopFallbacks()
         registerExtension()
+        startPreviewUpdate(for: wallpaper, runtime: runtime, properties: properties, fps: fps,
+                           displays: displays, loadFromMemory: loadFromMemory,
+                           deployment: prepared.root, configurationURL: container.appendingPathComponent(configurationName))
+    }
+
+    private func startPreviewUpdate(for wallpaper: WEWallpaper, runtime: WallpaperRuntimeState,
+                                    properties: [String: WEProjectProperty], fps: Int,
+                                    displays: [DisplaySnapshot], loadFromMemory: Bool,
+                                    deployment: URL, configurationURL: URL) {
+        previewTask?.cancel()
+        previewTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let directory = FileManager.default.temporaryDirectory
+                .appendingPathComponent("mirage-lock-preview-\(UUID().uuidString)", isDirectory: true)
+            defer { previewQueue.async { try? FileManager.default.removeItem(at: directory) } }
+            let captured = await capturePreviews(for: wallpaper, runtime: runtime, properties: properties,
+                                                 fps: fps, displays: displays, loadFromMemory: loadFromMemory,
+                                                 directory: directory)
+            guard !Task.isCancelled else { return }
+            let lock = configurationLock
+            let updated = await withCheckedContinuation { continuation in
+                previewQueue.async {
+                    let images = captured.compactMap { display -> (DisplaySnapshot, Data)? in
+                        guard let source = display.renderedPreviewSource,
+                              let data = Self.renderedPreviewData(source: source) else { return nil }
+                        return (display, data)
+                    }
+                    lock.lock()
+                    defer { lock.unlock() }
+                    continuation.resume(returning: Self.publishPreviews(images, deployment: deployment,
+                        configurationURL: configurationURL, wallpaperID: wallpaper.id, fillMode: runtime.fillMode))
+                }
+            }
+            if updated { MirageLockBridge.post(MirageLockBridge.previewNotification) }
+        }
+    }
+
+    nonisolated static func publishPreviews(_ images: [(DisplaySnapshot, Data)], deployment: URL,
+                                            configurationURL: URL, wallpaperID: String, fillMode: FillMode) -> Bool {
+        guard let data = try? Data(contentsOf: configurationURL),
+              let configuration = try? JSONDecoder().decode(DynamicLockScreenConfiguration.self, from: data),
+              configuration.enabled != false else { return false }
+        var updated = false
+        for (snapshot, image) in images {
+            let url = renderedPreviewURL(displayID: snapshot.displayID, in: deployment)
+            guard let display = configuration.displays["display-\(snapshot.displayID)"],
+                  display.wallpaperID == wallpaperID, display.fillMode == fillMode.rawValue,
+                  (display.position ?? .center) == snapshot.position,
+                  display.renderedPreviewPath == url.path,
+                  URL(fileURLWithPath: display.renderDirectory).deletingLastPathComponent().standardizedFileURL
+                    == deployment.standardizedFileURL else { continue }
+            if (try? image.write(to: url, options: .atomic)) != nil { updated = true }
+        }
+        return updated
+    }
+
+    private func capturePreviews(for wallpaper: WEWallpaper, runtime: WallpaperRuntimeState,
+                                 properties: [String: WEProjectProperty], fps: Int,
+                                 displays: [DisplaySnapshot], loadFromMemory: Bool,
+                                 directory: URL) async -> [DisplaySnapshot] {
+        guard (try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)) != nil else {
+            return displays
+        }
+        let renderer = AppDelegate.shared.wallpaperViewModel.renderer
+        return await withTaskGroup(of: DisplaySnapshot.self) { group in
+            for display in displays {
+                group.addTask { @MainActor in
+                    var result = display
+                    guard !Task.isCancelled else { return result }
+                    let url = directory.appendingPathComponent("display-\(display.displayID).heic")
+                    var options = RenderOptions()
+                    options.fps = min(max(fps, 10), 60)
+                    options.muted = true
+                    options.fillMode = runtime.fillMode
+                    options.position = display.position
+                    options.loadFromMemory = loadFromMemory
+                    options.userProperties = properties
+                    let cancellation = MiragePreviewCancellation()
+                    let captured = await withTaskCancellationHandler {
+                        await withCheckedContinuation { continuation in
+                            let token = renderer.snapshot(wallpaper: wallpaper, onDisplay: display.displayID,
+                                                          options: options, path: url.path) {
+                                continuation.resume(returning: $0)
+                            }
+                            cancellation.install { renderer.cancelPreview(token) }
+                        }
+                    } onCancel: {
+                        cancellation.cancel()
+                    }
+                    if captured { result.renderedPreviewSource = url }
+                    return result
+                }
+            }
+            var results: [DisplaySnapshot] = []
+            for await result in group { results.append(result) }
+            return results
+        }
     }
 
     private func commitConfiguration(_ prepared: PreparedConfiguration, in container: URL) throws {
@@ -370,6 +499,10 @@ final class DynamicLockScreenManager: ObservableObject {
             enabled: true,
             displays: Dictionary(uniqueKeysWithValues: displays.map { display in
                 let displayID = display.displayID
+                let previewURL = renderedPreviewURL(displayID: displayID, in: deployment.root)
+                if let source = display.renderedPreviewSource, let data = renderedPreviewData(source: source) {
+                    try? data.write(to: previewURL, options: .atomic)
+                }
                 let fallbackSource = display.fallbackSource
                 let fallbackURL = fallbackSource.flatMap {
                     try? deployDesktopFallback(source: $0, displayID: displayID, in: container,
@@ -393,14 +526,15 @@ final class DynamicLockScreenManager: ObservableObject {
                     kind: wallpaper.kind.rawValue,
                     renderDirectory: deployedPath(deployment.renderDirectory.path),
                     entryPath: deployedPath(deployment.entryURL.path),
-                    previewPath: deployment.previewURL.map { deployedPath($0.path) },
+                    previewPath: deployedPath(previewURL.path),
                     desktopFallbackPath: fallbackURL.map { deployedPath($0.path) },
                     systemFallbackPath: systemFallbackURL.map { deployedPath($0.path) },
                     rawProperties: rawPropertyValues.mapValues(AnyCodableValue.init),
                     fps: min(max(fps, 10), 60),
                     fillMode: runtime.fillMode.rawValue,
                     position: display.position,
-                    loadFromMemory: loadFromMemory
+                    loadFromMemory: loadFromMemory,
+                    renderedPreviewPath: deployedPath(previewURL.path)
                 )
                 return ("display-\(displayID)", record)
             })
@@ -536,6 +670,8 @@ final class DynamicLockScreenManager: ObservableObject {
     }
 
     func clearConfiguration() {
+        previewTask?.cancel()
+        previewTask = nil
         configurationRequestID = nil
         registrationErrorMessage = nil
         if !isEnabled { connectionState = .disabled }
@@ -584,7 +720,7 @@ final class DynamicLockScreenManager: ObservableObject {
         return FileManager.default.fileExists(atPath: cache.path) ? cache : source
     }
 
-    private nonisolated static func deploy(wallpaper: WEWallpaper, in container: URL) throws -> (root: URL, renderDirectory: URL, entryURL: URL, previewURL: URL?) {
+    private nonisolated static func deploy(wallpaper: WEWallpaper, in container: URL) throws -> (root: URL, renderDirectory: URL, entryURL: URL) {
         let deployments = container.appendingPathComponent("DynamicLockScreen/Staging", isDirectory: true)
         let root = deployments.appendingPathComponent(UUID().uuidString.lowercased(), isDirectory: true)
         do {
@@ -617,8 +753,7 @@ final class DynamicLockScreenManager: ObservableObject {
                 entryURL = renderDirectory.appendingPathComponent(source.lastPathComponent)
                 try linkOrCopy(source, to: entryURL)
             }
-            let previewURL = try deployPreview(for: wallpaper, in: root)
-            return (root, renderDirectory, entryURL, previewURL)
+            return (root, renderDirectory, entryURL)
         } catch {
             try? FileManager.default.removeItem(at: root)
             throw error
@@ -638,15 +773,23 @@ final class DynamicLockScreenManager: ObservableObject {
         return destination.path
     }
 
-    private nonisolated static func deployPreview(for wallpaper: WEWallpaper, in root: URL) throws -> URL? {
-        let source = wallpaper.previewURL.resolvingSymlinksInPath()
-        guard !source.hasDirectoryPath, FileManager.default.fileExists(atPath: source.path) else { return nil }
-        let extensionName = source.pathExtension.isEmpty ? "jpg" : source.pathExtension
-        let destination = root.appendingPathComponent("preview.\(extensionName)")
-        if !FileManager.default.fileExists(atPath: destination.path) {
-            try linkOrCopy(source, to: destination)
-        }
-        return destination
+    private nonisolated static func renderedPreviewURL(displayID: UInt32, in root: URL) -> URL {
+        root.appendingPathComponent("rendered-preview-\(displayID).png")
+    }
+
+    private nonisolated static func renderedPreviewData(source url: URL) -> Data? {
+        guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true,
+              let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceThumbnailMaxPixelSize: 4096
+              ] as CFDictionary) else { return nil }
+        let data = NSMutableData()
+        guard let encoder = CGImageDestinationCreateWithData(data, "public.png" as CFString, 1, nil) else { return nil }
+        CGImageDestinationAddImage(encoder, image, nil)
+        guard CGImageDestinationFinalize(encoder) else { return nil }
+        return data as Data
     }
 
     private nonisolated static func deployDesktopFallback(source: URL, displayID: UInt32, in container: URL, directory: URL? = nil) throws -> URL {

@@ -19,6 +19,7 @@ enum MirageLockBridge {
     static let probeNotification = notificationPrefix + ".probe"
     static let statusNotification = notificationPrefix + ".status"
     static let configurationNotification = notificationPrefix + ".configurationChanged"
+    static let previewNotification = notificationPrefix + ".previewChanged"
     static let desktopFallbackNotification = notificationPrefix + ".desktopFallbackChanged"
     static let lockedNotification = notificationPrefix + ".locked"
     static let unlockedNotification = notificationPrefix + ".unlocked"
