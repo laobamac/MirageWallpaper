@@ -9,6 +9,118 @@ import Observation
 import CoreGraphics
 import Combine
 
+// Persistent stops require a unique UUID. Positional and framebuffer keys only
+// identify a display within the current connection, so bind those stops to its ID.
+struct ManualDisplayStopState {
+    private var persistent: Set<DisplayKey>
+    private var stoppedIDs: Set<CGDirectDisplayID> = []
+    private var knownUUIDs: [CGDirectDisplayID: UUID] = [:]
+    private var connected: [DisplayInfo]
+    // Startup-only evidence: rejecting an ambiguous stop must also reject its
+    // stale assignments, without marking either collision member as stopped.
+    private let invalidatedSavedUUIDs: Set<UUID>
+    var hasInvalidatedSavedStops: Bool { !invalidatedSavedUUIDs.isEmpty }
+
+    func invalidatesRestoredAssignment(_ key: DisplayKey) -> Bool {
+        Self.uuid(key).map { invalidatedSavedUUIDs.contains($0) } ?? false
+    }
+
+    init(saved: [String] = [], connected: [DisplayInfo] = []) {
+        self.connected = connected
+        invalidatedSavedUUIDs = Set(saved.map(DisplayKey.init(rawValue:)).compactMap(Self.uuid))
+            .filter { identity in connected.filter { Self.uuid($0.key) == identity }.count > 1 }
+        persistent = Set(saved.map(DisplayKey.init(rawValue:)))
+            .filter { Self.canPersist($0, connected: connected) }
+        stoppedIDs = Set(connected.filter { persistent.contains($0.key) }.map(\.displayID))
+        knownUUIDs = Dictionary(uniqueKeysWithValues: connected.compactMap { info in
+            Self.uuid(info.key).map { (info.displayID, $0) }
+        })
+    }
+
+    var keys: Set<DisplayKey> {
+        persistent.union(connected.filter { stoppedIDs.contains($0.displayID) }.map(\.key))
+    }
+
+    var saved: [String] { persistent.map(\.rawValue).sorted() }
+
+    mutating func stop(_ key: DisplayKey) {
+        if Self.canPersist(key, connected: connected) { persistent.insert(key) }
+        stoppedIDs.formUnion(connected.filter { $0.key == key }.map(\.displayID))
+    }
+
+    mutating func resume(_ key: DisplayKey) {
+        let ids = connected.filter { $0.key == key }.map(\.displayID)
+        let identities = Set(ids.compactMap { knownUUIDs[$0] })
+        // A resumed display may temporarily have lost its UUID-derived key.
+        // Clear the durable marker for its known identity as well.
+        persistent = persistent.filter { candidate in
+            candidate != key && !(Self.uuid(candidate).map { identities.contains($0) } ?? false)
+        }
+        stoppedIDs.subtract(ids)
+    }
+
+    struct KeyChange {
+        let previous: DisplayKey
+        let current: DisplayKey
+        let displayID: CGDirectDisplayID
+        let stateKey: DisplayKey?
+        var preservesIdentity: Bool { stateKey == current }
+    }
+
+    @discardableResult
+    mutating func reconcile(_ next: [DisplayInfo]) -> [KeyChange] {
+        let previous = Dictionary(uniqueKeysWithValues: connected.map { ($0.displayID, $0.key) })
+        let current = Dictionary(uniqueKeysWithValues: next.map { ($0.displayID, $0.key) })
+        let previousUUIDs = knownUUIDs
+        func sameConnection(_ id: CGDirectDisplayID, _ key: DisplayKey) -> Bool {
+            if let oldUUID = previousUUIDs[id], let newUUID = Self.uuid(key) { return oldUUID == newUUID }
+            return true
+        }
+        // An observed disconnect ends a temporary binding. Also reject a reused
+        // ID when both snapshots provide UUIDs that identify different displays.
+        stoppedIDs = stoppedIDs.filter { id in
+            guard previous[id] != nil, let new = current[id] else { return false }
+            return sameConnection(id, new)
+        }
+        let changes = next.compactMap { info -> KeyChange? in
+            guard let old = previous[info.displayID], old != info.key else { return nil }
+            // A reused ID still requires old renderer/request cleanup, but must
+            // not transfer the previous display's wallpaper to its replacement.
+            let stateKey: DisplayKey?
+            if sameConnection(info.displayID, info.key) {
+                stateKey = info.key
+            } else {
+                // The old UUID may still be connected under a different ID.
+                // Retain its own assignment without transferring it by ID.
+                stateKey = Self.canPersist(old, connected: next) && next.contains { $0.key == old } ? old : nil
+            }
+            return KeyChange(previous: old, current: info.key, displayID: info.displayID,
+                             stateKey: stateKey)
+        }
+        // A UUID collision invalidates the whole group, including its first,
+        // unsuffixed member. Preserve only known continuous session bindings.
+        persistent = persistent.filter { Self.canPersist($0, connected: next) }
+        knownUUIDs = Dictionary(uniqueKeysWithValues: next.compactMap { info in
+            let identity = Self.uuid(info.key) ?? (previous[info.displayID] != nil ? previousUUIDs[info.displayID] : nil)
+            return identity.map { (info.displayID, $0) }
+        })
+        connected = next
+        stoppedIDs.formUnion(next.filter { persistent.contains($0.key) }.map(\.displayID))
+        return changes
+    }
+
+    private static func uuid(_ key: DisplayKey) -> UUID? {
+        guard key.rawValue.hasPrefix("uuid:") else { return nil }
+        let base = key.rawValue.split(separator: "#", maxSplits: 1)[0]
+        return UUID(uuidString: String(base.dropFirst(5)))
+    }
+
+    private static func canPersist(_ key: DisplayKey, connected: [DisplayInfo]) -> Bool {
+        guard !key.rawValue.contains("#"), let identity = uuid(key) else { return false }
+        return connected.filter { uuid($0.key) == identity }.count <= 1
+    }
+}
+
 struct WallpaperRuntimeState: Codable, Equatable {
     var volume: Float = 1.0
     var speed: Float = 1.0
@@ -94,6 +206,10 @@ class WallpaperViewModel: PlaylistPlayback {
     }
 
     private static let assignmentsDefaultsKey = "DisplayAssignments"
+    private static let stoppedDisplaysDefaultsKey = "ManuallyStoppedDisplays"
+    @ObservationIgnored private let stoppedDisplayDefaults: UserDefaults?
+    private var manualStops = ManualDisplayStopState()
+    var manuallyStoppedDisplays: Set<DisplayKey> { manualStops.keys }
     private static let selectedDisplayDefaultsKey = "SelectedDisplay"
     private static let legacyWallpaperDefaultsKey = "CurrentWallpaper"
     private static let runtimeKeyPrefix = "Runtime_"
@@ -161,23 +277,32 @@ class WallpaperViewModel: PlaylistPlayback {
                         ?? URL(fileURLWithPath: "/dev/null"))
     }
 
-    init(initialStates: [DisplayKey: DisplayWallpaperState]? = nil) {
+    init(initialStates: [DisplayKey: DisplayWallpaperState]? = nil,
+         stoppedDisplayDefaults: UserDefaults? = nil,
+         connectedDisplays: [DisplayInfo]? = nil) {
         persistsChanges = initialStates == nil
+        let stopDefaults = stoppedDisplayDefaults ?? (initialStates == nil ? .standard : nil)
+        self.stoppedDisplayDefaults = stopDefaults
         let registry = DisplayRegistry.shared
+        let savedStops = stopDefaults?.stringArray(forKey: Self.stoppedDisplaysDefaultsKey) ?? []
+        let connected = connectedDisplays ?? registry.connected
+        let mainKey = connected.first(where: \.isMain)?.key ?? connected.first?.key
+        let stops = ManualDisplayStopState(saved: savedStops, connected: connected)
+        manualStops = stops
         let stored = UserDefaults.standard.string(forKey: Self.selectedDisplayDefaultsKey)
             .map(DisplayKey.init(rawValue:))
-        let connectedKeys = registry.connectedKeys
+        let connectedKeys = Set(connected.map(\.key))
         if let first = initialStates?.keys.sorted(by: { $0.rawValue < $1.rawValue }).first {
             selectedDisplayKey = first
         } else if let stored, connectedKeys.contains(stored) {
             selectedDisplayKey = stored
         } else {
-            selectedDisplayKey = registry.mainKey ?? DisplayKey(rawValue: "idx:0")
+            selectedDisplayKey = mainKey ?? DisplayKey(rawValue: "idx:0")
         }
 
         var loaded = initialStates ?? Self.loadPersistedStates()
         if initialStates == nil, loaded.isEmpty, let migrated = Self.loadLegacyState(),
-           let mainKey = registry.mainKey {
+           let mainKey {
             loaded[mainKey] = migrated
         }
         if initialStates == nil && Self.repairRuntimesZeroedByLegacyPause() {
@@ -188,6 +313,10 @@ class WallpaperViewModel: PlaylistPlayback {
                 guard repaired != state else { continue }
                 loaded[key] = repaired
             }
+        }
+        // A manual stop wins over an older assignment or legacy migration.
+        loaded = loaded.filter {
+            !manuallyStoppedDisplays.contains($0.key) && !stops.invalidatesRestoredAssignment($0.key)
         }
         displayStates = loaded
         refreshSelectedState()
@@ -202,7 +331,35 @@ class WallpaperViewModel: PlaylistPlayback {
         NotificationCenter.default.addObserver(
             self, selector: #selector(displayTopologyChanged),
             name: NSApplication.didChangeScreenParametersNotification, object: nil)
-        persistStates()
+        if persistsChanges && stops.hasInvalidatedSavedStops {
+            // Finish startup cleanup before deleting its evidence. Otherwise a
+            // second initialization can reload the old assignment without a stop.
+            if Self.persistStartupCleanup(loaded, mainKey: mainKey) {
+                persistStoppedDisplays()
+            }
+        } else {
+            persistStates()
+        }
+    }
+
+    private static func persistStartupCleanup(_ states: [DisplayKey: DisplayWallpaperState],
+                                              mainKey: DisplayKey?) -> Bool {
+        do {
+            let encoder = JSONEncoder()
+            let raw = Dictionary(uniqueKeysWithValues: states.map { ($0.key.rawValue, $0.value) })
+            let data = try encoder.encode(raw)
+            let legacy = try mainKey.flatMap { states[$0] }.map { try encoder.encode($0.wallpaper) }
+            UserDefaults.standard.set(data, forKey: assignmentsDefaultsKey)
+            if let legacy {
+                UserDefaults.standard.set(legacy, forKey: legacyWallpaperDefaultsKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: legacyWallpaperDefaultsKey)
+            }
+            return true
+        } catch {
+            // Retain the original stop marker if serialization fails.
+            return false
+        }
     }
 
     deinit {
@@ -498,6 +655,11 @@ class WallpaperViewModel: PlaylistPlayback {
 
     func assign(_ wallpaper: WEWallpaper, to key: DisplayKey, restoreFocus: Bool = false,
                 preservingPlaybackState: Bool = false, completion: ((Bool) -> Void)? = nil) {
+        // Playlist work can finish preparing after the user stops this display.
+        guard !preservingPlaybackState || !manuallyStoppedDisplays.contains(key) else {
+            completion?(false)
+            return
+        }
         if !preservingPlaybackState { wallpaperChangeRequests.send(key) }
         let completion = completion.map(AssignmentCompletion.init)
         pendingPreparations[key] = nil
@@ -637,6 +799,7 @@ class WallpaperViewModel: PlaylistPlayback {
             cancelRuntimeSave(for: key)
             persistRuntime(previous.runtime, for: previous.wallpaper, on: key)
         }
+        manualStops.resume(key)
         displayStates[key] = state
         cancelFailedAssignmentRecovery(for: key)
         committedAssignmentIDs[key] = assignmentID
@@ -688,7 +851,7 @@ class WallpaperViewModel: PlaylistPlayback {
         applyToAllDisplays(state.wallpaper, restoreFocus: true)
     }
 
-    func clear(_ key: DisplayKey) {
+    func clear(_ key: DisplayKey, displayID targetDisplayID: CGDirectDisplayID? = nil) {
         previewSelections[key] = nil
         wallpaperChangeRequests.send(key)
         pendingPreparations[key] = nil
@@ -707,7 +870,7 @@ class WallpaperViewModel: PlaylistPlayback {
         if let index = DisplayRegistry.shared.screenIndex(for: key) {
             currentByScreen[index] = nil
         }
-        if let displayID = DisplayRegistry.shared.displayID(for: key) {
+        if let displayID = targetDisplayID ?? DisplayRegistry.shared.displayID(for: key) {
             pendingScreenAssignments[displayID] = nil
             pendingAssignmentProposals[displayID] = nil
             renderer.stop(displayID: displayID)
@@ -716,10 +879,14 @@ class WallpaperViewModel: PlaylistPlayback {
     }
 
     func stopWallpaper() {
+        manualStops.stop(selectedDisplayKey)
         clear(selectedDisplayKey)
     }
 
     func stopAllWallpapers() {
+        for key in Set(displayStates.keys).union(DisplayRegistry.shared.connectedKeys) {
+            manualStops.stop(key)
+        }
         previewSelections.removeAll()
         for info in DisplayRegistry.shared.connected { wallpaperChangeRequests.send(info.key) }
         pendingPreparations.removeAll()
@@ -948,7 +1115,33 @@ class WallpaperViewModel: PlaylistPlayback {
 
     @objc private func displayTopologyChanged() {
         DisplayRegistry.shared.invalidate()
-        let connected = DisplayRegistry.shared.connected
+        reconcileDisplays(DisplayRegistry.shared.connected)
+    }
+
+    func reconcileDisplays(_ connected: [DisplayInfo]) {
+        let keyChanges = manualStops.reconcile(connected)
+        if !keyChanges.isEmpty {
+            // Capture all states before clearing any key: positional keys can
+            // swap. Cancel old-key work before restoring the same display's state.
+            let previousStates = displayStates
+            for change in keyChanges {
+                clear(change.previous, displayID: change.displayID)
+            }
+            let clearedKeys = Set(keyChanges.map(\.previous))
+            for change in keyChanges where change.preservesIdentity && !clearedKeys.contains(change.current) {
+                // A vacated destination may still hold a disconnected display's
+                // state, even when there is no source state to move into it.
+                clear(change.current, displayID: change.displayID)
+            }
+            for change in keyChanges {
+                guard let key = change.stateKey, !manuallyStoppedDisplays.contains(key),
+                      let state = previousStates[change.previous] else { continue }
+                displayStates[key] = state
+                committedAssignmentIDs[key] = UUID()
+            }
+            persistStates()
+        }
+        persistStoppedDisplays()
         let connectedIDs = Set(connected.map(\.displayID))
         let connectedKeys = Set(connected.map(\.key))
 
@@ -972,10 +1165,12 @@ class WallpaperViewModel: PlaylistPlayback {
                 ?? connected.first?.key ?? selectedDisplayKey
         }
 
-        let inherited = DisplayRegistry.shared.mainKey.flatMap { displayStates[$0] }
-            ?? displayStates[selectedDisplayKey]
+        let inherited = connected.first(where: \.isMain).flatMap { displayStates[$0.key] }
+            ?? (connectedKeys.contains(selectedDisplayKey) ? displayStates[selectedDisplayKey] : nil)
+            ?? connected.lazy.compactMap { self.displayStates[$0.key] }.first
         var seeded = false
         for info in connected {
+            if manuallyStoppedDisplays.contains(info.key) { continue }
             if hasPendingAssignment(on: info.displayID, for: info.key) { continue }
             if displayStates[info.key] == nil, let inherited {
                 if currentPlaybackPolicy(for: info.key) == .stop {
@@ -1198,7 +1393,14 @@ class WallpaperViewModel: PlaylistPlayback {
         runtimeSaveWorkItems[key] = nil
     }
 
+    private func persistStoppedDisplays() {
+        guard let defaults = stoppedDisplayDefaults, defaults.stringArray(
+            forKey: Self.stoppedDisplaysDefaultsKey) != manualStops.saved else { return }
+        defaults.set(manualStops.saved, forKey: Self.stoppedDisplaysDefaultsKey)
+    }
+
     private func persistStates() {
+        persistStoppedDisplays()
         guard persistsChanges else { return }
         statesSaveWorkItem?.cancel()
         statesSaveWorkItem = nil
@@ -1649,7 +1851,8 @@ class WallpaperViewModel: PlaylistPlayback {
     }
 
     func allowsPlaylistAdvance(on key: DisplayKey, manually: Bool, updateOnPause: Bool) -> Bool {
-        guard DisplayRegistry.shared.info(for: key) != nil else { return false }
+        guard !manuallyStoppedDisplays.contains(key),
+              DisplayRegistry.shared.info(for: key) != nil else { return false }
         let policy = currentPlaybackPolicy(for: key)
         guard policy != .stop else { return false }
         return manually || updateOnPause || !isPaused(runtime(for: key), action: policy)
@@ -1701,6 +1904,7 @@ class WallpaperViewModel: PlaylistPlayback {
             cancelRuntimeSave(for: proposal.key)
             persistRuntime(previous.runtime, for: previous.wallpaper, on: key)
         }
+        manualStops.resume(proposal.key)
         displayStates[proposal.key] = committed
         committedAssignmentIDs[proposal.key] = proposal.id
         finishPreview(for: proposal.key, id: proposal.id)
