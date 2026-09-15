@@ -112,13 +112,11 @@ struct WorkshopFilterSidebar: View {
                             HStack {
                                 Button("全选") {
                                     workshopViewModel.selectedTags = Set(WorkshopTag.allCases.map { $0.rawValue })
-                                    workshopViewModel.currentPage = 1
-                                    workshopViewModel.search()
+                                    workshopViewModel.search(page: 1)
                                 }
                                 Button("清空") {
                                     workshopViewModel.selectedTags.removeAll()
-                                    workshopViewModel.currentPage = 1
-                                    workshopViewModel.search()
+                                    workshopViewModel.search(page: 1)
                                 }
                             }
                             .buttonStyle(.link)

@@ -42,8 +42,7 @@ struct WorkshopTagBar: View {
                 if !workshopViewModel.selectedTags.isEmpty {
                     Button {
                         workshopViewModel.selectedTags.removeAll()
-                        workshopViewModel.currentPage = 1
-                        workshopViewModel.search()
+                        workshopViewModel.search(page: 1)
                     } label: {
                         HStack(spacing: 4) {
                             Image(systemName: "xmark")

@@ -4,27 +4,39 @@ import AppKit
 struct PageNavigator: View {
     let currentPage: Int
     let pageCount: Int
+    let isLoading: Bool
+    let requestedPage: Int?
     let onSelect: (Int) -> Void
 
     @State private var pageText: String
     @FocusState private var isPageFieldFocused: Bool
 
-    init(currentPage: Int, pageCount: Int, onSelect: @escaping (Int) -> Void) {
+    init(currentPage: Int, pageCount: Int, isLoading: Bool = false, requestedPage: Int? = nil,
+         onSelect: @escaping (Int) -> Void) {
         self.currentPage = currentPage
         self.pageCount = max(1, pageCount)
+        self.isLoading = isLoading
+        self.requestedPage = requestedPage
         self.onSelect = onSelect
-        _pageText = State(initialValue: String(currentPage))
+        _pageText = State(initialValue: String(requestedPage ?? currentPage))
     }
 
     var body: some View {
         HStack(spacing: 6) {
+            if isLoading {
+                ProgressView()
+                    .controlSize(.small)
+                    .help(Text(L("正在加载第 %d 页…", navigationPage)))
+                    .accessibilityLabel(Text(L("正在加载第 %d 页…", navigationPage)))
+            }
+
             Button {
-                select(currentPage - 1)
+                select(navigationPage - 1)
             } label: {
                 Image(systemName: "chevron.left")
                     .frame(width: 18, height: 18)
             }
-            .disabled(currentPage <= 1)
+            .disabled(navigationPage <= 1)
             .help("上一页")
 
             ForEach(Array(pageItems.enumerated()), id: \.offset) { _, item in
@@ -33,11 +45,11 @@ struct PageNavigator: View {
                         select(page)
                     } label: {
                         Text("\(page)")
-                            .font(.callout.weight(page == currentPage ? .semibold : .regular))
-                            .foregroundStyle(page == currentPage ? Color.white : Color.primary)
+                            .font(.callout.weight(page == navigationPage ? .semibold : .regular))
+                            .foregroundStyle(page == navigationPage ? Color.white : Color.primary)
                             .frame(minWidth: 30, minHeight: 30)
                             .background(
-                                page == currentPage ? Color.accentColor : Color.clear,
+                                page == navigationPage ? Color.accentColor : Color.clear,
                                 in: RoundedRectangle(cornerRadius: 6, style: .continuous)
                             )
                             .contentShape(Rectangle())
@@ -52,12 +64,12 @@ struct PageNavigator: View {
             }
 
             Button {
-                select(currentPage + 1)
+                select(navigationPage + 1)
             } label: {
                 Image(systemName: "chevron.right")
                     .frame(width: 18, height: 18)
             }
-            .disabled(currentPage >= pageCount)
+            .disabled(navigationPage >= pageCount)
             .help("下一页")
 
             Divider()
@@ -88,11 +100,14 @@ struct PageNavigator: View {
             in: RoundedRectangle(cornerRadius: 8, style: .continuous),
             fallback: AnyShapeStyle(.regularMaterial)
         )
-        .onChange(of: currentPage) { _, value in
+        .onChange(of: navigationPage) { _, value in
             pageText = String(value)
         }
+        .onChange(of: isLoading) { _, _ in
+            pageText = String(navigationPage)
+        }
         .onChange(of: pageCount) { _, _ in
-            pageText = String(min(max(currentPage, 1), pageCount))
+            pageText = String(min(max(navigationPage, 1), pageCount))
         }
         .onChange(of: isPageFieldFocused) { _, focused in
             if !focused {
@@ -101,22 +116,24 @@ struct PageNavigator: View {
         }
     }
 
+    private var navigationPage: Int { requestedPage ?? currentPage }
+
     private var pageItems: [Int?] {
         guard pageCount > 7 else {
             return Array(1...pageCount).map(Optional.some)
         }
-        if currentPage <= 4 {
+        if navigationPage <= 4 {
             return [1, 2, 3, 4, 5, nil, pageCount]
         }
-        if currentPage >= pageCount - 3 {
+        if navigationPage >= pageCount - 3 {
             return [1, nil, pageCount - 4, pageCount - 3, pageCount - 2, pageCount - 1, pageCount]
         }
-        return [1, nil, currentPage - 1, currentPage, currentPage + 1, nil, pageCount]
+        return [1, nil, navigationPage - 1, navigationPage, navigationPage + 1, nil, pageCount]
     }
 
     private func submitPage() {
         guard let page = Int(pageText) else {
-            pageText = String(currentPage)
+            pageText = String(navigationPage)
             return
         }
         select(page)

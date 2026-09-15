@@ -22,8 +22,7 @@ struct WorkshopSearchBar: View {
                 if !workshopViewModel.searchText.isEmpty {
                     Button {
                         workshopViewModel.searchText = ""
-                        workshopViewModel.currentPage = 1
-                        workshopViewModel.search()
+                        workshopViewModel.search(page: 1)
                     } label: {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundStyle(.secondary)

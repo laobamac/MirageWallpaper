@@ -22,9 +22,7 @@ struct GeneralPage: SettingsPage {
     }
 
     private func applyEndpointChange() {
-        AppDelegate.shared.workshopViewModel.items = []
-        AppDelegate.shared.workshopViewModel.currentPage = 1
-        AppDelegate.shared.workshopViewModel.search()
+        AppDelegate.shared.workshopViewModel.search(page: 1)
     }
 
     private func refreshLibrarySources() {

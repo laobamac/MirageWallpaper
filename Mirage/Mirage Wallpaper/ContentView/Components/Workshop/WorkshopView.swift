@@ -83,6 +83,13 @@ struct WorkshopView: View {
                 steamSetupBanner
             }
 
+            if workshopViewModel.isLoadingNewSearch {
+                Text("正在加载新结果，暂时显示上次结果。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
             if let message = workshopViewModel.pageNavigationMessage {
                 HStack(spacing: 8) {
                     Image(systemName: "exclamationmark.triangle.fill")
@@ -90,6 +97,7 @@ struct WorkshopView: View {
                     Text(message)
                         .font(.caption)
                     Spacer()
+                    Button("重试") { workshopViewModel.retrySearch() }
                     Button {
                         workshopViewModel.pageNavigationMessage = nil
                     } label: {
@@ -117,6 +125,8 @@ struct WorkshopView: View {
                         PageNavigator(
                             currentPage: workshopViewModel.currentPage,
                             pageCount: workshopViewModel.totalPages,
+                            isLoading: workshopViewModel.isLoading,
+                            requestedPage: workshopViewModel.requestedPage,
                             onSelect: workshopViewModel.goToPage
                         )
                         .padding(.bottom, 12)
@@ -136,7 +146,7 @@ struct WorkshopView: View {
                             Text(error)
                                 .font(.caption)
                                 .foregroundStyle(.red)
-                            Button("重试") { workshopViewModel.search() }
+                            Button("重试") { workshopViewModel.retrySearch() }
                                 .buttonStyle(.borderedProminent)
                         } else {
                             Text("没有找到壁纸")
@@ -153,6 +163,8 @@ struct WorkshopView: View {
                         PageNavigator(
                             currentPage: workshopViewModel.currentPage,
                             pageCount: workshopViewModel.totalPages,
+                            isLoading: workshopViewModel.isLoading,
+                            requestedPage: workshopViewModel.requestedPage,
                             onSelect: workshopViewModel.goToPage
                         )
                         .padding(.bottom, 12)
@@ -160,88 +172,81 @@ struct WorkshopView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ScrollViewReader { proxy in
-                    ZStack(alignment: .bottom) {
-                        ScrollView {
-                            Color.clear
-                                .frame(height: 0)
-                                .id("workshopTop")
+                ZStack(alignment: .bottom) {
+                    ScrollView {
+                        LazyVGrid(
+                            columns: [GridItem(.adaptive(
+                                minimum: viewModel.explorerIconSize,
+                                maximum: viewModel.explorerIconSize * 2
+                            ), spacing: 14)],
+                            alignment: .leading,
+                            spacing: 14
+                        ) {
+                            ForEach(workshopViewModel.items) { item in
+                                WorkshopItemCard(
+                                    item: item,
 
-                            LazyVGrid(
-                                columns: [GridItem(.adaptive(
-                                    minimum: viewModel.explorerIconSize,
-                                    maximum: viewModel.explorerIconSize * 2
-                                ), spacing: 14)],
-                                alignment: .leading,
-                                spacing: 14
-                            ) {
-                                ForEach(workshopViewModel.items) { item in
-                                    WorkshopItemCard(
-                                        item: item,
-
-                                        isSelected: workshopViewModel.selectedItem?.id == item.id,
-                                        isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
-                                        presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
-                                        downloadTask: workshopViewModel.downloadTask(for: item.publishedFileId),
-                                        isFavorite: workshopViewModel.isWorkshopFavorite(item.publishedFileId),
-                                        isActive: isActive,
-                                        animatedPreviewMode: globalSettingsViewModel.animatedPreviewPlaybackMode
-                                    )
-                                    .onTapGesture {
-                                        workshopViewModel.selectWorkshopItem(item)
-                                    }
-                                    .contextMenu {
-                                        if let wallpaper = workshopViewModel.cachedInstalledWallpapers[item.publishedFileId] {
-                                            ExplorerItemMenu(
-                                                contentViewModel: viewModel,
-                                                wallpaperViewModel: wallpaperViewModel,
-                                                workshopViewModel: workshopViewModel,
-                                                current: wallpaper
-                                            )
-                                            ExplorerGlobalMenu(
-                                                contentViewModel: viewModel,
-                                                wallpaperViewModel: wallpaperViewModel
-                                            )
-                                        } else {
-                                            WorkshopCardContextMenu(
-                                                item: item,
-                                                workshopViewModel: workshopViewModel
-                                            )
-                                            WallpaperGridViewMenu(viewModel: viewModel)
-                                        }
+                                    isSelected: workshopViewModel.selectedItem?.id == item.id,
+                                    isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
+                                    presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
+                                    downloadTask: workshopViewModel.downloadTask(for: item.publishedFileId),
+                                    isFavorite: workshopViewModel.isWorkshopFavorite(item.publishedFileId),
+                                    isActive: isActive,
+                                    animatedPreviewMode: globalSettingsViewModel.animatedPreviewPlaybackMode
+                                )
+                                .onTapGesture {
+                                    workshopViewModel.selectWorkshopItem(item)
+                                }
+                                .contextMenu {
+                                    if let wallpaper = workshopViewModel.cachedInstalledWallpapers[item.publishedFileId] {
+                                        ExplorerItemMenu(
+                                            contentViewModel: viewModel,
+                                            wallpaperViewModel: wallpaperViewModel,
+                                            workshopViewModel: workshopViewModel,
+                                            current: wallpaper
+                                        )
+                                        ExplorerGlobalMenu(
+                                            contentViewModel: viewModel,
+                                            wallpaperViewModel: wallpaperViewModel
+                                        )
+                                    } else {
+                                        WorkshopCardContextMenu(
+                                            item: item,
+                                            workshopViewModel: workshopViewModel
+                                        )
+                                        WallpaperGridViewMenu(viewModel: viewModel)
                                     }
                                 }
                             }
-                            #if arch(arm64)
-                            .padding(.trailing)
-                            #endif
-
-                            if workshopViewModel.isLoading {
-                                ProgressView()
-                                    .padding()
-                            }
-
-                            if workshopViewModel.totalPages > 1 {
-                                Color.clear.frame(height: 58)
-                            }
                         }
-                        .contextMenu {
-                            WallpaperGridViewMenu(viewModel: viewModel)
+                        #if arch(arm64)
+                        .padding(.trailing)
+                        #endif
+
+                        if workshopViewModel.isLoading {
+                            ProgressView()
+                                .padding()
                         }
 
                         if workshopViewModel.totalPages > 1 {
-                            PageNavigator(
-                                currentPage: workshopViewModel.currentPage,
-                                pageCount: workshopViewModel.totalPages,
-                                onSelect: workshopViewModel.goToPage
-                            )
-                            .padding(.bottom, 12)
+                            Color.clear.frame(height: 58)
                         }
                     }
-                    .onChange(of: workshopViewModel.currentPage) { _, _ in
-                        withAnimation(.easeOut(duration: 0.2)) {
-                            proxy.scrollTo("workshopTop", anchor: .top)
-                        }
+                    // Reset only after accepting new content, including a reload of the same page.
+                    .id(workshopViewModel.pageLoadRevision)
+                    .contextMenu {
+                        WallpaperGridViewMenu(viewModel: viewModel)
+                    }
+
+                    if workshopViewModel.totalPages > 1 {
+                        PageNavigator(
+                            currentPage: workshopViewModel.currentPage,
+                            pageCount: workshopViewModel.totalPages,
+                            isLoading: workshopViewModel.isLoading,
+                            requestedPage: workshopViewModel.requestedPage,
+                            onSelect: workshopViewModel.goToPage
+                        )
+                        .padding(.bottom, 12)
                     }
                 }
             }
