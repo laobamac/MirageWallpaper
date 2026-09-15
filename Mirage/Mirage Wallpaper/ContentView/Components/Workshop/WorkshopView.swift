@@ -187,9 +187,12 @@ struct WorkshopView: View {
                                         isActive: isActive,
                                         animatedPreviewMode: globalSettingsViewModel.animatedPreviewPlaybackMode
                                     )
-                                    .onTapGesture {
-                                        workshopViewModel.selectWorkshopItem(item)
-                                    }
+                                    .gesture(
+                                        TapGesture(count: 2)
+                                            .onEnded { workshopViewModel.activateWorkshopItem(item) }
+                                            .exclusively(before: TapGesture()
+                                                .onEnded { workshopViewModel.selectWorkshopItem(item) })
+                                    )
                                     .contextMenu {
                                         if let wallpaper = workshopViewModel.cachedInstalledWallpapers[item.publishedFileId] {
                                             ExplorerItemMenu(
