@@ -154,6 +154,7 @@ class WallpaperViewModel: PlaylistPlayback {
     private var dynamicLockScreenPaused = false
     private var externalLockScreenSuspended = false
     private var sessionMuted = false
+    @ObservationIgnored private var lastDisplayTopology = DisplayTopologySnapshot.capture()
 
     static var invalidWallpaper: WEWallpaper {
         WEWallpaper(using: .invalid,
@@ -947,6 +948,10 @@ class WallpaperViewModel: PlaylistPlayback {
     // MARK: 拓扑变化
 
     @objc private func displayTopologyChanged() {
+        let topology = DisplayTopologySnapshot.capture()
+        guard topology != lastDisplayTopology else { return }
+        lastDisplayTopology = topology
+
         DisplayRegistry.shared.invalidate()
         let connected = DisplayRegistry.shared.connected
         let connectedIDs = Set(connected.map(\.displayID))
