@@ -6,6 +6,90 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Mirage</title>
         <item>
+            <title>1.1.4</title>
+            <pubDate>Sun, 20 Sep 2026 01:56:13 +0000</pubDate>
+            <link>https://github.com/laobamac/MirageWallpaper</link>
+            <sparkle:version>468</sparkle:version>
+            <sparkle:shortVersionString>1.1.4</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="markdown"><![CDATA[# Mirage 1.1.4
+
+本版本重点提升网页与 Live2D 壁纸的显示清晰度和渲染稳定性，强化动态锁屏与屏保的恢复能力，并优化媒体信息、界面响应和发布包体积。
+
+## 重大更新：动态锁屏与屏保稳定性
+
+- 改进动态锁屏和屏保的配置生命周期、扩展注册、资源部署及退出流程，减少重复实例、配置覆盖和系统墙纸服务不必要重启导致的问题。
+- 动态锁屏预览改为异步生成；系统设置中的壁纸预览和取消操作更可靠，配置失败时保留原有配置。
+- 修复自定义壁纸设置在动态锁屏和屏保流程中丢失的问题，并改进屏保播放、退出和跨进程快照处理。
+- 修复系统唤醒后播放规则未恢复的问题；同时改进显示器资源释放和屏保播放状态同步。
+
+## 网页与 Live2D 壁纸
+
+- 修复部分网页壁纸在 macOS 显示缩放下分辨率降低、画面清晰度异常的问题（Issue #64）。
+- 改进 Live2D 网格缓冲复用、Retina 分辨率适配和窗口尺寸变化处理，减少模糊、渲染停顿及重复上传几何数据的开销。
+
+## 播放与界面改进
+
+- 改进壁纸库、属性编辑器、创意工坊和预览界面的后台处理与刷新策略，减少快速操作、条件计算和资源加载造成的界面卡顿。
+- 修复媒体信息颜色提取失败后的重试，并在媒体状态未变化时复用已有的封面调色板，减少重复计算。
+- 改进场景运行时和屏幕捕获的隔离处理，减少不同壁纸、屏保和诊断流程之间的状态相互影响。
+
+## 发布包与诊断工具
+
+- 优化渲染器运行时和 FFmpeg 的打包方式，发布包不再依赖目标机器上的 Homebrew 解码组件，并减少重复运行时文件。
+- 新增本地化的场景颜色诊断工具，可生成脱敏报告用于定位特定 GPU、驱动或渲染路径下的颜色异常；诊断结果本身不代表问题已修复。
+
+## 下载
+
+- `arm64`：Apple Silicon Mac
+- `x86_64`：Intel Mac
+- 应用与屏保组件要求 macOS 14.2 或更高版本；原生动态锁屏功能要求 macOS 26 或更高版本
+
+当前构建使用临时签名，首次打开时可能需要在「系统设置 → 隐私与安全性」中选择“仍要打开”。
+
+---
+
+
+# Mirage 1.1.4
+
+This release improves display clarity and rendering stability for web and Live2D wallpapers, strengthens dynamic lock-screen and screen-saver recovery, and improves media metadata handling, UI responsiveness, and package size.
+
+## Major Update: Dynamic Lock Screen and Screen Saver Stability
+
+- Improved the configuration lifecycle, extension registration, resource deployment, and exit paths for dynamic lock screens and screen savers, reducing issues caused by duplicate instances, configuration replacement, and unnecessary wallpaper-service restarts.
+- Dynamic lock-screen previews are now generated asynchronously. System Settings wallpaper previews and cancellation are more reliable, and the previous configuration is preserved when deployment fails.
+- Fixed custom wallpaper settings being lost during dynamic lock-screen and screen-saver flows, and improved screen-saver playback, exit handling, and cross-process snapshot processing.
+- Fixed playback rules not being restored after system wake, and improved display-resource release and screen-saver playback-state synchronization.
+
+## Web and Live2D Wallpapers
+
+- Fixed reduced resolution and unexpected loss of clarity for some web wallpapers when macOS display scaling is enabled (Issue #64).
+- Improved Live2D mesh-buffer reuse, Retina resolution handling, and resize processing to reduce blur, rendering stalls, and repeated geometry uploads.
+
+## Playback and UI Improvements
+
+- Improved background processing and refresh behavior in the wallpaper library, property editor, Workshop, and previews, reducing UI stalls during rapid interactions, condition evaluation, and resource loading.
+- Added retries for failed media-artwork color extraction and reused the existing artwork palette when media state is unchanged, reducing repeated work.
+- Improved isolation for scene runtime and screen capture, reducing state interference between wallpapers, screen savers, and diagnostic sessions.
+
+## Packaging and Diagnostics
+
+- Optimized renderer-runtime and FFmpeg packaging. Release bundles no longer depend on Homebrew decoder components on the target machine and contain fewer duplicated runtime files.
+- Added localized scene-color diagnostics that generate redacted reports for investigating color issues on specific GPUs, drivers, or rendering paths. Diagnostic results do not by themselves indicate that an issue has been fixed.
+
+## Downloads
+
+- `arm64` for Apple Silicon Mac
+- `x86_64` for Intel Mac
+- The app and screen-saver component require macOS 14.2 or later; native dynamic lock-screen features require macOS 26 or later
+
+Builds use ad-hoc signing; macOS may require “Open Anyway” under System Settings → Privacy & Security on first launch.
+
+]]></description>
+            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/v1.1.4/Mirage-468-d639939b925f-macOS-arm64.zip" length="102590200" type="application/octet-stream" sparkle:edSignature="e+jS6gP8/VfquCDofsf6jttqsZugeA2GqN2iVSxHr6dmgxuT1NsfBni5tgWfg4fuxHzeia5jirZ6xtyT/Y48Cg=="/>
+        </item>
+        <item>
             <title>1.1.3</title>
             <pubDate>Sat, 19 Sep 2026 12:52:13 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
@@ -22,96 +106,6 @@ fix(build): resolve codec dependencies relative to loaders
 
 ]]></description>
             <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-467-62be9deb4566-macOS-arm64.zip" length="102590188" type="application/octet-stream" sparkle:edSignature="0KCXOJtVLarBJVCCxYqAFZtEkPxT2zfeOj7fx0yCORwbQOsPjLqjNPqGdYp6pmBaoZ3e05+nyTWygpa1ZO7lAA=="/>
-        </item>
-        <item>
-            <title>1.1.3</title>
-            <pubDate>Fri, 18 Sep 2026 13:02:44 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>461</sparkle:version>
-            <sparkle:shortVersionString>1.1.3</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="plain-text"><![CDATA[Commit: 6fa896455da595ce1548628cb3e9d52d0dca35ad
-Channel: beta
-
-test(build): cover clean renderer dependency checks
-
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-461-6fa896455da5-macOS-arm64.zip" length="370587488" type="application/octet-stream" sparkle:edSignature="HvQ0/6q0mSN4rguTOVCUt7cnFgk1qspLbXJM9KJom0N+p2i435d7GaP42VMntPMjyF6kd22VOMid1RxVyI2pAg=="/>
-        </item>
-        <item>
-            <title>1.1.3</title>
-            <pubDate>Wed, 16 Sep 2026 18:16:04 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>451</sparkle:version>
-            <sparkle:shortVersionString>1.1.3</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="plain-text"><![CDATA[Commit: e4d721c83f42152b622aa6b11355b28b652e7ab6
-Channel: beta
-
-test(renderer): cover Live2D compatibility and resource responses
-
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-451-e4d721c83f42-macOS-arm64.zip" length="363438272" type="application/octet-stream" sparkle:edSignature="XLqNw52yp5xWS8a5nO8s90HgfQ2Dzq0HVMlP/poGYlO7MRsEZzsWBK2laYyLaw8Oa3VpLT6JxwTKGmrtbzRSCw=="/>
-        </item>
-        <item>
-            <title>1.1.3</title>
-            <pubDate>Wed, 16 Sep 2026 17:32:46 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>449</sparkle:version>
-            <sparkle:shortVersionString>1.1.3</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="plain-text"><![CDATA[Commit: 797a4cf7f1f50d5a455c73c27becd91f092846eb
-Channel: beta
-
-test(app): cover lock screen and screen saver runtime snapshots
-
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-449-797a4cf7f1f5-macOS-arm64.zip" length="363434371" type="application/octet-stream" sparkle:edSignature="d6BL0fwM4xH3laL80/G8ap902pPccOrmXxvfMA/1UhbHHNa7mWlDQcgyamWLsCUyhPKFcqRpYbWf9lM3JvR2Bw=="/>
-        </item>
-        <item>
-            <title>1.1.3</title>
-            <pubDate>Tue, 15 Sep 2026 18:50:48 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>446</sparkle:version>
-            <sparkle:shortVersionString>1.1.3</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="plain-text"><![CDATA[Commit: bad4cee3b5698b03324b2e46d36638e4868af95e
-Channel: beta
-
-Merge branch 'main' of https://github.com/laobamac/MirageWallpaper
-
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-446-bad4cee3b569-macOS-arm64.zip" length="363296692" type="application/octet-stream" sparkle:edSignature="z7UHZELh2GBv2viXJNGKFOm/oZR6RTyajwGpvZKpYLXcJ/WIiBHlCBK59JdNDw2FVl3cjFUmPp28WROEM0SxAQ=="/>
-        </item>
-        <item>
-            <title>1.1.3</title>
-            <pubDate>Tue, 15 Sep 2026 17:17:31 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>444</sparkle:version>
-            <sparkle:shortVersionString>1.1.3</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="plain-text"><![CDATA[Commit: 1eb1f14cc65a1b3fa951b09fb3c7644bb95a3a2b
-Channel: beta
-
-Merge pull request #62 from JiahaoXu10Arthur/codex/now-playing-artwork-cache
-
-perf(media): reuse the last artwork palette between polls
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-444-1eb1f14cc65a-macOS-arm64.zip" length="363297370" type="application/octet-stream" sparkle:edSignature="G93t77vb4g2LmuJDclY0GEABOi76UZ9Ml3sUSZo05QgB3YbfhYtxRVFjtrCGP6QP/t5cRV6gCP9OTU8oJfB3AQ=="/>
         </item>
         <item>
             <title>1.1.3</title>
@@ -489,79 +483,9 @@ Builds use ad-hoc signing; macOS may require “Open Anyway” under System Sett
 ]]></description>
             <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/v1.1.0/Mirage-372-252e5045ac7c-macOS-arm64.zip" length="361367545" type="application/octet-stream" sparkle:edSignature="0GDwoLYzCTpGtsTjyB79Ep1jP6FLEKkqWT//Rqw8SS31bOqyfK24UxtSBDrEiYLbagNb3669diYTZ5zcoHwBCA=="/>
         </item>
-        <item>
-            <title>1.0.9</title>
-            <pubDate>Tue, 18 Aug 2026 14:10:47 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:version>361</sparkle:version>
-            <sparkle:shortVersionString>1.0.9</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# Mirage 1.0.9
-
-本版本重点增强 Steam 会话与创意工坊下载的故障恢复能力，并修复多标签筛选、场景效果采样、视频纹理刷新和 MetalFX 呈现稳定性。
-
-## 重大更新：Steam 会话与下载恢复
-
-- Steam 连接短暂中断时会使用稳定的登录标识和已保存的刷新令牌自动重连，并通过有界退避持续恢复；只有 Steam 明确拒绝保存的会话时才要求重新登录，减少网络波动导致的意外掉线。
-- Steam 服务组件意外退出后会自动重启、恢复登录并重新提交仍在进行的下载任务。下载暂存目录与已校验分块会被复用，不再因服务或连接中断丢弃已经下载的内容。
-- 改进 Steam 内容服务器选择与容错：缓存可用服务器、降低失败节点优先级，并为清单和内容分块增加跨服务器重试。单个下载现在可使用全局八个分块连接，多个任务同时运行时共享该上限。
-
-## 创意工坊修复
-
-- 修复同时选择多个标签时可能错误返回空结果的问题；查询现在按“匹配任一所选标签”合并并去重结果，同时保留其他筛选条件 (PR #35)。
-
-## 场景渲染修复
-
-- 修复透传效果未始终保留独立采样相机，以及合成图层绑定到错误渲染目标的问题，改善非全屏效果、后处理和合成场景的显示。
-- 修复资源刷新重新划分视频纹理活动周期，导致部分场景中的视频材质停止更新的问题；相同的填充模式也不再触发重复资源刷新。
-- 加强 MetalFX 呈现器的能力检查、纹理输入和线性回退路径，并将 MetalFX 默认改为关闭；用户仍可在性能设置中手动启用。
-
-## 下载
-
-- `arm64`：Apple Silicon Mac
-- `x86_64`：Intel Mac
-- 系统要求：macOS 14.2 或更高版本
-
-当前构建使用临时签名，首次打开时可能需要在「系统设置 → 隐私与安全性」中选择“仍要打开”。
-
----
-
-
-# Mirage 1.0.9
-
-This release strengthens recovery for Steam sessions and Workshop downloads while fixing multi-tag filtering, Scene effect sampling, video-texture refreshes, and MetalFX presentation stability.
-
-## Major Update: Steam Session and Download Recovery
-
-- Temporary Steam connection losses now recover automatically using a stable login ID and the saved refresh token, with bounded backoff between attempts. Mirage asks for another login only when Steam explicitly rejects the saved session, reducing unexpected sign-outs caused by network interruptions.
-- If the Steam service exits unexpectedly, Mirage restarts it, restores the session, and resubmits active download tasks. Staged files and already validated chunks are reused instead of discarding downloaded content after a service or connection interruption.
-- Improved Steam content-server selection and failover by caching available servers, deprioritizing failing hosts, and retrying manifests and content chunks across servers. A single download can now use all eight global chunk connections, while concurrent items share that limit.
-
-## Workshop Fixes
-
-- Fixed multi-tag filtering sometimes returning no results. Queries now merge and deduplicate items matching any selected tag while retaining the other active filters (PR #35).
-
-## Scene Rendering Fixes
-
-- Fixed passthrough effects not always retaining a dedicated sampling camera and composite layers binding to the wrong render target, improving non-fullscreen effects, post-processing, and composite scenes.
-- Fixed resource refreshes advancing the video-texture activity cycle and consequently stopping some video materials from updating. Reapplying an unchanged fill mode also no longer triggers another resource refresh.
-- Hardened MetalFX presenter capability checks, texture inputs, and linear fallback behavior. MetalFX is now disabled by default and remains available as an opt-in setting under Performance.
-
-## Downloads
-
-- `arm64` for Apple Silicon Mac
-- `x86_64` for Intel Mac
-- Requires macOS 14.2 or later
-
-Builds use ad-hoc signing; macOS may require “Open Anyway” under System Settings → Privacy & Security on first launch.
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/v1.0.9/Mirage-361-afb4af7b568d-macOS-arm64.zip" length="229030104" type="application/octet-stream" sparkle:edSignature="RdIwMe4ttYMsLk8KxHTfU/D8hfOx6riqwFfmGURe6wLXbMtb/R1NIXD+t3GDwhLiRAW0nFEoMUVRAKoZAFs1Bg=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: CRY8jcQ1PszavOWTerqSFHDRPjmr4ZUY6ZTftntbXK4E6Hmm54rrywy5McEKEurQN12UjO+TC+vtTYp0ve+vBQ==
-length: 42064
+edSignature: 2uFyVHzIz4/2iUsrBjRIuup9+0Q+G2+U2m2TpqsTzhyTmVioi5MvdsMUVupCJktYupA2OINNHgxIF1lg6jJpCQ==
+length: 37653
 -->
