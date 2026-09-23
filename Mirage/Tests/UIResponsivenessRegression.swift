@@ -134,6 +134,12 @@ private struct UIResponsivenessRegression {
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             NSApplication.shared.setActivationPolicy(.accessory)
             NSApplication.shared.finishLaunching()
+            if CommandLine.arguments.contains("--workshop-activation") {
+                try testWorkshopActivation()
+                try testSubscriptionStateSupersession()
+                print("WorkshopActivationRegression: all checks passed")
+                return
+            }
             if CommandLine.arguments.contains("--wallpaper-runtime") {
                 ImageProtocol.imageData = try pngData(color: .green)
                 try await testConfiguration()
@@ -167,6 +173,8 @@ private struct UIResponsivenessRegression {
             try await testInteractiveUpdates()
             try await testWallpaperSizes()
             try await testSubscriptionFiltering()
+            try testWorkshopActivation()
+            try testSubscriptionStateSupersession()
             try await testConditions()
             try testObservation()
             try await testImages()
@@ -678,6 +686,152 @@ private struct UIResponsivenessRegression {
         try require(result.isEmpty && Date().timeIntervalSince(blockedStart) < 2,
                     "A worker that never reads stdin blocked its timeout")
         print("PASS: condition values, exceptions, timeout, main-loop heartbeat and cancellation recovery")
+    }
+
+    static func testWorkshopActivation() throws {
+        // Exercise the actual activation handler without touching a Steam account.
+        final class Probe: WorkshopViewModel {
+            var selections: [String] = []
+            var subscriptions: [String] = []
+            var installed = false
+
+            override func selectWorkshopItem(_ item: WorkshopItem) {
+                selections.append(item.publishedFileId)
+            }
+            override func subscribe(_ item: WorkshopItem) {
+                subscriptions.append(item.publishedFileId)
+                downloadQueue.append(DownloadTask(workshopItem: item, attemptID: nil,
+                    state: .queued, startedAt: nil, completedAt: nil, purpose: .subscription))
+            }
+            override func isInstalled(_ workshopId: String) -> Bool { installed }
+        }
+        let item = WorkshopItem(publishedFileId: "1", title: "Activation regression", itemDescription: "",
+            previewImageURL: nil, tags: [], subscriptions: 0, favorited: 0, views: 0, fileSize: 1,
+            timeCreated: Date(), timeUpdated: Date(), creatorSteamId: "", wallpaperType: "video")
+        let model = Probe(subscriptionCatalog: [])
+        model.activateWorkshopItem(item)
+        try require(model.selections == [item.publishedFileId] && model.subscriptions == [item.publishedFileId],
+                    "Double-click selected an uninstalled wallpaper without subscribing and queuing it")
+        for state in [DownloadState.queued, .resolving, .validating,
+                      .downloading(.init(receivedBytes: 1, totalBytes: 10, bytesPerSecond: 1, etaSeconds: nil))] {
+            model.downloadQueue[0].state = state
+            model.activateWorkshopItem(item)
+        }
+        try require(model.subscriptions.count == 1, "Repeated activation duplicated an active download")
+        model.downloadQueue[0].state = .completed
+        let completedTask = model.downloadQueue[0]
+        model.activateWorkshopItem(item)
+        try require(model.subscriptions.count == 1 && model.downloadQueue.count == 1 &&
+                    model.downloadQueue[0] === completedTask && completedTask.state == .completed,
+                    "A completed download was subscribed or queued again before the installed-state scan caught up")
+        model.downloadQueue[0].state = .failed("Test failure")
+        model.activateWorkshopItem(item)
+        try require(model.subscriptions.count == 2, "A failed download could not be retried by double-clicking")
+        model.downloadQueue.removeAll()
+        model.installed = true
+        let selectionsBefore = model.selections.count
+        model.activateWorkshopItem(item)
+        try require(model.selections.count == selectionsBefore + 1 && model.subscriptions.count == 2,
+                    "An installed wallpaper was downloaded again instead of being opened")
+        print("PASS: workshop activation, active/completed download deduplication, retry and installed wallpaper routing")
+    }
+
+    static func testSubscriptionStateSupersession() throws {
+        final class Service: WorkshopSubscriptionService {
+            var isLoggedIn = true
+            var reads: [(ids: [String], reply: (Result<[String: Bool], Error>) -> Void)] = []
+            var subscribes: [(id: String, reply: (Result<Void, Error>) -> Void)] = []
+            var unsubscribes: [(id: String, reply: (Result<Void, Error>) -> Void)] = []
+
+            func fetchSubscriptionStates(workshopIds: [String], completion: @escaping (Result<[String: Bool], Error>) -> Void) {
+                reads.append((workshopIds, completion))
+            }
+            func subscribe(workshopId: String, completion: @escaping (Result<Void, Error>) -> Void) {
+                subscribes.append((workshopId, completion))
+            }
+            func unsubscribe(workshopId: String, completion: @escaping (Result<Void, Error>) -> Void) {
+                unsubscribes.append((workshopId, completion))
+            }
+        }
+        // Keep the real state-fetch and mutation callbacks; replace only external side effects.
+        final class Probe: WorkshopViewModel {
+            var downloads: [String] = []
+            var removals: [String] = []
+            override func downloadItem(_ item: WorkshopItem, purpose: DownloadPurpose = .wallpaper) {
+                downloads.append(item.publishedFileId)
+            }
+            override func refreshSubscriptions(startIndex: Int? = nil) {}
+            override func removeUnsubscribedWallpaper(workshopId: String) throws {
+                removals.append(workshopId)
+            }
+        }
+        let item = WorkshopItem(publishedFileId: "1", title: "State regression", itemDescription: "",
+            previewImageURL: nil, tags: [], subscriptions: 0, favorited: 0, views: 0, fileSize: 1,
+            timeCreated: Date(), timeUpdated: Date(), creatorSteamId: "", wallpaperType: "video")
+        var other = item
+        other.publishedFileId = "2"
+        let service = Service()
+        let model = Probe(subscriptionCatalog: [], subscriptionService: service)
+        model.steamSetupState = .ready
+        model.selectedItem = item
+
+        model.refreshSubscriptionStates(for: [item, other])
+        try require(service.reads.count == 1 && Set(service.reads[0].ids) == ["1", "2"],
+                    "The state-fetch probe did not receive the production batch request")
+        model.subscribe(item)
+        model.subscribe(item)
+        model.refreshSubscriptionStates(for: [item])
+        try require(service.subscribes.count == 1 && service.subscribes[0].id == "1" &&
+                    service.reads.count == 1 && model.changingSubscriptionIDs.contains("1"),
+                    "Pending subscription mutation was duplicated or allowed another state read")
+        service.subscribes[0].reply(.success(()))
+        try require(model.subscriptionState(for: "1") == .subscribed && model.downloads == ["1"],
+                    "Successful subscription did not update state and request a download")
+        service.reads[0].reply(.success(["1": false, "2": true]))
+        try require(model.subscriptionState(for: "1") == .subscribed &&
+                    model.subscriptionState(for: "2") == .subscribed && model.checkingSubscriptionIDs.isEmpty,
+                    "An old batch result overwrote a subscription or discarded an unaffected item's result")
+
+        model.refreshSubscriptionStates(for: [item])
+        model.unsubscribe(item)
+        try require(service.unsubscribes.count == 1 && service.unsubscribes[0].id == "1",
+                    "Unsubscription did not reach the service")
+        service.unsubscribes[0].reply(.success(()))
+        try require(model.subscriptionState(for: "1") == .unsubscribed && model.removals == ["1"],
+                    "Successful unsubscription did not update state and request local cleanup")
+        service.reads[1].reply(.success(["1": true]))
+        try require(model.subscriptionState(for: "1") == .unsubscribed && model.checkingSubscriptionIDs.isEmpty,
+                    "An old state read restored a subscription after unsubscription succeeded")
+
+        model.refreshSubscriptionStates(for: [item])
+        model.subscribe(item)
+        let mutationError = NSError(domain: "WorkshopRegression", code: 1,
+                                    userInfo: [NSLocalizedDescriptionKey: "Subscription failed"])
+        service.subscribes[1].reply(.failure(mutationError))
+        let staleError = NSError(domain: "WorkshopRegression", code: 2,
+                                 userInfo: [NSLocalizedDescriptionKey: "Stale read failed"])
+        service.reads[2].reply(.failure(staleError))
+        try require(model.subscriptionActionError(for: "1") == mutationError.localizedDescription &&
+                    model.changingSubscriptionIDs.isEmpty && model.checkingSubscriptionIDs.isEmpty,
+                    "An old query failure replaced the newer mutation error or left loading active")
+
+        model.refreshSubscriptionStates(for: [item])
+        model.subscribe(item)
+        service.subscribes[2].reply(.success(()))
+        model.refreshSubscriptionStates(for: [item])
+        try require(service.reads.count == 5, "A fresh query could not start after mutation completion")
+        service.reads[3].reply(.success(["1": false]))
+        try require(model.subscriptionState(for: "1") == .subscribed && model.checkingSubscriptionIDs.contains("1"),
+                    "An obsolete query overwrote state or cleared a newer query's loading indicator")
+        service.reads[4].reply(.success(["1": false]))
+        try require(model.subscriptionState(for: "1") == .unsubscribed && model.checkingSubscriptionIDs.isEmpty,
+                    "The current query was discarded with the obsolete query")
+        model.refreshSubscriptionStates(for: [item])
+        service.reads[5].reply(.failure(staleError))
+        try require(model.subscriptionActionError(for: "1") == staleError.localizedDescription &&
+                    model.checkingSubscriptionIDs.isEmpty,
+                    "A current query failure was hidden or left loading active")
+        print("PASS: real subscribe/unsubscribe callbacks reject stale success/error results and preserve fresh queries")
     }
 
     static func testObservation() throws {
