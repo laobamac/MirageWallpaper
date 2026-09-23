@@ -314,69 +314,59 @@ struct SubscribedWorkshopView: View {
     }
 
     private var subscriptionGrid: some View {
-        ScrollViewReader { proxy in
-            ZStack(alignment: .bottom) {
-                ScrollView {
-                    Color.clear
-                        .frame(height: 0)
-                        .id("subscriptionsTop")
+        ZStack(alignment: .bottom) {
+            ScrollView {
+                LazyVGrid(
+                    columns: [GridItem(.adaptive(
+                        minimum: viewModel.explorerIconSize,
+                        maximum: viewModel.explorerIconSize * 2
+                    ), spacing: 14)],
+                    alignment: .leading,
+                    spacing: 14
+                ) {
+                    ForEach(workshopViewModel.subscriptionItems) { item in
+                        WorkshopItemCard(
+                            item: item,
 
-                    LazyVGrid(
-                        columns: [GridItem(.adaptive(
-                            minimum: viewModel.explorerIconSize,
-                            maximum: viewModel.explorerIconSize * 2
-                        ), spacing: 14)],
-                        alignment: .leading,
-                        spacing: 14
-                    ) {
-                        ForEach(workshopViewModel.subscriptionItems) { item in
-                            WorkshopItemCard(
+                            isSelected: workshopViewModel.selectedItem?.id == item.id,
+                            isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
+                            presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
+                            downloadTask: workshopViewModel.downloadTask(for: item.publishedFileId),
+                            isFavorite: workshopViewModel.isWorkshopFavorite(item.publishedFileId),
+                            isActive: isActive,
+                            animatedPreviewMode: globalSettingsViewModel.animatedPreviewPlaybackMode
+                        )
+                        .onTapGesture {
+                            workshopViewModel.selectWorkshopItem(item)
+                        }
+                        .contextMenu {
+                            WorkshopCardContextMenu(
                                 item: item,
-
-                                isSelected: workshopViewModel.selectedItem?.id == item.id,
-                                isDownloaded: workshopViewModel.isInstalled(item.publishedFileId),
-                                presetNeedsDependency: workshopViewModel.presetNeedsDependency(item.publishedFileId),
-                                downloadTask: workshopViewModel.downloadTask(for: item.publishedFileId),
-                                isFavorite: workshopViewModel.isWorkshopFavorite(item.publishedFileId),
-                                isActive: isActive,
-                                animatedPreviewMode: globalSettingsViewModel.animatedPreviewPlaybackMode
+                                workshopViewModel: workshopViewModel
                             )
-                            .onTapGesture {
-                                workshopViewModel.selectWorkshopItem(item)
-                            }
-                            .contextMenu {
-                                WorkshopCardContextMenu(
-                                    item: item,
-                                    workshopViewModel: workshopViewModel
-                                )
-                                WallpaperGridViewMenu(viewModel: viewModel, showsPageSize: true)
-                            }
+                            WallpaperGridViewMenu(viewModel: viewModel, showsPageSize: true)
                         }
                     }
-                    .padding(.vertical, 2)
-                    #if arch(arm64)
-                    .padding(.trailing)
-                    #endif
-
-                    if workshopViewModel.subscriptionPageCount > 1 {
-                        Color.clear.frame(height: 58)
-                    }
                 }
+                .padding(.vertical, 2)
+                #if arch(arm64)
+                .padding(.trailing)
+                #endif
 
                 if workshopViewModel.subscriptionPageCount > 1 {
-                    PageNavigator(
-                        currentPage: workshopViewModel.subscriptionCurrentPage,
-                        pageCount: workshopViewModel.subscriptionPageCount,
-                        onSelect: workshopViewModel.goToSubscriptionPage
-                    )
-                    .disabled(workshopViewModel.isLoadingSubscriptions)
-                    .padding(.bottom, 12)
+                    Color.clear.frame(height: 58)
                 }
             }
-            .onChange(of: workshopViewModel.subscriptionStartIndex) { _, _ in
-                withAnimation(.easeOut(duration: 0.2)) {
-                    proxy.scrollTo("subscriptionsTop", anchor: .top)
-                }
+            .id(workshopViewModel.subscriptionStartIndex)
+
+            if workshopViewModel.subscriptionPageCount > 1 {
+                PageNavigator(
+                    currentPage: workshopViewModel.subscriptionCurrentPage,
+                    pageCount: workshopViewModel.subscriptionPageCount,
+                    onSelect: workshopViewModel.goToSubscriptionPage
+                )
+                .disabled(workshopViewModel.isLoadingSubscriptions)
+                .padding(.bottom, 12)
             }
         }
     }

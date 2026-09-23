@@ -134,6 +134,14 @@ private struct UIResponsivenessRegression {
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             NSApplication.shared.setActivationPolicy(.accessory)
             NSApplication.shared.finishLaunching()
+            if CommandLine.arguments.contains("--workshop-pagination") {
+                try await testWorkshopPagination()
+                try await testWorkshopSearchCommit()
+                try await testWorkshopSearchBoundaries()
+                try await testWorkshopSearchAuthentication()
+                print("WorkshopPaginationRegression: all checks passed")
+                return
+            }
             if CommandLine.arguments.contains("--wallpaper-runtime") {
                 ImageProtocol.imageData = try pngData(color: .green)
                 try await testConfiguration()
@@ -167,6 +175,10 @@ private struct UIResponsivenessRegression {
             try await testInteractiveUpdates()
             try await testWallpaperSizes()
             try await testSubscriptionFiltering()
+            try await testWorkshopPagination()
+            try await testWorkshopSearchCommit()
+            try await testWorkshopSearchBoundaries()
+            try await testWorkshopSearchAuthentication()
             try await testConditions()
             try testObservation()
             try await testImages()
@@ -678,6 +690,492 @@ private struct UIResponsivenessRegression {
         try require(result.isEmpty && Date().timeIntervalSince(blockedStart) < 2,
                     "A worker that never reads stdin blocked its timeout")
         print("PASS: condition values, exceptions, timeout, main-loop heartbeat and cancellation recovery")
+    }
+
+    static func testWorkshopPagination() async throws {
+        final class SearchProbe {
+            typealias Result = (items: [WorkshopItem], total: Int)
+            var pages: [Int] = []
+            var replies: [CheckedContinuation<Result, Error>] = []
+            func load(_ page: Int) async throws -> Result {
+                pages.append(page)
+                // Deliberately ignore cancellation so stale responses exercise the production guard.
+                return try await withCheckedThrowingContinuation { replies.append($0) }
+            }
+        }
+        let first = WorkshopItem(publishedFileId: "pagination-1", title: "First page", itemDescription: "",
+            previewImageURL: nil, tags: [], subscriptions: 0, favorited: 0, views: 0, fileSize: 1,
+            timeCreated: Date(), timeUpdated: Date(), creatorSteamId: "", wallpaperType: "video")
+        var second = first
+        second.publishedFileId = "pagination-2"
+        let probe = SearchProbe()
+        let model = WorkshopViewModel(subscriptionCatalog: [], pageSearch: probe.load)
+        let total = model.itemsPerPage * 3
+        let failure = NSError(domain: "PaginationRegression", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: "Page request failed"])
+        model.search()
+        try await waitUntil("initial page request") { probe.replies.count == 1 }
+        probe.replies[0].resume(returning: ([first], total))
+        try await waitUntil("initial page result") { !model.isLoading }
+        let firstRevision = model.pageLoadRevision
+        try require(model.currentPage == 1 && model.loadedPage == 1 && model.requestedPage == nil,
+                    "Initial page was not committed")
+
+        model.goToPage(2)
+        try await waitUntil("second page request") { probe.replies.count == 2 }
+        model.goToPage(2)
+        model.goToPage(1)
+        try await waitUntil("return-to-first-page request") { probe.replies.count == 3 }
+        try require(probe.pages == [1, 2, 1] && model.isLoading && model.requestedPage == 1 &&
+                    model.currentPage == 1 && model.items.map(\.id) == [first.id] &&
+                    model.pageLoadRevision == firstRevision,
+                    "Rapid 1→2→1 was blocked, duplicated the same target or changed visible content early")
+        probe.replies[1].resume(returning: ([second], total))
+        try await Task.sleep(for: .milliseconds(30))
+        try require(model.isLoading && model.requestedPage == 1 && model.currentPage == 1 &&
+                    model.pageLoadRevision == firstRevision, "A stale success applied or ended the latest loading state")
+        probe.replies[2].resume(returning: ([first], total))
+        try await waitUntil("same-page reload completion") { !model.isLoading }
+        try require(model.currentPage == 1 && model.requestedPage == nil &&
+                    model.pageLoadRevision == firstRevision + 1,
+                    "Reloading the same page did not change its scroll identity")
+
+        model.goToPage(2)
+        try await waitUntil("next pending request") { probe.replies.count == 4 }
+        model.loadNextPage()
+        try await waitUntil("next relative to pending target") { probe.replies.count == 5 }
+        model.loadPreviousPage()
+        try await waitUntil("previous relative to pending target") { probe.replies.count == 6 }
+        try require(probe.pages.suffix(3) == [2, 3, 2] && model.requestedPage == 2 && model.currentPage == 1,
+                    "Arrow navigation did not follow the pending target")
+        probe.replies[4].resume(throwing: failure)
+        try await Task.sleep(for: .milliseconds(30))
+        try require(model.isLoading && model.requestedPage == 2 && model.pageNavigationMessage == nil,
+                    "A stale failure ended or reported an error for the latest request")
+        probe.replies[5].resume(returning: ([second], total))
+        try await waitUntil("latest second-page success") { !model.isLoading }
+        let secondRevision = model.pageLoadRevision
+        probe.replies[3].resume(returning: ([first], total))
+        try await Task.sleep(for: .milliseconds(30))
+        try require(model.currentPage == 2 && model.loadedPage == 2 && model.items.map(\.id) == [second.id] &&
+                    model.pageLoadRevision == secondRevision && model.requestedPage == nil,
+                    "An older response arriving after completion overwrote the accepted result")
+
+        model.goToPage(1)
+        try await waitUntil("failed navigation request") { probe.replies.count == 7 }
+        probe.replies[6].resume(throwing: failure)
+        try await waitUntil("failed navigation cleanup") { !model.isLoading }
+        try require(model.currentPage == 2 && model.loadedPage == 2 && model.items.map(\.id) == [second.id] &&
+                    model.pageLoadRevision == secondRevision && model.requestedPage == nil &&
+                    model.pageNavigationMessage?.contains(failure.localizedDescription) == true && model.error == failure.localizedDescription,
+                    "Failed navigation did not retain content/scroll identity or clear the pending target")
+        model.goToPage(1)
+        try await waitUntil("retry request") { probe.replies.count == 8 }
+        probe.replies[7].resume(returning: ([first], total))
+        try await waitUntil("retry completion") { !model.isLoading }
+        try require(model.currentPage == 1 && model.pageNavigationMessage == nil &&
+                    model.pageLoadRevision == secondRevision + 1, "Navigation did not recover after failure")
+
+        let retainedRevision = model.pageLoadRevision
+        model.goToPage(2)
+        try await waitUntil("empty page request") { probe.replies.count == 9 }
+        probe.replies[8].resume(returning: ([], total))
+        try await waitUntil("empty page cleanup") { !model.isLoading }
+        try require(model.currentPage == 1 && model.items.map(\.id) == [first.id] && model.requestedPage == nil &&
+                    model.pageLoadRevision == retainedRevision && model.pageNavigationMessage != nil,
+                    "An empty response discarded current content or reset scrolling")
+        model.loadNextPage()
+        try await waitUntil("next-page recovery") { probe.replies.count == 10 }
+        probe.replies[9].resume(returning: ([second], total))
+        try await waitUntil("next-page recovery result") { !model.isLoading }
+        model.loadPreviousPage()
+        try await waitUntil("empty first-page request") { probe.replies.count == 11 }
+        probe.replies[10].resume(returning: ([], total))
+        try await waitUntil("empty first-page cleanup") { !model.isLoading }
+        try require(model.currentPage == 2 && model.items.map(\.id) == [second.id] && model.requestedPage == nil,
+                    "An empty response when returning to page one discarded the current page")
+
+        model.goToPage(3)
+        try await waitUntil("superseded page request") { probe.replies.count == 12 }
+        model.refreshSearch()
+        try await waitUntil("replacement search") { probe.replies.count == 13 }
+        probe.replies[11].resume(throwing: failure)
+        try await Task.sleep(for: .milliseconds(30))
+        try require(model.isLoading && model.requestedPage == 2 && model.currentPage == 2 &&
+                    model.pageNavigationMessage == nil, "A stale failure rolled back the replacement search")
+        probe.replies[12].resume(returning: ([second], total))
+        try await waitUntil("replacement completion") { !model.isLoading }
+        try require(probe.pages == [1, 2, 1, 2, 3, 2, 1, 1, 2, 2, 1, 3, 2], "Unexpected pagination requests")
+        print("PASS: latest-target navigation, same-page scroll reset, stale success/failure rejection, retained-page errors and retry")
+    }
+
+    static func testWorkshopSearchCommit() async throws {
+        final class SearchProbe {
+            typealias Result = (items: [WorkshopItem], total: Int)
+            var pages: [Int] = []
+            var replies: [CheckedContinuation<Result, Error>] = []
+            func load(_ page: Int) async throws -> Result {
+                pages.append(page)
+                return try await withCheckedThrowingContinuation { replies.append($0) }
+            }
+        }
+        let item = WorkshopItem(publishedFileId: "old-query", title: "Previous results", itemDescription: "",
+            previewImageURL: nil, tags: [], subscriptions: 0, favorited: 0, views: 0, fileSize: 1,
+            timeCreated: Date(), timeUpdated: Date(), creatorSteamId: "", wallpaperType: "video")
+        var newItem = item
+        newItem.publishedFileId = "new-query"
+        let failure = NSError(domain: "SearchCommitRegression", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: "Search request failed"])
+        let probe = SearchProbe()
+        let model = WorkshopViewModel(subscriptionCatalog: [], pageSearch: probe.load)
+        let total = model.itemsPerPage * 4
+        model.search()
+        try await waitUntil("initial search") { probe.replies.count == 1 }
+        probe.replies[0].resume(returning: ([item], total))
+        try await waitUntil("initial search completion") { !model.isLoading }
+        model.goToPage(2)
+        try await waitUntil("old query page two") { probe.replies.count == 2 }
+        probe.replies[1].resume(returning: ([item], total))
+        try await waitUntil("old query page two completion") { !model.isLoading }
+        let oldRevision = model.pageLoadRevision
+
+        model.searchText = "New query"
+        model.submitSearch()
+        try await waitUntil("new query page one") { probe.replies.count == 3 }
+        try require(model.currentPage == 2 && model.loadedPage == 2 && model.requestedPage == 1 &&
+                    model.isLoadingNewSearch && model.items.map(\.id) == [item.id] &&
+                    model.pageLoadRevision == oldRevision, "Search changed the displayed page before receiving results")
+        probe.replies[2].resume(throwing: failure)
+        try await waitUntil("new query failure") { !model.isLoading }
+        try require(model.currentPage == 2 && model.loadedPage == 2 && model.requestedPage == nil &&
+                    model.items.map(\.id) == [item.id] && model.totalItems == total &&
+                    model.pageLoadRevision == oldRevision && model.searchText == "New query" &&
+                    model.pageNavigationMessage?.contains(failure.localizedDescription) == true,
+                    "Failed search changed prior content/page or hid the error")
+        model.loadNextPage()
+        try await waitUntil("new query retry via pagination") { probe.replies.count == 4 }
+        try require(probe.pages.last == 1 && model.currentPage == 2,
+                    "Pagination reused the old query's page offset after a new query failed")
+        probe.replies[3].resume(returning: ([newItem], total))
+        try await waitUntil("new query accepted") { !model.isLoading }
+        try require(model.currentPage == 1 && model.items.map(\.id) == [newItem.id] &&
+                    model.pageNavigationMessage == nil && model.error == nil &&
+                    model.pageLoadRevision == oldRevision + 1, "New query did not commit atomically")
+        model.loadNextPage()
+        try await waitUntil("new query page two") { probe.replies.count == 5 }
+        try require(probe.pages.last == 2, "Accepted new query still forced page one")
+        probe.replies[4].resume(returning: ([newItem], total))
+        try await waitUntil("new query page two completion") { !model.isLoading }
+
+        let beforeFilters = model.pageLoadRevision
+        model.selectWorkshopSort(.mostSubscribed)
+        try await waitUntil("sort request") { probe.replies.count == 6 }
+        try require(model.currentPage == 2 && model.requestedPage == 1 && model.isLoadingNewSearch,
+                    "Sorting changed the displayed page before success")
+        model.applyTagFilter("Nature")
+        try await waitUntil("tag request replaces sort") { probe.replies.count == 7 }
+        probe.replies[5].resume(returning: ([item], total))
+        try await Task.sleep(for: .milliseconds(30))
+        try require(model.isLoading && model.currentPage == 2 && model.items.map(\.id) == [newItem.id] &&
+                    model.pageLoadRevision == beforeFilters, "An obsolete query replaced the current results")
+        probe.replies[6].resume(returning: ([], 0))
+        try await waitUntil("empty new query accepted") { !model.isLoading }
+        try require(model.currentPage == 1 && model.loadedPage == 1 && model.items.isEmpty && model.totalItems == 0 &&
+                    model.pageNavigationMessage == nil && model.error == nil &&
+                    model.pageLoadRevision == beforeFilters + 1,
+                    "A successful empty new query incorrectly kept stale results")
+
+        model.searchText = "Another query"
+        model.submitSearch()
+        try await waitUntil("repopulate page one") { probe.replies.count == 8 }
+        probe.replies[7].resume(returning: ([newItem], total))
+        try await waitUntil("repopulate completion") { !model.isLoading }
+        model.goToPage(2)
+        try await waitUntil("repopulate page two") { probe.replies.count == 9 }
+        probe.replies[8].resume(returning: ([newItem], total))
+        try await waitUntil("repopulate page two completion") { !model.isLoading }
+        let beforeRefresh = model.pageLoadRevision
+        model.refreshSearch()
+        try await waitUntil("same-query refresh") { probe.replies.count == 10 }
+        try require(probe.pages.last == 2 && !model.isLoadingNewSearch, "Refresh lost the displayed query's page")
+        probe.replies[9].resume(throwing: failure)
+        try await waitUntil("refresh failure") { !model.isLoading }
+        try require(model.currentPage == 2 && model.pageLoadRevision == beforeRefresh &&
+                    model.pageNavigationMessage?.contains(failure.localizedDescription) == true,
+                    "A non-pagination refresh hid its error or reset the displayed page")
+        model.retrySearch()
+        try await waitUntil("retry failed refresh") { probe.replies.count == 11 }
+        try require(probe.pages.last == 2, "Retry did not target the failed request")
+        probe.replies[10].resume(returning: ([newItem], total))
+        try await waitUntil("refresh retry completion") { !model.isLoading }
+
+        model.goToPage(3)
+        try await waitUntil("failed page three") { probe.replies.count == 12 }
+        probe.replies[11].resume(throwing: failure)
+        try await waitUntil("failed page three completion") { !model.isLoading }
+        model.searchText = "Changed before retry"
+        model.retrySearch()
+        try await waitUntil("retry after editing query") { probe.replies.count == 13 }
+        try require(probe.pages.last == 1, "Retry used a failed page number with different search criteria")
+        probe.replies[12].resume(returning: ([item], total))
+        try await waitUntil("retry after editing query completion") { !model.isLoading }
+        try require(probe.pages == [1, 2, 1, 1, 2, 1, 1, 1, 2, 2, 2, 3, 1], "Unexpected search page sequence")
+
+        let initialProbe = SearchProbe()
+        let initial = WorkshopViewModel(subscriptionCatalog: [], pageSearch: initialProbe.load)
+        initial.search()
+        try await waitUntil("initial failure request") { initialProbe.replies.count == 1 }
+        initialProbe.replies[0].resume(throwing: failure)
+        try await waitUntil("initial failure cleanup") { !initial.isLoading }
+        try require(initial.items.isEmpty && initial.currentPage == 1 && initial.error == failure.localizedDescription &&
+                    initial.pageNavigationMessage == nil && initial.requestedPage == nil,
+                    "Initial failure did not expose the empty-view error state")
+        print("PASS: unified search/filter commits, visible refresh failures, changed-query retry routing and empty results")
+    }
+
+    static func testWorkshopSearchBoundaries() async throws {
+        final class SearchProbe {
+            typealias Result = (items: [WorkshopItem], total: Int)
+            var pages: [Int] = []
+            var replies: [CheckedContinuation<Result, Error>] = []
+            func load(_ page: Int) async throws -> Result {
+                pages.append(page)
+                // Canceled requests still complete to exercise stale correction responses.
+                return try await withCheckedThrowingContinuation { replies.append($0) }
+            }
+        }
+        let item = WorkshopItem(publishedFileId: "retained", title: "Previous results", itemDescription: "",
+            previewImageURL: nil, tags: [], subscriptions: 0, favorited: 0, views: 0, fileSize: 1,
+            timeCreated: Date(), timeUpdated: Date(), creatorSteamId: "", wallpaperType: "video")
+        var correctedItem = item
+        correctedItem.publishedFileId = "corrected-page"
+        let failure = NSError(domain: "SearchBoundaryRegression", code: 1)
+        let probe = SearchProbe()
+        let model = WorkshopViewModel(subscriptionCatalog: [], pageSearch: probe.load)
+        let total = model.itemsPerPage * 4
+        model.search(page: 2)
+        try await waitUntil("displayed query page two") { probe.replies.count == 1 }
+        probe.replies[0].resume(returning: ([item], total))
+        try await waitUntil("displayed query ready") { !model.isLoading }
+        model.searchText = "Failing query"
+        model.submitSearch()
+        try await waitUntil("different query request") { probe.replies.count == 2 }
+        probe.replies[1].resume(throwing: failure)
+        try await waitUntil("different query failure") { !model.isLoading }
+        model.searchText = ""
+        model.retrySearch()
+        try await waitUntil("retry reverted criteria") { probe.replies.count == 3 }
+        let revertedPage = probe.pages.last
+        probe.replies[2].resume(returning: ([item], total))
+        try await waitUntil("reverted criteria completion") { !model.isLoading }
+        try require(revertedPage == 1 && model.currentPage == 1,
+                    "Reverting to displayed criteria reused its old page instead of restarting at one")
+
+        model.searchText = "Empty query"
+        model.submitSearch()
+        try await waitUntil("pending empty query") { probe.replies.count == 4 }
+        model.goToPage(2)
+        try await waitUntil("empty query page two") { probe.replies.count == 5 }
+        probe.replies[4].resume(returning: ([], 0))
+        try await waitUntil("empty query normalization") { !model.isLoading }
+        try require(model.currentPage == 1 && model.loadedPage == 1 && model.totalPages == 1 &&
+                    model.items.isEmpty && model.requestedPage == nil,
+                    "Empty new-query results committed an out-of-range page")
+        probe.replies[3].resume(returning: ([item], total))
+        try await Task.sleep(for: .milliseconds(30))
+        try require(model.items.isEmpty && model.totalItems == 0, "Stale first-page response replaced empty results")
+
+        model.searchText = "Large query"
+        model.submitSearch()
+        try await waitUntil("restore large range") { probe.replies.count == 6 }
+        probe.replies[5].resume(returning: ([item], total))
+        try await waitUntil("large range ready") { !model.isLoading }
+        let retainedRevision = model.pageLoadRevision
+        model.searchText = "Smaller query"
+        model.submitSearch()
+        try await waitUntil("smaller query pending") { probe.replies.count == 7 }
+        model.goToPage(4)
+        try await waitUntil("smaller query old page range") { probe.replies.count == 8 }
+        // Even a nonempty out-of-range response must not simply be relabeled.
+        probe.replies[7].resume(returning: ([item], model.itemsPerPage * 2))
+        try await waitUntil("corrective page request") { probe.replies.count == 9 }
+        try require(probe.pages.last == 2 && model.requestedPage == 2 && model.isLoading &&
+                    model.currentPage == 1 && model.items.map(\.id) == [item.id] &&
+                    model.pageLoadRevision == retainedRevision && model.totalItems == total,
+                    "Out-of-range content was committed before fetching the valid page")
+        probe.replies[8].resume(throwing: failure)
+        try await waitUntil("corrective request failure") { !model.isLoading }
+        try require(model.currentPage == 1 && model.pageLoadRevision == retainedRevision &&
+                    model.pageNavigationMessage != nil, "Correction failure discarded the previous results")
+        model.retrySearch()
+        try await waitUntil("retry corrective page") { probe.replies.count == 10 }
+        try require(probe.pages.last == 2, "Correction retry used the original invalid page")
+        probe.replies[9].resume(returning: ([correctedItem], model.itemsPerPage * 2))
+        try await waitUntil("corrective result committed") { !model.isLoading }
+        try require(model.currentPage == 2 && model.loadedPage == 2 && model.totalPages == 2 &&
+                    model.items.map(\.id) == [correctedItem.id] && model.pageLoadRevision == retainedRevision + 1,
+                    "Corrected content and page were not committed together")
+        probe.replies[6].resume(returning: ([item], total))
+        try await Task.sleep(for: .milliseconds(30))
+        try require(model.items.map(\.id) == [correctedItem.id], "Stale initial search replaced corrected results")
+
+        model.searchText = "One-page query"
+        model.submitSearch()
+        try await waitUntil("one-page query pending") { probe.replies.count == 11 }
+        model.goToPage(2)
+        try await waitUntil("one-page query invalid target") { probe.replies.count == 12 }
+        probe.replies[11].resume(returning: ([], 1))
+        try await waitUntil("one-page corrective request") { probe.replies.count == 13 }
+        try require(probe.pages.last == 1 && model.requestedPage == 1, "Empty invalid page did not request valid content")
+        model.searchText = "Latest query"
+        model.submitSearch()
+        try await waitUntil("supersede corrective request") { probe.replies.count == 14 }
+        probe.replies[12].resume(returning: ([item], 1))
+        probe.replies[10].resume(throwing: failure)
+        try await Task.sleep(for: .milliseconds(30))
+        try require(model.isLoading && model.items.map(\.id) == [correctedItem.id] && model.error == nil,
+                    "A superseded correction changed content or loading state")
+        probe.replies[13].resume(returning: ([], 0))
+        try await waitUntil("latest query after correction") { !model.isLoading }
+        try require(model.currentPage == 1 && model.items.isEmpty && model.totalItems == 0,
+                    "Latest query failed to replace the corrective request")
+        print("PASS: reverted-criteria retry, empty-result normalization, corrective fetch/failure/retry and supersession")
+    }
+
+    static func testWorkshopSearchAuthentication() async throws {
+        final class SearchProbe {
+            typealias Result = (items: [WorkshopItem], total: Int)
+            var authenticated = true
+            var pages: [Int] = []
+            var replies: [CheckedContinuation<Result, Error>] = []
+            func load(_ page: Int) async throws -> Result {
+                pages.append(page)
+                return try await withCheckedThrowingContinuation { replies.append($0) }
+            }
+        }
+        let storedShowOnly = UserDefaults.standard.object(forKey: "WorkshopShowOnlyV2")
+        defer { UserDefaults.standard.set(storedShowOnly, forKey: "WorkshopShowOnlyV2") }
+        let item = WorkshopItem(publishedFileId: "account-favorite", title: "Account favorite", itemDescription: "",
+            previewImageURL: nil, tags: [], subscriptions: 0, favorited: 0, views: 0, fileSize: 1,
+            timeCreated: Date(), timeUpdated: Date(), creatorSteamId: "", wallpaperType: "video")
+        let probe = SearchProbe()
+        let model = WorkshopViewModel(subscriptionCatalog: [], pageSearch: probe.load,
+                                      isSearchAuthenticated: { probe.authenticated })
+        let total = model.itemsPerPage * 4
+        let failure = NSError(domain: "SearchAuthenticationRegression", code: 1)
+        model.workshopShowOnly = [.myFavourites]
+        model.search(page: 2)
+        try await waitUntil("favorite page request") { probe.replies.count == 1 }
+        probe.replies[0].resume(returning: ([item], total))
+        try await waitUntil("favorite page completion") { !model.isLoading }
+        model.goToPage(3)
+        try await waitUntil("favorite page failure request") { probe.replies.count == 2 }
+        probe.replies[1].resume(throwing: failure)
+        try await waitUntil("favorite network failure") { !model.isLoading }
+        try require(model.currentPage == 2 && model.items.map(\.id) == [item.id] &&
+                    model.pageNavigationMessage != nil, "Authenticated network failure discarded favorites")
+
+        let beforeLogout = model.pageLoadRevision
+        probe.authenticated = false
+        // The favorite-ID observer calls this after the service clears its login state.
+        model.search(page: 1)
+        try require(model.items.isEmpty && model.totalItems == 0 && model.totalPages == 1 &&
+                    model.currentPage == 1 && model.loadedPage == 1 && model.requestedPage == nil &&
+                    !model.isLoading && !model.isLoadingNewSearch && model.pageNavigationMessage == nil &&
+                    model.error != nil && model.steamServiceStatus.browsingAPI == .unknown &&
+                    model.pageLoadRevision > beforeLogout && probe.pages == [2, 3],
+                    "Authentication failure retained account results, failed-page state or loading state")
+        model.retrySearch()
+        try require(probe.pages == [2, 3] && model.items.isEmpty && !model.isLoading,
+                    "Retry while logged out bypassed the authentication gate")
+        probe.authenticated = true
+        model.retrySearch()
+        try await waitUntil("new session retry") { probe.replies.count == 3 }
+        try require(probe.pages.last == 1, "New session reused the previous account's failed page")
+        probe.replies[2].resume(returning: ([item], total))
+        try await waitUntil("new session result") { !model.isLoading }
+        try require(model.currentPage == 1 && model.error == nil, "Login recovery retained the authentication error")
+
+        model.goToPage(2)
+        try await waitUntil("favorite request pending at logout") { probe.replies.count == 4 }
+        probe.authenticated = false
+        model.search(page: 1)
+        let logoutRevision = model.pageLoadRevision
+        probe.replies[3].resume(returning: ([item], total))
+        try await Task.sleep(for: .milliseconds(30))
+        try require(model.items.isEmpty && model.totalItems == 0 && model.currentPage == 1 &&
+                    model.pageLoadRevision == logoutRevision && model.requestedPage == nil && model.error != nil,
+                    "A late pre-logout response restored the previous account's favorites")
+
+        probe.authenticated = true
+        model.search(page: 1)
+        try await waitUntil("second pending session") { probe.replies.count == 5 }
+        probe.authenticated = false
+        model.search(page: 1)
+        probe.replies[4].resume(throwing: failure)
+        try await Task.sleep(for: .milliseconds(30))
+        try require(model.items.isEmpty && model.pageNavigationMessage == nil && model.error != failure.localizedDescription,
+                    "A late pre-logout failure replaced the authentication state")
+
+        model.workshopShowOnly = .none
+        model.search()
+        try await waitUntil("public search while logged out") { probe.replies.count == 6 }
+        try require(probe.pages.last == 1, "Public search reused an account page after logout")
+        probe.replies[5].resume(returning: ([item], total))
+        try await waitUntil("public search completion") { !model.isLoading }
+        model.goToPage(2)
+        try await waitUntil("public network failure request") { probe.replies.count == 7 }
+        probe.replies[6].resume(throwing: failure)
+        try await waitUntil("public network failure completion") { !model.isLoading }
+        try require(model.items.map(\.id) == [item.id] && model.currentPage == 1 && model.pageNavigationMessage != nil,
+                    "Logged-out public browsing lost ordinary retained-result failure handling")
+        // Exercise the same handler as the login-state observer, including public-filter transitions.
+        model.goToPage(2)
+        try await waitUntil("public request during authentication event") { probe.replies.count == 8 }
+        model.refreshSearchAuthentication()
+        try require(model.isLoading && model.requestedPage == 2 && probe.replies.count == 8,
+                    "Authentication loss unnecessarily canceled an entirely public search")
+        probe.replies[7].resume(returning: ([item], total))
+        try await waitUntil("public request preserved") { !model.isLoading }
+
+        probe.authenticated = true
+        model.workshopShowOnly = [.myFavourites]
+        model.search(page: 2)
+        try await waitUntil("favorites before switching filter") { probe.replies.count == 9 }
+        probe.replies[8].resume(returning: ([item], total))
+        try await waitUntil("favorites before switching filter ready") { !model.isLoading }
+        model.workshopShowOnly = .none
+        model.search(page: 1)
+        try await waitUntil("public filter replaces favorites") { probe.replies.count == 10 }
+        probe.replies[9].resume(throwing: failure)
+        try await waitUntil("public filter failure retaining favorites") { !model.isLoading }
+        try require(model.items.map(\.id) == [item.id] && model.currentPage == 2,
+                    "Expected retained favorite results before logout")
+        probe.authenticated = false
+        model.refreshSearchAuthentication()
+        try require(model.items.isEmpty && model.totalItems == 0 && model.currentPage == 1 && model.isLoading,
+                    "Logout retained account results after the controls switched to a public query")
+        try await waitUntil("public query restarted after authentication loss") { probe.replies.count == 11 }
+        probe.replies[10].resume(throwing: failure)
+        try await waitUntil("public restart failure") { !model.isLoading }
+        try require(model.items.isEmpty && model.totalItems == 0 && model.pageNavigationMessage == nil,
+                    "Failed public restart restored the previous account's result state")
+
+        probe.authenticated = true
+        model.workshopShowOnly = [.myFavourites]
+        model.search(page: 1)
+        try await waitUntil("favorite request before reconnect") { probe.replies.count == 12 }
+        probe.authenticated = false
+        // Reconnecting can emit only isLoggedIn=false, without changing favorite IDs.
+        model.refreshSearchAuthentication()
+        try require(!model.isLoading && model.requestedPage == nil && model.items.isEmpty && model.error != nil &&
+                    model.steamServiceStatus.browsingAPI == .unknown,
+                    "Authentication observer left a private request or phantom API check running")
+        probe.replies[11].resume(returning: ([item], total))
+        try await Task.sleep(for: .milliseconds(30))
+        try require(model.items.isEmpty && !model.isLoading && model.steamServiceStatus.browsingAPI == .unknown,
+                    "Request from the disconnected session repopulated favorites")
+        print("PASS: authentication invalidation, late account responses, login recovery and public browsing failures")
     }
 
     static func testObservation() throws {

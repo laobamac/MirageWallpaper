@@ -1025,6 +1025,10 @@
 "下一张" = "Next Wallpaper";
 "正在应用壁纸…" = "Applying wallpaper…";
 
+"正在加载第 %d 页…" = "Loading page %d…";
+"加载失败，仍显示上次结果：%@" = "Loading failed; showing previous results: %@";
+"正在加载新结果，暂时显示上次结果。" = "Loading new results; showing previous results for now.";
+
 "开发团队" = "Development Team";
 "项目作者 · 开发者" = "Project Author · Developer";
 "开发者" = "Developer";
