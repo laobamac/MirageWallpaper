@@ -88,3 +88,19 @@ cp -f "$ROOT/SteamService/Licenses/SteamKit2-NOTICE.txt" "$DESTINATION/Licenses/
 cp -f "$ROOT/SteamService/Licenses/DepotDownloader-NOTICE.txt" "$DESTINATION/Licenses/DepotDownloader-NOTICE.txt"
 cp -f "$DOTNET_ROOT/LICENSE.txt" "$DESTINATION/Licenses/dotnet-LICENSE.txt"
 cp -f "$DOTNET_ROOT/ThirdPartyNotices.txt" "$DESTINATION/Licenses/dotnet-ThirdPartyNotices.txt"
+
+PRIVATE_BUNDLE="${MIRAGE_DIRECT_WORKSHOP_BUNDLE:-$ROOT/../MirageDirectWorkshopPrivate/dist}"
+PRIVATE_DESTINATION="$APP/Contents/Resources/DirectWorkshop"
+rm -rf "$PRIVATE_DESTINATION"
+if [ -n "${MIRAGE_DIRECT_WORKSHOP_BUNDLE:-}" ] && [ ! -f "$PRIVATE_BUNDLE/MirageDirectWorkshop.dll" ]; then
+    echo "[direct-workshop] Configured private bundle is missing" >&2
+    exit 1
+fi
+if [ -f "$PRIVATE_BUNDLE/MirageDirectWorkshop.dll" ]; then
+    mkdir -p "$PRIVATE_DESTINATION"
+    cp -R "$PRIVATE_BUNDLE/." "$PRIVATE_DESTINATION/"
+    if find "$PRIVATE_DESTINATION" \( -name '*.cs' -o -name '*.pem' -o -name '*.pdb' -o -name '*private*' \) | grep -q .; then
+        echo "[direct-workshop] Private bundle contains source or signing material" >&2
+        exit 1
+    fi
+fi

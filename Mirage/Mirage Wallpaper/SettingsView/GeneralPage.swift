@@ -249,6 +249,8 @@ struct GeneralPage: SettingsPage {
                 Label("壁纸库", systemImage: "folder.fill")
             }
 
+            DirectWorkshopSettingsSection()
+
             if MirageRegion.isMainlandChina {
                 Section {
                     Picker("Steam API 线路", selection: $viewModel.settings.steamAPIEndpoint) {

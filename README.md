@@ -224,6 +224,18 @@ gh secret set MIRAGE_STEAM_WEB_API_KEY < .secrets/steam_web_api_key
 
 `MIRAGE_SPARKLE_PRIVATE_KEY` 只用于 Actions 生成 Ed25519 签名的更新包和 appcast。它绝不能提交到仓库；应保留登录钥匙串中的原始密钥，并另存一份离线备份。客户端仅包含可公开的公钥。
 
+如需在同一次 Action 中编译免登录下载组件，将组件源码放在独立的 **Private** 仓库，再为 MirageWallpaper 配置：
+
+| 类型 | 名称 | 内容 |
+| --- | --- | --- |
+| Repository Variable | `MIRAGE_DIRECT_WORKSHOP_REPOSITORY` | 私有组件仓库的 `owner/name` |
+| Repository Variable | `MIRAGE_DIRECT_WORKSHOP_REF` | 私有组件的完整 40 位提交 SHA，两种架构使用同一版本 |
+| Repository Secret | `MIRAGE_DIRECT_WORKSHOP_DEPLOY_KEY` | 仅用于读取上述私有仓库的 SSH 部署私钥；对应公钥加入私有仓库 Deploy keys，不启用写权限 |
+
+私有仓库须包含 `Service`、`Tests/Tests.csproj`、`Tests/Program.cs`、`build.sh` 和 `LICENSE`；保留原来的 `Service/VerificationKey.cs` 公钥，不要重新生成签名身份。`secrets/`、签发私钥和测试激活码均不提交，也不配置到 Actions。工作流在 runner 临时目录读取指定提交，运行私有组件测试并编译，仅将 `dist` 二进制打入 App；私有源码和编译日志不会作为 artifact 上传。打包后会验证辅助进程可以运行，并拒绝无效激活码。
+
+三项全部未配置时构建普通版本；配置不完整或私有组件构建失败时整个任务失败，避免悄悄发布缺少功能的版本。更新组件后修改 `MIRAGE_DIRECT_WORKSHOP_REF`，再手动运行 Action 或触发下一次主仓库构建。只更新私有仓库不会自动触发主仓库。
+
 Workflow 为每次构建自动将完整 Git commit 与 `git rev-list --count` 生成的递增构建号写入 App，因此不需要手动更新版本号。只有构建号更高的 commit 才会被安装，避免把较新的开发构建降级为较旧 Release。
 
 - 推送 `v*` 标签会创建正式 GitHub Release，并写入稳定更新源；
@@ -307,3 +319,5 @@ VideoRenderer/build/release/Tools/VideoViewer/VideoViewer <video-wallpaper-direc
 ## 许可证
 
 Mirage 使用 [GPL-3.0](LICENSE) 发布。Steam 服务相关第三方声明位于 [`SteamService/Licenses`](SteamService/Licenses)，其余第三方代码与资源继续遵循各自许可证。Mirage 与 Valve、Steam 或 Wallpaper Engine 没有关联，也未获得其官方认可。
+
+可选的免登录工坊下载默认关闭，需要在「设置 → 通用」输入本机专用激活码。该模式仅支持下载，不支持 Steam 订阅、收藏或评论。其独立辅助组件不包含在本开源仓库中；未提供该组件的构建仍可正常使用 Steam 下载。发布构建通过 `MIRAGE_DIRECT_WORKSHOP_BUNDLE` 指定预编译组件目录，勿将私有源码或激活签发材料加入仓库。

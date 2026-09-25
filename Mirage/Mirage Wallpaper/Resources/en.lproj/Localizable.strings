@@ -1029,3 +1029,67 @@
 "项目作者 · 开发者" = "Project Author · Developer";
 "开发者" = "Developer";
 "打开 %@ 的 GitHub 主页" = "Open %@’s GitHub profile";
+
+"免登录下载" = "Sign-in-free downloads";
+
+"无需登录 Steam 或拥有 Wallpaper Engine，即可下载公开壁纸。此模式仅支持下载，不支持 Steam 订阅、收藏或评论。" = "Download public wallpapers without signing into Steam or owning Wallpaper Engine. This mode supports downloads only; Steam subscriptions, favorites and comments are unavailable.";
+
+"为控制资源使用，本功能限量开放。QQ群 2160040437 不定期发放激活资格，领取时请提供下方设备码。激活码一机一码，仅适用于本机。" = "Access is limited to control resource usage. Activation access is offered periodically in QQ group 2160040437. Provide the device code below when requesting a code. Each activation code is bound to one device.";
+
+"已复制群号" = "Group number copied";
+
+"复制QQ群号" = "Copy QQ group number";
+
+"已复制设备码" = "Device code copied";
+
+"复制设备码" = "Copy device code";
+
+"本机已激活" = "Activated on this device";
+
+"移除激活" = "Remove activation";
+
+"有效期至 %@" = "Valid until %@";
+
+"输入本机激活码" = "Enter this device’s activation code";
+
+"免登录下载使用第三方服务，作品标识和网络信息会发送给相关服务。服务可能失效，激活不代表获得 Steam 许可证，也不保证符合平台条款。" = "Sign-in-free downloads use third-party services, which receive item identifiers and network information. Services may stop working. Activation does not grant a Steam license or guarantee compliance with platform terms.";
+
+"我已了解并接受上述限制与风险" = "I understand and accept these limitations and risks";
+
+"激活并开启" = "Activate and enable";
+
+"更改立即生效；关闭此模式会取消正在进行的免登录下载。" = "Changes apply immediately. Switching modes cancels current downloads.";
+
+"免登录工坊下载" = "Sign-in-free Workshop downloads";
+
+"移除本机激活？" = "Remove activation from this device?";
+
+"将关闭免登录下载并清除本机保存的激活码，已下载壁纸不受影响。" = "This turns off sign-in-free downloads and removes the saved activation code. Downloaded wallpapers are kept.";
+
+"此版本未包含免登录下载组件" = "This build does not include the sign-in-free download component";
+
+"无法将激活信息保存到钥匙串" = "Could not save activation to Keychain";
+
+"无法清除钥匙串中的激活信息" = "Could not remove activation from Keychain";
+
+"请先激活并开启免登录下载" = "Activate and enable sign-in-free downloads first";
+
+"激活码无效，请检查后重试" = "Invalid activation code. Check it and try again.";
+
+"此激活码不适用于本机，请使用本机设备码领取" = "This code is for another device. Request a code using this device’s code.";
+
+"激活码已过期，请领取新的激活码" = "This activation code has expired. Request a new code.";
+
+"无法读取本机设备标识" = "Could not read this device’s identifier";
+
+"免登录下载服务暂不可用，请稍后重试" = "Sign-in-free downloads are temporarily unavailable. Try again later.";
+
+"无法获取此创意工坊作品的下载内容" = "Could not obtain downloadable content for this Workshop item";
+
+"下载内容未通过安全或完整性校验" = "Downloaded content failed security or integrity validation";
+
+"免登录下载失败，请检查网络后重试" = "Sign-in-free download failed. Check your connection and retry.";
+
+"免登录模式仅支持下载，请关闭此模式并登录 Steam 以使用社区功能" = "This mode supports downloads only. Turn it off and sign into Steam to use community features.";
+
+"免登录下载已开启" = "Sign-in-free downloads enabled";

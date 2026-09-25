@@ -146,8 +146,13 @@ struct WorkshopItemDetail: View {
                 tagList(for: item)
 
                 sectionHeader("操作")
-                favoriteSection(for: item)
-                subscriptionSection(for: item)
+                if workshopViewModel.directDownloadMode {
+                    Text("免登录模式仅支持下载，请关闭此模式并登录 Steam 以使用社区功能")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    favoriteSection(for: item)
+                    subscriptionSection(for: item)
+                }
                 downloadSection(for: item)
 
                 Button {
@@ -172,8 +177,10 @@ struct WorkshopItemDetail: View {
                         .lineLimit(8)
                 }
 
-                sectionHeader("评论")
-                commentsSection(for: item)
+                if !workshopViewModel.directDownloadMode {
+                    sectionHeader("评论")
+                    commentsSection(for: item)
+                }
 
                 sectionHeader("信息")
                 VStack(alignment: .leading, spacing: 4) {
@@ -915,7 +922,9 @@ struct CreatorProfileView: View {
                         }
                         .contextMenu {
                             Section {
-                                if workshopViewModel.changingFavoriteIDs.contains(item.publishedFileId) {
+                                if workshopViewModel.directDownloadMode {
+                                    Label("免登录下载已开启", systemImage: "arrow.down.circle")
+                                } else if workshopViewModel.changingFavoriteIDs.contains(item.publishedFileId) {
                                     Label("正在同步收藏状态…", systemImage: "arrow.triangle.2.circlepath")
                                 } else {
                                     Button {

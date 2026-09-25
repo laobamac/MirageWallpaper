@@ -140,6 +140,14 @@ jobs:
           cache: true
           cache-dependency-path: SteamService/packages.lock.json
 
+      - name: Build optional private Workshop component
+        shell: bash
+        env:
+          MIRAGE_DIRECT_WORKSHOP_REPOSITORY: ${{ vars.MIRAGE_DIRECT_WORKSHOP_REPOSITORY }}
+          MIRAGE_DIRECT_WORKSHOP_REF: ${{ vars.MIRAGE_DIRECT_WORKSHOP_REF }}
+          MIRAGE_DIRECT_WORKSHOP_DEPLOY_KEY: ${{ secrets.MIRAGE_DIRECT_WORKSHOP_DEPLOY_KEY }}
+        run: bash Mirage/scripts/build_direct_workshop_ci.sh
+
       - name: Install build dependencies
         shell: bash
         run: |
@@ -238,6 +246,33 @@ jobs:
           grep -q '"type":"hello"' "$ipc_log"
           grep -q '"type":"pong"' "$ipc_log"
           grep -q '"requestId":"shutdown-ci"' "$ipc_log"
+          if [[ -n "${MIRAGE_DIRECT_WORKSHOP_BUNDLE:-}" ]]; then
+            private="$app/Contents/Resources/DirectWorkshop"
+            test -f "$private/Licenses/MirageDirectWorkshop-LICENSE.txt"
+            test -f "$private/Licenses/LGPL-2.1.txt"
+            test -f "$private/Licenses/SteamKit2-NOTICE.txt"
+            cmp "$MIRAGE_DIRECT_WORKSHOP_BUNDLE/MirageDirectWorkshop.dll" "$private/MirageDirectWorkshop.dll"
+            python3 - "$service/runtime" "$private/MirageDirectWorkshop.dll" <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+          import sys
+
+          runtime, assembly = (Path(value).resolve() for value in sys.argv[1:])
+          environment = dict(os.environ, DOTNET_ROOT=str(runtime), DOTNET_MULTILEVEL_LOOKUP="0")
+          command = [str(runtime / "dotnet"), str(assembly)]
+          device = subprocess.run(command, input=json.dumps({"command": "device"}) + "\n",
+                                  text=True, capture_output=True, env=environment, timeout=20)
+          assert device.returncode == 0, "Packaged private component failed to start"
+          response = json.loads(device.stdout)
+          assert response.get("success") is True and len(response.get("deviceCode", "")) == 64
+          rejected = subprocess.run(command, input=json.dumps({"command": "verify", "activationCode": "invalid-ci-code"}) + "\n",
+                                    text=True, capture_output=True, env=environment, timeout=20)
+          assert rejected.returncode != 0 and json.loads(rejected.stdout).get("errorCode") == "ACTIVATION_INVALID"
+          print("Private component runtime and activation rejection verified.")
+          PY
+          fi
           sparkle="$app/Contents/Frameworks/Sparkle.framework/Versions/B"
           codesign -dvv "$sparkle/Sparkle" 2>&1 | grep -q 'flags=.*runtime'
           sparkle_entitlements="$RUNNER_TEMP/sparkle-entitlements.plist"
@@ -296,6 +331,11 @@ jobs:
         run: |
           security delete-keychain "$RUNNER_TEMP/mirage-signing.keychain-db" 2>/dev/null || true
           rm -f "$RUNNER_TEMP/developer-id-application.p12"
+
+      - name: Remove private Workshop build output
+        if: always()
+        shell: bash
+        run: rm -rf "$RUNNER_TEMP/mirage-direct-workshop-bundle"
 
   publish:
     name: Publish ${{ github.ref_type == 'tag' && 'stable release' || 'pre-release' }} and update feeds

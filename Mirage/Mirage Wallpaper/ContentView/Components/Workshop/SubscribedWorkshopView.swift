@@ -18,7 +18,7 @@ struct SubscribedWorkshopView: View {
     var body: some View {
         @Bindable var globalSettingsViewModel = globalSettingsViewModel
         VStack(spacing: 8) {
-            toolbar
+            if !workshopViewModel.directDownloadMode { toolbar }
 
             if let error = workshopViewModel.subscriptionsError,
                !workshopViewModel.subscriptionItems.isEmpty {
@@ -30,14 +30,14 @@ struct SubscribedWorkshopView: View {
         .task(id: isActive) {
             guard isActive else { return }
             workshopViewModel.checkSteamSetup()
-            if steamService.isLoggedIn &&
+            if workshopViewModel.canUseSteamCommunity &&
                 workshopViewModel.subscriptionCatalogItems.isEmpty &&
                 !workshopViewModel.isLoadingSubscriptions {
                 workshopViewModel.refreshSubscriptions(startIndex: 0)
             }
         }
         .onChange(of: steamService.isLoggedIn) { _, isLoggedIn in
-            if isActive && isLoggedIn && !workshopViewModel.isLoadingSubscriptions {
+            if isActive && isLoggedIn && workshopViewModel.canUseSteamCommunity && !workshopViewModel.isLoadingSubscriptions {
                 workshopViewModel.refreshSubscriptions(startIndex: 0)
             }
         }
@@ -237,7 +237,13 @@ struct SubscribedWorkshopView: View {
 
     @ViewBuilder
     private var content: some View {
-        if workshopViewModel.steamSetupState == .checking {
+        if workshopViewModel.directDownloadMode {
+            centered {
+                Image(systemName: "arrow.down.circle").font(.system(size: 40)).foregroundStyle(.secondary)
+                Text("免登录模式仅支持下载，请关闭此模式并登录 Steam 以使用社区功能")
+                    .multilineTextAlignment(.center).foregroundStyle(.secondary)
+            }
+        } else if workshopViewModel.steamSetupState == .checking {
             centered {
                 ProgressView()
                     .scaleEffect(1.3)

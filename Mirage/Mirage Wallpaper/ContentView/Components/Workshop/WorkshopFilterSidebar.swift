@@ -25,7 +25,8 @@ struct WorkshopFilterSidebar: View {
                     ShowOnlyFilterSection(
                         id: "workshop.showOnly",
                         selection: workshopViewModel.workshopShowOnly,
-                        onChange: workshopViewModel.setWorkshopShowOnly
+                        onChange: workshopViewModel.setWorkshopShowOnly,
+                        favoritesEnabled: !workshopViewModel.directDownloadMode
                     )
 
                     FilterSection("类型", id: "workshop.type", alignment: .leading) {

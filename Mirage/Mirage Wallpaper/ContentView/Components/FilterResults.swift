@@ -213,6 +213,7 @@ struct ShowOnlyFilterSection: View {
     let id: String
     let selection: FRShowOnly
     let onChange: (FRShowOnly, Bool) -> Void
+    var favoritesEnabled = true
 
     var body: some View {
         FilterSection("仅显示", id: id, alignment: .leading) {
@@ -232,6 +233,7 @@ struct ShowOnlyFilterSection: View {
                         }
                     }
                     .toggleStyle(.checkbox)
+                    .disabled(option == .myFavourites && !favoritesEnabled)
                 }
             }
         }

@@ -76,7 +76,12 @@ struct WorkshopView: View {
                     DownloadPopover(workshopViewModel: workshopViewModel)
                 }
 
-                steamAccountSection
+                if workshopViewModel.directDownloadMode {
+                    Label("免登录下载已开启", systemImage: "arrow.down.circle.badge.checkmark")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    steamAccountSection
+                }
             }
 
             if workshopViewModel.steamSetupState != .ready {

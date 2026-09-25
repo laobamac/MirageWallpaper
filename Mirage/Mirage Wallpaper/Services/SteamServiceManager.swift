@@ -9,6 +9,7 @@ import Security
 
 final class SteamServiceManager: ObservableObject, @unchecked Sendable {
     static let shared = SteamServiceManager()
+    private static let communityCommands: Set<String> = ["listSubscriptions", "checkSubscriptionStates", "subscribe", "unsubscribe", "listFavorites", "favorite", "unfavorite", "getComments", "postComment"]
 
     @Published private(set) var isAvailable = false
     @Published private(set) var isLoggedIn = false
@@ -231,6 +232,11 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
 
     func downloadItem(workshopId: String, taskId: String,
                       onProgress: @escaping (DownloadState) -> Void) {
+        if DirectWorkshopService.shared.isEnabled {
+            DirectWorkshopService.shared.download(workshopId: workshopId, taskId: taskId,
+                                                  outputRoot: contentDirectory, progress: onProgress)
+            return
+        }
         ioQueue.async { [weak self] in
             guard let self else { return }
             self.downloadHandlers[taskId] = onProgress
@@ -240,6 +246,7 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
     }
 
     func cancelDownload(taskId: String) {
+        DirectWorkshopService.shared.cancel(taskId: taskId)
         ioQueue.async { [weak self] in
             guard let self else { return }
             guard self.process?.isRunning == true else {
@@ -456,6 +463,7 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
     }
 
     func shutdown() {
+        DirectWorkshopService.shared.shutdown()
         explicitShutdown = true
         ioQueue.sync {
             cancelServiceRestartOnQueue()
@@ -563,6 +571,10 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
     }
 
     private func restoreSessionOnQueue() {
+        guard !DirectWorkshopService.shared.requestsDirectMode else {
+            updateOnMain { self.authenticationState = .needsAction(L("免登录下载已开启")) }
+            return
+        }
         let username = savedUsername
         guard !username.isEmpty else {
             updateOnMain {
@@ -668,6 +680,10 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
     }
 
     private func sendCommandOnQueue(_ command: String, fields: [String: Any] = [:], completion: ((Bool, String?, String?) -> Void)? = nil) {
+        if DirectWorkshopService.shared.blocksSteamCommunity && Self.communityCommands.contains(command) {
+            completion?(false, nil, "DIRECT_DOWNLOAD_ONLY")
+            return
+        }
         guard process?.isRunning == true, let input else {
             completion?(false, L("Steam 服务组件不可用"), nil)
             return
@@ -700,6 +716,10 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
     }
 
     private func sendDataCommandOnQueue(_ command: String, fields: [String: Any] = [:], completion: @escaping (Bool, [String: Any]?, String?, String?) -> Void) {
+        if DirectWorkshopService.shared.blocksSteamCommunity && Self.communityCommands.contains(command) {
+            completion(false, nil, nil, "DIRECT_DOWNLOAD_ONLY")
+            return
+        }
         guard process?.isRunning == true, let input else {
             completion(false, nil, L("Steam 服务组件不可用"), nil)
             return
@@ -1001,6 +1021,7 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
 
     private func localizedError(code: String?, detail: String?) -> String {
         switch code {
+        case "DIRECT_DOWNLOAD_ONLY": return L("免登录模式仅支持下载，请关闭此模式并登录 Steam 以使用社区功能")
         case "AUTH_FAILED": return L("Steam 登录失败，请检查账户信息或重新扫码")
         case "AUTH_SERVICE_TEMPORARY": return L("Steam 认证服务暂时未响应，请稍后重试")
         case "CONNECTION_LOST": return L("Steam 连接已中断")

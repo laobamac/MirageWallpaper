@@ -154,7 +154,7 @@ struct WallpaperPreview: SubviewOfContentView {
                                     .foregroundStyle(isCurrentFavorite ? .red : .secondary)
                             }
                         }
-                        .disabled(isChangingCurrentFavorite)
+                        .disabled(isChangingCurrentFavorite || (workshopViewModel.directDownloadMode && currentWorkshopID != nil))
                         .help(L(isCurrentFavorite ? "取消收藏" : "加入收藏"))
                     }
                     HStack {
@@ -438,7 +438,8 @@ struct WallpaperPreview: SubviewOfContentView {
 
     @ViewBuilder
     private var workshopActions: some View {
-        if let item = workshopViewModel.installedWorkshopItem(for: wallpaperViewModel.previewWallpaper) {
+        if !workshopViewModel.directDownloadMode,
+           let item = workshopViewModel.installedWorkshopItem(for: wallpaperViewModel.previewWallpaper) {
             let id = item.publishedFileId
             let state = workshopViewModel.subscriptionState(for: id)
             let isChecking = workshopViewModel.checkingSubscriptionIDs.contains(id)
