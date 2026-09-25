@@ -84,12 +84,18 @@ RELEASE_FLAGS=()
 if [ "$CONFIG" = Release ]; then
     RELEASE_FLAGS=(ENABLE_CODE_COVERAGE=NO CLANG_COVERAGE_MAPPING=NO DEPLOYMENT_POSTPROCESSING=YES)
 fi
+XCODE_CODE_SIGNING_ALLOWED=YES
+if [ "$SIGN_IDENTITY" = "-" ]; then
+    # Local ad-hoc signing is applied by the packaging scripts after Xcode has
+    # assembled the targets; Xcode development signing would require profiles.
+    XCODE_CODE_SIGNING_ALLOWED=NO
+fi
 echo "[build] 编译 ($CONFIG)..."
 if ! xcodebuild "${XCCONFIG_ARGS[@]}" -project "$PROJECT" -scheme "$SCHEME" -configuration "$CONFIG" \
     -destination 'platform=macOS' \
     -derivedDataPath "$BUILD_DIR/DD" \
     ARCHS="$TARGET_ARCH" ONLY_ACTIVE_ARCH=YES \
-    CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=YES \
+    CODE_SIGN_IDENTITY="$SIGN_IDENTITY" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED="$XCODE_CODE_SIGNING_ALLOWED" \
     "${RELEASE_FLAGS[@]}" \
     build > "$BUILD_LOG" 2>&1; then
     echo "[build] 编译失败，错误摘要:" >&2
