@@ -20,7 +20,6 @@ enum SceneMobileMPKGExporter {
     private static let streamingTextureFlag: UInt32 = 1 << 5
     private static let maximumMobileTextureDimension = 4096
     private static let effort = 10
-    private static let copyBufferSize = 1024 * 1024
     private static let excludedMobileSuffixes: Set<String> = [
         "flac", "m4a", "mp3", "ogg", "wav",
     ]
@@ -98,7 +97,6 @@ enum SceneMobileMPKGExporter {
 
         let package = try readPackage(at: packageURL)
         let mobileVersion = try mobileVersion(for: package.version)
-        let tools = try conversionTools()
         let fileManager = FileManager.default
         let staging = fileManager.temporaryDirectory
             .appending(path: "Mirage-Mobile-Scene-\(UUID().uuidString)", directoryHint: .isDirectory)
@@ -173,7 +171,6 @@ enum SceneMobileMPKGExporter {
         queue.qualityOfService = .userInitiated
         queue.maxConcurrentOperationCount = conversionParallelism
         let resultLock = NSLock()
-        let progressLock = NSLock()
         var textureResults: [Int: StagedEntry] = [:]
         var firstError: Error?
         for item in textureEntries {
@@ -183,23 +180,17 @@ enum SceneMobileMPKGExporter {
                 resultLock.unlock()
                 guard !shouldStop else { return }
                 do {
-                    let source = try readPackageEntry(item.entry, from: packageURL)
-                    let data = try mobileTexture(
-                        source,
-                        label: item.entry.name,
-                        ffmpeg: tools.ffmpeg,
-                        etcTool: tools.etcTool,
-                        jobs: encoderJobs
-                    )
-                    let staged = try stage(data, named: item.entry.name, in: staging)
+                    let staged = try autoreleasepool {
+                        let source = try readPackageEntry(item.entry, from: packageURL)
+                        let data = try mobileTexture(source, label: item.entry.name, jobs: encoderJobs)
+                        return try stage(data, named: item.entry.name, in: staging)
+                    }
                     resultLock.lock()
                     textureResults[item.index] = staged
                     processed += 1
                     let fraction = Double(processed) / Double(conversionCount) * 0.9
-                    resultLock.unlock()
-                    progressLock.lock()
                     progress?(fraction)
-                    progressLock.unlock()
+                    resultLock.unlock()
                 } catch {
                     resultLock.lock()
                     if firstError == nil { firstError = error }
@@ -303,8 +294,6 @@ enum SceneMobileMPKGExporter {
     private static func mobileTexture(
         _ source: Data,
         label: String,
-        ffmpeg: URL,
-        etcTool: URL,
         jobs: Int
     ) throws -> Data {
         let asset = try parseTexture(source, label: label)
@@ -315,7 +304,7 @@ enum SceneMobileMPKGExporter {
         if asset.format == textureFormatRGBA8,
            canEncodeRawMobileTexture(asset),
            (asset.flags == 0 || preservesMobileRGBA8(label: label, asset: asset)) {
-            return try rawMobileTexture(asset, label: label, ffmpeg: ffmpeg)
+            return try rawMobileTexture(asset, label: label)
         }
         guard [textureFormatRGBA8, textureFormatBC1, textureFormatBC2, textureFormatBC3]
             .contains(asset.format) else {
@@ -325,6 +314,9 @@ enum SceneMobileMPKGExporter {
               asset.slots.allSatisfy({ !$0.isEmpty }) else {
             throw SceneMobileExportError.unsupportedTextureLayout(label)
         }
+
+        let ffmpeg = try conversionTool(named: "ffmpeg")
+        let etcTool = try conversionTool(named: "EtcTool")
 
         let temporary = FileManager.default.temporaryDirectory
             .appending(path: "Mirage-Scene-Texture-\(UUID().uuidString)", directoryHint: .isDirectory)
@@ -548,7 +540,8 @@ enum SceneMobileMPKGExporter {
         let sourceHeight = sourceDimensions?.height ?? (asset.spriteData == nil
             ? (asset.mapHeight > 0 ? Int(asset.mapHeight) : Int(mip.height))
             : Int(mip.height))
-        guard sourceWidth <= Int(mip.width), sourceHeight <= Int(mip.height) else {
+        guard sourceWidth > 0, sourceHeight > 0,
+              sourceWidth <= Int(mip.width), sourceHeight <= Int(mip.height) else {
             throw SceneMobileExportError.invalidTexture(label)
         }
         var outputWidth = sourceWidth
@@ -569,6 +562,11 @@ enum SceneMobileMPKGExporter {
             try body.write(to: source)
             arguments += ["-i", source.path]
         } else if [textureFormatBC1, textureFormatBC2, textureFormatBC3].contains(asset.format) {
+            let blockBytes = asset.format == textureFormatBC1 ? 8 : 16
+            let expected = ((Int(mip.width) + 3) / 4) * ((Int(mip.height) + 3) / 4) * blockBytes
+            guard body.count == expected else {
+                throw SceneMobileExportError.invalidTexture(label)
+            }
             source = temporary.appending(path: "source.dds")
             let fourCC: String = [
                 textureFormatBC1: "DXT1",
@@ -585,8 +583,8 @@ enum SceneMobileMPKGExporter {
             try dds.write(to: source)
             arguments += ["-i", source.path]
         } else if asset.format == textureFormatRGBA8 {
-            let expected = Int(mip.width) * Int(mip.height) * 4
-            guard body.count >= expected else {
+            let expected = try rgbaByteCount(width: Int(mip.width), height: Int(mip.height), label: label)
+            guard body.count == expected else {
                 throw SceneMobileExportError.invalidTexture(label)
             }
             source = temporary.appending(path: "source.rgba")
@@ -718,8 +716,7 @@ enum SceneMobileMPKGExporter {
 
     private static func rawMobileTexture(
         _ asset: TextureAsset,
-        label: String,
-        ffmpeg: URL
+        label: String
     ) throws -> Data {
         guard asset.slots.count == 1, let mip = asset.slots.first?.first else {
             throw SceneMobileExportError.unsupportedTextureLayout(label)
@@ -727,7 +724,7 @@ enum SceneMobileMPKGExporter {
         var payload = try decodedMip(mip, label: label)
         var width = Int(mip.width)
         var height = Int(mip.height)
-        var expected = width * height * 4
+        var expected = try rgbaByteCount(width: width, height: height, label: label)
         if payload.count != expected, let suffix = imageSuffix(payload) {
             let temporary = FileManager.default.temporaryDirectory
                 .appending(path: "Mirage-Scene-RGBA-\(UUID().uuidString)", directoryHint: .isDirectory)
@@ -739,7 +736,7 @@ enum SceneMobileMPKGExporter {
             width = asset.mapWidth > 0 ? Int(asset.mapWidth) : Int(mip.width)
             height = asset.mapHeight > 0 ? Int(asset.mapHeight) : Int(mip.height)
             try run(
-                ffmpeg,
+                try conversionTool(named: "ffmpeg"),
                 arguments: [
                     "-hide_banner", "-loglevel", "error", "-y",
                     "-i", source.path,
@@ -752,7 +749,7 @@ enum SceneMobileMPKGExporter {
                 label: "FFmpeg raw RGBA \(label)"
             )
             payload = try Data(contentsOf: decoded)
-            expected = width * height * 4
+            expected = try rgbaByteCount(width: width, height: height, label: label)
         }
         guard payload.count == expected else {
             throw SceneMobileExportError.invalidTexture(label)
@@ -782,6 +779,14 @@ enum SceneMobileMPKGExporter {
         output.append(compressed)
         if let spriteData = asset.spriteData { output.append(spriteData) }
         return output
+    }
+
+    private static func rgbaByteCount(width: Int, height: Int, label: String) throws -> Int {
+        let (pixels, overflow) = width.multipliedReportingOverflow(by: height)
+        guard width > 0, height > 0, !overflow, pixels <= 512 * 1024 * 1024 / 4 else {
+            throw SceneMobileExportError.invalidTexture(label)
+        }
+        return pixels * 4
     }
 
     private static func ktxPayload(
@@ -856,116 +861,74 @@ enum SceneMobileMPKGExporter {
 
     private static func rewriteMobileShader(_ source: Data, label: String) -> Data {
         guard let text = String(data: source, encoding: .utf8) else { return source }
-        let pattern = #"//[^\r\n]*|/\*.*?\*/|\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|[A-Za-z_]\w*|(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?|\S"#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else {
-            return source
-        }
+        // Keep comments, directives, strings and complete numeric literals intact.
+        let pattern = #"^[ \t]*#(?:[^\r\n\\]|\\[^\r\n]|\\\r?\n)*|//[^\r\n]*|/\*.*?\*/|\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|[A-Za-z_]\w*|0[xX][0-9a-fA-F]+[uU]?|(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?[fFuU]?|\S"#
+        guard let regex = try? NSRegularExpression(
+            pattern: pattern, options: [.dotMatchesLineSeparators, .anchorsMatchLines]
+        ) else { return source }
         let string = text as NSString
         let matches = regex.matches(in: text, range: NSRange(location: 0, length: string.length))
         let tokens = matches.map { string.substring(with: $0.range) }
+        let code = tokens.indices.filter {
+            !isComment(tokens[$0]) && !tokens[$0].trimmingCharacters(in: .whitespaces).hasPrefix("#")
+        }
         var replacements: [Int: String] = [:]
-        var constructorRanges: [Range<Int>] = []
-        var bracketRanges: [Range<Int>] = []
-        var arrayIndexIdentifiers = Set<String>()
-        var bracketStack: [Int] = []
-        let callNames: Set<String> = ["vec2", "vec3", "vec4", "mat2", "mat3", "mat4", "smoothstep"]
-
-        for index in tokens.indices {
-            if tokens[index] == "[" {
-                bracketStack.append(index)
-            } else if tokens[index] == "]", let start = bracketStack.popLast() {
-                bracketRanges.append((start + 1)..<index)
-                for cursor in (start + 1)..<index where
-                    tokens[cursor].range(of: #"^[A-Za-z_]\w*$"#, options: .regularExpression) != nil {
-                    arrayIndexIdentifiers.insert(tokens[cursor])
-                }
-            }
+        let floatCalls: Set<String> = [
+            "vec2", "vec3", "vec4", "mat2", "mat3", "mat4",
+            "mix", "min", "max", "clamp", "pow", "step", "smoothstep", "mod",
+            "abs", "sign", "floor", "trunc", "round", "ceil", "fract",
+            "sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh",
+            "exp", "exp2", "log", "log2", "sqrt", "inversesqrt",
+        ]
+        func isIntegerLiteral(_ token: String) -> Bool {
+            !token.isEmpty && token.utf8.allSatisfy { (48...57).contains($0) }
         }
 
-        var protectedForRanges: [Range<Int>] = []
-        for index in tokens.indices where tokens[index] == "for" {
-            let open = index + 1
-            guard open < tokens.count, tokens[open] == "(" else { continue }
-            var depth = 0
-            var cursor = open
-            var identifiers = Set<String>()
-            while cursor < tokens.count {
-                let token = tokens[cursor]
+        for index in code where tokens[index] == "sample" {
+            replacements[index] = "_sample"
+        }
+        // Only normalize whole scalar arguments. Expressions, array indices and
+        // nested integer calls retain their types and integer division semantics.
+        for position in code.indices where floatCalls.contains(tokens[code[position]]) {
+            guard position + 1 < code.count, tokens[code[position + 1]] == "(" else { continue }
+            var depth = 1
+            var brackets = 0
+            var argumentStart = position + 2
+            var cursor = argumentStart
+            while cursor < code.count, depth > 0 {
+                let token = tokens[code[cursor]]
                 if token == "(" { depth += 1 }
-                else if token == ")" {
-                    depth -= 1
-                    if depth == 0 { break }
-                } else if depth > 0,
-                          token.range(of: #"^[A-Za-z_]\w*$"#, options: .regularExpression) != nil {
-                    identifiers.insert(token)
+                if token == "[" { brackets += 1 }
+                if token == "]" { brackets -= 1 }
+                if (token == "," && depth == 1 && brackets == 0) || (token == ")" && depth == 1) {
+                    let argument = Array(code[argumentStart..<cursor])
+                    let literal: Int?
+                    if argument.count == 1 {
+                        literal = argument.first
+                    } else if argument.count == 2, ["+", "-"].contains(tokens[argument[0]]) {
+                        literal = argument[1]
+                    } else {
+                        literal = nil
+                    }
+                    if let literal, isIntegerLiteral(tokens[literal]) {
+                        replacements[literal] = tokens[literal] + ".0"
+                    }
+                    argumentStart = cursor + 1
                 }
+                if token == ")" { depth -= 1 }
                 cursor += 1
             }
-            if depth == 0, !identifiers.isDisjoint(with: arrayIndexIdentifiers) {
-                protectedForRanges.append((open + 1)..<cursor)
-            }
         }
-
-        // The Android GLSL compiler treats `sample` as a reserved identifier.
-        // Wallpaper Engine's mobile exporter prefixes code identifiers with an
-        // underscore while leaving strings and larger identifiers untouched.
-        for index in tokens.indices where tokens[index] == "sample" {
-            if !isPreprocessorToken(matches[index].range, in: string) {
-                replacements[index] = "_sample"
-            }
-        }
-
-        for index in tokens.indices where callNames.contains(tokens[index]) {
-            let open = index + 1
-            guard open < tokens.count, tokens[open] == "(" else { continue }
-            var depth = 0
-            var cursor = open
-            while cursor < tokens.count {
-                let token = tokens[cursor]
-                if token == "(" { depth += 1 }
-                else if token == ")" {
-                    depth -= 1
-                    if depth == 0 { break }
-                } else if depth > 0,
-                          token.range(of: #"^\d+$"#, options: .regularExpression) != nil,
-                          !isPreprocessorToken(matches[cursor].range, in: string) {
-                    replacements[cursor] = token + ".0"
-                }
-                cursor += 1
-            }
-            if depth == 0 { constructorRanges.append((open + 1)..<cursor) }
-        }
-
-        for index in tokens.indices {
-            let token = tokens[index]
-            guard token.range(of: #"^\d+$"#, options: .regularExpression) != nil,
-                  !isPreprocessorToken(matches[index].range, in: string),
-                  !constructorRanges.contains(where: { $0.contains(index) }),
-                  !bracketRanges.contains(where: { $0.contains(index) }),
-                  !protectedForRanges.contains(where: { $0.contains(index) }) else { continue }
-            let previous = previousCodeToken(tokens, before: index)
-            let following = nextCodeToken(tokens, after: index)
-            if previous == "#" || previous == "[" || following == ":" { continue }
-            if previous == "." || previous == "_" || following == "." { continue }
-            if ["return", "=", "+", "-", "*", "/", "<", ">", "<=", ">=", ",", "("].contains(previous)
-                || ["+", "-", "*", "/", ")", ",", ";"].contains(following) {
-                replacements[index] = token + ".0"
-            }
-        }
-
-        // Float normalization may otherwise leave invalid declarations such
-        // as `int value = 1.0`. The official mobile exporter promotes the
-        // declaration too, including loop counters.
-        for index in tokens.indices where tokens[index] == "int" {
-            let nameIndex = index + 1
-            let equalsIndex = index + 2
-            let valueIndex = index + 3
-            guard valueIndex < tokens.count,
-                  tokens[nameIndex].range(of: #"^[A-Za-z_]\w*$"#, options: .regularExpression) != nil,
-                  !arrayIndexIdentifiers.contains(tokens[nameIndex]),
-                  tokens[equalsIndex] == "=",
-                  replacements[valueIndex]?.hasSuffix(".0") == true else { continue }
-            replacements[index] = "float"
+        for position in code.indices where tokens[code[position]] == "float" {
+            guard position + 4 < code.count,
+                  tokens[code[position + 2]] == "=" else { continue }
+            let signOffset = ["+", "-"].contains(tokens[code[position + 3]]) ? 1 : 0
+            let literalPosition = position + 3 + signOffset
+            guard literalPosition + 1 < code.count,
+                  isIntegerLiteral(tokens[code[literalPosition]]),
+                  [";", ","].contains(tokens[code[literalPosition + 1]]) else { continue }
+            let literal = code[literalPosition]
+            replacements[literal] = tokens[literal] + ".0"
         }
         let result = NSMutableString(string: text)
         for index in replacements.keys.sorted(by: >) {
@@ -1003,10 +966,18 @@ enum SceneMobileMPKGExporter {
                     in: &rewritten
                 )
             }
-            rewritten = rewritten.replacingOccurrences(
-                of: "mix(-1.0, 1.0, step(",
-                with: "mix(-g_TextureReductionScale, g_TextureReductionScale, step("
-            )
+            if let expression = try? NSRegularExpression(
+                pattern: #"\bmix\s*\(\s*-1(?:\.0*)?[fF]?\s*,\s*1(?:\.0*)?[fF]?\s*,\s*step\s*\("#
+            ) {
+                let range = NSRange(rewritten.startIndex..<rewritten.endIndex, in: rewritten)
+                if let match = expression.firstMatch(in: rewritten, range: range),
+                   let matchRange = Range(match.range, in: rewritten) {
+                    rewritten.replaceSubrange(
+                        matchRange,
+                        with: "mix(-g_TextureReductionScale, g_TextureReductionScale, step("
+                    )
+                }
+            }
         }
         return Data(rewritten.utf8)
     }
@@ -1016,29 +987,6 @@ enum SceneMobileMPKGExporter {
         value.replaceSubrange(range, with: replacement)
     }
 
-    private static func isPreprocessorToken(_ range: NSRange, in string: NSString) -> Bool {
-        let prefixRange = NSRange(location: 0, length: range.location)
-        let newline = string.range(of: "\n", options: .backwards, range: prefixRange)
-        let start = newline.location == NSNotFound ? 0 : newline.location + 1
-        let linePrefix = string.substring(with: NSRange(location: start, length: range.location - start))
-        return linePrefix.trimmingCharacters(in: .whitespaces).hasPrefix("#")
-    }
-
-    private static func previousCodeToken(_ tokens: [String], before index: Int) -> String {
-        guard index > 0 else { return "" }
-        for cursor in stride(from: index - 1, through: 0, by: -1) {
-            if !isComment(tokens[cursor]) { return tokens[cursor] }
-        }
-        return ""
-    }
-
-    private static func nextCodeToken(_ tokens: [String], after index: Int) -> String {
-        guard index + 1 < tokens.count else { return "" }
-        for cursor in (index + 1)..<tokens.count where !isComment(tokens[cursor]) {
-            return tokens[cursor]
-        }
-        return ""
-    }
 
     private static func isComment(_ token: String) -> Bool {
         token.hasPrefix("//") || token.hasPrefix("/*")
@@ -1093,13 +1041,11 @@ enum SceneMobileMPKGExporter {
         throw SceneMobileExportError.invalidTexture(label)
     }
 
-    private static func conversionTools() throws -> (ffmpeg: URL, etcTool: URL) {
+    private static func conversionTool(named name: String) throws -> URL {
         let fileManager = FileManager.default
         let bundled = Bundle.main.resourceURL?
             .appending(path: "SceneMobileTools", directoryHint: .isDirectory)
-        var candidates: [(URL?, URL?)] = [
-            (bundled?.appending(path: "ffmpeg"), bundled?.appending(path: "EtcTool")),
-        ]
+        var candidates: [URL?] = [bundled?.appending(path: name)]
 #if DEBUG
         let projectRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -1108,17 +1054,13 @@ enum SceneMobileMPKGExporter {
             .deletingLastPathComponent()
         let architecture = hostArchitecture()
         let brewPrefix = architecture == "x86_64" ? "/usr/local" : "/opt/homebrew"
-        candidates.append((
-            URL(fileURLWithPath: "\(brewPrefix)/opt/ffmpeg/bin/ffmpeg"),
-            projectRoot
-                .appending(path: "Mirage/build/SceneMobileTools/etc2comp-\(architecture)/EtcTool/EtcTool")
-        ))
+        candidates.append(name == "ffmpeg"
+            ? URL(fileURLWithPath: "\(brewPrefix)/opt/ffmpeg/bin/ffmpeg")
+            : projectRoot.appending(path: "Mirage/build/SceneMobileTools/etc2comp-\(architecture)/EtcTool/EtcTool"))
 #endif
-        for (ffmpeg, etcTool) in candidates {
-            if let ffmpeg, let etcTool,
-               fileManager.isExecutableFile(atPath: ffmpeg.path),
-               fileManager.isExecutableFile(atPath: etcTool.path) {
-                return (ffmpeg, etcTool)
+        for candidate in candidates {
+            if let candidate, fileManager.isExecutableFile(atPath: candidate.path) {
+                return candidate
             }
         }
         throw SceneMobileExportError.conversionToolsMissing
@@ -1220,76 +1162,14 @@ enum SceneMobileMPKGExporter {
         entries: [StagedEntry],
         version: String,
         to outputURL: URL,
-        progress: (Double) -> Void
+        progress: @escaping (Double) -> Void
     ) throws {
-        guard !entries.isEmpty else { throw SceneMobileExportError.invalidProject }
-        var offset: UInt64 = 0
-        var table: [(StagedEntry, Data, UInt32)] = []
-        for entry in entries {
-            let name = Data(entry.name.utf8)
-            guard name.count <= 1024,
-                  entry.size <= UInt64(UInt32.max),
-                  offset + entry.size <= UInt64(UInt32.max) else {
-                throw SceneMobileExportError.wallpaperTooLarge
-            }
-            table.append((entry, name, UInt32(offset)))
-            offset += entry.size
+        let archiveEntries = entries.map {
+            MobilePackageArchive.Entry(name: $0.name, source: .file($0.url, offset: $0.offset, size: $0.size))
         }
-        let totalSize = max(offset, 1)
-        let destination = outputURL.standardizedFileURL
-        try FileManager.default.createDirectory(
-            at: destination.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        let temporary = destination.deletingLastPathComponent().appending(
-            path: ".\(destination.lastPathComponent).\(UUID().uuidString).tmp"
-        )
-        FileManager.default.createFile(atPath: temporary.path, contents: nil)
-        defer { try? FileManager.default.removeItem(at: temporary) }
-        let output = try FileHandle(forWritingTo: temporary)
-        var written: UInt64 = 0
-        do {
-            try output.write(contentsOf: littleEndianData(UInt32(version.utf8.count)))
-            try output.write(contentsOf: Data(version.utf8))
-            try output.write(contentsOf: littleEndianData(UInt32(table.count)))
-            for item in table {
-                try output.write(contentsOf: littleEndianData(UInt32(item.1.count)))
-                try output.write(contentsOf: item.1)
-                try output.write(contentsOf: littleEndianData(item.2))
-                try output.write(contentsOf: littleEndianData(UInt32(item.0.size)))
-            }
-            for item in table {
-                let input = try FileHandle(forReadingFrom: item.0.url)
-                do {
-                    try input.seek(toOffset: item.0.offset)
-                    var remaining = item.0.size
-                    while remaining > 0 {
-                        let count = min(copyBufferSize, Int(remaining))
-                        let data = try input.read(upToCount: count) ?? Data()
-                        guard !data.isEmpty else {
-                            throw SceneMobileExportError.truncatedPackage
-                        }
-                        try output.write(contentsOf: data)
-                        written += UInt64(data.count)
-                        remaining -= UInt64(data.count)
-                        progress(min(Double(written) / Double(totalSize), 1))
-                    }
-                    try input.close()
-                } catch {
-                    try? input.close()
-                    throw error
-                }
-            }
-            try output.synchronize()
-            try output.close()
-        } catch {
-            try? output.close()
-            throw error
+        try MobilePackageArchive.write(entries: archiveEntries, version: version, to: outputURL) { written, total in
+            progress(total == 0 ? 1 : Double(written) / Double(total))
         }
-        if FileManager.default.fileExists(atPath: destination.path) {
-            try FileManager.default.removeItem(at: destination)
-        }
-        try FileManager.default.moveItem(at: temporary, to: destination)
     }
 
     private static func containedFile(_ name: String, in directory: URL) -> URL? {
@@ -1303,12 +1183,7 @@ enum SceneMobileMPKGExporter {
     }
 
     private static func isSafeEntryName(_ name: String) -> Bool {
-        guard !name.isEmpty,
-              !name.contains("\0"),
-              !name.contains("\\"),
-              !name.hasPrefix("/") else { return false }
-        let components = name.split(separator: "/", omittingEmptySubsequences: false)
-        return components.allSatisfy { !$0.isEmpty && $0 != "." && $0 != ".." }
+        MobilePackageArchive.isSafeEntryName(name)
     }
 
     private static func readExactly(_ count: Int, from handle: FileHandle) throws -> Data {
@@ -1320,11 +1195,6 @@ enum SceneMobileMPKGExporter {
     private static func readUInt32(from handle: FileHandle) throws -> UInt32 {
         let data = try readExactly(4, from: handle)
         return data.withUnsafeBytes { $0.loadUnaligned(as: UInt32.self).littleEndian }
-    }
-
-    private static func littleEndianData(_ value: UInt32) -> Data {
-        var value = value.littleEndian
-        return withUnsafeBytes(of: &value) { Data($0) }
     }
 
     private struct BinaryReader {
