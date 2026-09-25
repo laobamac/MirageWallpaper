@@ -1266,3 +1266,20 @@
 "App 缺少场景转换组件，请重新安装 Mirage。" = "The app is missing scene conversion components. Reinstall Mirage.";
 "场景转换失败：%@" = "Scene conversion failed: %@";
 "移动设备场景壁纸不能超过 4 GB。" = "Mobile scene wallpapers cannot exceed 4 GB.";
+
+// Scene mobile export options
+"最高质量 -（不降低纹理分辨率）" = "Highest quality - (Keep original texture resolution)";
+"更佳性能 -（将纹理分辨率降低至原来的一半）" = "Better performance - (Reduce textures to half their resolution)";
+"高性能 -（将纹理分辨率降低至原来的四分之一）" = "High performance - (Reduce textures to a quarter of their resolution)";
+"Mirage 将优化壁纸，以便您的设备达到最佳性能。请选择最能代表您设备的性能等级。如果视觉质量或性能不符合您的喜好，您可以稍后更改此选择，然后将壁纸重新上传到设备。" = "Mirage will optimize your wallpaper for your device. Choose the performance level that best suits your device. You can change this selection and send the wallpaper again if the visual quality or performance is not to your liking.";
+"预渲染视频导出暂不可用" = "Pre-rendered video export is not yet available";
+"显示高级设置" = "Show advanced settings";
+"像素画优化" = "Pixel art optimization";
+"纹理分辨率降低" = "Texture reduction";
+"保留 RGBA 纹理，减少像素画的压缩损失。文件可能增大。" = "Preserve RGBA textures to reduce compression artifacts in pixel art. Files may be larger.";
+"蒙版和较小纹理保留原尺寸；超大纹理仍受 4096 像素兼容上限限制。" = "Masks and small textures keep their original size. Very large textures are capped at 4096 pixels for compatibility.";
+"提示：" = "Tip: ";
+"将您的 Android 设备连接到 Mirage，即可无线传输壁纸，无需先导出。" = "Connect your Android device to Mirage to send wallpapers wirelessly without exporting them first. ";
+"点击此处了解更多信息。" = "Click here to learn more.";
+"已开启" = "On";
+"已关闭" = "Off";

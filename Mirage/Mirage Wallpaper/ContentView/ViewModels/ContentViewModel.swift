@@ -198,7 +198,8 @@ class ContentViewModel: DropDelegate {
 
     var pendingSceneMobileExport: SceneMobileExportRequest?
 
-    func exportMobileMPKG(_ wallpaper: WEWallpaper, to outputURL: URL) {
+    func exportMobileMPKG(_ wallpaper: WEWallpaper, to outputURL: URL,
+                          sceneOptions: SceneMobileExportOptions = .init()) {
         let progressModel = MobileTransferProgressModel.shared
         let progressID = progressModel.startExport(
             wallpaperTitle: wallpaper.project.title,
@@ -216,7 +217,7 @@ class ContentViewModel: DropDelegate {
                         )
                     }
                 case .scene:
-                    try SceneMobileMPKGExporter.export(wallpaper, to: outputURL) { fraction in
+                    try SceneMobileMPKGExporter.export(wallpaper, to: outputURL, options: sceneOptions) { fraction in
                         progressModel.updateConversion(id: progressID, fraction: fraction)
                     }
                 case .web, .unsupported:
@@ -235,7 +236,8 @@ class ContentViewModel: DropDelegate {
         }
     }
 
-    func presentMobileMPKGSavePanel(for wallpaper: WEWallpaper) {
+    func presentMobileMPKGSavePanel(for wallpaper: WEWallpaper,
+                                    sceneOptions: SceneMobileExportOptions = .init()) {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [UTType(filenameExtension: "mpkg") ?? .data]
         panel.nameFieldStringValue = MobileMPKGExporter.suggestedFilename(for: wallpaper)
@@ -243,7 +245,7 @@ class ContentViewModel: DropDelegate {
 
         let completion: (NSApplication.ModalResponse) -> Void = { [weak self] response in
             guard response == .OK, let url = panel.url else { return }
-            self?.exportMobileMPKG(wallpaper, to: url)
+            self?.exportMobileMPKG(wallpaper, to: url, sceneOptions: sceneOptions)
         }
         // Keep the save panel independent from the main window. Attaching an
         // NSSavePanel as a sheet can make SwiftUI/AppKit renegotiate the host

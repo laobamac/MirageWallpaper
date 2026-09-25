@@ -117,6 +117,7 @@ final class MobileDevicesViewModel: ObservableObject, MobilePairingServiceDelega
     func send(
         wallpaper: WEWallpaper,
         to device: MobileDevice,
+        sceneOptions: SceneMobileExportOptions = .init(),
         completion: @escaping (Result<Void, Error>) -> Void
     ) {
         let progressModel = MobileTransferProgressModel.shared
@@ -154,7 +155,7 @@ final class MobileDevicesViewModel: ObservableObject, MobilePairingServiceDelega
                         )
                     }
                 case .scene:
-                    try SceneMobileMPKGExporter.export(wallpaper, to: output) { fraction in
+                    try SceneMobileMPKGExporter.export(wallpaper, to: output, options: sceneOptions) { fraction in
                         progressModel.updateConversion(id: progressID, fraction: fraction)
                     }
                 case .web, .unsupported:

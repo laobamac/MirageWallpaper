@@ -61,6 +61,8 @@ enum SceneMobileMPKGExporter {
     private struct ConvertedTextureSlot {
         let width: Int
         let height: Int
+        let contentWidth: Int
+        let contentHeight: Int
         let payload: Data
         let compressed: Data
     }
@@ -69,12 +71,15 @@ enum SceneMobileMPKGExporter {
         let mip: TextureMip
         let sourceWidth: Int
         let sourceHeight: Int
-        let reduced: Bool
+        let outputWidth: Int
+        let outputHeight: Int
+        let coordinateScale: Double
     }
 
     static func export(
         _ wallpaper: WEWallpaper,
         to outputURL: URL,
+        options: SceneMobileExportOptions = .init(),
         progress: ((Double) -> Void)? = nil
     ) throws {
         guard wallpaper.isValid, wallpaper.kind == .scene else {
@@ -90,12 +95,17 @@ enum SceneMobileMPKGExporter {
         let projectData = try Data(contentsOf: projectURL)
         guard let project = try JSONSerialization.jsonObject(with: projectData) as? [String: Any],
               (project["type"] as? String)?.lowercased() == "scene",
+              let sceneName = project["file"] as? String,
+              isSafeEntryName(sceneName),
               let previewName = project["preview"] as? String,
               let previewURL = containedFile(previewName, in: wallpaper.wallpaperDirectory) else {
             throw SceneMobileExportError.invalidProject
         }
 
         let package = try readPackage(at: packageURL)
+        guard package.entries.contains(where: { $0.name.caseInsensitiveCompare(sceneName) == .orderedSame }) else {
+            throw SceneMobileExportError.invalidProject
+        }
         let mobileVersion = try mobileVersion(for: package.version)
         let fileManager = FileManager.default
         let staging = fileManager.temporaryDirectory
@@ -134,7 +144,8 @@ enum SceneMobileMPKGExporter {
                 continue
             }
 
-            if suffix != "vert" && suffix != "frag" {
+            let isScene = entry.name.caseInsensitiveCompare(sceneName) == .orderedSame
+            if suffix != "vert" && suffix != "frag" && !isScene {
                 stagedEntries.append(StagedEntry(
                     name: entry.name,
                     url: packageURL,
@@ -155,7 +166,7 @@ enum SceneMobileMPKGExporter {
                 throw SceneMobileExportError.truncatedPackage
             }
 
-            let data = rewriteMobileShader(source, label: entry.name)
+            let data = try isScene ? options.sceneData(source) : rewriteMobileShader(source, label: entry.name)
             stagedEntries.append(try stage(data, named: entry.name, in: staging))
             processed += 1
             progress?(Double(processed) / Double(conversionCount) * 0.9)
@@ -182,7 +193,7 @@ enum SceneMobileMPKGExporter {
                 do {
                     let staged = try autoreleasepool {
                         let source = try readPackageEntry(item.entry, from: packageURL)
-                        let data = try mobileTexture(source, label: item.entry.name, jobs: encoderJobs)
+                        let data = try mobileTexture(source, label: item.entry.name, options: options, jobs: encoderJobs)
                         return try stage(data, named: item.entry.name, in: staging)
                     }
                     resultLock.lock()
@@ -294,102 +305,89 @@ enum SceneMobileMPKGExporter {
     private static func mobileTexture(
         _ source: Data,
         label: String,
+        options: SceneMobileExportOptions,
         jobs: Int
     ) throws -> Data {
         let asset = try parseTexture(source, label: label)
+        // Masks and streaming/native mobile textures must retain their layout and sampling data.
         if asset.flags & streamingTextureFlag != 0
             || [textureFormatETC2RGBA8, textureFormatRG8, textureFormatR8].contains(asset.format) {
             return source
         }
-        if asset.format == textureFormatRGBA8,
-           canEncodeRawMobileTexture(asset),
-           (asset.flags == 0 || preservesMobileRGBA8(label: label, asset: asset)) {
-            return try rawMobileTexture(asset, label: label)
-        }
-        guard [textureFormatRGBA8, textureFormatBC1, textureFormatBC2, textureFormatBC3]
-            .contains(asset.format) else {
+        guard [textureFormatRGBA8, textureFormatBC1, textureFormatBC2, textureFormatBC3].contains(asset.format) else {
             throw SceneMobileExportError.unsupportedTextureFormat(asset.format, label)
         }
         guard asset.spriteData != nil || asset.slots.count == 1,
               asset.slots.allSatisfy({ !$0.isEmpty }) else {
             throw SceneMobileExportError.unsupportedTextureLayout(label)
         }
-
-        let ffmpeg = try conversionTool(named: "ffmpeg")
-        let etcTool = try conversionTool(named: "EtcTool")
-
+        // Pixel-art optimization preserves RGBA pixels instead of introducing ETC2 artifacts.
+        // BC textures have already been compressed by the author and still require ETC2 on mobile.
+        let preserveRGBA = asset.format == textureFormatRGBA8
+            && (options.pixelArtOptimization || asset.flags == 0 || preservesMobileRGBA8(label: label, asset: asset))
+        let useMapSize = asset.spriteData == nil || (preserveRGBA && asset.slots.count == 1)
         let temporary = FileManager.default.temporaryDirectory
             .appending(path: "Mirage-Scene-Texture-\(UUID().uuidString)", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: temporary) }
         var convertedSlots: [ConvertedTextureSlot] = []
         var slotScales: [(x: Double, y: Double)] = []
-        var safetyReduced = false
         for (slotIndex, slot) in asset.slots.enumerated() {
-            let selection = try selectMobileMip(
-                asset,
-                slot: slot,
-                label: "\(label) slot \(slotIndex)"
-            )
-            let mip = selection.mip
-            let decoded = temporary.appending(path: "decoded-\(slotIndex).png")
-            let dimensions = try decodeTexture(
-                asset,
-                mip: mip,
-                label: "\(label) slot \(slotIndex)",
-                ffmpeg: ffmpeg,
-                temporary: temporary,
-                destination: decoded,
-                maximumDimension: maximumMobileTextureDimension,
-                sourceDimensions: (selection.sourceWidth, selection.sourceHeight)
-            )
-            let encoded = temporary.appending(path: "encoded-\(slotIndex).ktx")
-            try run(
-                etcTool,
-                arguments: [
-                    decoded.path,
-                    "-format", "RGBA8",
-                    "-errormetric", "rgbx",
-                    "-effort", String(effort),
-                    "-j", String(jobs),
-                    "-output", encoded.path,
-                ],
-                label: "ETC2 \(label) slot \(slotIndex)"
-            )
-            let payload = try ktxPayload(
-                Data(contentsOf: encoded),
-                expectedWidth: dimensions.width,
-                expectedHeight: dimensions.height
-            )
+            let slotLabel = "\(label) slot \(slotIndex)"
+            let selection = try selectMobileMip(asset, slot: slot, options: options, useMapSize: useMapSize, label: slotLabel)
+            let payload: Data
+            let width: Int
+            let height: Int
+            if preserveRGBA {
+                payload = try rawMobilePixels(asset, selection: selection, label: slotLabel,
+                                              temporary: temporary, nearestNeighbor: options.pixelArtOptimization)
+                width = selection.outputWidth
+                height = selection.outputHeight
+            } else {
+                let decoded = temporary.appending(path: "decoded-\(slotIndex).png")
+                _ = try decodeTexture(
+                    asset, mip: selection.mip, label: slotLabel,
+                    ffmpeg: conversionTool(named: "ffmpeg"), temporary: temporary, destination: decoded,
+                    sourceDimensions: (selection.sourceWidth, selection.sourceHeight),
+                    outputDimensions: (selection.outputWidth, selection.outputHeight)
+                )
+                let encoded = temporary.appending(path: "encoded-\(slotIndex).ktx")
+                try run(conversionTool(named: "EtcTool"), arguments: [
+                    decoded.path, "-format", "RGBA8", "-errormetric", "rgbx", "-effort", String(effort),
+                    "-j", String(jobs), "-output", encoded.path,
+                ], label: "ETC2 \(slotLabel)")
+                payload = try ktxPayload(Data(contentsOf: encoded), expectedWidth: selection.outputWidth,
+                                         expectedHeight: selection.outputHeight)
+                width = ((selection.outputWidth + 3) / 4) * 4
+                height = ((selection.outputHeight + 3) / 4) * 4
+            }
             convertedSlots.append(ConvertedTextureSlot(
-                width: ((dimensions.width + 3) / 4) * 4,
-                height: ((dimensions.height + 3) / 4) * 4,
-                payload: payload,
-                compressed: try lz4Compress(payload, label: "\(label) slot \(slotIndex)")
+                width: width, height: height, contentWidth: selection.outputWidth, contentHeight: selection.outputHeight,
+                payload: payload, compressed: try lz4Compress(payload, label: slotLabel)
             ))
-            slotScales.append((
-                Double(dimensions.width) / Double(slot[0].width),
-                Double(dimensions.height) / Double(slot[0].height)
-            ))
-            safetyReduced = safetyReduced || selection.reduced
+            slotScales.append((selection.coordinateScale, selection.coordinateScale))
         }
         guard let firstSlot = convertedSlots.first else {
             throw SceneMobileExportError.unsupportedTextureLayout(label)
         }
-        let mapWidth = asset.mapWidth > 0 ? Int(asset.mapWidth) : firstSlot.width
-        let mapHeight = asset.mapHeight > 0 ? Int(asset.mapHeight) : firstSlot.height
-        let headerWidth = safetyReduced
-            ? (asset.mapWidth > 0 ? Int(asset.mapWidth) : Int(asset.width))
-            : (asset.spriteData == nil ? firstSlot.width : Int(asset.width))
-        let headerHeight = safetyReduced
-            ? (asset.mapHeight > 0 ? Int(asset.mapHeight) : Int(asset.height))
-            : (asset.spriteData == nil ? firstSlot.height : Int(asset.height))
+        let mapWidth = asset.mapWidth > 0 ? Int(asset.mapWidth) : Int(asset.width)
+        let mapHeight = asset.mapHeight > 0 ? Int(asset.mapHeight) : Int(asset.height)
+        // TEXI records the logical backing size; TEXB records the actual reduced pixels.
+        // Account for ETC block padding at the original scale so UVs do not stretch cropped edges.
+        let headerWidth = useMapSize
+            ? Int((Double(mapWidth) * Double(firstSlot.width) / Double(firstSlot.contentWidth)).rounded())
+            : Int(asset.width)
+        let headerHeight = useMapSize
+            ? Int((Double(mapHeight) * Double(firstSlot.height) / Double(firstSlot.contentHeight)).rounded())
+            : Int(asset.height)
+        guard headerWidth > 0, headerHeight > 0, headerWidth <= Int32.max, headerHeight <= Int32.max else {
+            throw SceneMobileExportError.invalidTexture(label)
+        }
         let mobileFlags = asset.flags | (asset.slots[0].count == 1 ? rawMobileFlag : 0)
-
         var output = Data()
         output.appendStamp("TEXV0005")
         output.appendStamp("TEXI0001")
-        output.appendInt32(textureFormatETC2RGBA8)
+        output.appendInt32(preserveRGBA ? textureFormatRGBA8 : textureFormatETC2RGBA8)
         output.appendUInt32(mobileFlags)
         output.appendInt32(Int32(headerWidth))
         output.appendInt32(Int32(headerHeight))
@@ -410,13 +408,8 @@ enum SceneMobileMPKGExporter {
             output.append(slot.compressed)
         }
         if let spriteData = asset.spriteData {
-            output.append(try mobileSpriteData(
-                spriteData,
-                slotScales: slotScales,
-                mapWidth: mapWidth,
-                mapHeight: mapHeight,
-                label: label
-            ))
+            output.append(try mobileSpriteData(spriteData, slotScales: slotScales,
+                                               mapWidth: mapWidth, mapHeight: mapHeight, label: label))
         }
         return output
     }
@@ -428,12 +421,6 @@ enum SceneMobileMPKGExporter {
             return asset.spriteData == nil || asset.spriteData?.starts(with: Data("TEXS0003\0".utf8)) == true
         }
         return normalized.hasPrefix("materials/particle/") && asset.spriteData == nil
-    }
-
-    private static func canEncodeRawMobileTexture(_ asset: TextureAsset) -> Bool {
-        guard asset.slots.count == 1, let mip = asset.slots[0].first else { return false }
-        return max(Int(mip.width), Int(mip.height)) <= maximumMobileTextureDimension
-            && max(Int(asset.mapWidth), Int(asset.mapHeight)) <= maximumMobileTextureDimension
     }
 
     private static func parseTexture(_ data: Data, label: String) throws -> TextureAsset {
@@ -530,10 +517,12 @@ enum SceneMobileMPKGExporter {
         ffmpeg: URL,
         temporary: URL,
         destination: URL,
-        maximumDimension: Int? = nil,
-        sourceDimensions: (width: Int, height: Int)? = nil
+        sourceDimensions: (width: Int, height: Int)? = nil,
+        outputDimensions: (width: Int, height: Int)? = nil,
+        nearestNeighbor: Bool = false,
+        decodedBody: Data? = nil
     ) throws -> (width: Int, height: Int) {
-        let body = try decodedMip(mip, label: label)
+        let body = try decodedBody ?? decodedMip(mip, label: label)
         let sourceWidth = sourceDimensions?.width ?? (asset.spriteData == nil
             ? (asset.mapWidth > 0 ? Int(asset.mapWidth) : Int(mip.width))
             : Int(mip.width))
@@ -544,16 +533,12 @@ enum SceneMobileMPKGExporter {
               sourceWidth <= Int(mip.width), sourceHeight <= Int(mip.height) else {
             throw SceneMobileExportError.invalidTexture(label)
         }
-        var outputWidth = sourceWidth
-        var outputHeight = sourceHeight
-        if let maximumDimension, max(outputWidth, outputHeight) > maximumDimension {
-            let scale = Double(maximumDimension) / Double(max(outputWidth, outputHeight))
-            outputWidth = max(1, Int((Double(outputWidth) * scale).rounded()))
-            outputHeight = max(1, Int((Double(outputHeight) * scale).rounded()))
-        }
-        var filters = ["crop=\(sourceWidth):\(sourceHeight):0:0"]
+        let outputWidth = outputDimensions?.width ?? sourceWidth
+        let outputHeight = outputDimensions?.height ?? sourceHeight
+        var filters = ["crop=\(sourceWidth):\(sourceHeight):0:0:exact=1"]
         if outputWidth != sourceWidth || outputHeight != sourceHeight {
-            filters.append("scale=\(outputWidth):\(outputHeight):flags=lanczos")
+            let filter = nearestNeighbor ? "neighbor" : "lanczos"
+            filters.append("scale=\(outputWidth):\(outputHeight):flags=\(filter)")
         }
         let source: URL
         var arguments = ["-hide_banner", "-loglevel", "error", "-y"]
@@ -598,7 +583,9 @@ enum SceneMobileMPKGExporter {
         } else {
             throw SceneMobileExportError.unsupportedTextureFormat(asset.format, label)
         }
-        arguments += ["-vf", filters.joined(separator: ","), "-frames:v", "1", destination.path]
+        arguments += ["-vf", filters.joined(separator: ","), "-frames:v", "1", "-pix_fmt", "rgba", "-threads", "1"]
+        if destination.pathExtension == "rgba" { arguments += ["-f", "rawvideo"] }
+        arguments.append(destination.path)
         try run(ffmpeg, arguments: arguments, label: "FFmpeg \(label)")
         guard FileManager.default.fileExists(atPath: destination.path) else {
             throw SceneMobileExportError.toolFailed("FFmpeg \(label)")
@@ -607,52 +594,41 @@ enum SceneMobileMPKGExporter {
     }
 
     private static func selectMobileMip(
-        _ asset: TextureAsset,
-        slot: [TextureMip],
-        label: String
+        _ asset: TextureAsset, slot: [TextureMip], options: SceneMobileExportOptions,
+        useMapSize: Bool, label: String
     ) throws -> MobileMipSelection {
-        guard let base = slot.first else {
-            throw SceneMobileExportError.unsupportedTextureLayout(label)
-        }
-        let baseWidth = asset.spriteData == nil
-            ? (asset.mapWidth > 0 ? Int(asset.mapWidth) : Int(base.width))
-            : Int(base.width)
-        let baseHeight = asset.spriteData == nil
-            ? (asset.mapHeight > 0 ? Int(asset.mapHeight) : Int(base.height))
-            : Int(base.height)
-        guard baseWidth > 0, baseHeight > 0 else {
+        guard let base = slot.first else { throw SceneMobileExportError.unsupportedTextureLayout(label) }
+        let baseWidth = useMapSize && asset.mapWidth > 0 ? Int(asset.mapWidth) : Int(base.width)
+        let baseHeight = useMapSize && asset.mapHeight > 0 ? Int(asset.mapHeight) : Int(base.height)
+        guard baseWidth > 0, baseHeight > 0, baseWidth <= Int(base.width), baseHeight <= Int(base.height) else {
             throw SceneMobileExportError.invalidTexture(label)
         }
-
-        var selected = base
-        var selectedWidth = baseWidth
-        var selectedHeight = baseHeight
-        for mip in slot {
-            selected = mip
-            selectedWidth = min(
-                Int(mip.width),
-                max(1, Int((Double(baseWidth) * Double(mip.width) / Double(base.width)).rounded()))
-            )
-            selectedHeight = min(
-                Int(mip.height),
-                max(1, Int((Double(baseHeight) * Double(mip.height) / Double(base.height)).rounded()))
-            )
-            if max(selectedWidth, selectedHeight) <= maximumMobileTextureDimension { break }
-        }
-
-        var outputWidth = selectedWidth
-        var outputHeight = selectedHeight
+        let factor = options.reductionFactor(width: baseWidth, height: baseHeight)
+        var outputWidth = max(1, baseWidth / factor)
+        var outputHeight = max(1, baseHeight / factor)
+        var coordinateScale = 1 / Double(factor)
         if max(outputWidth, outputHeight) > maximumMobileTextureDimension {
-            let scale = Double(maximumMobileTextureDimension) / Double(max(outputWidth, outputHeight))
-            outputWidth = max(1, Int((Double(outputWidth) * scale).rounded()))
-            outputHeight = max(1, Int((Double(outputHeight) * scale).rounded()))
+            let safetyScale = Double(maximumMobileTextureDimension) / Double(max(outputWidth, outputHeight))
+            outputWidth = max(1, Int(Double(outputWidth) * safetyScale))
+            outputHeight = max(1, Int(Double(outputHeight) * safetyScale))
+            coordinateScale *= safetyScale
         }
-        return MobileMipSelection(
-            mip: selected,
-            sourceWidth: selectedWidth,
-            sourceHeight: selectedHeight,
-            reduced: outputWidth != baseWidth || outputHeight != baseHeight
-        )
+        // Reuse the smallest mip that still supplies all requested pixels, never upscale a smaller mip.
+        // Floor the cropped size: embedded PNG mips use floor(size / 2), not nearest rounding.
+        var selected = base
+        var sourceWidth = baseWidth
+        var sourceHeight = baseHeight
+        for mip in slot.dropFirst() {
+            let width = max(1, Int(Double(baseWidth) * Double(mip.width) / Double(base.width)))
+            let height = max(1, Int(Double(baseHeight) * Double(mip.height) / Double(base.height)))
+            if width >= outputWidth, height >= outputHeight, width <= sourceWidth, height <= sourceHeight {
+                selected = mip
+                sourceWidth = width
+                sourceHeight = height
+            }
+        }
+        return MobileMipSelection(mip: selected, sourceWidth: sourceWidth, sourceHeight: sourceHeight,
+                                  outputWidth: outputWidth, outputHeight: outputHeight, coordinateScale: coordinateScale)
     }
 
     private static func mobileSpriteData(
@@ -714,71 +690,29 @@ enum SceneMobileMPKGExporter {
         return output
     }
 
-    private static func rawMobileTexture(
-        _ asset: TextureAsset,
-        label: String
+    private static func rawMobilePixels(
+        _ asset: TextureAsset, selection: MobileMipSelection, label: String,
+        temporary: URL, nearestNeighbor: Bool
     ) throws -> Data {
-        guard asset.slots.count == 1, let mip = asset.slots.first?.first else {
-            throw SceneMobileExportError.unsupportedTextureLayout(label)
+        let mip = selection.mip
+        let body = try decodedMip(mip, label: label)
+        let sourceSize = try rgbaByteCount(width: Int(mip.width), height: Int(mip.height), label: label)
+        if body.count == sourceSize, imageSuffix(body) == nil,
+           selection.sourceWidth == Int(mip.width), selection.sourceHeight == Int(mip.height),
+           selection.outputWidth == Int(mip.width), selection.outputHeight == Int(mip.height) {
+            return body
         }
-        var payload = try decodedMip(mip, label: label)
-        var width = Int(mip.width)
-        var height = Int(mip.height)
-        var expected = try rgbaByteCount(width: width, height: height, label: label)
-        if payload.count != expected, let suffix = imageSuffix(payload) {
-            let temporary = FileManager.default.temporaryDirectory
-                .appending(path: "Mirage-Scene-RGBA-\(UUID().uuidString)", directoryHint: .isDirectory)
-            try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
-            defer { try? FileManager.default.removeItem(at: temporary) }
-            let source = temporary.appending(path: "source\(suffix)")
-            let decoded = temporary.appending(path: "decoded.rgba")
-            try payload.write(to: source)
-            width = asset.mapWidth > 0 ? Int(asset.mapWidth) : Int(mip.width)
-            height = asset.mapHeight > 0 ? Int(asset.mapHeight) : Int(mip.height)
-            try run(
-                try conversionTool(named: "ffmpeg"),
-                arguments: [
-                    "-hide_banner", "-loglevel", "error", "-y",
-                    "-i", source.path,
-                    "-vf", "crop=\(width):\(height):0:0",
-                    "-frames:v", "1",
-                    "-f", "rawvideo",
-                    "-pix_fmt", "rgba",
-                    decoded.path,
-                ],
-                label: "FFmpeg raw RGBA \(label)"
-            )
-            payload = try Data(contentsOf: decoded)
-            expected = try rgbaByteCount(width: width, height: height, label: label)
-        }
-        guard payload.count == expected else {
+        let decoded = temporary.appending(path: "decoded.rgba")
+        _ = try decodeTexture(asset, mip: mip, label: label, ffmpeg: conversionTool(named: "ffmpeg"),
+                              temporary: temporary, destination: decoded,
+                              sourceDimensions: (selection.sourceWidth, selection.sourceHeight),
+                              outputDimensions: (selection.outputWidth, selection.outputHeight),
+                              nearestNeighbor: nearestNeighbor, decodedBody: body)
+        let payload = try Data(contentsOf: decoded)
+        guard payload.count == (try rgbaByteCount(width: selection.outputWidth, height: selection.outputHeight, label: label)) else {
             throw SceneMobileExportError.invalidTexture(label)
         }
-        let mobileFlags = asset.flags | (asset.slots[0].count == 1 ? rawMobileFlag : 0)
-        let compressed = try lz4Compress(payload, label: label)
-        var output = Data()
-        output.appendStamp("TEXV0005")
-        output.appendStamp("TEXI0001")
-        output.appendInt32(textureFormatRGBA8)
-        output.appendUInt32(mobileFlags)
-        output.appendInt32(Int32(width))
-        output.appendInt32(Int32(height))
-        output.appendInt32(asset.mapWidth > 0 ? asset.mapWidth : Int32(width))
-        output.appendInt32(asset.mapHeight > 0 ? asset.mapHeight : Int32(height))
-        output.appendInt32(asset.reservedA)
-        output.appendStamp("TEXB0004")
-        output.appendInt32(1)
-        output.appendInt32(-1)
-        output.appendInt32(0)
-        output.appendInt32(1)
-        output.appendInt32(Int32(width))
-        output.appendInt32(Int32(height))
-        output.appendInt32(1)
-        output.appendInt32(Int32(payload.count))
-        output.appendInt32(Int32(compressed.count))
-        output.append(compressed)
-        if let spriteData = asset.spriteData { output.append(spriteData) }
-        return output
+        return payload
     }
 
     private static func rgbaByteCount(width: Int, height: Int, label: String) throws -> Int {
