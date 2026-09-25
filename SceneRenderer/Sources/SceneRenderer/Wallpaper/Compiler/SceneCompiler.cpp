@@ -2,6 +2,8 @@ module;
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
+#include <optional>
 #include <sstream>
 
 #include <rstd/macro.hpp>
@@ -932,8 +934,10 @@ SceneAnimationCurve ToSceneAnimationCurve(const wpscene::AnimCurve& curve) {
     out.fps      = curve.options.fps;
     out.length   = curve.options.length;
     out.mode     = curve.options.mode;
+    out.name     = curve.options.name;
     out.wraploop = curve.options.wraploop;
     out.relative = curve.relative;
+    out.startpaused = curve.options.startpaused;
     return out;
 }
 
@@ -1021,6 +1025,19 @@ void AssignNodeFieldAnimations(SceneNode& node, const wpscene::FieldBindings& bi
     if (auto curve = make_curve("scale")) node.SetScaleAnimation(std::move(*curve));
     if (auto curve = make_curve("angles")) node.SetRotationAnimation(std::move(*curve));
     if (auto curve = make_curve("alpha")) node.SetAlphaAnimation(std::move(*curve));
+}
+
+bool HasStartPausedNamedFieldAnimation(const wpscene::FieldBindings& bindings) {
+    for (const auto& [_, curve] : bindings.animations) {
+        if (! curve.options.name.empty() && curve.options.startpaused) return true;
+    }
+    return false;
+}
+
+void SetFieldAnimationsAlphaGate(SceneNode& node, const wpscene::FieldBindings& bindings) {
+    for (const auto& [_, curve] : bindings.animations) {
+        if (! curve.options.name.empty()) node.SetFieldAnimationAlphaGate(curve.options.name, true);
+    }
 }
 
 std::optional<SceneCameraLookAtKey> ParseLookAtKey(const Json& json) {
@@ -3208,10 +3225,15 @@ void InitContext(ParseContext& context, fs::VFS& vfs, const wpscene::SceneMetada
 void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj,
                    ImageParseGeometry parse_geometry = {}) {
     auto& wpimgobj = img_obj;
+    const bool is_hidden_link_source =
+        context.hidden_link_source_ids.count(static_cast<std::int32_t>(wpimgobj.id)) != 0;
+    const bool hidden_playable_animation =
+        ! wpimgobj.visible && ! is_hidden_link_source &&
+        HasStartPausedNamedFieldAnimation(wpimgobj.field_bindings);
     // Invisible image layers are kept in the scene tree because their composite
     // may be sampled by other layers via `_rt_imageLayerComposite_<id>`. The
     // render-graph builder decides whether to actually emit passes for them.
-    if (! wpimgobj.visible) {
+    if (! wpimgobj.visible && ! hidden_playable_animation) {
         context.scene->MarkLayerVisibilityElidable(
             WallpaperLayerId { .value = static_cast<i32>(wpimgobj.id) });
     }
@@ -3293,8 +3315,6 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj,
         colorEffect.materials.push_back(std::move(colorMat));
         wpimgobj.effects.push_back(std::move(colorEffect));
     }
-    const bool is_hidden_link_source =
-        context.hidden_link_source_ids.count(static_cast<std::int32_t>(wpimgobj.id)) != 0;
     const bool is_linked_composite =
         wpimgobj.composite_layer &&
         context.IsLinkedSource(static_cast<std::int32_t>(wpimgobj.id));
@@ -4268,6 +4288,9 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj,
         });
 
     AssignNodeFieldAnimations(*spImgNode.as_ptr(), wpimgobj.field_bindings);
+    if (hidden_playable_animation) {
+        SetFieldAnimationsAlphaGate(*spImgNode.as_ptr(), wpimgobj.field_bindings);
+    }
     WireFieldScripts(context, spImgNode, wpimgobj.field_bindings);
     if (! wpimgobj.color_user_key.empty()) {
         context.scene->image_color_user_index[wpimgobj.color_user_key].push_back(

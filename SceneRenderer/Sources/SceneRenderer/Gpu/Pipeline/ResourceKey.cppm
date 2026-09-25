@@ -1,5 +1,10 @@
 module;
 
+#if defined(__linux__)
+#include <string>
+#include <vector>
+#endif
+
 #include <vulkan/vulkan_core.h>
 
 export module sr.vulkan_render:resource_key;

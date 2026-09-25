@@ -1,0 +1,174 @@
+---
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const local = (path: string) => `${base}${path}`;
+const github = 'https://github.com/elysia-best/MirageLinuxDisplay';
+const docs = local('/guides/introduction/');
+const architecture = local('/guides/architecture/');
+const protocol = local('/protocol/overview/');
+const kde = local('/adapters/kde/');
+const consumer = local('/dev/consumer/');
+const gpu = local('/dev/gpu/');
+const abi = local('/reference/abi/');
+---
+
+<div class="mirage-landing">
+  <main>
+    <section class="hero-section landing-shell">
+      <div class="hero-copy">
+        <span class="product-badge">
+          <img src={local('/favicon.svg')} alt="" width="24" height="24" />
+          MirageWallpaper 的 Linux 显示集成层
+        </span>
+        <h1>让 MirageWallpaper 的帧，<span>在 Linux 桌面上醒来。</span></h1>
+        <p>
+          基于 mirage-display-v1 协议、稳定的 C ABI 消费/生产库与路由核心，
+          MirageLinuxDisplay 让渲染器把 DMA-BUF 帧交给嵌入式 broker，再由 KDE Plasma
+          等桌面环境自有的壁纸表面呈现。像素数据全程留在 GPU 显存，从不经过 broker 拷贝。
+        </p>
+        <div class="hero-actions">
+          <a class="primary-action" href={docs}>阅读文档<span aria-hidden="true">→</span></a>
+          <a class="secondary-action" href={github} target="_blank" rel="noreferrer">浏览源码<span aria-hidden="true">↗</span></a>
+        </div>
+      </div>
+      <figure class="hero-visual hero-stage-enter">
+        <img src={local('/images/architecture.svg')} alt="MirageLinuxDisplay 架构数据流图" width="1200" height="675" loading="eager" />
+        <figcaption><strong>协议驱动 · 零拷贝 · DE 自有的壁纸表面</strong><span>mirage-display-v1 · DMA-BUF · 显式同步</span></figcaption>
+      </figure>
+    </section>
+
+    <section class="format-section landing-shell">
+      <header class="section-heading mirage-reveal"><p>核心能力</p><h2>三个组件，一条协议。</h2></header>
+      <div class="format-grid">
+        <article class="format-item mirage-reveal"><div><span>PROTOCOL</span><h3>协议驱动</h3><p><code>mirage-display-v1</code> 协议已经冻结，覆盖握手、输出注册、缓冲池绑定、帧与同步、配置、指针输入与错误处理等全部环节，以 <code>protocol/mirage_display_v1.xml</code> 为权威定义。</p></div></article>
+        <article class="format-item mirage-reveal" data-delay="60"><div><span>BROKER</span><h3>零拷贝路由</h3><p>嵌入式 <code>md_broker</code> 以权限 <code>0600</code> 的 Unix 域套接字提供服务，通过 <code>SO_PEERCRED</code> 校验对端是否同 UID，再按稳定输出标识把单个生产者与多个桌面消费者匹配起来，只转发报文与文件描述符。</p></div></article>
+        <article class="format-item mirage-reveal" data-delay="120"><div><span>C ABI</span><h3>消费 / 生产双库</h3><p>核心实现使用 C++20，但 <code>include/</code> 只导出 C11 与 C++ 都能用的稳定 C ABI，兼容 Qt、GObject 与 Rust FFI，公开 DTO 统一采用八字节定长布局。</p></div></article>
+      </div>
+    </section>
+
+    <section class="feature-section feature-light">
+      <div class="landing-shell feature-grid">
+        <div class="feature-copy mirage-reveal">
+          <p class="section-kicker">ROUTING CORE</p>
+          <h2>一个 broker，稳定调度所有输出。</h2>
+          <p>broker 负责稳定的发现与多输出路由，渲染器或桌面壳层重启后也能自动恢复连接；稳定输出标识取代了过去的屏幕索引约定。</p>
+          <ul>
+            <li>同 UID 校验</li>
+            <li>格式与修饰符协商</li>
+            <li>多消费者同步扇出</li>
+            <li>缓冲池代际管理</li>
+            <li>断连自动重连</li>
+          </ul>
+        </div>
+        <figure class="code-panel mirage-reveal" data-delay="80">
+          <pre><span class="k">$ ls -l</span> $XDG_RUNTIME_DIR/mirage-wallpaper/
+drwx------ mirage
+srwx------ display-v1.sock    <span class="k"># AF_UNIX · SOCK_SEQPACKET · 0600</span>
+
+<span class="k">$ ss -xlp | grep display-v1</span>
+u_seq ESTAB 0 0 display-v1.sock
+  peer: pid=… uid=1000        <span class="k"># SO_PEERCRED 同 UID</span></pre>
+        </figure>
+      </div>
+    </section>
+
+    <section class="workshop-section landing-shell">
+      <div class="workshop-copy mirage-reveal">
+        <p class="section-kicker">GPU HELPERS</p>
+        <h2>EGL 与 Vulkan，两条导入路径。</h2>
+        <p>EGL 路径借助 <code>EGL_EXT_image_dma_buf_import</code> 与原生 fence 完成同步；Vulkan 路径通过 external memory FD 与 DRM 修饰符导入，遇到无法直接采样的格式时，用同设备 relay/blit 回退到宿主可采样的图像。</p>
+        <a class="text-link" href={gpu}>GPU 助手指南<span aria-hidden="true">→</span></a>
+      </div>
+      <figure class="code-panel mirage-reveal" data-delay="80">
+        <pre><span class="k">EGL</span>    EGL_EXT_image_dma_buf_import
+        EGL_LINUX_DMA_BUF_EXT + 原生 fence
+<span class="k">Vulkan</span>  VK_KHR_external_memory_fd
+        DRM 修饰符枚举 + relay/blit 回退
+<span class="k">Sync</span>    DRM syncobj 扇出 · sync_file 桥接</pre>
+      </figure>
+    </section>
+
+    <section class="paired-section">
+      <div class="landing-shell paired-grid">
+        <article class="paired-card mirage-reveal">
+          <div>
+            <p class="section-kicker">KDE PLASMA</p>
+            <h2>一个壁纸包，X11 / Wayland 通用。</h2>
+            <p>作为 Plasma 6 的 <code>Plasma/Wallpaper</code> 壁纸包，它以 Qt Quick 显示项提供 EGL 与 Vulkan 双后端，支持多显示器、旋转、缩放、指针转发与窗口状态；工作区信息来自 Plasma/KWin 接口。</p>
+            <a class="text-link" href={kde}>KDE 适配器指南<span aria-hidden="true">→</span></a>
+          </div>
+          <figure class="code-panel">
+            <pre><span class="k">$</span> kpackagetool6 -t Plasma/Wallpaper \
+    -i mirage-wallpaper-0.2.0.zip</pre>
+          </figure>
+        </article>
+        <article class="paired-card mirage-reveal" data-delay="70">
+          <div>
+            <p class="section-kicker">C ABI</p>
+            <h2>非阻塞握手，回调驱动。</h2>
+            <p>消费端与生产端库都提供非阻塞握手、完整的缓冲池生命周期、帧接收与显式同步；帧与同步文件描述符的所有权转移有明确约定，断连时保证恰好关闭一次。</p>
+            <a class="text-link" href={consumer}>消费库指南<span aria-hidden="true">→</span></a>
+          </div>
+          <figure class="code-panel">
+            <pre><span class="k">md_display_t*</span> d = md_display_new(&cb);
+md_display_connect(d, sock, "kde",
+                   "0.2.0", &output, &caps, 5000);
+<span class="k">for (;;)</span> md_display_dispatch(d);</pre>
+          </figure>
+        </article>
+      </div>
+    </section>
+
+    <section class="display-section landing-shell">
+      <figure class="code-panel mirage-reveal">
+        <pre>渲染器 → 生产者
+  → MirageQt 内嵌 broker
+  → libmirage-display 消费者
+  → DE 壁纸 / 背景 API
+  → 合成器或 X 服务器</pre>
+      </figure>
+      <div class="display-copy mirage-reveal" data-delay="70">
+        <p class="section-kicker">CLEAR BOUNDARY</p>
+        <h2>桌面，交给桌面环境自己呈现。</h2>
+        <p>本项目不会创建、也不会管理裸的 X11 桌面或根窗口。无论 X11 还是 Wayland，最终呈现都发生在桌面环境自有的集成点里——最后一跳永远属于桌面环境。</p>
+        <a class="text-link" href={architecture}>了解边界<span aria-hidden="true">→</span></a>
+      </div>
+    </section>
+
+    <section class="feature-section open-section">
+      <div class="landing-shell feature-grid">
+        <div class="feature-copy mirage-reveal">
+          <p class="section-kicker">OPEN &amp; FREE</p>
+          <h2>协议冻结，ABI 稳定。</h2>
+          <p><code>mirage-display-v1</code> 的报文语义、描述符所有权与回调顺序保持稳定；0.2.0 把跨语言的 FD、超时与状态计数统一为定宽类型，并为公开 DTO 固定了八字节布局。</p>
+          <div class="inline-links">
+            <a class="text-link" href={abi}>ABI 与兼容性<span aria-hidden="true">→</span></a>
+            <a class="text-link" href={protocol}>协议参考<span aria-hidden="true">→</span></a>
+            <a class="text-link" href={github} target="_blank" rel="noreferrer">浏览源码<span aria-hidden="true">↗</span></a>
+          </div>
+        </div>
+        <figure class="code-panel mirage-reveal" data-delay="80">
+          <pre>mirage-display-v1 · major=1 minor=0
+magic "MDP1" · 24 字节报文头
+小端 · 定宽类型 · 显式同步
+C ABI：C11 / C++ / Rust FFI</pre>
+        </figure>
+      </div>
+    </section>
+
+    <section class="closing-section landing-shell">
+      <img src={local('/favicon.svg')} alt="" width="72" height="72" />
+      <h2>让 Linux 桌面再多一个维度。</h2>
+      <p>面向 KDE Plasma（X11 / Wayland），GNOME 与 layer-shell 正在规划中。</p>
+      <div class="hero-actions">
+        <a class="primary-action" href={docs}>阅读文档<span aria-hidden="true">→</span></a>
+        <a class="secondary-action" href={github} target="_blank" rel="noreferrer">浏览源码<span aria-hidden="true">↗</span></a>
+      </div>
+    </section>
+  </main>
+  <footer class="landing-footer landing-shell">
+    <a href={local('/')}><img src={local('/favicon.svg')} alt="" width="30" height="30" /><strong>MirageLinuxDisplay</strong></a>
+    <p>MirageLinuxDisplay 是 MirageWallpaper 生态中的 Linux 桌面显示集成层，与 Valve、Steam 或 Wallpaper Engine 无关。</p>
+    <span>GPL-3.0-or-later</span>
+  </footer>
+</div>
+<script>import '../scripts/reveal.ts';</script>

@@ -1,6 +1,8 @@
 module;
 
 module sr.pkg.scene_obj;
+import sr.fs;
+import sr.json;
 
 using namespace sr::wpscene;
 

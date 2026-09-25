@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="mirage-g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#67cce9"/>
+      <stop offset="1" stop-color="#167c9d"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#mirage-g)"/>
+  <path d="M17 46V17h7l8 15 8-15h7v29h-6V27l-9 16-9-16v19z" fill="#071017"/>
+</svg>

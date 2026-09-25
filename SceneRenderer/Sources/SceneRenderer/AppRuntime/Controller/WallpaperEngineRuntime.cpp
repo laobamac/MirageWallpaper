@@ -1,5 +1,9 @@
 module;
 
+#if defined(__linux__)
+#include <string>
+#endif
+
 #include <rstd/macro.hpp>
 
 #include <array>
@@ -7,6 +11,7 @@ module;
 #include <chrono>
 #include <ctime>
 #include <filesystem>
+#include <memory>
 #include <mutex>
 
 module sr.scene_wallpaper;
@@ -1019,8 +1024,9 @@ void MergeProjectUserProperties(const std::filesystem::path& project_dir, rstd::
     std::ifstream is(project_path);
     if (! is) return;
 
-    std::string source(std::istreambuf_iterator<char>(is), {});
-    auto        parsed = ParseJson(source, { .allow_comments = true });
+    std::ostringstream ss;
+    ss << is.rdbuf();
+    auto parsed = ParseJson(ss.str(), { .allow_comments = true });
     if (parsed.is_err()) {
         rstd_warn("Can't parse {}: {}", project_path.string(), parsed.unwrap_err());
         return;
@@ -1638,6 +1644,9 @@ void SceneRenderController::on(RenderSetScene&& m) {
     rebuildRenderGraph(vulkan::RenderGraphResourceRetention::ReleaseSceneTextures, true);
     if (m_scene && m_media_status) applyMediaStatus(*m_media_status);
     m_scene_ready.store(m_scene != nullptr && m_render->readyToDraw(), std::memory_order_release);
+    if (! m_stopped && renderInited() && m_rg && m_render->exSwapchain() == nullptr) {
+        frame_timer.Run();
+    }
 }
 
 void SceneRenderController::on(RenderSetSpeed&& m) {

@@ -1,0 +1,89 @@
+#!/usr/bin/make -f
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+# CI supplies the pinned upstream LLVM 21 compiler paths. Local package builds
+# must provide an equivalent Clang toolchain through CC and CXX.
+
+BUILD_ROOT := $(CURDIR)/debian/build
+SCENE_BUILD := $(BUILD_ROOT)/scene
+VIDEO_BUILD := $(BUILD_ROOT)/video
+WEB_BUILD := $(BUILD_ROOT)/web
+APP_BUILD := $(BUILD_ROOT)/mirageqt
+STEAM_BUILD := $(BUILD_ROOT)/steamservice
+PACKAGE_ROOT := $(CURDIR)/debian/miragewallpaper
+
+%:
+	dh $@
+
+override_dh_auto_configure:
+	cmake -S SceneRenderer -B $(SCENE_BUILD) -G Ninja \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DCMAKE_LINKER_TYPE=LLD \
+		-DSCENERENDERER_BUILD_WALLPAPER_HOST=ON
+	cmake -S VideoRenderer -B $(VIDEO_BUILD) -G Ninja \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DCMAKE_LINKER_TYPE=LLD \
+		-DVIDEORENDERER_BUILD_VIEWER=OFF
+	cmake -S WebRenderer -B $(WEB_BUILD) -G Ninja \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DCMAKE_LINKER_TYPE=LLD \
+		-DWEBRENDERER_BUILD_VIEWER=OFF
+	cmake -S MirageQt -B $(APP_BUILD) -G Ninja \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DCMAKE_LINKER_TYPE=LLD \
+		-DCMAKE_INSTALL_PREFIX=/usr \
+		-DMIRAGEQT_RUNTIME_DIR=/usr/libexec/miragewallpaper \
+		-DMIRAGEQT_DATA_DIR=/usr/share/miragewallpaper
+
+override_dh_auto_build:
+	cmake --build $(SCENE_BUILD) --parallel
+	cmake --build $(VIDEO_BUILD) --parallel
+	cmake --build $(WEB_BUILD) --parallel
+	cmake --build $(APP_BUILD) --parallel
+	bash scripts/build_steam_service_linux.sh $(STEAM_BUILD)
+
+override_dh_auto_install:
+	# Install only the application target from the Qt tree. The vendored
+	# mirage-display project also exposes development libraries, which are not
+	# part of this runtime package because all three hosts link it statically.
+	install -Dm755 $(APP_BUILD)/bin/MirageQt \
+		$(PACKAGE_ROOT)/usr/bin/MirageQt
+	install -Dm644 $(APP_BUILD)/mirageqt.desktop \
+		$(PACKAGE_ROOT)/usr/share/applications/mirageqt.desktop
+	install -Dm644 MirageQt/Resources/mirage.png \
+		$(PACKAGE_ROOT)/usr/share/icons/hicolor/512x512/apps/mirageqt.png
+	install -Dm755 $(SCENE_BUILD)/Tools/SceneWallpaper/SceneWallpaper \
+		$(PACKAGE_ROOT)/usr/libexec/miragewallpaper/SceneWallpaper
+	install -Dm755 $(VIDEO_BUILD)/Tools/VideoWallpaper/VideoWallpaper \
+		$(PACKAGE_ROOT)/usr/libexec/miragewallpaper/VideoWallpaper
+	install -Dm755 $(WEB_BUILD)/Tools/WebWallpaper/WebWallpaper \
+		$(PACKAGE_ROOT)/usr/libexec/miragewallpaper/WebWallpaper
+	install -d $(PACKAGE_ROOT)/usr/share/miragewallpaper
+	cp -a assets $(PACKAGE_ROOT)/usr/share/miragewallpaper/assets
+	# SteamServiceManager resolves the FHS bundle under linux-x64, matching the
+	# repository build layout and preventing a packaged runtime path mismatch.
+	install -d $(PACKAGE_ROOT)/usr/libexec/miragewallpaper/SteamService/linux-x64
+	cp -a $(STEAM_BUILD)/. $(PACKAGE_ROOT)/usr/libexec/miragewallpaper/SteamService/linux-x64/
+	install -d $(PACKAGE_ROOT)/usr/share/doc/miragewallpaper
+	install -m644 LICENSE $(PACKAGE_ROOT)/usr/share/doc/miragewallpaper/LICENSE
+	install -m644 MirageQt/Vendor/FluentUI/License \
+		$(PACKAGE_ROOT)/usr/share/doc/miragewallpaper/FluentUI-MIT.txt
+	install -m644 debian/README.Debian $(PACKAGE_ROOT)/usr/share/doc/miragewallpaper/README.Debian
+	find $(STEAM_BUILD)/Licenses -maxdepth 1 -type f -exec install -m644 {} \
+		$(PACKAGE_ROOT)/usr/share/doc/miragewallpaper/ \;
+
+override_dh_auto_clean:
+	rm -rf $(BUILD_ROOT)
+
+override_dh_shlibdeps:
+	# SteamService contains a self-contained .NET runtime whose internal shared
+	# objects have private loader contracts, including an optional LTTng provider
+	# that Debian 13 cannot describe. Excluding that runtime keeps shlibdeps for
+	# every native application and renderer without generating invalid dependencies.
+	dh_shlibdeps -XSteamService
+
+override_dh_missing:
+	dh_missing --fail-missing
+
+override_dh_dwz:
+	:

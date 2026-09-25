@@ -1,11 +1,22 @@
-add_executable(VideoViewer VideoViewer.mm)
-
-target_link_libraries(VideoViewer PRIVATE
-    VideoRendererEngine
-    ${VR_FRAMEWORKS})
-
-target_compile_features(VideoViewer PRIVATE cxx_std_20)
-set_target_properties(VideoViewer PROPERTIES
-    OBJCXX_STANDARD 20
-    OBJCXX_STANDARD_REQUIRED ON)
-target_compile_options(VideoViewer PRIVATE -Wno-deprecated-declarations)
+if(APPLE)
+    add_executable(VideoViewer macOS/VideoViewer.mm)
+    target_link_libraries(VideoViewer PRIVATE VideoRendererEngine ${VR_FRAMEWORKS})
+    target_compile_features(VideoViewer PRIVATE cxx_std_20)
+    set_target_properties(VideoViewer PROPERTIES
+        OBJCXX_STANDARD 20
+        OBJCXX_STANDARD_REQUIRED ON)
+    target_compile_options(VideoViewer PRIVATE -Wno-deprecated-declarations)
+elseif(UNIX AND NOT APPLE)
+    find_package(Vulkan REQUIRED)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(GLFW IMPORTED_TARGET glfw3)
+    if(NOT GLFW_FOUND)
+        message(FATAL_ERROR "Need glfw3 for the video viewer")
+    endif()
+    find_package(Qt6 6.5 REQUIRED COMPONENTS Core)
+    add_executable(VideoViewer Linux/VideoViewer.cpp)
+    target_link_libraries(VideoViewer PRIVATE VideoRendererEngine Vulkan::Vulkan PkgConfig::GLFW)
+    target_compile_features(VideoViewer PRIVATE cxx_std_20)
+else()
+    message(FATAL_ERROR "VideoViewer has no platform backend for this system")
+endif()

@@ -1,3 +1,10 @@
+module;
+
+#if defined(__linux__)
+#include <string>
+#include <set>
+#endif
+
 module sr.scene;
 import eigen;
 import rstd;
@@ -882,6 +889,30 @@ void SceneNode::TickFieldAnimations(double runtime) {
     if (m_scale_curve) SetScale(m_scale_curve->EvaluateVec3(m_scale_base, runtime));
     if (m_rotation_curve) SetRotation(m_rotation_curve->EvaluateVec3(m_rotation_base, runtime));
     if (m_alpha_curve) SetUserAlpha(m_alpha_curve->EvaluateScalar(m_base_alpha, runtime));
+    // alpha 门控：被门控的命名动画已停止时隐藏节点（点击动画完成后的状态）。
+    for (const auto& name : m_alpha_gated_animations) {
+        auto it = m_named_field_animations.find(name);
+        if (it != m_named_field_animations.end() &&
+            it->second->Status() == SceneAnimationPlaybackStatus::Stopped) {
+            SetUserAlpha(0.0f);
+            break;
+        }
+    }
+}
+
+void SceneNode::SetFieldAnimationAlphaGate(std::string_view name, bool value) {
+    if (value) {
+        m_alpha_gated_animations.insert(std::string(name));
+        // 门控建立时动画未在播放（Stopped 或尚未启动）→ 立即隐藏层。
+        auto it = m_named_field_animations.find(std::string(name));
+        if (it == m_named_field_animations.end() ||
+            it->second->Status() == SceneAnimationPlaybackStatus::Stopped) {
+            SetUserAlpha(0.0f);
+        }
+    } else {
+        m_alpha_gated_animations.erase(std::string(name));
+        SetUserAlpha(m_base_alpha);
+    }
 }
 
 void SceneNode::RegisterFieldAnimation(

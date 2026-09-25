@@ -1,5 +1,14 @@
 module;
 
+// InputSnapshot compares std::optional<std::array<...>> values; both standard
+// library types must be declared in this module unit instead of inherited from imports.
+#include <array>
+#include <optional>
+
+#if defined(__linux__)
+#include <string>
+#endif
+
 #include <rstd/macro.hpp>
 #include <rstd/enum.hpp>
 #include "quickjs.h"
@@ -1081,8 +1090,9 @@ void LoadLocalStorage(EngineHostState* host) {
     if (host->ls_path.empty()) return;
     std::ifstream f(host->ls_path);
     if (! f) return;
-    std::string source(std::istreambuf_iterator<char>(f), {});
-    auto        parsed = ParseJson(source);
+    std::ostringstream ss;
+    ss << f.rdbuf();
+    auto parsed = ParseJson(ss.str());
     if (parsed.is_err()) {
         rstd_warn("localStorage parse failed: {}", parsed.unwrap_err());
         return;

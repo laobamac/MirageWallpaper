@@ -1,5 +1,9 @@
 module;
 
+#if defined(__linux__)
+#include <string>
+#endif
+
 module sr.user_property;
 
 import rstd.cppstd;

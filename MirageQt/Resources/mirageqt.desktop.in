@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=MirageQt
+Exec=@MIRAGEQT_EXECUTABLE@
+Icon=mirageqt
+StartupWMClass=MirageQt
+Terminal=false
+Categories=Settings;DesktopSettings;
+StartupNotify=false

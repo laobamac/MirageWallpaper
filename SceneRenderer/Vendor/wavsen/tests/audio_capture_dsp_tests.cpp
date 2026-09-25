@@ -78,7 +78,7 @@ bool test_frequency_mapping_matches_we_response_samples() {
         Buffer right{};
         fill_sine(left, right, tone.hz, 0.25f, 0.25f);
         const auto raw = wavsen::audio::dsp::analyze_stereo_spectrum(
-            left.data(), right.data(), layout, 2.0f / static_cast<float>(left.size()));
+            left.data(), right.data(), layout, wavsen::audio::dsp::kFftAmplitudeNorm);
         const auto actual = peak_band(raw.average);
         const float actual_x = band_center_x(actual);
         if (std::abs(actual_x - tone.expected_x) > tone.tolerance) {
@@ -102,7 +102,7 @@ bool test_channel_split_and_average() {
     Buffer right{};
     fill_sine(left, right, 1000.0f, 1.0f, 0.0f);
     const auto raw = wavsen::audio::dsp::analyze_stereo_spectrum(
-        left.data(), right.data(), layout, 2.0f / static_cast<float>(left.size()));
+        left.data(), right.data(), layout, wavsen::audio::dsp::kFftAmplitudeNorm);
     const auto band = peak_band(raw.left);
 
     if (raw.left[band] <= 0.0f || raw.left[band] > wavsen::audio::dsp::kResponseCeil) {
@@ -128,10 +128,37 @@ bool test_response_cap() {
     Buffer right{};
     fill_sine(left, right, 1000.0f, 4.0f, 4.0f);
     const auto raw = wavsen::audio::dsp::analyze_stereo_spectrum(
-        left.data(), right.data(), layout, 2.0f / static_cast<float>(left.size()));
+        left.data(), right.data(), layout, wavsen::audio::dsp::kFftAmplitudeNorm);
     for (float v : raw.average) {
         if (v > wavsen::audio::dsp::kResponseCeil) {
             std::cerr << "response exceeded cap: " << v << "\n";
+            return false;
+        }
+    }
+    return true;
+}
+
+bool test_monitor_attenuation_is_removed_before_response_mapping() {
+    const auto layout = wavsen::audio::dsp::make_we_layout(kSampleRate);
+    const std::array<float, 3> monitor_gains { 1.0f, 0.1f, 0.000482f };
+    float reference = 0.0f;
+    for (std::size_t index = 0; index < monitor_gains.size(); ++index) {
+        const float monitor_gain = monitor_gains[index];
+        Buffer left{};
+        Buffer right{};
+        fill_sine(left, right, 440.0f, 0.1f * monitor_gain, 0.1f * monitor_gain);
+        // Backends divide by the explicit linear monitor volume before the
+        // shared DSP. Scaling the FFT normalization is mathematically
+        // equivalent and keeps this test independent of either audio API.
+        const auto raw = wavsen::audio::dsp::analyze_stereo_spectrum(
+            left.data(), right.data(), layout,
+            wavsen::audio::dsp::kFftAmplitudeNorm / monitor_gain);
+        const float response = raw.average[peak_band(raw.average)];
+        if (index == 0) {
+            reference = response;
+        } else if (std::abs(response - reference) > 1.0e-5f) {
+            std::cerr << "monitor gain changed calibrated response: " << response
+                      << " vs " << reference << "\n";
             return false;
         }
     }
@@ -143,7 +170,8 @@ float response_for_unit(const wavsen::audio::dsp::BandLayout& layout, std::size_
     const float db = wavsen::audio::dsp::kDbFloor +
                      unit * (wavsen::audio::dsp::kDbCeil - wavsen::audio::dsp::kDbFloor);
     const float compensated = std::pow(10.0f, db / 20.0f);
-    return wavsen::audio::dsp::visual_response(compensated / layout.gain[band], layout, band);
+    return wavsen::audio::dsp::visual_response(
+        compensated / layout.gain[band], layout, band);
 }
 
 bool test_response_contrast() {
@@ -174,7 +202,7 @@ bool test_short_neighbor_bars_survive_response() {
     Buffer right{};
     fill_sine(left, right, 500.0f, 0.25f, 0.25f);
     const auto raw = wavsen::audio::dsp::analyze_stereo_spectrum(
-        left.data(), right.data(), layout, 2.0f / static_cast<float>(left.size()));
+        left.data(), right.data(), layout, wavsen::audio::dsp::kFftAmplitudeNorm);
     const auto band = peak_band(raw.average);
     if (band == 0) {
         std::cerr << "500 Hz peak has no left neighbor\n";
@@ -216,6 +244,8 @@ int main() {
     if (!test_channel_split_and_average())
         return EXIT_FAILURE;
     if (!test_response_cap())
+        return EXIT_FAILURE;
+    if (!test_monitor_attenuation_is_removed_before_response_mapping())
         return EXIT_FAILURE;
     if (!test_response_contrast())
         return EXIT_FAILURE;

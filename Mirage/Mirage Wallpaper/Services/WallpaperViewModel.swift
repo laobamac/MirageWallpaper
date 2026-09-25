@@ -446,11 +446,13 @@ class WallpaperViewModel: PlaylistPlayback {
 
     static func isWallpaperTrusted(_ w: WEWallpaper) -> Bool {
         let list = UserDefaults.standard.stringArray(forKey: "TrustedWallpapers") ?? []
+        let trustedPaths = Set(list.map { URL(fileURLWithPath: $0).standardizedFileURL.path })
         let id = trustID(for: w)
-        if list.contains(id) || list.contains(w.id) { return true }
+        let rawID = w.wallpaperDirectory.standardizedFileURL.path
+        if trustedPaths.contains(id) || trustedPaths.contains(rawID) || trustedPaths.contains(w.id) { return true }
         sessionTrustLock.lock()
         defer { sessionTrustLock.unlock() }
-        return sessionTrusted.contains(id)
+        return sessionTrusted.contains(id) || sessionTrusted.contains(rawID)
     }
 
     func isTrusted(_ w: WEWallpaper) -> Bool {
@@ -461,6 +463,7 @@ class WallpaperViewModel: PlaylistPlayback {
         let existing = UserDefaults.standard.stringArray(forKey: "TrustedWallpapers") ?? []
         var list = Set(existing.map { URL(fileURLWithPath: $0).standardizedFileURL.path })
         list.insert(Self.trustID(for: w))
+        list.insert(w.wallpaperDirectory.standardizedFileURL.path)
         UserDefaults.standard.set(list.sorted(), forKey: "TrustedWallpapers")
     }
 
@@ -513,15 +516,20 @@ class WallpaperViewModel: PlaylistPlayback {
             return
         }
         if wallpaper.kind == .web, !isTrusted(wallpaper) {
-            guard let displayID = DisplayRegistry.shared.displayID(for: key) else {
-                cancelPendingPreview(wallpaperID: wallpaper.id, for: key)
+            // 对于用户手动导入到本地壁纸库的网页壁纸，自动保存信任状态，避免重启后阻断
+            if WallpaperLibrary.shared.isImported(wallpaper) {
+                trust(wallpaper)
+            } else {
+                guard let displayID = DisplayRegistry.shared.displayID(for: key) else {
+                    cancelPendingPreview(wallpaperID: wallpaper.id, for: key)
+                    return
+                }
+                previewSelections[key]?.isApplying = false
+                if key == selectedDisplayKey { refreshPreviewState() }
+                AppDelegate.shared.contentViewModel.warningUnsafeWallpaperModal(
+                    which: wallpaper, action: .applyOnDisplay(displayID))
                 return
             }
-            previewSelections[key]?.isApplying = false
-            if key == selectedDisplayKey { refreshPreviewState() }
-            AppDelegate.shared.contentViewModel.warningUnsafeWallpaperModal(
-                which: wallpaper, action: .applyOnDisplay(displayID))
-            return
         }
         assign(wallpaper, to: key, restoreFocus: true)
     }
@@ -1311,9 +1319,9 @@ class WallpaperViewModel: PlaylistPlayback {
         else { return [:] }
         var result: [DisplayKey: DisplayWallpaperState] = [:]
         for (rawKey, stored) in raw {
-            guard FileManager.default.fileExists(
-                atPath: stored.wallpaper.wallpaperDirectory.path) else { continue }
-            let refreshed = WEWallpaper.load(from: stored.wallpaper.wallpaperDirectory)
+            let directoryURL = stored.wallpaper.wallpaperDirectory.standardizedFileURL
+            guard FileManager.default.fileExists(atPath: directoryURL.path) else { continue }
+            let refreshed = WEWallpaper.load(from: directoryURL)
             guard refreshed.isValid, refreshed.kind != .unsupported else { continue }
             result[DisplayKey(rawValue: rawKey)] = DisplayWallpaperState(
                 wallpaper: refreshed,

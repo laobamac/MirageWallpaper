@@ -17,6 +17,10 @@ inline constexpr std::size_t kFftSize = 4096;
 inline constexpr std::size_t kNumBins = 64;
 inline constexpr std::size_t kHalfFft = kFftSize / 2;
 inline constexpr std::size_t kHopSize = 1024;
+// A Hann window has a coherent gain of 0.5. The one-sided real spectrum
+// therefore needs 4/N normalization; monitor-device volume is handled by the
+// capture backend and must not be hidden in this frequency-domain constant.
+inline constexpr float kFftAmplitudeNorm = 4.0f / static_cast<float>(kFftSize);
 inline constexpr float kMinFrequencyHz = 10.0f;
 inline constexpr float kMaxFrequencyHz = 16000.0f;
 inline constexpr float kTiltPivotHz = 1000.0f;

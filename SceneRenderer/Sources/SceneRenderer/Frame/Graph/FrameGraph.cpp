@@ -211,7 +211,7 @@ std::vector<NodeID> RenderGraph::topologicalOrder() const {
         if (active_target) {
             for (size_t i = 0; i < ready.size(); ++i) {
                 auto target = passWriteTarget(ready[i]);
-                if (target && *target == *active_target) return i;
+                if (target && *target->c_str() == *active_target->c_str()) return i;
             }
         }
 

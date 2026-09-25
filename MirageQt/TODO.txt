@@ -1,0 +1,6 @@
+Align the MirageQt with the EXCACT SAME feature, layout, bevabour like the macOS switft version
+in ../Mirage, using Qt and QML Theme FluentUI (in Vendor dir). Requirements: 1. Implement all the features in macOS
+version, if one feature is not availble in linux, leave it as a placehold and markit with TODO 2. No extra codes, no
+defensive programming, no overwheeling encapsulation. 3. When using QML theme FluentUI, make sure not using lots of
+anchors to layout items in pixel, which will break in different dpi. you should layout items like the macOS SwiftUI
+using FluentUI's Compoenet

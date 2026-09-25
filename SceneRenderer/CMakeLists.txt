@@ -11,10 +11,10 @@ set(SCENERENDERER_VERSION 0.1.8)
 
 project(SceneRenderer VERSION ${SCENERENDERER_VERSION})
 
-# SceneRenderer engine build for macOS.
-# MoltenVK is used as the Vulkan ICD and wavsen is forced onto Core Audio
-# when building on Darwin. The repository is intentionally laid out as an
-# embeddable engine plus a small standalone tool, not as the final app shell.
+# SceneRenderer engine build.
+# On macOS, MoltenVK is used as the Vulkan ICD and wavsen is forced onto
+# Core Audio. Linux builds use the system Vulkan loader and the default
+# wavsen backend unless explicitly overridden.
 if(APPLE)
     set(WAVSEN_AUDIO_BACKEND "coreaudio" CACHE STRING "Core Audio backend on macOS" FORCE)
     # MoltenVK as the Vulkan ICD. Hint Vulkan::Vulkan to the brew loader.
@@ -32,9 +32,13 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# ELF $ORIGIN doesn't exist on mach-o; use @loader_path so install rpath
-# stays explicit and the build doesn't bake the literal "$ORIGIN" string.
-set(CMAKE_INSTALL_RPATH "@loader_path")
+# ELF $ORIGIN doesn't exist on mach-o; use @loader_path on macOS and
+# $ORIGIN on ELF so installed tools can resolve adjacent runtime libraries.
+if(APPLE)
+    set(CMAKE_INSTALL_RPATH "@loader_path")
+else()
+    set(CMAKE_INSTALL_RPATH "$ORIGIN")
+endif()
 set(CMAKE_INSTALL_RPATH_USE_LINK_PATH OFF)
 set(CMAKE_BUILD_WITH_INSTALL_RPATH OFF)
 set(CMAKE_INSTALL_REMOVE_ENVIRONMENT_RPATH ON)
@@ -47,9 +51,22 @@ if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND NOT SR_ALLOW_NONCLANG)
         "or pass -DSR_ALLOW_NONCLANG=ON to bypass this check.")
 endif()
 
-
 find_package(PkgConfig REQUIRED)
 find_package(Threads REQUIRED)
+
+# Linux wallpapers display exclusively through the mirage-display protocol
+# (the repository-maintained MirageLinuxDisplay library); there is no native X11 host.
+if(UNIX AND NOT APPLE)
+    # MirageLinuxDisplay is maintained as a top-level repository component.
+    set(MIRAGE_DISPLAY_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}/../MirageLinuxDisplay")
+    set(MIRAGE_DISPLAY_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(MIRAGE_DISPLAY_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(MIRAGE_DISPLAY_PLUGIN_QML OFF CACHE BOOL "" FORCE)
+    set(MIRAGE_DISPLAY_WITH_EGL OFF CACHE BOOL "" FORCE)
+    set(MIRAGE_DISPLAY_WITH_VULKAN ON CACHE BOOL "" FORCE)
+    add_subdirectory("${MIRAGE_DISPLAY_SOURCE_DIR}"
+        "${CMAKE_CURRENT_BINARY_DIR}/MirageLinuxDisplay")
+endif()
 
 if(CMAKE_USE_PTHREADS_INIT)
     # Clang records pthread support in C++ module BMIs; keep all module targets compatible.
@@ -75,10 +92,18 @@ if(SCENERENDERER_BUILD_ENGINE AND SCENERENDERER_BUILD_VIEWER)
     add_subdirectory(Tools/SceneViewer)
 endif()
 
-option(SCENERENDERER_BUILD_WALLPAPER_HOST "Build the native macOS desktop wallpaper host" ${APPLE})
-if(SCENERENDERER_BUILD_ENGINE AND APPLE AND SCENERENDERER_BUILD_WALLPAPER_HOST)
-    add_subdirectory(Tools/SceneWallpaper)
-    add_subdirectory(Tools/SceneScreenSaver)
+set(_scenerenderer_default_wallpaper_host OFF)
+if(APPLE OR (UNIX AND NOT APPLE))
+    set(_scenerenderer_default_wallpaper_host ON)
+endif()
+option(SCENERENDERER_BUILD_WALLPAPER_HOST "Build the native desktop wallpaper host" ${_scenerenderer_default_wallpaper_host})
+if(SCENERENDERER_BUILD_ENGINE AND SCENERENDERER_BUILD_WALLPAPER_HOST)
+    if(APPLE OR (UNIX AND NOT APPLE))
+        add_subdirectory(Tools/SceneWallpaper)
+    endif()
+    if(APPLE)
+        add_subdirectory(Tools/SceneScreenSaver)
+    endif()
 endif()
 
 option(SCENERENDERER_BUILD_TESTS "Build SceneRenderer regression tests" OFF)
@@ -86,6 +111,14 @@ if(SCENERENDERER_BUILD_ENGINE AND SCENERENDERER_BUILD_TESTS)
     enable_testing()
     add_executable(SceneRendererPerformanceTests Tests/PerformanceRegression.cpp
         Tools/SceneWallpaper/ControlChannel.cpp)
+    if(NOT APPLE)
+        # The production Linux capture backends analyze the system monitor and
+        # therefore do not compile CoreAudio's scene-output loopback analyzer.
+        # This regression exercises that backend-independent analyzer contract
+        # directly, so provide its implementation to the Linux test target only.
+        target_sources(SceneRendererPerformanceTests PRIVATE
+            Vendor/wavsen/src/audio/audio_loopback_analyzer.cpp)
+    endif()
     target_link_libraries(SceneRendererPerformanceTests PRIVATE SceneRenderer::Engine)
     set_property(TARGET SceneRendererPerformanceTests PROPERTY CXX_SCAN_FOR_MODULES ON)
     add_test(NAME SceneRendererPerformance COMMAND SceneRendererPerformanceTests)
@@ -130,4 +163,17 @@ if(SCENERENDERER_BUILD_ENGINE AND SCENERENDERER_BUILD_TESTS)
     target_link_libraries(SceneRendererPuppetAlphaTests PRIVATE SceneRenderer::Import)
     set_property(TARGET SceneRendererPuppetAlphaTests PROPERTY CXX_SCAN_FOR_MODULES ON)
     add_test(NAME SceneRendererPuppetAlpha COMMAND SceneRendererPuppetAlphaTests)
+
+    if(UNIX AND NOT APPLE)
+        # Exercises the Linux platform implementation without Vulkan: the test
+        # supplies the engine's documented live-frame callback symbol and
+        # verifies the PNG bytes written by WriteSceneSnapshot.
+        find_package(PNG REQUIRED)
+        add_executable(SceneRendererSnapshotTests
+            Tests/SceneSnapshotRegression.cpp
+            Tools/SceneWallpaper/SceneSnapshot.cpp)
+        target_include_directories(SceneRendererSnapshotTests PRIVATE Tools/SceneWallpaper)
+        target_link_libraries(SceneRendererSnapshotTests PRIVATE PNG::PNG Threads::Threads)
+        add_test(NAME SceneRendererSnapshot COMMAND SceneRendererSnapshotTests)
+    endif()
 endif()

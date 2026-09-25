@@ -3,6 +3,7 @@ module;
 #include <cstdint>
 #include <cstddef>
 #include <limits>
+#include <new>
 #include <tuple>
 #include <source_location>
 export module rstd.basic:prelude;

@@ -70,6 +70,7 @@ struct SettingsView: View {
         }
         .frame(minWidth: 720, idealWidth: 780, minHeight: 520, idealHeight: 620)
         .environment(\.locale, localization.locale)
+        .preferredColorScheme(viewModel.settings.appearance == .light ? .light : (viewModel.settings.appearance == .dark ? .dark : nil))
     }
 
     private var header: some View {

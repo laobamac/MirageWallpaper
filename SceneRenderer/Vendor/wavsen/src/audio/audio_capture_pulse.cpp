@@ -2,6 +2,7 @@ module;
 
 #include <pulse/pulseaudio.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstring>
 #include <string>
@@ -102,7 +103,33 @@ public:
             shutdown_loop();
             return false;
         }
-        const std::string monitor_name = default_sink_ + ".monitor";
+        // Pulse applies an independent recording volume to the monitor
+        // source. Invert its documented linear value only for spectrum
+        // analysis; changing this process must never change system playback.
+        monitor_source_ = default_sink_ + ".monitor";
+        source_info_done_ = false;
+        auto* source_op = pa_context_get_source_info_by_name(
+            ctx_, monitor_source_.c_str(), &Impl::on_source_info, this);
+        if (! source_op) {
+            rstd::log::error("wavsen::audio: capture monitor-volume request failed");
+            destroy_locked();
+            pa_threaded_mainloop_unlock(loop_);
+            shutdown_loop();
+            return false;
+        }
+        pa_operation_unref(source_op);
+        while (! source_info_done_) pa_threaded_mainloop_wait(loop_);
+        pa_context_set_subscribe_callback(ctx_, &Impl::on_subscribe, this);
+        auto* subscribe_op = pa_context_subscribe(
+            ctx_, PA_SUBSCRIPTION_MASK_SOURCE, nullptr, nullptr);
+        if (! subscribe_op) {
+            rstd::log::error("wavsen::audio: capture source subscription failed");
+            destroy_locked();
+            pa_threaded_mainloop_unlock(loop_);
+            shutdown_loop();
+            return false;
+        }
+        pa_operation_unref(subscribe_op);
 
         pa_sample_spec ss {};
         ss.format   = PA_SAMPLE_FLOAT32LE;
@@ -134,7 +161,7 @@ public:
 
         const auto flags = static_cast<pa_stream_flags_t>(PA_STREAM_ADJUST_LATENCY);
 
-        if (pa_stream_connect_record(stream_, monitor_name.c_str(), &ba, flags) < 0) {
+        if (pa_stream_connect_record(stream_, monitor_source_.c_str(), &ba, flags) < 0) {
             rstd::log::error("wavsen::audio: capture pa_stream_connect_record failed: {}",
                              pa_strerror(pa_context_errno(ctx_)));
             destroy_locked();
@@ -160,7 +187,7 @@ public:
         pa_threaded_mainloop_unlock(loop_);
 
         rstd::log::info("wavsen::audio: capture inited (pulse monitor '{}', "
-                        "{} ch @ {} Hz)", monitor_name,
+                        "{} ch @ {} Hz)", monitor_source_,
                         kDefaultChannels, kDefaultRate);
         return true;
     }
@@ -177,6 +204,10 @@ public:
     bool is_inited() const { return loop_ != nullptr && stream_ != nullptr; }
 
     bool snapshot(AudioSpectrum& out) const {
+        if (! gain_ready_.load(std::memory_order_acquire)) {
+            out.clear();
+            return false;
+        }
         for (int attempt = 0; attempt < 16; ++attempt) {
             const std::uint32_t s1 = seq_.load(std::memory_order_acquire);
             if (s1 == 0) {
@@ -207,6 +238,7 @@ private:
         }
         if (ctx_) {
             pa_context_set_state_callback(ctx_, nullptr, nullptr);
+            pa_context_set_subscribe_callback(ctx_, nullptr, nullptr);
             pa_context_disconnect(ctx_);
             pa_context_unref(ctx_);
             ctx_ = nullptr;
@@ -239,6 +271,42 @@ private:
         pa_threaded_mainloop_signal(self->loop_, 0);
     }
 
+    static void on_source_info(::pa_context*, const ::pa_source_info* info, int eol,
+                               void* user) {
+        auto* self = static_cast<Impl*>(user);
+        if (info && info->name && self->monitor_source_ == info->name &&
+            info->volume.channels >= kDefaultChannels) {
+            const double left_volume = pa_sw_volume_to_linear(info->volume.values[0]);
+            const double right_volume = pa_sw_volume_to_linear(info->volume.values[1]);
+            if (info->mute == 0 && left_volume > 0.0 && right_volume > 0.0) {
+                self->left_scale_.store(static_cast<float>(1.0 / left_volume),
+                                        std::memory_order_release);
+                self->right_scale_.store(static_cast<float>(1.0 / right_volume),
+                                         std::memory_order_release);
+                self->gain_ready_.store(true, std::memory_order_release);
+            } else {
+                self->gain_ready_.store(false, std::memory_order_release);
+            }
+        }
+        if (eol != 0) {
+            self->source_info_done_ = true;
+            pa_threaded_mainloop_signal(self->loop_, 0);
+        }
+    }
+
+    static void on_subscribe(::pa_context* context, pa_subscription_event_type_t event,
+                             std::uint32_t index, void* user) {
+        auto* self = static_cast<Impl*>(user);
+        if ((event & PA_SUBSCRIPTION_EVENT_FACILITY_MASK) != PA_SUBSCRIPTION_EVENT_SOURCE) return;
+        pa_operation* operation = pa_context_get_source_info_by_index(
+            context, index, &Impl::on_source_info, self);
+        if (! operation) {
+            self->gain_ready_.store(false, std::memory_order_release);
+            return;
+        }
+        pa_operation_unref(operation);
+    }
+
     static void on_read(::pa_stream* s, size_t /*nbytes*/, void* user) {
         auto* self = static_cast<Impl*>(user);
         while (pa_stream_readable_size(s) > 0) {
@@ -255,16 +323,21 @@ private:
             constexpr std::uint32_t stride   = channels * sizeof(float);
             const auto* src = static_cast<const float*>(data);
             const std::uint32_t n_frames = static_cast<std::uint32_t>(sz / stride);
-            self->ingest(src, n_frames, channels);
+            if (self->gain_ready_.load(std::memory_order_acquire)) {
+                self->ingest(src, n_frames, channels,
+                             self->left_scale_.load(std::memory_order_acquire),
+                             self->right_scale_.load(std::memory_order_acquire));
+            }
             pa_stream_drop(s);
         }
     }
 
-    void ingest(const float* src, std::uint32_t n_frames, std::uint32_t channels) {
+    void ingest(const float* src, std::uint32_t n_frames, std::uint32_t channels,
+                float left_scale, float right_scale) {
         for (std::uint32_t f = 0; f < n_frames; ++f) {
             const std::uint32_t base  = f * channels;
-            const float         left  = channels > 0 ? src[base] : 0.f;
-            const float         right = channels > 1 ? src[base + 1] : left;
+            const float         left  = channels > 0 ? src[base] * left_scale : 0.f;
+            const float         right = channels > 1 ? src[base + 1] * right_scale : left;
             ring_left_[ring_head_]    = left;
             ring_right_[ring_head_]   = right;
             ring_head_                = (ring_head_ + 1) % dsp::kFftSize;
@@ -287,9 +360,9 @@ private:
         dsp::fft_inplace(buf_left.data(), dsp::kFftSize);
         dsp::fft_inplace(buf_right.data(), dsp::kFftSize);
 
-        const float norm = 2.0f / static_cast<float>(dsp::kFftSize);
         const auto  raw =
-            dsp::analyze_stereo_spectrum(buf_left.data(), buf_right.data(), band_layout_, norm);
+            dsp::analyze_stereo_spectrum(buf_left.data(), buf_right.data(), band_layout_,
+                                         dsp::kFftAmplitudeNorm);
         const auto dt_sec = static_cast<float>(dsp::kHopSize) / static_cast<float>(kDefaultRate);
         const auto bands  = dsp::smooth_spectrum(raw, smoothed_, dt_sec);
 
@@ -313,7 +386,12 @@ private:
     ::pa_context*           ctx_    = nullptr;
     ::pa_stream*            stream_ = nullptr;
     std::string             default_sink_;
+    std::string             monitor_source_;
     bool                    server_info_done_ = false;
+    bool                    source_info_done_ = false;
+    std::atomic<float>      left_scale_ { 1.0f };
+    std::atomic<float>      right_scale_ { 1.0f };
+    std::atomic<bool>       gain_ready_ { false };
 
     std::array<float, dsp::kFftSize> ring_left_ {};
     std::array<float, dsp::kFftSize> ring_right_ {};

@@ -1,9 +1,17 @@
 module;
 
+#if defined(__linux__)
+#include <string>
+#endif
+
 #include <atomic>
 #include <climits>
 #include <cmath>
 #include <initializer_list>
+// 标准库模板自由函数（optional::operator==、make_shared 等）不随
+// `import rstd.cppstd` 导出，必须显式 include 才可见（clang + libstdc++）。
+#include <memory>
+#include <optional>
 
 export module sr.scene;
 import eigen;
@@ -1177,8 +1185,14 @@ struct SceneAnimationCurve {
     float                          fps { 30.0f };
     std::int32_t                   length { 0 };
     std::string                    mode;
+    // 命名 field-animation：SceneCompiler 填充，供 alpha-gate 查询使用。
+    // 动画的实际播放参数以 playback 构造参数为准。
+    std::string                    name;
     bool                           wraploop { false };
     bool                           relative { false };
+    // 初始暂停标志：SceneCompiler 填充；playback 构造时已应用，
+    // 此处仅保留供查询。
+    bool                           startpaused { false };
     std::shared_ptr<SceneAnimationPlayback> playback;
 
     bool            Empty() const;
@@ -1437,6 +1451,9 @@ public:
     void RegisterAnimationPlayback(const std::shared_ptr<SceneAnimationPlayback>& playback);
     std::vector<SceneAnimationEvent> ConsumeAnimationEvents();
     std::shared_ptr<SceneAnimationPlayback> FindAnimation(std::string_view name) const;
+    // 命名动画停止时隐藏节点（alpha 门控）。SceneCompiler 为可点击动画层
+    // 绑定此门控；播放恢复基础 alpha，停止后隐藏。
+    void SetFieldAnimationAlphaGate(std::string_view name, bool value);
     bool HasFieldAnimations() const {
         return m_origin_curve || m_scale_curve || m_rotation_curve || m_alpha_curve ||
                ! m_field_animation_playbacks.empty();
@@ -1676,6 +1693,7 @@ private:
         m_field_animation_playbacks;
     std::unordered_map<std::string, std::shared_ptr<SceneAnimationPlayback>>
         m_named_field_animations;
+    std::unordered_set<std::string> m_alpha_gated_animations;
     float                              m_brightness { 1.0f };
     bool                               m_brightness_overridden { false };
     Eigen::Vector3f                    m_color { 1.0f, 1.0f, 1.0f };

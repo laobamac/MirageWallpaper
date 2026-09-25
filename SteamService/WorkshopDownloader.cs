@@ -51,7 +51,7 @@ internal sealed class WorkshopDownloader
 
     private async Task<DownloadResult> DownloadOnceAsync(string taskId, ulong workshopId, string outputRoot, CancellationToken cancellationToken)
     {
-        if (!OperatingSystem.IsMacOS()) throw new PlatformNotSupportedException();
+        if (!(OperatingSystem.IsMacOS() || OperatingSystem.IsLinux())) throw new PlatformNotSupportedException();
         writer.DownloadState(taskId, "resolving");
         var detailsRequest = new CPublishedFile_GetDetails_Request { appid = SteamSession.AppId, includechildren = true };
         detailsRequest.publishedfileids.Add(workshopId);

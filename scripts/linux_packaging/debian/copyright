@@ -1,0 +1,18 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: MirageWallpaper
+Upstream-Contact: https://github.com/laobamac/MirageWallpaper/issues
+Source: https://github.com/laobamac/MirageWallpaper
+
+Files: *
+Copyright: 2024-2026 Mirage Wallpaper contributors
+License: GPL-3+
+ The complete GNU General Public License version 3 text is shipped in
+ /usr/share/doc/miragewallpaper/LICENSE.
+
+Files: SteamService/*
+Copyright: 2024-2026 Mirage Wallpaper contributors
+License: GPL-3+
+
+Files: MirageQt/Vendor/FluentUI/*
+Copyright: FluentUI contributors
+License: MIT

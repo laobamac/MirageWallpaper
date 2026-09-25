@@ -2,6 +2,7 @@ module;
 
 module sr.pkg.scene_obj;
 import rstd.cppstd;
+import sr.json;
 
 namespace sr::wpscene
 {

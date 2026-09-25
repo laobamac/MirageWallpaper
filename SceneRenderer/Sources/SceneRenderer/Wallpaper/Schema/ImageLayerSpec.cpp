@@ -1,10 +1,15 @@
 module;
 
+#if defined(__linux__)
+#include <string>
+#endif
+
 #include <rstd/macro.hpp>
 
 module sr.pkg.scene_obj;
 import rstd.log;
 import rstd.cppstd;
+import sr.fs;
 import sr.json;
 
 using namespace sr::wpscene;

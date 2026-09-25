@@ -1,0 +1,39 @@
+#include <windows.h>
+
+#define STR(x) #x
+#define VER_JOIN(a,b,c,d) STR(a.b.c.d)
+#define VER_JOIN_(x) VER_JOIN x
+#define VER_STR VER_JOIN_((FLUENTUI_VERSION))
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION FLUENTUI_VERSION
+ PRODUCTVERSION FLUENTUI_VERSION
+ FILEFLAGSMASK 0x3fL
+#ifdef _DEBUG
+ FILEFLAGS 0x1L
+#else
+ FILEFLAGS 0x0L
+#endif
+ FILEOS 0x40004L
+ FILETYPE 0x2L
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "080404b0"
+        BEGIN
+            VALUE "CompanyName", "ZhuZiChu"
+            VALUE "FileDescription", "https://github.com/zhuzichu520/FluentUI"
+            VALUE "FileVersion", VER_STR
+            VALUE "InternalName", "${PROJECT_NAME}.dll"
+            VALUE "LegalCopyright", "Copyright (C) 2023 ZhuZiChu. All rights reserved."
+            VALUE "OriginalFilename", "${PROJECT_NAME}.dll"
+            VALUE "ProductName", "${PROJECT_NAME}"
+            VALUE "ProductVersion", VER_STR
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x804, 1200
+    END
+END

@@ -1,0 +1,52 @@
+# Builds the installable Plasma/Wallpaper kpackage ZIP for MirageWallpaper.
+#
+# Configured from adapters/kde/CMakeLists.txt and executed with
+#   cmake -P package-wallpaper.cmake
+#
+# The archive follows the KPackage layout that kpackagetool6 expects:
+#   metadata.json            (at the archive root)
+#   contents/config/main.xml
+#   contents/ui/main.qml     (Plasma/Wallpaper "mainscript")
+#   contents/ui/...
+# plus a README.md describing the package.
+#
+# The package is self-contained: the native QML module is copied into
+# contents/ui/MirageDisplayEmbed and the surface component imports it with a
+# relative import, so `kpackagetool6 -i` works without a system-wide QML
+# module or library install.
+
+set(_stage "@_wallpaper_pkg_stage@")
+set(_archive "@_wallpaper_pkg_archive@")
+set(_qml_module "@_wallpaper_pkg_qml_module@")
+
+file(REMOVE_RECURSE "${_stage}")
+file(MAKE_DIRECTORY "${_stage}")
+file(COPY "@CMAKE_CURRENT_SOURCE_DIR@/wallpaper/"
+    DESTINATION "${_stage}")
+
+# Ship the native QML module inside the package. The surface component uses
+# the self-contained MirageSurfaceEmbed.qml with a relative import into
+# "MirageDisplayEmbed", so the package does not depend on any system-wide
+# QML module or on the mirage_display shared libraries.
+file(REMOVE "${_stage}/contents/ui/MirageSurface.qml")
+file(RENAME
+    "${_stage}/contents/ui/MirageSurfaceEmbed.qml"
+    "${_stage}/contents/ui/MirageSurface.qml")
+if(NOT EXISTS "${_qml_module}/qmldir")
+    message(FATAL_ERROR "QML module output not found: ${_qml_module}")
+endif()
+file(COPY "${_qml_module}/"
+    DESTINATION "${_stage}/contents/ui/MirageDisplayEmbed")
+
+get_filename_component(_parent "${_stage}" DIRECTORY)
+get_filename_component(_name "${_stage}" NAME)
+
+file(REMOVE "${_archive}")
+execute_process(
+    COMMAND "${CMAKE_COMMAND}" -E chdir "${_parent}"
+            "${CMAKE_COMMAND}" -E tar cf "${_archive}" --format=zip "${_name}"
+    RESULT_VARIABLE _result)
+if(NOT _result EQUAL 0)
+    message(FATAL_ERROR "Failed to create wallpaper package ${_archive}")
+endif()
+message(STATUS "Created wallpaper package: ${_archive}")
