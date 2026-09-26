@@ -68,6 +68,9 @@ struct ExplorerItem: View {
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(alignment: .topTrailing) {
+            if wallpaper.project.mirageBake != nil { WallpaperBakeBadge().padding(6).allowsHitTesting(false) }
+        }
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .strokeBorder(Color.accentColor,

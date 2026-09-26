@@ -437,7 +437,21 @@ enum WorkshopId: Codable, Equatable, Hashable, RawRepresentable {
 
 // MARK: - WEProject
 
+struct WallpaperBakeMetadata: Codable, Equatable, Hashable {
+    var schema = 1
+    var id: UUID
+    var sourceTitle: String
+    var sourceKind: String
+    var sourceDigest: String
+    var createdAt: Date
+    var width: Int
+    var height: Int
+    var fps: Int
+    var duration: Int
+}
+
 struct WEProject: Codable, Equatable, Hashable {
+    var mirageBake: WallpaperBakeMetadata?
     var approved: Bool?
     var author: String?
     var contentrating: String?
@@ -522,12 +536,14 @@ struct WEProject: Codable, Equatable, Hashable {
     }
 
     enum CodingKeys: String, CodingKey {
+        case mirageBake
         case approved, author, contentrating, dependency, description, file, general, preset
         case preview, tags, title, visibility, workshopid, workshopurl, type, version
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        mirageBake = try? c.decode(WallpaperBakeMetadata.self, forKey: .mirageBake)
         approved = try? c.decode(Bool.self, forKey: .approved)
         author = try? c.decode(String.self, forKey: .author)
         contentrating = try? c.decode(String.self, forKey: .contentrating)
@@ -548,6 +564,7 @@ struct WEProject: Codable, Equatable, Hashable {
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encodeIfPresent(mirageBake, forKey: .mirageBake)
         try c.encodeIfPresent(approved, forKey: .approved)
         try c.encodeIfPresent(author, forKey: .author)
         try c.encodeIfPresent(contentrating, forKey: .contentrating)

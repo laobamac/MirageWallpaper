@@ -240,6 +240,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        WallpaperBakeService.shared.cancelAll()
         PlaylistManager.shared.stopAllRotators()
         if developerLogWindowWasOpened {
             MirageLogService.shared.saveAutomatically()

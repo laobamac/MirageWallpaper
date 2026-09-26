@@ -75,6 +75,7 @@ struct ContentView: View {
     @Bindable var workshopViewModel: WorkshopViewModel
     @ObservedObject var navigationModel: MainNavigationModel
     @ObservedObject private var shortcutManager = WallpaperShortcutManager.shared
+    @ObservedObject private var bakeService = WallpaperBakeService.shared
     @ObservedObject private var dynamicLockScreenManager = DynamicLockScreenManager.shared
     @ObservedObject private var screenSaverDynamicLockScreenManager = ScreenSaverDynamicLockScreenManager.shared
     @StateObject private var steamSetupViewModel = SteamSetupViewModel()
@@ -321,6 +322,15 @@ struct ContentView: View {
                 wallpaper: wallpaper,
                 manager: shortcutManager
             )
+        }
+        .sheet(item: $bakeService.presentedWallpaper, onDismiss: {
+            if !bakeService.jobs.isEmpty { bakeService.showsTasks = true }
+        }) { wallpaper in
+            WallpaperBakeView(wallpaper: wallpaper)
+        }
+        .sheet(isPresented: Binding(get: { bakeService.showsTasks && bakeService.presentedWallpaper == nil },
+                                    set: { bakeService.showsTasks = $0 })) {
+            WallpaperBakeTasksView()
         }
         .sheet(item: $viewModel.pendingTrustRequest) { request in
             UnsafeWallpaper(request: request)

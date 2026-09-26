@@ -167,6 +167,8 @@ struct WallpaperPreview: SubviewOfContentView {
                     }
                     .font(.footnote)
 
+                    if wallpaperViewModel.previewWallpaper.project.mirageBake != nil { WallpaperBakeBadge() }
+
                     if wallpaperViewModel.previewWallpaper.isPreset,
                        let dependency = wallpaperViewModel.previewWallpaper.presetDependency {
                         Label("基础壁纸：\(dependency.rawValue)", systemImage: "square.stack.3d.up.fill")

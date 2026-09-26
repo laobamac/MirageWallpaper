@@ -1093,3 +1093,95 @@
 "免登录模式仅支持下载，请关闭此模式并登录 Steam 以使用社区功能" = "This mode supports downloads only. Turn it off and sign into Steam to use community features.";
 
 "免登录下载已开启" = "Sign-in-free downloads enabled";
+
+"已烘焙" = "Baked";
+
+"已烘焙的视频壁纸" = "Baked video wallpaper";
+
+"烘焙为视频" = "Bake to Video";
+
+"烘焙任务" = "Baking Tasks";
+
+"输出尺寸" = "Output size";
+
+"宽度" = "Width";
+
+"高度" = "Height";
+
+"时长" = "Duration";
+
+"烘焙时长（秒）" = "Duration (seconds)";
+
+"预热：%d 秒" = "Warm-up: %d seconds";
+
+"包含壁纸自身音频" = "Include wallpaper audio";
+
+"高画质（文件更大）" = "High quality (larger file)";
+
+"烘焙会固定当前属性，生成新的 SDR 视频壁纸。鼠标交互、时钟和实时媒体信息不会继续更新；首尾不保证无缝。" = "Baking freezes the current properties into a new SDR video wallpaper. Mouse interaction, clocks and live media information will no longer update. A seamless loop is not guaranteed.";
+
+"网页将以原速实时录制，输出静音。录制期间会显示独立的桌面层窗口。" = "Web wallpapers are recorded in real time at their original speed, without audio. A separate desktop window is displayed during recording.";
+
+"我信任此网页壁纸并允许运行其脚本" = "I trust this web wallpaper and allow its scripts to run";
+
+"允许屏幕录制" = "Allow Screen Recording";
+
+"授权后可能需要重新启动 Mirage。" = "You may need to restart Mirage after granting permission.";
+
+"预计视频大小：%@" = "Estimated video size: %@";
+
+"尺寸需为 128–4096 的偶数，时长需为 1–600 秒。" = "Dimensions must be even numbers from 128 to 4096. Duration must be 1–600 seconds.";
+
+"开始烘焙" = "Start Baking";
+
+"清除已结束任务" = "Clear Finished Tasks";
+
+"暂无烘焙任务" = "No baking tasks";
+
+"取消烘焙" = "Cancel Baking";
+
+"查看日志" = "View Log";
+
+"等待烘焙" = "Queued";
+
+"准备烘焙" = "Preparing";
+
+"正在烘焙" = "Baking";
+
+"验证烘焙结果" = "Verifying";
+
+"烘焙完成" = "Completed";
+
+"烘焙已取消" = "Cancelled";
+
+"正在取消烘焙" = "Cancelling";
+
+"烘焙失败" = "Failed";
+
+"%@ · 已烘焙" = "%@ · Baked";
+
+"此场景依赖实时音频频谱，暂不支持离线烘焙。" = "This scene uses a live audio spectrum and cannot currently be baked offline.";
+
+"网页烘焙需要屏幕录制权限。请在系统设置中允许 Mirage，重新启动后重试。" = "Web baking requires Screen Recording permission. Allow Mirage in System Settings, restart it and try again.";
+
+"网页捕获速度不足，请降低分辨率或帧率后重试。" = "Web capture is too slow. Reduce the resolution or frame rate and try again.";
+
+"烘焙等待画面超时，请检查壁纸资源后重试。" = "Timed out waiting for a frame. Check the wallpaper resources and try again.";
+
+"壁纸源文件在烘焙期间发生变化，请重新烘焙。" = "The source wallpaper changed during baking. Please bake it again.";
+
+"可用磁盘空间不足，无法完成烘焙。" = "There is not enough free disk space to complete baking.";
+
+"未找到烘焙组件，请重新构建或安装完整的 Mirage。" = "Baking components are missing. Rebuild or install the complete Mirage application.";
+
+"烘焙参数无效，请检查尺寸、时长和播放速度。" = "Invalid baking settings. Check the dimensions, duration and playback speed.";
+
+"当前烘焙输出仅支持 SDR，不能烘焙 HDR 视频。" = "Baking currently supports SDR output only. HDR video cannot be baked.";
+
+"当前设备无法以所选尺寸启动视频编码器。" = "The video encoder could not start with the selected dimensions on this device.";
+
+"无法读取壁纸或解码其视频。" = "The wallpaper could not be read or its video could not be decoded.";
+
+"无法读取壁纸音轨，烘焙未完成。" = "The wallpaper audio track could not be read. Baking did not complete.";
+
+"烘焙失败，未生成壁纸。请检查任务日志后重试。" = "Baking failed and no wallpaper was created. Check the task log and try again.";

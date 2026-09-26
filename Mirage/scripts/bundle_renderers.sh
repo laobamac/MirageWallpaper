@@ -38,6 +38,9 @@ SCENE_BIN="$ROOT/SceneRenderer/build/$SCENE_PRESET/Tools/SceneWallpaper/SceneWal
 SCENE_SAVER_LIB="$ROOT/SceneRenderer/build/$SCENE_PRESET/Tools/SceneScreenSaver/libMirageSceneSaver.dylib"
 WEB_BIN="$ROOT/WebRenderer/build/release/Tools/WebWallpaper/WebWallpaper"
 VIDEO_BIN="$ROOT/VideoRenderer/build/release/Tools/VideoWallpaper/VideoWallpaper"
+SCENE_BAKER="$ROOT/SceneRenderer/build/$SCENE_PRESET/Tools/SceneBaker/SceneBaker"
+WEB_BAKER="$ROOT/WebRenderer/build/release/Tools/WebBaker/WebBaker"
+VIDEO_BAKER="$ROOT/VideoRenderer/build/release/Tools/VideoBaker/VideoBaker"
 ASSETS_DIR="$ROOT/assets"
 EXTENSION="$CONTENTS/Extensions/MirageWallpaperExtension.appex"
 APP_ENTITLEMENTS="$ROOT/Mirage/Mirage Wallpaper/Mirage_Wallpaper.entitlements"
@@ -54,7 +57,7 @@ MOLTENVK="$MOLTENVK_DIR/libMoltenVK.dylib"
 echo "[bundle] App:  $APP"
 echo "[bundle] Root: $ROOT"
 
-for f in "$SCENE_BIN" "$SCENE_SAVER_LIB" "$WEB_BIN" "$VIDEO_BIN"; do
+for f in "$SCENE_BIN" "$SCENE_SAVER_LIB" "$WEB_BIN" "$VIDEO_BIN" "$SCENE_BAKER" "$WEB_BAKER" "$VIDEO_BAKER"; do
     [ -f "$f" ] || { echo "[bundle] 缺少渲染器: $f" >&2; exit 1; }
 done
 [ -d "$ASSETS_DIR" ] || { echo "[bundle] 缺少 assets 目录: $ASSETS_DIR" >&2; exit 1; }
@@ -65,6 +68,9 @@ mkdir -p "$FRAMEWORKS" "$RENDERERS" "$VK_ICD_DIR"
 cp -f "$SCENE_BIN" "$RENDERERS/SceneWallpaper"
 cp -f "$WEB_BIN"   "$RENDERERS/WebWallpaper"
 cp -f "$VIDEO_BIN" "$RENDERERS/VideoWallpaper"
+cp -f "$SCENE_BAKER" "$RENDERERS/SceneBaker"
+cp -f "$WEB_BAKER" "$RENDERERS/WebBaker"
+cp -f "$VIDEO_BAKER" "$RENDERERS/VideoBaker"
 chmod +x "$RENDERERS"/*
 cp -f "$SCENE_SAVER_LIB" "$FRAMEWORKS/libMirageSceneSaver.dylib"
 chmod u+w "$FRAMEWORKS/libMirageSceneSaver.dylib"
@@ -125,6 +131,9 @@ collect_deps "$FRAMEWORKS/libMirageSceneSaver.dylib"
 # 绝对路径的 /usr/local 依赖发布，在没有 Homebrew 的机器上启动即失败。
 echo "[bundle] 收集视频引擎依赖..."
 collect_deps "$RENDERERS/VideoWallpaper"
+collect_deps "$RENDERERS/SceneBaker"
+collect_deps "$RENDERERS/WebBaker"
+collect_deps "$RENDERERS/VideoBaker"
 
 MVK_BASE=$(basename "$MOLTENVK")
 cp -f "$MOLTENVK" "$FRAMEWORKS/$MVK_BASE"
@@ -199,7 +208,7 @@ for lib in "$FRAMEWORKS"/*.dylib; do
     [ -f "$lib" ] && [ ! -L "$lib" ] || continue
     strip_item "$lib"
 done
-for bin in "$RENDERERS/SceneWallpaper" "$RENDERERS/WebWallpaper" "$RENDERERS/VideoWallpaper"; do
+for bin in "$RENDERERS/SceneWallpaper" "$RENDERERS/WebWallpaper" "$RENDERERS/VideoWallpaper" "$RENDERERS/SceneBaker" "$RENDERERS/WebBaker" "$RENDERERS/VideoBaker"; do
     strip_item "$bin"
 done
 
@@ -222,7 +231,7 @@ retarget_bin() {
 }
 
 echo "[bundle] 重写渲染器可执行文件的 install name..."
-for bin in "$RENDERERS/SceneWallpaper" "$RENDERERS/WebWallpaper" "$RENDERERS/VideoWallpaper"; do
+for bin in "$RENDERERS/SceneWallpaper" "$RENDERERS/WebWallpaper" "$RENDERERS/VideoWallpaper" "$RENDERERS/SceneBaker" "$RENDERERS/WebBaker" "$RENDERERS/VideoBaker"; do
     retarget_bin "$bin"
 done
 
@@ -295,7 +304,7 @@ for lib in "$FRAMEWORKS"/*.dylib; do
     [ -f "$lib" ] || continue
     sign_item "$lib"
 done
-for bin in "$RENDERERS/SceneWallpaper" "$RENDERERS/WebWallpaper" "$RENDERERS/VideoWallpaper"; do
+for bin in "$RENDERERS/SceneWallpaper" "$RENDERERS/WebWallpaper" "$RENDERERS/VideoWallpaper" "$RENDERERS/SceneBaker" "$RENDERERS/WebBaker" "$RENDERERS/VideoBaker"; do
     sign_item "$bin"
 done
 NOW_PLAYING="$RESOURCES/NowPlaying/libMirageNowPlaying.dylib"

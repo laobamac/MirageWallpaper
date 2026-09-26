@@ -61,6 +61,19 @@ struct ExplorerItemMenu: SubviewOfContentView {
                 }
                 .disabled(!canApply || (hoveredWallpaper.kind != .video && hoveredWallpaper.kind != .scene))
 
+                Button {
+                    WallpaperBakeService.shared.presentedWallpaper = hoveredWallpaper
+                } label: {
+                    Label("烘焙为视频", systemImage: "flame.fill")
+                }
+                .disabled(!canApply)
+
+                Button {
+                    WallpaperBakeService.shared.showsTasks = true
+                } label: {
+                    Label("烘焙任务", systemImage: "list.bullet.rectangle")
+                }
+
                 Button(action: setAsDynamicLockScreen) {
                     Label("设为动态锁屏", systemImage: "lock.rectangle")
                 }
