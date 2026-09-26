@@ -130,7 +130,6 @@ BOOL MBVerify(NSString *path, NSInteger width, NSInteger height, double duration
     CIImage *image = [CIImage imageWithBitmapData:data bytesPerRow:width * 4 size:CGSizeMake(width, height)
                                           format:kCIFormatRGBA8 colorSpace:space];
     CGColorSpaceRelease(space);
-    image = [image imageByApplyingTransform:CGAffineTransformMake(1, 0, 0, -1, 0, height)];
     return [self appendImage:image frame:frame];
 }
 - (BOOL)appendImage:(CIImage *)image frame:(int64_t)frame {
