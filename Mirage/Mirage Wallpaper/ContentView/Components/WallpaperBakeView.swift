@@ -128,8 +128,20 @@ struct WallpaperBakeTasksView: View {
                                 Text(job.wallpaper.project.title).font(.headline).lineLimit(1)
                                 Spacer()
                                 Text(status(job.state)).foregroundStyle(job.state == "failed" ? .red : .secondary)
+                                if job.state == "complete" || (!job.finished && job.progress > 0) {
+                                    Text("\(Int((job.progress * 100).rounded()))%")
+                                        .monospacedDigit().foregroundStyle(.secondary)
+                                }
                             }
-                            if !job.finished { ProgressView(value: job.progress) }
+                            if job.state == "complete" {
+                                ProgressView(value: 1)
+                            } else if !job.finished {
+                                if job.state == "queued" || job.state == "preparing" {
+                                    ProgressView()
+                                } else {
+                                    ProgressView(value: job.progress)
+                                }
+                            }
                             if let error = job.error { Text(error).font(.callout).foregroundStyle(.red).textSelection(.enabled) }
                             HStack {
                                 if !job.finished { Button("取消烘焙") { service.cancel(job.id) }.disabled(job.state == "cancelling") }

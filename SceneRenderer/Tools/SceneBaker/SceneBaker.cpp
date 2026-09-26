@@ -113,7 +113,8 @@ int MBRunScene(const MBBakeSceneOptions* o, void* writer) {
         }
         if (!MBWriteAudio(writer, resampled.data(), output_samples, audio_offset)) { result = 3; break; }
         audio_offset += output_samples;
-        if (frame % o->fps == 0 || frame + 1 == o->frames) MBProgress(frame + 1, o->frames);
+        if (frame == 0 || (frame + 1) % std::max(1u, o->fps / 4) == 0 || frame + 1 == o->frames)
+            MBProgress(frame + 1, o->frames);
     }
     SceneRendererSetLiveFrameCallback(nullptr, nullptr);
     return result;
