@@ -62,6 +62,7 @@ if(WEBRENDERER_BUILD_VIEWER)
 endif()
 if(WEBRENDERER_BUILD_WALLPAPER)
     add_subdirectory(Tools/WebWallpaper)
+    add_subdirectory(Tools/WebBaker)
 endif()
 
 include(CTest)
