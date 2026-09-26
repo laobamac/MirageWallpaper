@@ -19,6 +19,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var globalSettingsViewModel = GlobalSettingsViewModel()
     var workshopViewModel = WorkshopViewModel()
     var navigationModel = MainNavigationModel()
+    lazy var mobileDevicesViewModel = MobileDevicesViewModel()
 
     var importOpenPanel: NSOpenPanel!
     private var developerLogWindowController: DeveloperLogWindowController?
@@ -196,6 +197,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         SteamServiceManager.shared.start()
+        mobileDevicesViewModel.startBackgroundReconnect()
 
         DynamicLockScreenManager.shared.prepareAtLaunch()
         if DynamicLockScreenManager.shared.isEnabled {
@@ -257,6 +259,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         wallpaperViewModel.renderer.stopAllAndWait()
 
         SteamServiceManager.shared.shutdown()
+        mobileDevicesViewModel.stopPairing()
 
         // Same constraint: a transient override is one Mirage only took for
         // tint consistency, so the user's own picture goes back synchronously

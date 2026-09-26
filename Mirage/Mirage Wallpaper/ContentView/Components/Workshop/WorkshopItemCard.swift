@@ -13,8 +13,9 @@ struct WorkshopItemCard: View {
     var isDownloaded: Bool
     var presetNeedsDependency: Bool
     var downloadTask: DownloadTask?
+    var liveDownloadState: DownloadState? = nil
 
-    private var downloadState: DownloadState? { isActive ? downloadTask?.state : nil }
+    private var downloadState: DownloadState? { isActive ? (liveDownloadState ?? downloadTask?.state) : nil }
     var isFavorite: Bool = false
     var isActive: Bool = true
     var animatedPreviewMode: GSAnimatedPreviewPlayback = .hover

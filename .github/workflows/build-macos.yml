@@ -204,6 +204,7 @@ jobs:
       - name: Build app bundle
         shell: bash
         env:
+          MIRAGE_ALLOW_NETWORK_FETCH: "1"
           MIRAGE_ARCH: ${{ matrix.arch }}
           MIRAGE_STEAM_WEB_API_KEY: ${{ secrets.MIRAGE_STEAM_WEB_API_KEY }}
           MIRAGE_GIT_COMMIT: ${{ github.sha }}
@@ -220,6 +221,8 @@ jobs:
           test -x "$app/Contents/Resources/Renderers/SceneWallpaper"
           test -x "$app/Contents/Resources/Renderers/WebWallpaper"
           test -x "$app/Contents/Resources/Renderers/VideoWallpaper"
+          test -x "$app/Contents/Resources/SceneMobileTools/ffmpeg"
+          test -x "$app/Contents/Resources/SceneMobileTools/EtcTool"
           test -d "$app/Contents/Frameworks/Sparkle.framework"
           service="$app/Contents/Resources/SteamService/${{ matrix.arch }}"
           test -x "$service/runtime/dotnet"
