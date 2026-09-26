@@ -42,7 +42,6 @@ enum WallpaperBakeError: Error, LocalizedError {
         case .code(let value):
             switch value {
             case "cancelled": return L("烘焙已取消")
-            case "external_audio": return L("此场景依赖实时音频频谱，暂不支持离线烘焙。")
             case "capture_permission": return L("网页烘焙需要屏幕录制权限。请在系统设置中允许 Mirage，重新启动后重试。")
             case "capture_too_slow": return L("网页捕获速度不足，请降低分辨率或帧率后重试。")
             case "capture_timeout", "render_timeout": return L("烘焙等待画面超时，请检查壁纸资源后重试。")

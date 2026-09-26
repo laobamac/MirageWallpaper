@@ -1407,7 +1407,7 @@ void SceneRenderController::on(RenderDraw&&) {
             fi.mouse_buttons_released = consumeReleased();
             wavsen::audio::AudioSpectrum spec;
             bool primed = false;
-            if (m_audio_enabled.load(std::memory_order_acquire)) {
+            if (!m_manual_frames && m_audio_enabled.load(std::memory_order_acquire)) {
                 primed = m_audio_capture.snapshot(spec);
                 wavsen::audio::AudioSpectrum external;
                 if (snapshotExternalAudio(external)) {
@@ -1532,10 +1532,6 @@ void SceneRenderController::on(RenderOfflineFrame&& message) {
         !std::isfinite(message.time) || !std::isfinite(message.step) || message.step <= 0.0 ||
         message.audio_frames > 192000) {
         message.callback(1, {});
-        return;
-    }
-    if (m_scene->uses_audio_spectrum) {
-        message.callback(2, {});
         return;
     }
     m_stopped = false;

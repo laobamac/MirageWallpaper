@@ -1160,7 +1160,6 @@
 
 "%@ · 已烘焙" = "%@ · Baked";
 
-"此场景依赖实时音频频谱，暂不支持离线烘焙。" = "This scene uses a live audio spectrum and cannot currently be baked offline.";
 
 "网页烘焙需要屏幕录制权限。请在系统设置中允许 Mirage，重新启动后重试。" = "Web baking requires Screen Recording permission. Allow Mirage in System Settings, restart it and try again.";
 

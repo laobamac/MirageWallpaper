@@ -34,7 +34,7 @@ int main(int argc, const char **argv) {
         int status = MBRunScene(&o, (__bridge void *)writer);
         if (status == 0 && [writer finish]) { MBEvent(@"complete", @{}); return 0; }
         [writer cancel];
-        MBEvent(@"error", @{@"code":status == 2 ? @"external_audio" : status == 5 ? @"render_timeout" : MBCancelled() ? @"cancelled" : @"render_failed",
+        MBEvent(@"error", @{@"code":status == 5 ? @"render_timeout" : MBCancelled() ? @"cancelled" : @"render_failed",
             @"detail":writer.failure});
         return 1;
     }
