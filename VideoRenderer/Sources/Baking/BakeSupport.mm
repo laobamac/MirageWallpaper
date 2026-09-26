@@ -224,3 +224,6 @@ int MBWriteAudio(void *writer, const float *samples, uint32_t count, int64_t off
 void MBProgress(uint32_t frame, uint32_t count) {
     @autoreleasepool { MBEvent(@"progress", @{@"completed":@(frame), @"total":@(count)}); }
 }
+void MBWarmup(uint32_t frame, uint32_t count) {
+    @autoreleasepool { MBEvent(@"warming", @{@"completed":@(frame), @"total":@(count)}); }
+}

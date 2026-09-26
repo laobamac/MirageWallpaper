@@ -72,6 +72,7 @@ int MBRunScene(const MBBakeSceneOptions* o, void* writer) {
     SceneRendererSetLiveFrameCallback(Frame, &sink);
     int result = 0;
     int64_t audio_offset = 0;
+    if (o->warmup) MBWarmup(0, o->warmup);
     for (uint32_t i = 0; i < o->frames + o->warmup; ++i) {
         if (MBShouldStop()) { result = 4; break; }
         struct Completion {
@@ -97,7 +98,11 @@ int MBRunScene(const MBBakeSceneOptions* o, void* writer) {
         }
         if (completion->status) { result = completion->status; break; }
         if (sink.pixels.empty()) { result = 3; break; }
-        if (i < o->warmup) continue;
+        if (i < o->warmup) {
+            if (i == 0 || (i + 1) % std::max(1u, o->fps / 4) == 0 || i + 1 == o->warmup)
+                MBWarmup(i + 1, o->warmup);
+            continue;
+        }
         uint32_t frame = i - o->warmup;
         if (!MBWriteFrame(writer, sink.pixels.data(), sink.width, sink.height, frame)) { result = 3; break; }
         uint32_t output_samples = 48000 / o->fps;

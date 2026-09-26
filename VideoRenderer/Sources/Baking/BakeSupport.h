@@ -45,6 +45,7 @@ int MBWriteFrame(void *writer, const uint8_t *rgba, uint32_t width, uint32_t hei
 int MBWriteAudio(void *writer, const float *samples, uint32_t count, int64_t offset);
 int MBShouldStop(void);
 void MBProgress(uint32_t frame, uint32_t count);
+void MBWarmup(uint32_t frame, uint32_t count);
 #ifdef __cplusplus
 }
 #endif

@@ -161,12 +161,14 @@ final class WallpaperBakeService: ObservableObject {
             let result: Result<URL, Error> = await withCheckedContinuation { continuation in
                 DispatchQueue.global(qos: .utility).async {
                     let result = Result { try Self.run(request) { event, progress, log in
-                        Task { @MainActor in
-                            guard let index = self.jobs.firstIndex(where: { $0.id == request.id }) else { return }
-                            guard !self.jobs[index].finished else { return }
-                            if !self.jobs[index].cancellation.isCancelled { self.jobs[index].state = event }
-                            self.jobs[index].progress = max(self.jobs[index].progress, progress)
-                            if let log { self.jobs[index].log = log }
+                        DispatchQueue.main.sync {
+                            MainActor.assumeIsolated {
+                                guard let index = self.jobs.firstIndex(where: { $0.id == request.id }) else { return }
+                                guard !self.jobs[index].finished else { return }
+                                if !self.jobs[index].cancellation.isCancelled { self.jobs[index].state = event }
+                                self.jobs[index].progress = max(self.jobs[index].progress, progress)
+                                if let log { self.jobs[index].log = log }
+                            }
                         }
                     } }
                     continuation.resume(returning: result)
@@ -197,7 +199,7 @@ final class WallpaperBakeService: ObservableObject {
         try fm.createDirectory(at: logRoot, withIntermediateDirectories: true)
         let logURL = logRoot.appendingPathComponent("\(job.id.uuidString).log")
         fm.createFile(atPath: logURL.path, contents: nil)
-        update("preparing", 0, logURL)
+        update("checking", 0, logURL)
         let available = try job.destination.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]).volumeAvailableCapacityForImportantUsage ?? 0
         guard available > job.settings.estimatedBytes * 2 + 512 * 1024 * 1024 else { throw WallpaperBakeError.code("disk_space") }
         try job.cancellation.check()
@@ -283,7 +285,18 @@ final class WallpaperBakeService: ObservableObject {
                 if state == "complete" { complete = true }
                 if state == "error" { failure = event["code"] as? String ?? "render_failed" }
                 let current = event["completed"] as? Double ?? 0, total = event["total"] as? Double ?? 1
-                update(state, state == "progress" ? min(0.97, current / max(1, total) * 0.97) : 0, nil)
+                let fraction = min(1, max(0, current / max(1, total)))
+                let progress: Double
+                switch state {
+                case "warming", "progress" where job.wallpaper.kind == .scene:
+                    let warmupFrames = Double(job.settings.warmup * job.settings.fps)
+                    let outputFrames = Double(job.settings.duration * job.settings.fps)
+                    let done = state == "warming" ? current : warmupFrames + current
+                    progress = min(0.97, done / max(1, warmupFrames + outputFrames) * 0.97)
+                case "progress": progress = fraction * 0.97
+                default: progress = 0
+                }
+                update(state, progress, nil)
             }
         }
         process.waitUntilExit()
