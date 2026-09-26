@@ -79,6 +79,7 @@ option(SCENERENDERER_BUILD_WALLPAPER_HOST "Build the native macOS desktop wallpa
 if(SCENERENDERER_BUILD_ENGINE AND APPLE AND SCENERENDERER_BUILD_WALLPAPER_HOST)
     add_subdirectory(Tools/SceneWallpaper)
     add_subdirectory(Tools/SceneScreenSaver)
+    add_subdirectory(Tools/SceneBaker)
 endif()
 
 option(SCENERENDERER_BUILD_TESTS "Build SceneRenderer regression tests" OFF)

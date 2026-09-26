@@ -449,6 +449,7 @@ struct AudioBufferSlot {
 
 struct EngineHostState {
     FrameInputs inputs;
+    uint32_t offline_random { 1 };
     MediaStatus media;
     bool        media_initialized { false };
     sr::Scene* scene { nullptr };
@@ -4306,6 +4307,43 @@ JsRuntime::~JsRuntime() {
     m_impl->host.deferred.clear();
     if (m_impl->ctx) JS_FreeContext(m_impl->ctx);
     if (m_impl->rt) JS_FreeRuntime(m_impl->rt);
+}
+
+void JsRuntime::SetOfflineSeed(uint32_t seed) {
+    auto* ctx = m_impl->ctx;
+    m_impl->host.offline_random = seed ? seed : 1;
+    auto global = JS_GetGlobalObject(ctx);
+    JS_SetPropertyStr(ctx, global, "__mirageBakeTime", JS_NewCFunction(ctx,
+        [](JSContext* c, JSValueConst, int, JSValueConst*) -> JSValue {
+            auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(c));
+            return JS_NewFloat64(c, 946728000000.0 + host->inputs.runtime * 1000.0);
+        }, "__mirageBakeTime", 0));
+    JS_SetPropertyStr(ctx, global, "__mirageBakeRandom", JS_NewCFunction(ctx,
+        [](JSContext* c, JSValueConst, int, JSValueConst*) -> JSValue {
+            auto* host = static_cast<EngineHostState*>(JS_GetContextOpaque(c));
+            auto x = host->offline_random;
+            x ^= x << 13; x ^= x >> 17; x ^= x << 5;
+            host->offline_random = x;
+            return JS_NewFloat64(c, static_cast<double>(x) / 4294967296.0);
+        }, "__mirageBakeRandom", 0));
+    const char script[] = R"JS((function(){
+        const NativeDate = Date, now = __mirageBakeTime, random = __mirageBakeRandom;
+        function BakeDate(...args) {
+            if (!new.target) return new NativeDate(now()).toString();
+            return Reflect.construct(NativeDate, args.length ? args : [now()], new.target);
+        }
+        Object.setPrototypeOf(BakeDate, NativeDate);
+        BakeDate.prototype = NativeDate.prototype;
+        BakeDate.now = now;
+        globalThis.Date = BakeDate;
+        Math.random = random;
+        globalThis.performance = {now: function(){return now() - 946728000000;}};
+        delete globalThis.__mirageBakeTime;
+        delete globalThis.__mirageBakeRandom;
+    })())JS";
+    auto result = JS_Eval(ctx, script, sizeof(script) - 1, "mirage-bake", JS_EVAL_TYPE_GLOBAL);
+    JS_FreeValue(ctx, result);
+    JS_FreeValue(ctx, global);
 }
 
 void JsRuntime::SetFrameInputs(const FrameInputs& fi) {

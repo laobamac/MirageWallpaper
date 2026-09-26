@@ -132,6 +132,7 @@ struct ParseContext {
     Set<std::int32_t>                             hidden_link_source_ids;
     std::string                                    script_persistence_path;
     std::optional<std::string>                      script_storage_snapshot;
+    std::optional<uint32_t>                         offline_seed;
     Set<std::string>                              unresolved_shader_values;
     bool                                          scene_has_scripts { false };
     bool                                          scene_accesses_effects { false };

@@ -35,6 +35,8 @@ struct VulkanSurfaceInfo {
 struct RenderInitInfo {
     bool enable_valid_layer { false };
     bool offscreen { false };
+    bool manual_frames { false };
+    uint32_t random_seed { 1 };
 
     std::span<const std::uint8_t> uuid;
     TexTiling                     offscreen_tiling { TexTiling::OPTIMAL };

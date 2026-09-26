@@ -43,11 +43,13 @@ public:
     void SetScriptStorageSnapshot(std::optional<std::string> snapshot) {
         m_script_storage_snapshot = std::move(snapshot);
     }
+    void SetOfflineSeed(uint32_t seed) { m_offline_seed = seed; }
 
 private:
     rstd::Option<rstd::ref<rstd::json::Map>> m_user_properties;
     std::string                              m_script_persistence_path;
     std::optional<std::string>                m_script_storage_snapshot;
+    std::optional<uint32_t>                   m_offline_seed;
 };
 
 } // namespace sr

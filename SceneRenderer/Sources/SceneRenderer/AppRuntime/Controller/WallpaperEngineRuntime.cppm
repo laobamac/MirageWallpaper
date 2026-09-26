@@ -71,6 +71,8 @@ struct SceneWallpaperConfig {
     bool                                    spectrum_enabled { true };
     bool                                    external_spectrum { false };
     bool                                    load_from_memory { false };
+    bool                                    offline { false };
+    uint32_t                                random_seed { 1 };
 };
 
 bool SceneCanRenderOnDemand(const Scene&);
@@ -91,6 +93,8 @@ public:
     void pause();
     void pause(uint32_t fade_ms);
     void requestFrame();
+    void renderOfflineFrame(double time, double step, uint32_t audio_frames,
+                            std::function<void(int, std::vector<float>)> callback);
     void mouseInput(double x, double y);
     // button: 0=left, 1=right, 2=middle (GLFW numbering). down=true on
     // press, false on release.

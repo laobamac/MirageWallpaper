@@ -546,6 +546,7 @@ std::vector<sr::SceneNode*> SpawnLayerClones(ParseContext& context, SceneNode* t
 script::ScriptScene& EnsureScriptScene(ParseContext& context) {
     if (! context.script_scene) {
         context.script_scene = std::make_unique<script::ScriptScene>();
+        if (context.offline_seed) context.script_scene->runtime().SetOfflineSeed(*context.offline_seed);
         if (context.script_storage_snapshot)
             context.script_scene->runtime().SetStorageSnapshot(*context.script_storage_snapshot);
         else if (! context.script_persistence_path.empty())
@@ -7194,6 +7195,7 @@ std::shared_ptr<Scene> WPSceneParser::Parse(std::string_view              scene_
                                             m_user_properties,
                                             m_script_persistence_path,
                                             m_script_storage_snapshot);
+    context.offline_seed = m_offline_seed;
     context.scene_has_scripts       = SceneHasScripts(json, scene_objs);
     context.scene_accesses_effects  = SceneAccessesEffects(json, scene_objs);
     context.scene_layer_text_writes = SceneWritesLayerText(json, scene_objs);

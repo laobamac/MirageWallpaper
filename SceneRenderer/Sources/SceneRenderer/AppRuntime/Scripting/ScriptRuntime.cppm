@@ -217,6 +217,7 @@ public:
     // string to revert to in-memory-only behaviour.
     void SetPersistence(std::string path);
     void SetStorageSnapshot(std::string_view snapshot);
+    void SetOfflineSeed(uint32_t seed);
     std::string StorageSnapshot() const;
     void SetStorageCallback(std::function<void(std::string)> callback);
     void PublishStorageSnapshot();

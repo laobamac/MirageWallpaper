@@ -70,6 +70,12 @@ struct RenderStop {
     bool stop;
 };
 struct RenderDraw {};
+struct RenderOfflineFrame {
+    double time;
+    double step;
+    uint32_t audio_frames;
+    std::function<void(int, std::vector<float>)> callback;
+};
 struct RenderRequestFrame {};
 struct RenderSwapchainReady {
     bool     ready;
@@ -90,7 +96,7 @@ struct RenderExportScriptStorage {
 struct RenderMsg {
     std::variant<RenderInit, RenderSetScene, RenderSetFillMode, RenderSetPosition, RenderSetSpeed,
                  RenderSetFps, RenderSetAudioCapture, RenderSetUserProperty, RenderSetMediaStatus,
-                 RenderStop, RenderDraw, RenderRequestFrame, RenderSwapchainReady,
+                 RenderStop, RenderDraw, RenderOfflineFrame, RenderRequestFrame, RenderSwapchainReady,
                  RenderRequestPreparedPassDiagnostics, RenderResetScriptStorage,
                  RenderExportScriptStorage>
         v;
@@ -1095,6 +1101,9 @@ public:
 
     bool init();
     auto renderController() const { return m_render_controller.get(); }
+    std::vector<float> renderOfflineAudio(uint32_t frames) {
+        return m_sound_manager->render_offline(frames);
+    }
     bool inited() const { return m_inited; }
 
     MainSender   mainSender() { return m_main_loop.sender(); }
@@ -1182,6 +1191,7 @@ public:
     void on(RenderSetMediaStatus&&);
     void on(RenderStop&&);
     void on(RenderDraw&&);
+    void on(RenderOfflineFrame&&);
     void on(RenderRequestFrame&&) {
         if (m_stopped) {
             redrawStoppedFrame();
@@ -1194,7 +1204,7 @@ public:
         if (! m_idle || m_stopped) return;
         m_idle = false;
         if (m_frame_activity_cb) m_frame_activity_cb(true);
-        frame_timer.Run();
+        if (!m_manual_frames) frame_timer.Run();
     }
     void on(RenderSwapchainReady&&);
     void on(RenderRequestPreparedPassDiagnostics&&);
@@ -1305,6 +1315,9 @@ private:
     bool                                  m_stopped { false };
     bool                                    m_idle { false };
     bool                                    m_allow_on_demand { false };
+    bool                                    m_manual_frames { false };
+    bool                                    m_offline_drawing { false };
+    double                                  m_offline_step { 0.0 };
     std::function<void(bool)>               m_frame_activity_cb;
 
     std::atomic<std::array<float, 2>> m_mouse_pos { std::array { 0.5f, 0.5f } };
@@ -1342,11 +1355,12 @@ void SceneRenderController::on(RenderStop&& m) {
         m_render->flushPendingFrame();
     } else {
         if (m_audio_enabled.load()) (void)m_audio_capture.init(! m_external_audio.load());
-        frame_timer.Run();
+        if (!m_manual_frames) frame_timer.Run();
     }
 }
 
 void SceneRenderController::on(RenderDraw&&) {
+    if (m_manual_frames && !m_offline_drawing) return;
     if (m_stopped || m_idle) {
         frame_timer.FrameBegin();
         frame_timer.FrameEnd();
@@ -1356,6 +1370,8 @@ void SceneRenderController::on(RenderDraw&&) {
     if (m_rg) {
         const bool diagnostic = std::getenv("SCENERENDERER_DIAGNOSTICS_DIR") != nullptr;
         const double diagnostic_step = diagnostic && m_scene->elapsingTime < 20.0 ? 1.0 / 30.0 : 0.0;
+        const double step = m_manual_frames ? m_offline_step : frame_timer.IdeaTime() * m_speed;
+        if (m_manual_frames) m_scene->frameTime = step;
         if (diagnostic) m_scene->frameTime = diagnostic_step;
         {
             auto pos                 = diagnostic ? std::array<float, 2> { 0.5f, 0.5f } : m_mouse_pos.load();
@@ -1377,7 +1393,7 @@ void SceneRenderController::on(RenderDraw&&) {
             fi.canvas_h  = static_cast<float>(m_scene->ortho[1]);
             fi.screen_w  = fi.canvas_w;
             fi.screen_h  = fi.canvas_h;
-            fi.time_of_day = m_scene->script_scene ? LocalTimeOfDay() : 0.0f;
+            fi.time_of_day = m_manual_frames ? 0.5f : (m_scene->script_scene ? LocalTimeOfDay() : 0.0f);
             {
                 auto pos    = m_mouse_pos.load();
                 fi.cursor_x = pos[0];
@@ -1475,7 +1491,7 @@ void SceneRenderController::on(RenderDraw&&) {
 
         /* Advance video textures (no-op if none) before drawFrame so
          * the new RGBA frame is sampled by the same render pass. */
-        m_render->pumpVideoTextures(frame_timer.IdeaTime() * m_speed);
+        m_render->pumpVideoTextures(m_manual_frames && m_scene->elapsingTime == 0.0 ? 0.0 : step);
 
         /* Upload any glyph rects the actuators added this tick. Runs after
          * TickSceneScripts (which calls FontFace::Populate) and before
@@ -1490,7 +1506,7 @@ void SceneRenderController::on(RenderDraw&&) {
             return;
         }
 
-        m_scene->PassFrameTime(diagnostic ? diagnostic_step : frame_timer.IdeaTime() * m_speed);
+        m_scene->PassFrameTime(diagnostic ? diagnostic_step : step);
 
         m_scene->shaderValueUpdater->FrameEnd();
 
@@ -1509,6 +1525,29 @@ void SceneRenderController::on(RenderDraw&&) {
         }
     }
     frame_timer.FrameEnd();
+}
+
+void SceneRenderController::on(RenderOfflineFrame&& message) {
+    if (!m_manual_frames || !m_scene || !m_rg || !m_render->readyToDraw() ||
+        !std::isfinite(message.time) || !std::isfinite(message.step) || message.step <= 0.0 ||
+        message.audio_frames > 192000) {
+        message.callback(1, {});
+        return;
+    }
+    if (m_scene->uses_audio_spectrum) {
+        message.callback(2, {});
+        return;
+    }
+    m_stopped = false;
+    m_idle = false;
+    m_offline_drawing = true;
+    m_offline_step = message.step;
+    m_scene->elapsingTime = message.time;
+    auto audio = m_main.renderOfflineAudio(message.audio_frames);
+    on(RenderDraw {});
+    m_render->flushPendingFrame();
+    m_offline_drawing = false;
+    message.callback(m_render->failed() ? 3 : 0, std::move(audio));
 }
 
 void SceneRenderController::on(RenderSetFillMode&& m) {
@@ -1756,6 +1795,11 @@ void SceneRenderController::applyMediaStatus(const MediaStatus& status) {
 }
 
 void SceneRenderController::on(RenderInit&& m) {
+    m_manual_frames = m.info->manual_frames;
+    if (m_manual_frames) {
+        frame_timer.Stop();
+        Random::seed(m.info->random_seed);
+    }
     m_frame_activity_cb    = m.info->frame_activity_callback;
     m_allow_on_demand      = m.info->allow_on_demand;
     const bool initialized = m_render->init(std::move(*m.info));
@@ -1797,7 +1841,7 @@ void SceneRenderController::on(RenderSwapchainReady&& m) {
         m_render->refreshPreparedResources(*m_scene, m_render_scene);
         redrawStoppedFrame();
     }
-    if (m_stopped)
+    if (m_stopped || m_manual_frames)
         frame_timer.Stop();
     else
         frame_timer.Run();
@@ -1838,6 +1882,11 @@ void SceneRuntimeController::on(MainConfigure&& m) {
         m.config.speed = 1.0f;
     }
     m_config          = std::move(m.config);
+    if (m_config.offline) {
+        Random::seed(m_config.random_seed);
+        m_sound_manager->set_offline(48000);
+        m_scene_parser.SetOfflineSeed(m_config.random_seed);
+    }
     m_user_properties = NormalizeUserProperties(m_config.user_properties);
     ++m_config_generation;
     // Preserve zero as the "not configured" sentinel after wraparound.
@@ -2243,6 +2292,12 @@ void SceneWallpaper::pause(uint32_t fade_ms) {
 }
 void SceneWallpaper::requestFrame() {
     (void)m_runtime->renderSender().send(RenderMsg { RenderRequestFrame {} });
+}
+
+void SceneWallpaper::renderOfflineFrame(double time, double step, uint32_t audio_frames,
+                                        std::function<void(int, std::vector<float>)> callback) {
+    (void)m_runtime->renderSender().send(RenderMsg { RenderOfflineFrame {
+        time, step, audio_frames, std::move(callback) } });
 }
 
 void SceneWallpaper::mouseInput(double x, double y) {
