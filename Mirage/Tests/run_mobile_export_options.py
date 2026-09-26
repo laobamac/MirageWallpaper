@@ -14,6 +14,10 @@ parser.add_argument('--tools', type=Path, required=True, help='Directory contain
 parser.add_argument('--preview', action='store_true')
 parser.add_argument('--references', type=Path, help='Optional read-only reference sample directory')
 args = parser.parse_args()
+args.derived_data = args.derived_data.resolve()
+args.tools = args.tools.resolve()
+if args.references:
+    args.references = args.references.resolve()
 project = Path(__file__).resolve().parents[1]
 products = args.derived_data / 'Build/Products/Debug'
 app = products / 'Mirage Wallpaper.app/Contents'

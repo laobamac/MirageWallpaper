@@ -181,6 +181,20 @@ struct MobileExportOptionsRegression {
                 print("PASS: reduction=\(factor), pixelArt=\(pixel)")
             }
         }
+        // Reference exports retain wide textures above 4096px when advanced
+        // settings request original resolution. A byte-budget check still
+        // protects against unreasonably large decoded images.
+        let wide = texture(width: 5000, height: 256)
+        try archive([("scenes/main.json", scene), ("materials/wide.tex", wide)])
+            .write(to: root.appending(path: "scene.pkg"))
+        try SceneMobileMPKGExporter.export(wallpaper, to: root.appending(path: "result.mpkg"),
+                                           options: .init(textureReduction: .original,
+                                                          pixelArtOptimization: true))
+        let wideResult = Texture(unpack(try Data(contentsOf: root.appending(path: "result.mpkg")))["materials/wide.tex"]!)
+        try require(wideResult.width == 5000 && wideResult.height == 256,
+                    "Original resolution must not be capped at 4096 pixels")
+        print("PASS: original 5000px texture retains its resolution")
+
         // A malformed scene must fail without replacing the previous successful export.
         let destination = root.appending(path: "result.mpkg")
         let previous = try Data(contentsOf: destination)

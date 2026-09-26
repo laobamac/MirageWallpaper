@@ -18,7 +18,6 @@ enum SceneMobileMPKGExporter {
     private static let spriteFlag: UInt32 = 1 << 2
     private static let rawMobileFlag: UInt32 = 1 << 3
     private static let streamingTextureFlag: UInt32 = 1 << 5
-    private static let maximumMobileTextureDimension = 4096
     private static let effort = 10
     private static let excludedMobileSuffixes: Set<String> = [
         "flac", "m4a", "mp3", "ogg", "wav",
@@ -286,6 +285,7 @@ enum SceneMobileMPKGExporter {
         guard let value = Int(sourceVersion.suffix(4)),
               let mobile = [
                   1: 14,
+                  13: 14,
                   14: 14,
                   16: 14,
                   17: 15,
@@ -604,15 +604,13 @@ enum SceneMobileMPKGExporter {
             throw SceneMobileExportError.invalidTexture(label)
         }
         let factor = options.reductionFactor(width: baseWidth, height: baseHeight)
-        var outputWidth = max(1, baseWidth / factor)
-        var outputHeight = max(1, baseHeight / factor)
-        var coordinateScale = 1 / Double(factor)
-        if max(outputWidth, outputHeight) > maximumMobileTextureDimension {
-            let safetyScale = Double(maximumMobileTextureDimension) / Double(max(outputWidth, outputHeight))
-            outputWidth = max(1, Int(Double(outputWidth) * safetyScale))
-            outputHeight = max(1, Int(Double(outputHeight) * safetyScale))
-            coordinateScale *= safetyScale
-        }
+        let outputWidth = max(1, baseWidth / factor)
+        let outputHeight = max(1, baseHeight / factor)
+        let coordinateScale = 1 / Double(factor)
+        // Wallpaper Engine keeps the selected resolution even for 8K scenes.
+        // A fixed 4096px cap silently changed the advanced "original" option
+        // and could distort sprite coordinates. Keep a byte-size guard instead.
+        _ = try rgbaByteCount(width: outputWidth, height: outputHeight, label: label)
         // Reuse the smallest mip that still supplies all requested pixels, never upscale a smaller mip.
         // Floor the cropped size: embedded PNG mips use floor(size / 2), not nearest rounding.
         var selected = base

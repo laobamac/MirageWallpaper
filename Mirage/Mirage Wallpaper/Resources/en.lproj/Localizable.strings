@@ -1277,7 +1277,7 @@
 "像素画优化" = "Pixel art optimization";
 "纹理分辨率降低" = "Texture reduction";
 "保留 RGBA 纹理，减少像素画的压缩损失。文件可能增大。" = "Preserve RGBA textures to reduce compression artifacts in pixel art. Files may be larger.";
-"蒙版和较小纹理保留原尺寸；超大纹理仍受 4096 像素兼容上限限制。" = "Masks and small textures keep their original size. Very large textures are capped at 4096 pixels for compatibility.";
+"蒙版和较小纹理保留原尺寸。最高质量会保留原始纹理分辨率。" = "Masks and small textures keep their original size. Highest quality keeps the original texture resolution.";
 "提示：" = "Tip: ";
 "将您的 Android 设备连接到 Mirage，即可无线传输壁纸，无需先导出。" = "Connect your Android device to Mirage to send wallpapers wirelessly without exporting them first. ";
 "点击此处了解更多信息。" = "Click here to learn more.";
