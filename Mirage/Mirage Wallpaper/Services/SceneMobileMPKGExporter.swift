@@ -4,8 +4,10 @@
 //  Native conversion of desktop scene packages for Wallpaper Engine Android.
 //
 
+import Accelerate
 import Compression
 import Foundation
+import ImageIO
 
 enum SceneMobileMPKGExporter {
     private static let textureFormatRGBA8: Int32 = 0
@@ -19,6 +21,12 @@ enum SceneMobileMPKGExporter {
     private static let rawMobileFlag: UInt32 = 1 << 3
     private static let streamingTextureFlag: UInt32 = 1 << 5
     private static let effort = 10
+    // ImageIO avoids process startup on small mips. Large PNGs decode faster
+    // with FFmpeg's threaded decoder in the sample benchmark.
+    private static let maximumNativePNGDimension = 512
+#if DEBUG
+    private static let recordsToolTiming = ProcessInfo.processInfo.environment["MIRAGE_SCENE_EXPORT_TIMING"] == "1"
+#endif
     private static let excludedMobileSuffixes: Set<String> = [
         "flac", "m4a", "mp3", "ogg", "wav",
     ]
@@ -62,7 +70,7 @@ enum SceneMobileMPKGExporter {
         let height: Int
         let contentWidth: Int
         let contentHeight: Int
-        let payload: Data
+        let payloadSize: Int
         let compressed: Data
     }
 
@@ -183,7 +191,12 @@ enum SceneMobileMPKGExporter {
         let resultLock = NSLock()
         var textureResults: [Int: StagedEntry] = [:]
         var firstError: Error?
-        for item in textureEntries {
+        // Start large assets first so a late 8K texture does not leave the
+        // other worker idle at the end of the conversion. Archive order is
+        // determined separately from the original entry indices below.
+        for item in textureEntries.sorted(by: {
+            $0.entry.size == $1.entry.size ? $0.index < $1.index : $0.entry.size > $1.entry.size
+        }) {
             queue.addOperation {
                 resultLock.lock()
                 let shouldStop = firstError != nil
@@ -192,7 +205,12 @@ enum SceneMobileMPKGExporter {
                 do {
                     let staged = try autoreleasepool {
                         let source = try readPackageEntry(item.entry, from: packageURL)
-                        let data = try mobileTexture(source, label: item.entry.name, options: options, jobs: encoderJobs)
+                        guard let data = try mobileTexture(source, label: item.entry.name, options: options, jobs: encoderJobs) else {
+                            // Unchanged masks/mobile textures can be streamed
+                            // straight from the source package by the writer.
+                            return StagedEntry(name: item.entry.name, url: packageURL,
+                                               offset: item.entry.absoluteOffset, size: item.entry.size)
+                        }
                         return try stage(data, named: item.entry.name, in: staging)
                     }
                     resultLock.lock()
@@ -307,12 +325,12 @@ enum SceneMobileMPKGExporter {
         label: String,
         options: SceneMobileExportOptions,
         jobs: Int
-    ) throws -> Data {
+    ) throws -> Data? {
         let asset = try parseTexture(source, label: label)
         // Masks and streaming/native mobile textures must retain their layout and sampling data.
         if asset.flags & streamingTextureFlag != 0
             || [textureFormatETC2RGBA8, textureFormatRG8, textureFormatR8].contains(asset.format) {
-            return source
+            return nil
         }
         guard [textureFormatRGBA8, textureFormatBC1, textureFormatBC2, textureFormatBC3].contains(asset.format) else {
             throw SceneMobileExportError.unsupportedTextureFormat(asset.format, label)
@@ -363,7 +381,7 @@ enum SceneMobileMPKGExporter {
             }
             convertedSlots.append(ConvertedTextureSlot(
                 width: width, height: height, contentWidth: selection.outputWidth, contentHeight: selection.outputHeight,
-                payload: payload, compressed: try lz4Compress(payload, label: slotLabel)
+                payloadSize: payload.count, compressed: try lz4Compress(payload, label: slotLabel)
             ))
             slotScales.append((selection.coordinateScale, selection.coordinateScale))
         }
@@ -403,7 +421,7 @@ enum SceneMobileMPKGExporter {
             output.appendInt32(Int32(slot.width))
             output.appendInt32(Int32(slot.height))
             output.appendInt32(1)
-            output.appendInt32(Int32(slot.payload.count))
+            output.appendInt32(Int32(slot.payloadSize))
             output.appendInt32(Int32(slot.compressed.count))
             output.append(slot.compressed)
         }
@@ -535,6 +553,15 @@ enum SceneMobileMPKGExporter {
         }
         let outputWidth = outputDimensions?.width ?? sourceWidth
         let outputHeight = outputDimensions?.height ?? sourceHeight
+        // Embedded PNG mips often already contain exactly the requested pixels.
+        // EtcTool can read them directly; avoid a PNG decode/encode round trip.
+        if destination.pathExtension == "png", asset.format == textureFormatRGBA8,
+           sourceWidth == Int(mip.width), sourceHeight == Int(mip.height),
+           outputWidth == sourceWidth, outputHeight == sourceHeight,
+           canReusePNG(body, width: outputWidth, height: outputHeight) {
+            try body.write(to: destination)
+            return (outputWidth, outputHeight)
+        }
         var filters = ["crop=\(sourceWidth):\(sourceHeight):0:0:exact=1"]
         if outputWidth != sourceWidth || outputHeight != sourceHeight {
             let filter = nearestNeighbor ? "neighbor" : "lanczos"
@@ -542,6 +569,11 @@ enum SceneMobileMPKGExporter {
         }
         let source: URL
         var arguments = ["-hide_banner", "-loglevel", "error", "-y"]
+        if max(mip.width, mip.height) <= maximumNativePNGDimension {
+            // Decoder/filter thread setup can dominate small texture work.
+            // Large inputs retain FFmpeg's default decoder parallelism.
+            arguments += ["-threads", "1", "-filter_threads", "1"]
+        }
         if let suffix = imageSuffix(body) {
             source = temporary.appending(path: "source\(suffix)")
             try body.write(to: source)
@@ -585,6 +617,11 @@ enum SceneMobileMPKGExporter {
         }
         arguments += ["-vf", filters.joined(separator: ","), "-frames:v", "1", "-pix_fmt", "rgba", "-threads", "1"]
         if destination.pathExtension == "rgba" { arguments += ["-f", "rawvideo"] }
+        if destination.pathExtension == "png" {
+            // This disposable PNG is immediately decoded by EtcTool. Deflate
+            // and PNG prediction spend CPU without improving the final MPKG.
+            arguments += ["-compression_level", "0", "-pred", "none"]
+        }
         arguments.append(destination.path)
         try run(ffmpeg, arguments: arguments, label: "FFmpeg \(label)")
         guard FileManager.default.fileExists(atPath: destination.path) else {
@@ -700,6 +737,16 @@ enum SceneMobileMPKGExporter {
            selection.outputWidth == Int(mip.width), selection.outputHeight == Int(mip.height) {
             return body
         }
+        // ImageIO exposes the original unpremultiplied RGB(A) PNG samples.
+        // Read its provider directly: drawing into a CGContext would lose RGB
+        // values under transparent pixels and may apply color conversion.
+        // Any resize or unsupported provider layout retains the FFmpeg path.
+        if selection.outputWidth == selection.sourceWidth,
+           selection.outputHeight == selection.sourceHeight,
+           let pixels = nativePNGPixels(body, width: Int(mip.width), height: Int(mip.height),
+                                        cropWidth: selection.sourceWidth, cropHeight: selection.sourceHeight) {
+            return pixels
+        }
         let decoded = temporary.appending(path: "decoded.rgba")
         _ = try decodeTexture(asset, mip: mip, label: label, ffmpeg: conversionTool(named: "ffmpeg"),
                               temporary: temporary, destination: decoded,
@@ -711,6 +758,57 @@ enum SceneMobileMPKGExporter {
             throw SceneMobileExportError.invalidTexture(label)
         }
         return payload
+    }
+
+    private static func nativePNGPixels(
+        _ data: Data, width: Int, height: Int, cropWidth: Int, cropHeight: Int
+    ) -> Data? {
+        guard max(width, height) <= maximumNativePNGDimension,
+              canReusePNG(data, width: width, height: height),
+              cropWidth > 0, cropHeight > 0, cropWidth <= width, cropHeight <= height,
+              let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, [
+                  kCGImageSourceShouldCacheImmediately: true,
+              ] as CFDictionary),
+              image.width == width, image.height == height,
+              image.bitsPerComponent == 8, image.bitsPerPixel == 32,
+              image.colorSpace?.model == .rgb,
+              image.alphaInfo == .last || image.alphaInfo == .noneSkipLast,
+              !image.bitmapInfo.contains(.floatComponents),
+              [.byteOrderDefault, .byteOrder32Big].contains(image.bitmapInfo.intersection(.byteOrderMask)),
+              image.bytesPerRow >= width * 4,
+              let providerData = image.dataProvider?.data else { return nil }
+        let pixels = providerData as Data
+        let (requiredBytes, overflow) = image.bytesPerRow.multipliedReportingOverflow(by: height)
+        guard !overflow, pixels.count >= requiredBytes else { return nil }
+        let rowBytes = cropWidth * 4
+        var output: Data
+        if cropWidth == width, cropHeight == height, image.bytesPerRow == rowBytes {
+            output = pixels.prefix(rowBytes * cropHeight)
+        } else {
+            output = Data(count: rowBytes * cropHeight)
+            output.withUnsafeMutableBytes { destination in
+                pixels.withUnsafeBytes { input in
+                    for row in 0..<cropHeight {
+                        destination.baseAddress!.advanced(by: row * rowBytes).copyMemory(
+                            from: input.baseAddress!.advanced(by: row * image.bytesPerRow), byteCount: rowBytes)
+                    }
+                }
+            }
+        }
+        if image.alphaInfo == .noneSkipLast {
+            // Skip bytes have no defined alpha. Fill them explicitly instead
+            // of relying on ImageIO's current value in the padding channel.
+            let status = output.withUnsafeMutableBytes { bytes in
+                var buffer = vImage_Buffer(data: bytes.baseAddress!, height: vImagePixelCount(cropHeight),
+                                           width: vImagePixelCount(cropWidth), rowBytes: rowBytes)
+                var destination = buffer
+                return vImageOverwriteChannelsWithScalar_ARGB8888(
+                    255, &buffer, &destination, 0x1, vImage_Flags(kvImageDoNotTile))
+            }
+            guard status == kvImageNoError else { return nil }
+        }
+        return output
     }
 
     private static func rgbaByteCount(width: Int, height: Int, label: String) throws -> Int {
@@ -769,6 +867,38 @@ enum SceneMobileMPKGExporter {
         if data.starts(with: Data("GIF87a".utf8)) || data.starts(with: Data("GIF89a".utf8)) { return ".gif" }
         if data.starts(with: Data("BM".utf8)) { return ".bmp" }
         return nil
+    }
+
+    private static func canReusePNG(_ data: Data, width: Int, height: Int) -> Bool {
+        guard data.count >= 33,
+              data.starts(with: [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) else { return false }
+        return data.withUnsafeBytes { (bytes: UnsafeRawBufferPointer) in
+            func word(_ offset: Int) -> UInt32 {
+                bytes.loadUnaligned(fromByteOffset: offset, as: UInt32.self).bigEndian
+            }
+            // Keep 16-bit, indexed, interlaced and animated PNG normalization
+            // on the existing FFmpeg path. Only ordinary 8-bit RGB(A) mips
+            // with an exact IHDR size qualify for direct reuse.
+            guard word(8) == 13, word(12) == 0x49484452,
+                  word(16) == width, word(20) == height,
+                  bytes[24] == 8, [2, 6].contains(bytes[25]),
+                  bytes[26] == 0, bytes[27] == 0, bytes[28] == 0 else { return false }
+            var offset = 8
+            var hasImageData = false
+            while offset <= bytes.count - 12 {
+                let count = Int(word(offset))
+                guard count <= bytes.count - offset - 12 else { return false }
+                switch word(offset + 4) {
+                case 0x6163544C, 0x74524E53: return false // acTL, tRNS
+                case 0x49444154: hasImageData = true // IDAT
+                case 0x49454E44: // IEND
+                    return hasImageData && count == 0 && offset + 12 == bytes.count
+                default: break
+                }
+                offset += count + 12
+            }
+            return false
+        }
     }
 
     private static func ddsHeader(
@@ -1011,6 +1141,19 @@ enum SceneMobileMPKGExporter {
 #endif
 
     private static func run(_ executable: URL, arguments: [String], label: String) throws {
+#if DEBUG
+        let started = ProcessInfo.processInfo.systemUptime
+        defer {
+            if recordsToolTiming,
+               let data = try? JSONSerialization.data(withJSONObject: [
+                   "tool": executable.lastPathComponent,
+                   "label": label,
+                   "seconds": ProcessInfo.processInfo.systemUptime - started,
+               ], options: [.sortedKeys]) {
+                FileHandle.standardError.write(Data("MIRAGE_EXPORT_TIMING ".utf8) + data + Data([10]))
+            }
+        }
+#endif
         let process = Process()
         process.executableURL = executable
         process.arguments = arguments
