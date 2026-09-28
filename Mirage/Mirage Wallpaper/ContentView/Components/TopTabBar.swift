@@ -9,15 +9,21 @@ import SwiftUI
 struct TopTabBar: View {
     @ObservedObject var navigationModel: MainNavigationModel
     @Bindable var wallpaperViewModel: WallpaperViewModel
+    @ObservedObject var mobileDevicesViewModel: MobileDevicesViewModel
     @State private var hoverSelection: MainSection?
 
-    init(navigationModel: MainNavigationModel, wallpaperViewModel: WallpaperViewModel) {
+    init(
+        navigationModel: MainNavigationModel,
+        wallpaperViewModel: WallpaperViewModel,
+        mobileDevicesViewModel: MobileDevicesViewModel = AppDelegate.shared.mobileDevicesViewModel
+    ) {
         self.navigationModel = navigationModel
         self.wallpaperViewModel = wallpaperViewModel
+        self.mobileDevicesViewModel = mobileDevicesViewModel
     }
 
-    private var downloadCount: Int {
-        AppDelegate.shared.workshopViewModel.activeDownloadCount
+    private var hasConnectedMobileDevice: Bool {
+        mobileDevicesViewModel.devices.contains(where: \.isConnected)
     }
 
     var body: some View {
@@ -25,7 +31,9 @@ struct TopTabBar: View {
             HStack(spacing: 4) {
                 tab(section: .installed, title: "已安装", systemImage: "square.and.arrow.down.fill")
                 tab(section: .discover, title: "发现", systemImage: "sparkle.magnifyingglass")
-                tab(section: .workshop, title: "创意工坊", systemImage: "cloud.fill", badge: downloadCount)
+                WorkshopActiveDownloadCount(downloadStore: AppDelegate.shared.workshopViewModel.downloadStore) { count in
+                    tab(section: .workshop, title: "创意工坊", systemImage: "cloud.fill", badge: count)
+                }
                 tab(section: .subscriptions, title: "已订阅", systemImage: "checkmark.circle.fill")
             }
             .padding(4)
@@ -35,7 +43,13 @@ struct TopTabBar: View {
             Spacer(minLength: 10)
 
             HStack(spacing: 2) {
-                chromeButton(title: "移动端", systemImage: "platter.filled.bottom.iphone") { }
+                chromeButton(
+                    title: "移动端",
+                    systemImage: "platter.filled.bottom.iphone",
+                    iconColor: hasConnectedMobileDevice ? .green : nil
+                ) {
+                    navigationModel.isMobileDevicesPresented = true
+                }
                 DisplayPicker(wallpaperViewModel: wallpaperViewModel)
                 chromeButton(title: "设置", systemImage: "gearshape.fill") {
                     AppDelegate.shared.openSettingsWindow()
@@ -88,8 +102,9 @@ struct TopTabBar: View {
     }
 
     @ViewBuilder
-    private func chromeButton(title: LocalizedStringKey, systemImage: String, action: @escaping () -> Void) -> some View {
-        ChromeButton(title: title, systemImage: systemImage, action: action)
+    private func chromeButton(title: LocalizedStringKey, systemImage: String,
+                              iconColor: Color? = nil, action: @escaping () -> Void) -> some View {
+        ChromeButton(title: title, systemImage: systemImage, iconColor: iconColor, action: action)
     }
 }
 
@@ -98,13 +113,20 @@ struct TopTabBar: View {
 private struct ChromeButton: View {
     let title: LocalizedStringKey
     let systemImage: String
+    var iconColor: Color? = nil
     let action: () -> Void
 
     @State private var hovering = false
 
     var body: some View {
         Button(action: action) {
-            Label(title, systemImage: systemImage)
+            Label {
+                Text(title)
+            } icon: {
+                Image(systemName: systemImage)
+                    .foregroundStyle(iconColor ?? .primary)
+            }
+            .foregroundStyle(.primary)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
                 .background(

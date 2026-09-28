@@ -8,7 +8,13 @@ import SwiftUI
 
 struct DownloadPopover: View {
     @Bindable var workshopViewModel: WorkshopViewModel
+    @ObservedObject private var downloadStore: WorkshopDownloadStore
     @State private var revealError: String?
+
+    init(workshopViewModel: WorkshopViewModel) {
+        self.workshopViewModel = workshopViewModel
+        self.downloadStore = workshopViewModel.downloadStore
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -32,7 +38,7 @@ struct DownloadPopover: View {
 
             Divider()
 
-            if workshopViewModel.downloadQueue.isEmpty {
+            if downloadStore.queue.isEmpty {
                 VStack(spacing: 10) {
                     Image(systemName: "arrow.down.doc")
                         .font(.system(size: 36))
@@ -49,7 +55,7 @@ struct DownloadPopover: View {
             } else {
                 ScrollView {
                     VStack(spacing: 1) {
-                        ForEach(workshopViewModel.downloadQueue) { task in
+                        ForEach(downloadStore.queue) { task in
                             DownloadRow(
                                 task: task,
                                 onCancel: { workshopViewModel.cancelDownload(task.workshopItem) },
@@ -65,8 +71,8 @@ struct DownloadPopover: View {
             Divider()
 
             HStack {
-                let active = workshopViewModel.downloadQueue.filter(\.isActive).count
-                let completed = workshopViewModel.downloadQueue.filter(\.isCompleted).count
+                let active = downloadStore.activeCount
+                let completed = downloadStore.queue.filter(\.isCompleted).count
 
                 Label("\(active) 下载中", systemImage: "arrow.down.circle.fill")
                     .font(.caption)
@@ -93,7 +99,7 @@ struct DownloadPopover: View {
     }
 
     private var hasCompleted: Bool {
-        workshopViewModel.downloadQueue.contains(where: \.isClearable)
+        downloadStore.queue.contains(where: \.isClearable)
     }
 
     private func revealInFinder(_ task: DownloadTask) {
