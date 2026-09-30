@@ -91,7 +91,11 @@ if(WEBRENDERER_BUILD_VIEWER)
 endif()
 if(WEBRENDERER_BUILD_WALLPAPER)
     add_subdirectory(Tools/WebWallpaper)
-    add_subdirectory(Tools/WebBaker)
+    # WebBaker captures through ScreenCaptureKit and shares the Apple-only
+    # BakeSupport implementation; Linux builds only need the WebWallpaper host.
+    if(APPLE)
+        add_subdirectory(Tools/WebBaker)
+    endif()
 endif()
 
 include(CTest)

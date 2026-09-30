@@ -107,7 +107,11 @@ if(VIDEORENDERER_BUILD_VIEWER)
 endif()
 if(VIDEORENDERER_BUILD_WALLPAPER)
     add_subdirectory(Tools/VideoWallpaper)
-    add_subdirectory(Tools/VideoBaker)
+    # VideoBaker uses AVFoundation and the macOS-only VRTranscoder; Linux
+    # builds provide the mirage-display wallpaper host without offline baking.
+    if(APPLE)
+        add_subdirectory(Tools/VideoBaker)
+    endif()
 endif()
 
 if(VIDEORENDERER_BUILD_TEST)
