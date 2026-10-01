@@ -7,6 +7,23 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
         <title>Mirage</title>
         <item>
             <title>1.1.4</title>
+            <pubDate>Thu, 01 Oct 2026 04:03:39 +0000</pubDate>
+            <link>https://github.com/laobamac/MirageWallpaper</link>
+            <sparkle:channel>beta</sparkle:channel>
+            <sparkle:version>505</sparkle:version>
+            <sparkle:shortVersionString>1.1.4</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <description sparkle:format="plain-text"><![CDATA[Commit: 13d240c65c4b684ccfd41d81d2357353ae5c37c0
+Channel: beta
+
+fix(text): preserve background and alpha when compositing glyphs
+
+
+]]></description>
+            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-505-13d240c65c4b-macOS-x86_64.zip" length="113099574" type="application/octet-stream" sparkle:edSignature="86XPYPUHWaMSnUm3vgrt/qoOwsAz9EsWhk8tRYcI0ibpNlgRL9BjNJLTi/egXIccP2JESkltyWtypTJi/OJgDg=="/>
+        </item>
+        <item>
+            <title>1.1.4</title>
             <pubDate>Wed, 30 Sep 2026 16:46:08 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
             <sparkle:channel>beta</sparkle:channel>
@@ -89,23 +106,6 @@ fix(baking): keep web capture off desktop and report live stage progress
 
 ]]></description>
             <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-495-d9106b80d5d8-macOS-x86_64.zip" length="113022507" type="application/octet-stream" sparkle:edSignature="f7+RuliTWnBpllpMSwsADumBK5KEE9gzp7YEt4s5aShNgoUzWyg/gIdXunT3TgD6fSD4iRhnEJYvc+lQA6uQBA=="/>
-        </item>
-        <item>
-            <title>1.1.4</title>
-            <pubDate>Sun, 27 Sep 2026 14:47:55 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>494</sparkle:version>
-            <sparkle:shortVersionString>1.1.4</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <description sparkle:format="plain-text"><![CDATA[Commit: 6f705f395c79a31e028effc157e8aa17505d457c
-Channel: beta
-
-fix(baking): stop web wallpaper bakes coming out black
-
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-494-6f705f395c79-macOS-x86_64.zip" length="113009507" type="application/octet-stream" sparkle:edSignature="/mxOgJxDF5HY1lDkoGpfpoK6Z5uCl2KbwJbLPb0Yln+i3PmoQAryx1RsD50YBy9lmyuJ3Pufcepg+drMRXLoAQ=="/>
         </item>
         <item>
             <title>1.1.4</title>
@@ -564,6 +564,6 @@ Builds use ad-hoc signing; macOS may require “Open Anyway” under System Sett
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: T6HQ57uhZuu4Uc0smK7rioFWoMbbTsT3DDBOZPP0PwGoD0ed8YEw7yMkb5gENGvzi6TGUIJz4o+3OyjBQlvPAw==
-length: 41948
+edSignature: sftwnBgCy1XDJpmTBdcZ+DRjkglNiCujL6oL48MVYA4dj4gH9rcxOsR1Gp1hGyPMC7xRFgSw8TJ8m1jAbm08BA==
+length: 41958
 -->
