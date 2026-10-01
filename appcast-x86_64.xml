@@ -7,6 +7,23 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
         <title>Mirage</title>
         <item>
             <title>1.1.4</title>
+            <pubDate>Thu, 01 Oct 2026 06:46:27 +0000</pubDate>
+            <link>https://github.com/laobamac/MirageWallpaper</link>
+            <sparkle:channel>beta</sparkle:channel>
+            <sparkle:version>513</sparkle:version>
+            <sparkle:shortVersionString>1.1.4</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <description sparkle:format="plain-text"><![CDATA[Commit: 5a989a249b0eb0937463918745066c705cd68885
+Channel: beta
+
+fix(text): update effect extents when text size changes
+
+
+]]></description>
+            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-513-5a989a249b0e-macOS-x86_64.zip" length="113118338" type="application/octet-stream" sparkle:edSignature="EJshSjy8qoGdfJxK+/7xgv5ePu5hZ0jKDCfz2C2MHG786lx1+nZmS92uUbEyMmHXxZRKLQB17f5pjOxRdln2Dw=="/>
+        </item>
+        <item>
+            <title>1.1.4</title>
             <pubDate>Thu, 01 Oct 2026 05:19:21 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
             <sparkle:channel>beta</sparkle:channel>
@@ -89,23 +106,6 @@ fix(playback): ignore system sound services in audio detection
 
 ]]></description>
             <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-500-0880bda16e99-macOS-x86_64.zip" length="113054465" type="application/octet-stream" sparkle:edSignature="LTRV+usJ3KsPGUfQ+Dp4Gc/1XSXxN+FeIJSxC2qAAc91XVxlpkIDMkzD/iFsqYaJShcRghnaRMf4ZtexNbUyDg=="/>
-        </item>
-        <item>
-            <title>1.1.4</title>
-            <pubDate>Wed, 30 Sep 2026 10:31:19 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>497</sparkle:version>
-            <sparkle:shortVersionString>1.1.4</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <description sparkle:format="plain-text"><![CDATA[Commit: 45569dd34b40f66644b0fcb1eb374b868b5cacbd
-Channel: beta
-
-fix(playback): ignore Siri listening and stabilize audio detection
-
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-497-45569dd34b40-macOS-x86_64.zip" length="113046353" type="application/octet-stream" sparkle:edSignature="cCc+itPXWfZYOoil/umsTmI8yzX6MjFiK0InXmGxkT4oJBO8XpfnqIGrLzQzLY0CmDS88Tdw4stD3xOP2rxMCA=="/>
         </item>
         <item>
             <title>1.1.4</title>
@@ -564,6 +564,6 @@ Builds use ad-hoc signing; macOS may require “Open Anyway” under System Sett
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: ovfweMvCXq2uu6n8cMpQjTKTbsrUdAyUbz1k/eBzuMd7Wlf5HmcNqr0rQ1SLDPbQAyk8d43/GwL2IsSYP3cABg==
-length: 41934
+edSignature: 6XsTFS1clwAs/3RiZNBe3WfHEtrQS6u+AfAvviCQxslAOZVfRJSxls4xqs/t4daidyU+l44FSE4qVWrE/wk9DQ==
+length: 41923
 -->
