@@ -620,11 +620,7 @@ script::ScriptScene& EnsureScriptScene(ParseContext& context) {
                 };
             });
         if (context.user_properties.is_some())
-            (*context.user_properties)->iter().for_each([&](auto entry) {
-                auto [entry_key, entry_value] = entry;
-                auto key                      = rstd::cppstd::as_string_view(entry_key->as_str());
-                context.script_scene->runtime().SetUserProperty(key, *entry_value);
-            });
+            context.script_scene->runtime().SetUserProperties(**context.user_properties, false);
         for (const auto& binding : context.image_alignment_bindings) {
             InstallImageAlignmentBinding(context.script_scene->runtime(),
                                          binding.node,
@@ -880,6 +876,9 @@ struct TextRuntimeTargets {
                 camera.Update();
                 changed = true;
             }
+            if (auto layer = camera.GetImgEffect(); layer)
+                layer->SetExtent(static_cast<float>(next_logical_w),
+                                 static_cast<float>(next_logical_h));
         }
 
         for (const auto& fbo : fbos) {
@@ -1182,7 +1181,8 @@ void WireFieldScripts(ParseContext& context, const rstd::sync::Arc<SceneNode>& n
         auto  props         = ScriptPropertiesForField(context, field, sb);
         auto  initial_value = ScriptInitialValueForField(field, sb.initial_value);
         auto* fs =
-            rt.MakeFieldScript(sb.source, sha, kind, props, initial_value, node, std::move(clones));
+            rt.MakeFieldScript(sb.source, sha, kind, props, initial_value, node, std::move(clones),
+                               {}, { .animation = node->FieldAnimation(field) });
         if (! fs) continue;
         RegisterFieldScriptMetadata(context, node, fs);
         if (is_visible && ! is_container && node != nullptr && node->ID() >= 0 &&
@@ -1836,10 +1836,14 @@ void LoadEmitter(ParticleSubSystem& pSys, const wpscene::Particle& wp,
                  const ParticleInstanceModifiers& modifiers) {
     bool sort = false;
     for (const auto& em : wp.emitters) {
-        auto newEm = em;
-        newEm.rate *= modifiers.Count();
-        if (newEm.audioprocessingmode != 0) pSys.SetUsesAudioResponse();
-        pSys.AddEmitter(WPParticleParser::genParticleEmittOp(newEm, sort));
+        if (em.audioprocessingmode != 0) pSys.SetUsesAudioResponse();
+        pSys.AddEmitter([emit = WPParticleParser::genParticleEmittOp(em, sort), modifiers](
+            ParticleEmitterState& state, std::vector<Particle>& particles,
+            std::vector<ParticleInitOp>& initializers, u32 capacity, double elapsed,
+            std::span<const float> audio, std::span<const ParticleControlpoint> controlpoints) {
+            state.count_scale = modifiers.Count();
+            emit(state, particles, initializers, capacity, elapsed, audio, controlpoints);
+        });
     }
 }
 
@@ -2421,7 +2425,7 @@ bool UsesEffectPositionSpace(const wpscene::Material& wpmat) {
     return mode_it != wpmat.combos.end() && mode_it->second == 1;
 }
 
-bool UsesUnitFinalQuad(const wpscene::Material& wpmat) {
+bool UsesPixelEffectPosition(const wpscene::Material& wpmat) {
     if (wpmat.shader != "effects/transform") return false;
     auto mode_it = wpmat.combos.find("MODE");
     return mode_it != wpmat.combos.end() && mode_it->second == 1;
@@ -2486,7 +2490,8 @@ script::FieldScript* RegisterMaterialValueScript(ParseContext&                  
                                                  SceneNode*                     owner,
                                                  const wpscene::Material&       material,
                                                  const std::string&             material_key,
-                                                 const wpscene::ScriptBinding& binding) {
+                                                 const wpscene::ScriptBinding& binding,
+                                                 script::FieldScriptBinding self = {}) {
     if (! owner) return nullptr;
     auto value = material.constantshadervalues.find(material_key);
     if (value == material.constantshadervalues.end()) return nullptr;
@@ -2506,7 +2511,7 @@ script::FieldScript* RegisterMaterialValueScript(ParseContext&                  
                                                                                kind,
                                                                                binding.properties,
                                                                                binding.initial_value,
-                                                                               owner);
+                                                                               owner, {}, {}, std::move(self));
     RegisterFieldScriptMetadata(context, owner, field_script);
     return field_script;
 }
@@ -2525,11 +2530,12 @@ void RegisterImageEffectVisibilityScript(
                                                             script::FieldKind::Bool,
                                                             binding->second.properties,
                                                             binding->second.initial_value,
-                                                            owner);
+                                                            owner, {}, {},
+                                                            { .effect = SceneImageEffectRef {
+                                                                .layer = effect_layer.get(),
+                                                                .effect = effect } });
     RegisterFieldScriptMetadata(context, owner, field_script);
     if (! field_script) return;
-    scripts.runtime().SetFieldScriptEffectSelf(
-        *field_script, { .layer = effect_layer.get(), .effect = effect });
     auto* scene = context.scene.get();
     scripts.AddActuator({
         field_script,
@@ -2627,15 +2633,15 @@ void RegisterShaderUserVarIndex(ParseContext& context, SceneNode* owner,
          wpmat.constantshadervalues_bindings.scripts) {
         auto uniform_name = ResolveShaderMaterialKey(info, material_key);
         if (uniform_name.empty()) continue;
-        auto* field_script =
-            RegisterMaterialValueScript(context, owner, wpmat, material_key, binding);
-        if (! field_script) continue;
+        script::FieldScriptBinding self { .material = stable_mat.get() };
         if (auto animation = stable_mat->customShader.valueAnimations.find(uniform_name);
             animation != stable_mat->customShader.valueAnimations.end() &&
             animation->second.curve && animation->second.curve->playback) {
-            scripts.runtime().SetImplicitAnimation(*field_script,
-                                                    animation->second.curve->playback);
+            self.animation = animation->second.curve->playback;
         }
+        auto* field_script = RegisterMaterialValueScript(context, owner, wpmat, material_key,
+                                                          binding, std::move(self));
+        if (! field_script) continue;
         scripts.AddActuator({
             field_script,
             [pScene, stable_mat, uniform_name = std::move(uniform_name)](
@@ -3316,14 +3322,21 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj,
         colorEffect.materials.push_back(std::move(colorMat));
         wpimgobj.effects.push_back(std::move(colorEffect));
     }
+    const bool is_hidden_link_source =
+        context.hidden_link_source_ids.count(static_cast<std::int32_t>(wpimgobj.id)) != 0;
+    const bool captures_children = wpimgobj.composite_layer && ! wpimgobj.copybackground &&
+        (has_author_effect ||
+         std::any_of(context.object_parent_ids.begin(), context.object_parent_ids.end(),
+                     [&](const auto& entry) { return entry.second == wpimgobj.id; }));
     const bool is_linked_composite =
         wpimgobj.composite_layer &&
         context.IsLinkedSource(static_cast<std::int32_t>(wpimgobj.id));
-    if (! has_author_effect && (is_hidden_link_source || is_linked_composite)) {
+    if (! has_author_effect && (is_hidden_link_source || is_linked_composite || captures_children)) {
         AppendLayerCompositePassthroughEffect(vfs, wpimgobj);
     }
     const bool composite_render_path =
-        wpimgobj.composite_layer && ! (is_hidden_link_source || is_linked_composite);
+        captures_children ||
+        (wpimgobj.composite_layer && ! (is_hidden_link_source || is_linked_composite));
 
     bool hasEffect =
         CountRuntimeImageEffects(wpimgobj.effects, context.scene_accesses_effects) > 0;
@@ -3851,7 +3864,7 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj,
                                                         ? effect_camera_anchor->get()
                                                         : spImgNode.as_ptr());
         }
-        if (composite_render_path) {
+        if (captures_children) {
             const std::string group_camera = nodeAddr + "_group";
             const auto        group_extent =
                 NonZeroRenderTargetExtent(effect_target_size[0], effect_target_size[1]);
@@ -3878,7 +3891,8 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj,
                                                     effect_ppong_b);
         image_effect_layer = imgEffectLayer;
         {
-            imgEffectLayer->SetRequiresSourceDraw(parse_geometry.requires_source_draw);
+            imgEffectLayer->SetRequiresSourceDraw(! captures_children &&
+                                                   parse_geometry.requires_source_draw);
             imgEffectLayer->SetFullscreen(wpimgobj.fullscreen);
             imgEffectLayer->SetFinalMaterialState(finalMaterialState);
             imgEffectLayer->SetSkipWhenNoRuntimeEffect(wpimgobj.fullscreen || isPassthrough);
@@ -4181,7 +4195,7 @@ void ParseImageObj(ParseContext& context, wpscene::ImageObject& img_obj,
                 imgEffect->nodes.push_back(SceneImageEffectNode {
                     .output                   = matOutRT,
                     .sceneNode                = spEffNode.clone(),
-                    .uses_unit_final_quad     = UsesUnitFinalQuad(wpmat),
+                    .uses_pixel_position      = UsesPixelEffectPosition(wpmat),
                     .final_quad_shader_values = std::move(final_quad_shader_values),
                 });
             }
@@ -4725,6 +4739,13 @@ void ParseParticleObj(ParseContext& context, wpscene::ParticleObject& wppartobj,
         static_cast<double>(particle_obj.starttime),
         particle_obj.flags[wpscene::Particle::FlagEnum::wordspace]);
 
+    auto emission_requests = std::make_shared<u32>(0);
+    if (! is_child) {
+        particleSub->SetEmissionRequests(emission_requests);
+        spNode->SetParticleEmissionControl([emission_requests, maxcount](u32 count) {
+            *emission_requests += std::min(count, maxcount - *emission_requests);
+        });
+    }
     particleSub->SetOwnerNode(spNode.as_ptr());
     particleSub->SetPlaybackState(playback_state);
     particleSub->SetRopeSubdivision(rope_subdivision);
@@ -4783,11 +4804,13 @@ void ParseParticleObj(ParseContext& context, wpscene::ParticleObject& wppartobj,
                 ApplyParticleOverride(*override_state, field, values);
             });
         spNode->SetPlaybackControl(
-            [playback_state]() {
+            [playback_state, emission_requests]() {
+                *emission_requests = 0;
                 playback_state->playing.store(true, std::memory_order_release);
                 playback_state->reset_sequence.fetch_add(1, std::memory_order_acq_rel);
             },
-            [playback_state]() {
+            [playback_state, emission_requests]() {
+                *emission_requests = 0;
                 playback_state->playing.store(false, std::memory_order_release);
                 playback_state->reset_sequence.fetch_add(1, std::memory_order_acq_rel);
             },
@@ -4797,6 +4820,31 @@ void ParseParticleObj(ParseContext& context, wpscene::ParticleObject& wppartobj,
             [playback_state]() {
                 return playback_state->playing.load(std::memory_order_acquire);
             });
+        for (const auto& [field, sb] : wppartobj.instance_field_bindings.scripts) {
+            const auto current = ReadParticleOverride(*override_state, field);
+            if (current.empty()) continue;
+            const bool vector = current.size() == 3;
+            auto& ss = EnsureScriptScene(context);
+            auto* fs = ss.runtime().MakeFieldScript(
+                sb.source, utils::genSha1(std::span<const char>(sb.source)),
+                vector ? script::FieldKind::Vec3 : script::FieldKind::Scalar,
+                ScriptPropertiesForField(context, field, sb), sb.initial_value,
+                spNode.as_ptr(), {}, {}, { .particle_instance = true });
+            if (! fs) continue;
+            RegisterFieldScriptMetadata(context, spNode.as_ptr(), fs);
+            ss.AddActuator({ fs, [override_state, field, vector](const script::ScriptValue& value) {
+                if (vector) {
+                    const auto previous = ReadParticleOverride(*override_state, field);
+                    const auto next = ScriptValueAsVec3(value, Vector3f(previous.data()));
+                    if (next) ApplyParticleOverride(*override_state, field,
+                                                   std::span<const float>(next->data(), 3));
+                } else {
+                    const auto next = ScriptValueAsFloat(value);
+                    if (next) ApplyParticleOverride(*override_state, field,
+                                                   std::span<const float>(&*next, 1));
+                }
+            } });
+        }
         AssignNodeFieldAnimations(*spNode.as_ptr(), wppartobj.field_bindings);
     }
     WireFieldScripts(context, spNode, wppartobj.field_bindings);
@@ -5246,7 +5294,7 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
         material.name     = "text";
         material.textures = { atlas_url };
         material.defines  = { "g_Texture0" };
-        material.blenmode = direct_text || copy_background_seed ? BlendMode::Translucent
+        material.blenmode = direct_text || copy_background_seed || has_bg ? BlendMode::Translucent
                                                                  : BlendMode::Normal;
         material.customShader.shader = shader;
         material.customShader.constValues[std::string(G_ALPHA)] = 1.0f;
@@ -5663,7 +5711,7 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
                     effect->nodes.push_back(SceneImageEffectNode {
                         .output                   = matOutRT,
                         .sceneNode                = effect_node.clone(),
-                        .uses_unit_final_quad     = UsesUnitFinalQuad(wpmat),
+                        .uses_pixel_position      = UsesPixelEffectPosition(wpmat),
                         .final_quad_shader_values = std::move(final_quad_shader_values),
                     });
                 }
@@ -5724,23 +5772,21 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
     RegisterHiddenTextEffectScripts(context, compose_node.as_ptr(), obj.effects);
 
     auto compose_hold      = SceneNodeArcHold(compose_node.clone());
-    auto apply_text_anchor = [compose_hold, anchor_state]() {
-        auto* compose_ptr = compose_hold.get();
-        const auto& scale = compose_ptr->Scale();
-        const auto anchored = text::ResolveTextAnchorPosition(anchor_state->horizontal,
-                                                              anchor_state->vertical,
-                                                              anchor_state->origin.x(),
-                                                              anchor_state->origin.y(),
-                                                              anchor_state->width,
-                                                              anchor_state->height,
-                                                              scale.x(),
-                                                              scale.y(),
-                                                              anchor_state->line_box_width,
-                                                              anchor_state->line_box_height);
-        Vector3f pos = anchor_state->origin;
-        pos.x()      = anchored[0];
-        pos.y()      = anchored[1];
-        compose_ptr->SetTranslate(pos);
+    auto apply_text_anchor = [compose_hold, anchor_state, layouter, direct_text]() {
+        auto*      node = compose_hold.get();
+        const auto offset = text::ResolveTextAnchorPosition(
+            anchor_state->horizontal, anchor_state->vertical, 0.0f, 0.0f,
+            anchor_state->width, anchor_state->height, 1.0f, 1.0f,
+            anchor_state->line_box_width, anchor_state->line_box_height);
+        Vector3d   draw_offset { offset[0], offset[1], 0.0 };
+        const auto metrics = layouter->Metrics();
+        if (direct_text && metrics.source_centered) {
+            draw_offset.x() += metrics.source_center_x;
+            draw_offset.y() += metrics.source_center_y;
+        }
+        node->SetTranslate(anchor_state->origin);
+        node->SetGeometryTransform(Affine3d(Translation3d(draw_offset)).matrix());
+        node->SetHitCenter({ offset[0], offset[1] });
     };
 
 
@@ -5763,7 +5809,10 @@ void ParseTextObj(ParseContext& context, wpscene::TextObject& obj) {
             anchor_state->width = std::max(1.0f, metrics.text_width + 2.0f * text_padding);
         if (! anchor_state->authored_height)
             anchor_state->height = std::max(1.0f, metrics.text_height + 2.0f * text_padding);
-        compose_ptr->SetSize({ anchor_state->width, anchor_state->height });
+        const float frame_padding =
+            geometry_policy.preserve_text_bbox ? 2.0f * text_padding : 0.0f;
+        compose_ptr->SetSize(
+            { metrics.text_width + frame_padding, metrics.text_height + frame_padding });
         anchor_state->line_box_width  = std::max(1.0f, metrics.text_width);
         anchor_state->line_box_height = std::max(1.0f, metrics.text_height);
         apply_text_anchor();
@@ -6957,6 +7006,7 @@ std::shared_ptr<Scene> FinalizeScene(ParseContext& context) {
             return node;
         });
         runtime.SetSceneRoot(scene->sceneGraph.as_ptr());
+        scripts->ApplyPendingValues();
         scene->CommitDynamicTopology();
         sr::script::InstallScriptScene(*scene, std::move(scripts));
     }
@@ -7314,6 +7364,7 @@ std::shared_ptr<Scene> WPSceneParser::Parse(std::string_view              scene_
             }
             wpscene::FieldBindings fb;
             wpscene::AbsorbAllFieldBindings(o, fb);
+            AssignNodeFieldAnimations(*node.as_ptr(), fb);
             WireFieldScripts(context, node, fb, {}, {}, {}, true);
             std::string attachment;
             sr::GetJsonValue(o, "attachment", attachment, false);

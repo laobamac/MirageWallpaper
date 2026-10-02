@@ -317,6 +317,20 @@ private struct UIResponsivenessRegression {
         unrelated.executablePath = "/Applications/Player.app/Contents/MacOS/corespeechd"
         try require(unrelated.exclusionReason(excludedPIDs: []) == nil,
                     "A process basename or framework bundle ID was enough to exclude an application")
+        for path in ["/usr/sbin/systemsoundserverd", "/usr/libexec/audiomxd"] {
+            var sound = Monitor.ProcessActivity(pid: 700, executablePath: path, output: true)
+            try require(sound.exclusionReason(excludedPIDs: []) == "system-sound",
+                        "A system sound service was treated as application playback")
+            sound.pid = 9700
+            try require(sound.exclusionReason(excludedPIDs: []) == "system-sound",
+                        "System sound filtering stopped working after a process restart")
+            sound.executablePath = "/Applications/Player.app/Contents/MacOS/" + URL(fileURLWithPath: path).lastPathComponent
+            try require(sound.exclusionReason(excludedPIDs: []) == nil,
+                        "System sound filtering matched an unrelated executable with the same name")
+        }
+        let audioServer = Monitor.ProcessActivity(pid: 800, executablePath: "/usr/sbin/coreaudiod", output: true)
+        try require(audioServer.exclusionReason(excludedPIDs: []) == nil,
+                    "System sound filtering excluded the general CoreAudio server")
         let call = Monitor.ProcessActivity(pid: 300, bundleID: "com.apple.avconferenced", output: true, input: true)
         try require(call.exclusionReason(excludedPIDs: []) == nil,
                     "A voice call was ignored because it also uses the microphone")
@@ -337,15 +351,20 @@ private struct UIResponsivenessRegression {
                 10: Monitor.ProcessActivity(pid: 100, output: true),
                 11: Monitor.ProcessActivity(pid: 610, bundleID: "com.apple.CoreSpeech",
                     executablePath: "/System/Library/PrivateFrameworks/CoreSpeech.framework/corespeechd", output: true, input: true),
-                12: Monitor.ProcessActivity(pid: 300, bundleID: "org.example.recorder", input: true)
+                12: Monitor.ProcessActivity(pid: 300, bundleID: "org.example.recorder", input: true),
+                15: Monitor.ProcessActivity(pid: 700, executablePath: "/usr/sbin/systemsoundserverd", output: true),
+                16: Monitor.ProcessActivity(pid: 701, executablePath: "/usr/libexec/audiomxd", output: true)
             ]
         }
         let monitor = probe.monitor()
         monitor.start()
         defer { monitor.stop() }
-        try await waitUntil("Audio listeners and initial sample") { probe.state.access { $0.listeners.count == 5 && !$0.logs.isEmpty } }
+        try await waitUntil("Audio listeners and initial sample") { probe.state.access { $0.listeners.count == 7 && !$0.logs.isEmpty } }
+        try await Task.sleep(for: .milliseconds(750))
         try require(probe.state.access { $0.transitions.isEmpty }, "Speech, input-only or wallpaper audio triggered the rule")
         try require(probe.state.access { $0.logs.contains { $0.contains("speech-listener") } }, "Filtered audio sources were not diagnosed")
+        try require(probe.state.access { $0.logs.contains { $0.contains("system-sound") } },
+                    "System sound output lasting beyond the confirmation window was not filtered")
 
         probe.state.access { $0.sources[13] = Monitor.ProcessActivity(pid: 400, bundleID: "org.example.player", output: true) }
         probe.notify()

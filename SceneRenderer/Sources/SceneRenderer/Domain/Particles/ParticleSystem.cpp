@@ -258,17 +258,7 @@ void ParticleSubSystem::Tick(double frame_time, bool update_mesh) {
     // Hidden conditional layers remain loaded for later reactivation, but
     // their simulation clock and particle state must stay paused while hidden.
     if (m_owner_node != nullptr && ! m_owner_node->Visible()) return;
-    const bool reset = SyncPlayback();
-    if (m_playback_state && ! m_playback_state->playing.load(std::memory_order_acquire)) {
-        if (reset && update_mesh && m_mesh_has_geometry) {
-            m_mesh->SetDirty();
-            m_sys.gener->GenGLData(
-                m_instances, *m_mesh, m_genSpecOp, m_rope_sequence_count, m_rope_subdivision);
-            m_mesh_has_geometry = false;
-        }
-        for (auto& child : m_children) child->Tick(0.0, update_mesh);
-        return;
-    }
+    SyncPlayback();
     Advance(frame_time, update_mesh);
 }
 
@@ -377,15 +367,24 @@ void ParticleSubSystem::SimulateInstance(
         }
     }
 
-    if (! inst.IsDeath()) {
+    const bool playing =
+        ! m_playback_state || m_playback_state->playing.load(std::memory_order_acquire);
+    const u32 requested = m_emission_requests ? std::exchange(*m_emission_requests, 0u) : 0u;
+    if (! inst.IsDeath() || requested > 0) {
         for (usize emitter_index = 0; emitter_index < m_emiters.size(); ++emitter_index) {
-            m_emiters[emitter_index](inst.EmitterState(emitter_index),
-                                     inst.ParticlesVec(),
-                                     m_initializers,
-                                     m_maxcount,
-                                     simulation_time,
-                                     audio_signal,
-                                     std::span<const ParticleControlpoint> { m_controlpoints });
+            auto& state = inst.EmitterState(emitter_index);
+            if (requested > 0 && emitter_index == 0) {
+                state.manual_count = requested;
+                m_emiters[emitter_index](state, inst.ParticlesVec(), m_initializers,
+                                        m_maxcount, 0.0, audio_signal,
+                                        std::span<const ParticleControlpoint> { m_controlpoints });
+                state.manual_count.reset();
+            }
+            if (playing && ! inst.IsDeath()) {
+                m_emiters[emitter_index](state, inst.ParticlesVec(), m_initializers,
+                                        m_maxcount, simulation_time, audio_signal,
+                                        std::span<const ParticleControlpoint> { m_controlpoints });
+            }
         }
     }
 
@@ -443,7 +442,6 @@ void ParticleSubSystem::SimulateInstance(
             if (m_trail_length > 0) inst.TrailsVec()[index].Reset();
         }
 
-        ParticleModify::MarkOld(p);
         if (! ParticleModify::LifetimeOk(p)) continue;
         ParticleModify::Reset(p);
         ParticleModify::ChangeLifetime(p, -simulation_time);
@@ -473,6 +471,7 @@ void ParticleSubSystem::SimulateInstance(
     };
     for (auto& operation : m_operators) operation(info);
     for (auto& p : info.particles) {
+        ParticleModify::MarkOld(p);
         if (! ParticleModify::LifetimeOk(p)) continue;
         ParticleModify::MoveByTime(p, simulation_time);
         ParticleModify::RotateByTime(p, simulation_time);
@@ -612,12 +611,14 @@ void ParticleSubSystem::Advance(double frame_time, bool update_mesh) {
 
     for (auto& instance : m_instances) {
         rstd_assert(instance);
-        Warmup(*instance,
-               m_time,
-               audio_signal,
-               world_from_local_dir,
-               local_from_world_dir,
-               world_from_spawn_space);
+        if (! m_playback_state || m_playback_state->playing.load(std::memory_order_acquire)) {
+            Warmup(*instance,
+                   m_time,
+                   audio_signal,
+                   world_from_local_dir,
+                   local_from_world_dir,
+                   world_from_spawn_space);
+        }
         SimulateInstance(*instance,
                          simulation_time,
                          audio_signal,

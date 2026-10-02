@@ -1481,6 +1481,9 @@ class WallpaperViewModel: PlaylistPlayback {
             prop.mirageShortcutIcon = UserTextureCache.shared.shortcutIconPath(
                 for: normalizedValue.stringValue)
         }
+        if displayKey == selectedDisplayKey, previewWallpaper.id == state.wallpaper.id {
+            propertyModel.setOverride(normalizedValue, for: propertyKey)
+        }
         mutateRuntime(for: displayKey) { $0.propertyOverrides[propertyKey] = normalizedValue }
 
         switch state.wallpaper.kind {

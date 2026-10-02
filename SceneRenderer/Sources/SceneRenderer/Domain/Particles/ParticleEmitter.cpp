@@ -207,10 +207,11 @@ ParticleEmittOp ParticleBoxEmitterArgs::MakeEmittOp(ParticleBoxEmitterArgs a) {
                                    audio_average,
                                std::span<const ParticleControlpoint>
                                cps) mutable {
-        state.elapsed += timepass;
-        if (a.duration > 0.0f && state.elapsed > a.duration) return;
-
-        state.timer += timepass;
+        if (! state.manual_count) {
+            state.elapsed += timepass;
+            if (a.duration > 0.0f && state.elapsed > a.duration) return;
+            state.timer += timepass;
+        }
         Eigen::Vector3d origin = ResolveEmitterOrigin(cps, a.controlpoint, a.orgin);
         auto            GenBox = [&]() {
             Eigen::Vector3d pos;
@@ -226,14 +227,16 @@ ParticleEmittOp ParticleBoxEmitterArgs::MakeEmittOp(ParticleBoxEmitterArgs a) {
             ParticleModify::Move(p, origin);
             return p;
         };
-        float emit_speed = a.emitSpeed * AudioResponseScale(audio_average, a.audio_response);
-        u32   emit_num =
-            ResolveEmitNum(state.timer, emit_speed, a.instantaneous, a.one_per_frame, ps.empty());
+        float emit_speed = a.emitSpeed * std::max(0.0f, state.count_scale) *
+                           AudioResponseScale(audio_average, a.audio_response);
+        u32 emit_num = state.manual_count.value_or(
+            ResolveEmitNum(state.timer, emit_speed, a.instantaneous, a.one_per_frame, ps.empty()));
         if (emit_num == 0) return;
         const u32 emitted = Emitt(ps, emit_num, maxcount, a.sort, [&]() {
-            return Spwan(GenBox, inis, EmitDuration(emit_speed));
+            return Spwan(GenBox, inis, state.manual_count ? 0.0 : EmitDuration(emit_speed));
         });
-        CommitEmitNum(state.timer, emit_speed, emit_num, emitted, a.one_per_frame);
+        if (! state.manual_count)
+            CommitEmitNum(state.timer, emit_speed, emit_num, emitted, a.one_per_frame);
     };
 }
 
@@ -248,10 +251,11 @@ ParticleEmittOp ParticleSphereEmitterArgs::MakeEmittOp(ParticleSphereEmitterArgs
                                    audio_average,
                                std::span<const ParticleControlpoint>
                                cps) mutable {
-        state.elapsed += timepass;
-        if (a.duration > 0.0f && state.elapsed > a.duration) return;
-
-        state.timer += timepass;
+        if (! state.manual_count) {
+            state.elapsed += timepass;
+            if (a.duration > 0.0f && state.elapsed > a.duration) return;
+            state.timer += timepass;
+        }
         Eigen::Vector3d origin     = ResolveEmitterOrigin(cps, a.controlpoint, a.orgin);
         Eigen::Vector3d directions = Eigen::Vector3f { a.directions.data() }.cast<double>();
         u32             dimensions = ActiveAxisCount(directions);
@@ -270,13 +274,15 @@ ParticleEmittOp ParticleSphereEmitterArgs::MakeEmittOp(ParticleSphereEmitterArgs
             ParticleModify::Move(p, origin);
             return p;
         };
-        float emit_speed = a.emitSpeed * AudioResponseScale(audio_average, a.audio_response);
-        u32   emit_num =
-            ResolveEmitNum(state.timer, emit_speed, a.instantaneous, a.one_per_frame, ps.empty());
+        float emit_speed = a.emitSpeed * std::max(0.0f, state.count_scale) *
+                           AudioResponseScale(audio_average, a.audio_response);
+        u32 emit_num = state.manual_count.value_or(
+            ResolveEmitNum(state.timer, emit_speed, a.instantaneous, a.one_per_frame, ps.empty()));
         if (emit_num == 0) return;
         const u32 emitted = Emitt(ps, emit_num, maxcount, a.sort, [&]() {
-            return Spwan(GenSphere, inis, EmitDuration(emit_speed));
+            return Spwan(GenSphere, inis, state.manual_count ? 0.0 : EmitDuration(emit_speed));
         });
-        CommitEmitNum(state.timer, emit_speed, emit_num, emitted, a.one_per_frame);
+        if (! state.manual_count)
+            CommitEmitNum(state.timer, emit_speed, emit_num, emitted, a.one_per_frame);
     };
 }

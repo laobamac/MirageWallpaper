@@ -317,7 +317,8 @@ SceneNode* find_layer_node(Scene& scene, WallpaperLayerId id) {
 
 void ensure_snapshot_link_render_targets(Scene& scene, const Set<i32>& linked_ids) {
     for (auto id : linked_ids) {
-        if (scene.elidable_layer_ids.count(id) == 0) continue;
+        if (scene.elidable_layer_ids.count(id) == 0 &&
+            ! scene.RenderGroupCamera(WallpaperLayerId { .value = id })) continue;
         auto layer = WallpaperLayerId { .value = id };
         auto key   = GenLinkTex(static_cast<std::ptrdiff_t>(id));
         if (scene.renderTargets.contains(key)) continue;
@@ -1179,6 +1180,62 @@ bool Scene::SortLayer(SceneNode& node, std::size_t index) {
         return false;
     if (*current < index) ++destination;
     parent->m_children.splice(destination, parent->m_children, moving);
+    m_render_graph_dirty = true;
+    return true;
+}
+
+bool Scene::ReparentLayer(SceneNode& node, SceneNode* parent, bool adjust_transforms) {
+    if (! parent) parent = sceneGraph.as_ptr();
+    auto* previous = node.Parent();
+    if (! previous || ! parent || previous == parent || ! node.SceneScriptLayer()) return false;
+    auto* root = parent;
+    for (auto* ancestor = parent; ancestor; ancestor = ancestor->Parent()) {
+        if (ancestor == &node) return false;
+        root = ancestor;
+    }
+    if (root != sceneGraph.as_ptr()) return false;
+    auto moving = std::find_if(previous->m_children.begin(), previous->m_children.end(),
+                               [&](const auto& child) { return child.as_ptr() == &node; });
+    if (moving == previous->m_children.end()) return false;
+    if (adjust_transforms) {
+        previous->UpdateTrans();
+        parent->UpdateTrans();
+        if (std::abs(parent->ModelTrans().determinant()) < 1e-12) return false;
+        node.UpdateTrans();
+        const Eigen::Affine3d local(parent->ModelTrans().inverse() * node.ModelTrans());
+        Eigen::Matrix3d rotation, scaling;
+        local.computeRotationScaling(&rotation, &scaling);
+        const Eigen::Vector3d scale = scaling.diagonal();
+        if (scale.cwiseAbs().minCoeff() > 1e-12) {
+            const Eigen::Matrix3d residual = local.linear() *
+                (rotation * scale.asDiagonal()).inverse();
+            Eigen::Matrix4d frame = Eigen::Matrix4d::Identity();
+            frame.block<3, 3>(0, 0) = residual;
+            node.SetLocalFrame(frame);
+            node.SetTranslate((residual.inverse() * local.translation()).cast<float>());
+            node.SetScale(scale.cast<float>());
+            node.SetRotation(rotation.eulerAngles(2, 1, 0).reverse().cast<float>());
+        } else {
+            node.SetLocalFrame(parent->ModelTrans().inverse() * previous->ModelTrans() *
+                               node.LocalFrame());
+        }
+    }
+    parent->m_children.splice(parent->m_children.end(), previous->m_children, moving);
+    node.m_parent = parent;
+    node.MarkTransDirty();
+    if (auto identity = node.WallpaperIdentity()) {
+        if (auto old = m_authored_layer_parents.find(identity->value);
+            old != m_authored_layer_parents.end()) {
+            auto& siblings = m_authored_layer_order[old->second];
+            siblings.erase(std::remove(siblings.begin(), siblings.end(), identity->value),
+                           siblings.end());
+        }
+        const auto parent_identity = parent->WallpaperIdentity();
+        const i32 parent_id = parent_identity ? parent_identity->value : -1;
+        m_authored_layer_parents[identity->value] = parent_id;
+        m_authored_layer_order[parent_id].push_back(identity->value);
+    }
+    RebuildResourceIndex();
     m_render_graph_dirty = true;
     return true;
 }

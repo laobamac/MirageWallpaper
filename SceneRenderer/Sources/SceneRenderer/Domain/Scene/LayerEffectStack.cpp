@@ -17,28 +17,23 @@ using namespace sr;
 namespace
 {
 
-void ChangeMeshToUnitQuad(SceneMesh& target) {
-    SceneMesh mesh;
-    // clang-format off
-    const std::array pos = {
-        0.0f, 1.0f, 0.0f,
-        0.0f, 0.0f, 0.0f,
-        1.0f, 1.0f, 0.0f,
-        1.0f, 0.0f, 0.0f,
+void MakePixelEffectQuad(SceneMesh& mesh, float width, float height) {
+    const float      half_width  = width * 0.5f;
+    const float      half_height = height * 0.5f;
+    const std::array pos         = {
+        -half_width, half_height, 0.0f, -half_width, -half_height, 0.0f,
+        half_width,  half_height, 0.0f, half_width,  -half_height, 0.0f,
     };
     const std::array tex_coord = {
-        0.0f, 0.0f,
-        0.0f, 1.0f,
-        1.0f, 0.0f,
-        1.0f, 1.0f,
+        0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f, 1.0f,
     };
-    // clang-format on
 
     SceneVertexArray vertex(MakeAttrSet({ VAttr::Position, VAttr::TexCoord }), 4);
     vertex.SetVertex(WE_IN_POSITION, pos);
     vertex.SetVertex(WE_IN_TEXCOORD, tex_coord);
     mesh.AddVertexArray(std::move(vertex));
-    target.ChangeMeshDataFrom(mesh);
+    mesh.SetGeometryTransform(
+        Eigen::Affine3d(Eigen::Scaling(2.0 / width, 2.0 / height, 1.0)).matrix());
 }
 
 } // namespace
@@ -62,6 +57,18 @@ void SceneImageEffectLayer::ResolveEffect(const SceneMesh& default_mesh,
         std::swap(ppong_a, ppong_b);
     };
     auto default_node = SceneNode();
+    std::unique_ptr<SceneMesh> pixel_mesh;
+    auto                       set_effect_mesh = [&](SceneImageEffectNode& effect) {
+        if (effect.uses_pixel_position) {
+            if (! pixel_mesh) {
+                pixel_mesh = std::make_unique<SceneMesh>();
+                MakePixelEffectQuad(*pixel_mesh, std::max(1.0f, m_width), std::max(1.0f, m_height));
+            }
+            effect.sceneNode->Mesh()->ChangeMeshDataFrom(*pixel_mesh);
+        } else {
+            effect.sceneNode->Mesh()->ChangeMeshDataFrom(default_mesh);
+        }
+    };
 
     SceneImageEffectNode* last_output { nullptr };
     auto                  resolve_effect = [&](SceneImageEffect& eff) {
@@ -105,8 +112,9 @@ void SceneImageEffectLayer::ResolveEffect(const SceneMesh& default_mesh,
             {
                 material.blenmode = BlendMode::Normal;
                 it->sceneNode->SetCamera(effect_cam.data());
+                it->sceneNode->SetParentAnchor(nullptr);
                 it->sceneNode->CopyTrans(default_node);
-                it->sceneNode->Mesh()->ChangeMeshDataFrom(default_mesh);
+                set_effect_mesh(*it);
             }
         }
         m_resolved_effects.push_back(&eff);
@@ -128,12 +136,12 @@ void SceneImageEffectLayer::ResolveEffect(const SceneMesh& default_mesh,
             last_output->sceneNode->SetCamera(std::string(effect_cam));
             last_output->sceneNode->SetParentAnchor(nullptr);
             last_output->sceneNode->CopyTrans(default_node);
-            mesh.ChangeMeshDataFrom(default_mesh);
+            set_effect_mesh(*last_output);
         } else if (fullscreen) {
             last_output->sceneNode->SetCamera(std::string(effect_cam));
             last_output->sceneNode->SetParentAnchor(nullptr);
             last_output->sceneNode->CopyTrans(default_node);
-            mesh.ChangeMeshDataFrom(default_mesh);
+            set_effect_mesh(*last_output);
         } else {
             const bool perspective = m_worldNode != nullptr && m_worldNode->Perspective();
             last_output->sceneNode->SetCamera(m_final_camera.empty()
@@ -144,14 +152,7 @@ void SceneImageEffectLayer::ResolveEffect(const SceneMesh& default_mesh,
             // inherits the layer's world transform (including any container
             // parent chain) via ModelTrans. Identity local — no CopyTrans dance.
             last_output->sceneNode->SetParentAnchor(m_worldNode);
-            if (last_output->uses_unit_final_quad) {
-                last_output->sceneNode->SetTranslate({ -m_width * 0.5f, -m_height * 0.5f, 0.0f });
-                last_output->sceneNode->SetScale({ m_width, m_height, 1.0f });
-                ChangeMeshToUnitQuad(mesh);
-
-            } else {
-                mesh.ChangeMeshDataFrom(*m_final_mesh);
-            }
+            mesh.ChangeMeshDataFrom(*m_final_mesh);
             for (const auto& [name, value] : last_output->final_quad_shader_values) {
                 material.SetShaderValue(name, value.base);
                 if (value.curve && ! value.curve->Empty()) {

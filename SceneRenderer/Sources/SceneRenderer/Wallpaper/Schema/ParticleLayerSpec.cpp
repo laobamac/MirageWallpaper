@@ -287,6 +287,7 @@ bool ParticleObject::FromJson(const sr::Json& json, fs::VFS& vfs, SceneVersion /
 
     if (auto value = json.get("instanceoverride"); value.is_some() && ! (*value)->is_null()) {
         instanceoverride.FromJosn(**value);
+        AbsorbAllFieldBindings(**value, instance_field_bindings);
     }
 
     sr::GetJsonValue(json, "locktransforms", locktransforms, false);

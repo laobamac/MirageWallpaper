@@ -1454,6 +1454,13 @@ public:
     // 命名动画停止时隐藏节点（alpha 门控）。SceneCompiler 为可点击动画层
     // 绑定此门控；播放恢复基础 alpha，停止后隐藏。
     void SetFieldAnimationAlphaGate(std::string_view name, bool value);
+    std::shared_ptr<SceneAnimationPlayback> FieldAnimation(std::string_view field) const {
+        const auto* curve = field == "origin" ? &m_origin_curve :
+                            field == "scale" ? &m_scale_curve :
+                            field == "angles" ? &m_rotation_curve :
+                            field == "alpha" ? &m_alpha_curve : nullptr;
+        return curve && *curve ? (*curve)->playback : nullptr;
+    }
     bool HasFieldAnimations() const {
         return m_origin_curve || m_scale_curve || m_rotation_curve || m_alpha_curve ||
                ! m_field_animation_playbacks.empty();
@@ -1509,6 +1516,12 @@ public:
         m_stop_control       = std::move(stop);
         m_pause_control      = std::move(pause);
         m_is_playing_control = std::move(is_playing);
+    }
+    void SetParticleEmissionControl(std::function<void(u32)> emit) {
+        m_particle_emission = std::move(emit);
+    }
+    void EmitParticles(u32 count) {
+        if (m_particle_emission) m_particle_emission(count);
     }
     void SetLayerPropertyControl(
         std::function<std::vector<float>(std::string_view)> get,
@@ -1707,6 +1720,7 @@ private:
     std::function<bool()>               m_is_playing_control;
     std::function<std::vector<float>(std::string_view)> m_property_get;
     std::function<void(std::string_view, std::span<const float>)> m_property_apply;
+    std::function<void(u32)> m_particle_emission;
     bool                               m_layer_playing { true };
     float                              m_volume { 1.0f };
     std::shared_ptr<SceneSoundControl> m_sound_control;
@@ -1734,7 +1748,7 @@ private:
 struct SceneImageEffectNode {
     std::string                                 output; // render target
     rstd::sync::Arc<SceneNode>                  sceneNode;
-    bool                                        uses_unit_final_quad { false };
+    bool                                        uses_pixel_position { false };
     Map<std::string, SceneShaderValueAnimation> final_quad_shader_values;
 };
 
@@ -1797,6 +1811,14 @@ public:
     auto& PrefillNodes() { return m_prefill_nodes; }
     void  SetFullscreen(bool value) {
         fullscreen = value;
+        m_resolved = false;
+    }
+    void SetExtent(float width, float height) {
+        width  = std::max(1.0f, width);
+        height = std::max(1.0f, height);
+        if (m_width == width && m_height == height) return;
+        m_width    = width;
+        m_height   = height;
         m_resolved = false;
     }
     void SetFinalBlend(BlendMode m) {
@@ -1996,6 +2018,8 @@ using ParticleOperatorOp = std::function<void(const ParticleInfo&)>;
 struct ParticleEmitterState {
     double timer { 0.0 };
     double elapsed { 0.0 };
+    std::optional<u32> manual_count;
+    float count_scale { 1.0f };
 };
 
 using ParticleEmittOp = std::function<void(
@@ -2423,6 +2447,9 @@ public:
     std::optional<u32> RopeSequenceCount() const { return m_rope_sequence_count; }
     void SetRopeSubdivision(u32 value) { m_rope_subdivision = value; }
     void SetRateSource(std::function<double()> source) { m_rate_source = std::move(source); }
+    void SetEmissionRequests(std::shared_ptr<u32> requests) {
+        m_emission_requests = std::move(requests);
+    }
     void SetParentControlpointStartIndex(i32 value) {
         m_parent_controlpoint_start_index = value;
     }
@@ -2499,6 +2526,7 @@ private:
     bool      m_mesh_has_geometry { false };
     std::shared_ptr<ParticlePlaybackState> m_playback_state;
     u32       m_seen_reset_sequence { 0 };
+    std::shared_ptr<u32> m_emission_requests;
 
 public:
     u32 TrailLength() const { return m_trail_length; }
@@ -2563,7 +2591,8 @@ public:
     virtual void InitUniforms(SceneNode*, const ExistsUniformOp&)                  = 0;
     virtual void UpdateUniforms(SceneNode*, sprite_map_t&, const UpdateUniformOp&,
                                 SceneRenderViewKind  = SceneRenderViewKind::Primary,
-                                SceneRenderAlphaMode = SceneRenderAlphaMode::Composite) = 0;
+                                SceneRenderAlphaMode = SceneRenderAlphaMode::Composite,
+                                SceneCamera* = nullptr) = 0;
     virtual void FrameEnd()                                                        = 0;
     virtual bool RequiresContinuousFrames() const { return true; }
 
@@ -3182,6 +3211,7 @@ public:
     void                      RegisterAuthoredLayer(WallpaperLayerId id, i32 parent_id);
     std::optional<std::size_t> LayerIndex(const SceneNode& node) const;
     bool                       SortLayer(SceneNode& node, std::size_t index);
+    bool ReparentLayer(SceneNode& node, SceneNode* parent, bool adjust_transforms);
     SceneResourceIndex&       ResourceIndex() { return m_resource_index; }
     const SceneResourceIndex& ResourceIndex() const { return m_resource_index; }
     uint32_t                  ResourceGeneration() const { return m_resource_generation; }

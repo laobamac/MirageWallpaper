@@ -108,7 +108,7 @@ public:
 
     void InitUniforms(SceneNode*, const ExistsUniformOp&) override;
     void UpdateUniforms(SceneNode*, sprite_map_t&, const UpdateUniformOp&, SceneRenderViewKind,
-                        SceneRenderAlphaMode) override;
+                        SceneRenderAlphaMode, SceneCamera* = nullptr) override;
     void FrameEnd() override;
     bool RequiresContinuousFrames() const override;
     void MouseInput(double, double) override;
@@ -154,7 +154,7 @@ public:
 private:
     std::optional<SceneNodeRenderTransform>
     NodeTransform(SceneNode* node, SceneRenderViewKind view, bool screen_camera,
-                  bool apply_geometry_transform);
+                  bool apply_geometry_transform, SceneCamera* camera_override = nullptr);
 
     bool                 m_dynamic_uniforms { false };
     Scene*               m_scene;

@@ -170,6 +170,13 @@ struct PropDescriptor {
 
 class FieldScript;
 
+struct FieldScriptBinding {
+    std::shared_ptr<sr::SceneAnimationPlayback> animation;
+    sr::SceneMaterial* material { nullptr };
+    std::optional<sr::SceneImageEffectRef> effect;
+    bool particle_instance { false };
+};
+
 struct LayerAssetReference {
     std::string_view               path;
     std::optional<std::string_view> workshop_id;
@@ -192,7 +199,8 @@ public:
         std::string_view source, std::string_view script_sha, FieldKind field_kind,
         const Json& properties_config, const Json& initial_value, sr::SceneNode* node = nullptr,
         std::vector<sr::SceneNode*>                                  clones       = {},
-        std::unordered_map<std::string, std::vector<sr::SceneNode*>> asset_clones = {});
+        std::unordered_map<std::string, std::vector<sr::SceneNode*>> asset_clones = {},
+        FieldScriptBinding binding = {});
 
     // Pending initializers run in authored layer order once the complete scene
     // graph is available.
@@ -232,6 +240,7 @@ public:
     // `property` should be the descriptor object shape used by project.json
     // (`{value: ...}` plus optional metadata).
     void SetUserProperty(std::string_view key, const Json& property);
+    void SetUserProperties(const rstd::json::Map& properties, bool notify = true);
 
     // Dispatch Wallpaper Engine media callbacks for the current media
     // snapshot. Call from the renderer owner thread.
@@ -317,6 +326,7 @@ public:
 
     FieldKind          field_kind() const noexcept;
     const ScriptValue& last_value() const noexcept;
+    bool               ConsumeValueChange() noexcept;
     bool               alive() const noexcept;
     bool               HasUpdate() const noexcept;
     std::string_view   script_sha() const noexcept;
@@ -384,6 +394,7 @@ public:
     // results into actuators. Call once per frame, before the renderer
     // begins drawing.
     void Tick(const FrameInputs& fi);
+    void ApplyPendingValues();
 
     struct Impl;
     std::unique_ptr<Impl> m_impl;
@@ -401,6 +412,7 @@ void TickSceneScripts(sr::Scene& scene, const FrameInputs& fi);
 // Patch `engine.userProperties` on the ScriptScene attached to `scene`.
 // No-op when the scene has no script runtime.
 void SetSceneUserProperty(sr::Scene& scene, std::string_view key, const Json& property);
+void SetSceneUserProperties(sr::Scene& scene, const rstd::json::Map& properties);
 
 void SetSceneMediaStatus(sr::Scene& scene, const MediaStatus& status);
 

@@ -22,7 +22,9 @@ public:
         RenderItemId    render_item;
         SceneRenderViewKind render_view { SceneRenderViewKind::Primary };
         SceneRenderAlphaMode alpha_mode { SceneRenderAlphaMode::Composite };
+        SceneCamera* camera_override { nullptr };
         bool                 hide_when_node_invisible { false };
+        bool                 clear_only { false };
         // Which submesh of node->Mesh() this pass renders. SceneToRenderGraph
         // emits one pass per (node, submesh).
         uint32_t                           submesh_index { 0 };

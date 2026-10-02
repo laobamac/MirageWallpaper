@@ -20,10 +20,12 @@ using namespace sr::vulkan;
 
 CustomShaderPass::CustomShaderPass(const Desc& desc) {
     m_desc.node                     = desc.node;
+    m_desc.clear_only               = desc.clear_only;
     m_desc.draw_item                = desc.draw_item;
     m_desc.render_item              = desc.render_item;
     m_desc.render_view              = desc.render_view;
     m_desc.alpha_mode               = desc.alpha_mode;
+    m_desc.camera_override          = desc.camera_override;
     m_desc.hide_when_node_invisible = desc.hide_when_node_invisible;
     m_desc.submesh_index            = desc.submesh_index;
     m_desc.texture_bindings         = desc.texture_bindings;
@@ -554,6 +556,7 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
             VkColorComponentFlags colorMask =
                 VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT;
             bool writes_alpha =
+                m_desc.camera_override != nullptr ||
                 ! (m_desc.node->Camera().empty() || sstart_with(m_desc.node->Camera(), "global"));
 
             if (writes_alpha) colorMask |= VK_COLOR_COMPONENT_A_BIT;
@@ -561,6 +564,9 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
 
             SetBlend(blendmode, color_blend);
             SetAlphaBlendWritePolicy(color_blend, writes_alpha);
+            if (writes_alpha && (material_ref.name == "text" || m_desc.camera_override) &&
+                color_blend.blendEnable)
+                color_blend.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
             m_desc.blending = color_blend.blendEnable;
 
             SetAttachmentLoadOp(blendmode, loadOp);
@@ -709,6 +715,7 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
         auto* node           = m_desc.node;
         auto  render_view    = m_desc.render_view;
         auto  alpha_mode     = m_desc.alpha_mode;
+        auto* camera_override = m_desc.camera_override;
         const bool clamp_coverage = material_ref.blenmode == BlendMode::Translucent ||
                                     material_ref.blenmode == BlendMode::AlphaToCoverage;
         auto* shader_updater = scene.shaderValueUpdater.get();
@@ -722,6 +729,7 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
                             node,
                             render_view,
                             alpha_mode,
+                            camera_override,
                             clamp_coverage,
                             &sprites,
                             &vk_textures,
@@ -740,7 +748,7 @@ void CustomShaderPass::prepare(Scene& scene, const Device& device, RenderingReso
                                                         sr::ShaderValue  value) {
                 UpdateUniform(buf, *bufref, blocks, name, value);
             };
-            shader_updater->UpdateUniforms(node, sprites, update_unf_op, render_view, alpha_mode);
+            shader_updater->UpdateUniforms(node, sprites, update_unf_op, render_view, alpha_mode, camera_override);
             UpdateUniform(buf, *bufref, blocks, "g_MirageClampCoverage",
                           ShaderValue(clamp_coverage ? 1.0f : 0.0f));
             // update image slot for sprites
@@ -903,6 +911,7 @@ void CustomShaderPass::beginRenderScope(RenderingResources& rr) {
 }
 
 void CustomShaderPass::recordRenderScopeDraw(RenderingResources& rr) {
+    if (m_desc.clear_only) return;
     if (m_desc.hide_when_node_invisible && m_desc.node != nullptr) {
         const SceneNode* alpha_source = m_desc.node->AlphaSource();
         if (! m_desc.node->Visible() || (alpha_source != nullptr && ! alpha_source->Visible())) {

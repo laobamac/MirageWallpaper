@@ -39,6 +39,7 @@ struct WallpaperPreview: SubviewOfContentView {
     @State var hoveredTag: String?
     @State var isTagsHovered = false
     @State private var isConfirmingUnsubscribe = false
+    @StateObject private var conditions = ConditionStore()
 
     init(contentViewModel viewModel: ContentViewModel,
          wallpaperViewModel: WallpaperViewModel,
@@ -72,6 +73,8 @@ struct WallpaperPreview: SubviewOfContentView {
     
     var body: some View {
         let displayKey = wallpaperViewModel.selectedDisplayKey
+        let propertyRows = wallpaperViewModel.propertyModel.rows
+        let visibleRows = propertyRows.filter { conditions.isVisible($0.property.condition) }
         VStack {
             ScrollView {
                 LazyVStack(spacing: 16) {
@@ -269,8 +272,16 @@ struct WallpaperPreview: SubviewOfContentView {
                     }
 
                     sectionHeader("壁纸属性")
-                    PropertyEditor(wallpaper: wallpaperViewModel.previewWallpaper, isActive: isActive)
-                        .environment(wallpaperViewModel)
+                    if propertyRows.isEmpty {
+                        PropertyEmptyState()
+                    } else {
+                        ForEach(visibleRows) { entry in
+                            PropertyRow(wallpaper: wallpaperViewModel.previewWallpaper, key: entry.id,
+                                property: entry.property, valueState: entry.state,
+                                displayKey: displayKey, conditions: conditions)
+                                .environment(wallpaperViewModel)
+                        }
+                    }
 
                     sectionHeader("壁纸")
                     VStack(spacing: 3) {
@@ -334,6 +345,7 @@ struct WallpaperPreview: SubviewOfContentView {
                           wallpaperViewModel.previewWallpaper.id != wallpaperViewModel.currentWallpaper.id)
                 .padding([.horizontal, .top])
             }
+            .id("\(displayKey.rawValue):\(wallpaperViewModel.previewWallpaper.id)")
 
             HStack {
                 Spacer()
@@ -350,6 +362,12 @@ struct WallpaperPreview: SubviewOfContentView {
                 }
             }
             .padding()
+        }
+        .environment(\.mirageContentActive, isActive)
+        .background {
+            PropertyConditionObserver(model: wallpaperViewModel.propertyModel,
+                identity: "\(displayKey.rawValue):\(wallpaperViewModel.previewWallpaper.id)",
+                conditions: conditions, isActive: isActive)
         }
         .task(id: isActive ? wallpaperViewModel.previewWallpaper.id : nil) {
             guard isActive else { return }
