@@ -1,7 +1,14 @@
 module;
+
+#if defined(__linux__)
+#include <string>
+#include <memory>
+#endif
+
 #include <rstd/macro.hpp>
 
 module sr.pkg.parse;
+import eigen;
 import sr.json;
 import sr.spec_texs;
 import sr.core;

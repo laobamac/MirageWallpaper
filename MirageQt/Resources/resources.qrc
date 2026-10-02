@@ -1,0 +1,12 @@
+<RCC>
+    <qresource prefix="/">
+        <file alias="appicon.png">mirage.png</file>
+        <file alias="icons/arrow_down.png">arrow_down.png</file>
+        <file alias="i18n/ui_zh-chs.json">../../Mirage/Mirage Wallpaper/Resources/ui_zh-chs.json</file>
+        <file alias="i18n/ui_zh-cht.json">../../Mirage/Mirage Wallpaper/Resources/ui_zh-cht.json</file>
+        <file alias="i18n/ui_en-us.json">../../Mirage/Mirage Wallpaper/Resources/ui_en-us.json</file>
+        <file alias="sponsorship/afdian.jpg">../../Mirage/Mirage Wallpaper/Resources/Sponsorship/afdian.jpg</file>
+        <file alias="sponsorship/alipay.jpg">../../Mirage/Mirage Wallpaper/Resources/Sponsorship/alipay.jpg</file>
+        <file alias="sponsorship/wechat-pay.png">../../Mirage/Mirage Wallpaper/Resources/Sponsorship/wechat-pay.png</file>
+    </qresource>
+</RCC>

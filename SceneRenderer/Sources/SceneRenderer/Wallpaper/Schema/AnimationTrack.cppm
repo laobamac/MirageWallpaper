@@ -1,5 +1,9 @@
 module;
 
+// This partition constructs shared visibility-condition values directly;
+// Clang modules do not make std::make_shared visible through imported modules.
+#include <memory>
+
 export module sr.pkg.scene_obj:animation_layer;
 import rstd.cppstd;
 import sr.json;

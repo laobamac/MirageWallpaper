@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
-# WebRenderer — macOS build helper. System frameworks only (no Homebrew).
+# WebRenderer build helper. macOS uses Apple frameworks; Linux uses QtWebEngine
+# and the repository-maintained MirageLinuxDisplay Vulkan producer.
 #
 # Usage:
 #   scripts/build.sh             release build (default): configure + build + report
@@ -64,14 +65,20 @@ case "$PRESET" in
     release|debug) ;;
     *) die "unknown preset: $PRESET (expected release or debug)" ;;
 esac
-BUILD_DIR="$PROJECT_DIR/build/$PRESET"
-
-[[ "$(uname -s)" == "Darwin" ]] || die "this script is macOS-only."
 command -v cmake >/dev/null || die "cmake not found. brew install cmake"
 command -v ninja >/dev/null || die "ninja not found. brew install ninja"
-xcrun --find clang >/dev/null 2>&1 || die "Xcode CLT not found: xcode-select --install"
-
-JOBS="${JOBS:-$(sysctl -n hw.logicalcpu 2>/dev/null || echo 8)}"
+OS_NAME="$(uname -s)"
+if [[ "$OS_NAME" == "Darwin" ]]; then
+    xcrun --find clang >/dev/null 2>&1 || die "Xcode CLT not found: xcode-select --install"
+    PRESET_NAME="$PRESET"
+    JOBS="${JOBS:-$(sysctl -n hw.logicalcpu 2>/dev/null || echo 8)}"
+elif [[ "$OS_NAME" == "Linux" ]]; then
+    PRESET_NAME="linux-$PRESET"
+    JOBS="${JOBS:-$(nproc 2>/dev/null || echo 8)}"
+else
+    die "unsupported host platform: $OS_NAME"
+fi
+BUILD_DIR="$PROJECT_DIR/build/$PRESET_NAME"
 
 do_clean() {
     [[ -d "$BUILD_DIR" ]] || { info "nothing to clean ($BUILD_DIR absent)"; return; }
@@ -79,13 +86,13 @@ do_clean() {
 }
 
 do_configure() {
-    info "configuring preset: $PRESET"
-    cmake --preset "$PRESET"
+    info "configuring preset: $PRESET_NAME"
+    cmake --preset "$PRESET_NAME"
 }
 
 do_build() {
     [[ -f "$BUILD_DIR/CMakeCache.txt" ]] || do_configure
-    info "building preset: $PRESET (jobs=$JOBS)"
+    info "building preset: $PRESET_NAME (jobs=$JOBS)"
     cmake --build "$BUILD_DIR" --parallel "$JOBS"
 }
 

@@ -1,0 +1,9 @@
+miragewallpaper for Debian
+===========================
+
+The package installs the Mirage application and renderer hosts. A compatible
+mirage-display desktop adapter (for example the KDE Plasma adapter) is still
+required by the desktop session to consume rendered wallpaper frames.
+
+The package is currently built for amd64 only because the bundled SteamService
+runtime is linux-x64.

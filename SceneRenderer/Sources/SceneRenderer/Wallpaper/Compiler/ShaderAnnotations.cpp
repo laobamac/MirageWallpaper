@@ -4,7 +4,9 @@ module;
 #include "Utils/StringUtil.h"
 
 module sr.pkg.parse;
+import sr.core;
 import sr.json;
+import sr.scene;
 import rstd.cppstd;
 import rstd.log;
 import :shader_lex;

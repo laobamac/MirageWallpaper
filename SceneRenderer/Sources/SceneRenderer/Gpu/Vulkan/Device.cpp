@@ -1,5 +1,9 @@
 module;
 
+#if defined(__linux__)
+#include <string>
+#endif
+
 #include <rstd/macro.hpp>
 #include "vk_mem_alloc.h"
 
@@ -318,6 +322,7 @@ bool Device::Create(Instance& inst, std::span<const Extension> exts, VkExtent2D 
             rstd_error("create swapchain failed");
             return false;
         }
+        device.set_out_extent(device.m_swapchain.extent());
     }
     {
         VkCommandPoolCreateInfo info { .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
@@ -373,6 +378,20 @@ void Device::Destroy(bool wait_idle) {
         savePipelineCache();
     }
     destroyPipelineCache();
+}
+
+bool Device::RecreateSwapchain(VkSurfaceKHR surface, VkExtent2D extent) {
+    VVK_CHECK_BOOL_RE(m_device.WaitIdle());
+
+    Swapchain recreated;
+    if (! Swapchain::Create(*this, surface, extent, recreated)) {
+        rstd_error("recreate swapchain failed");
+        return false;
+    }
+
+    m_swapchain = std::move(recreated);
+    set_out_extent(m_swapchain.extent());
+    return true;
 }
 
 Device::Device(): m_tex_cache(std::make_unique<TextureCache>(*this)) {}

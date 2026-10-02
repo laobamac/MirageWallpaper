@@ -10,4 +10,4 @@ target_sources(
          rstd.cppm
          cppstd.cppm)
 
-target_link_libraries(rstd.cppstd PUBLIC rstd.std)
+target_link_libraries(rstd.cppstd PUBLIC rstd.std fmt::fmt)

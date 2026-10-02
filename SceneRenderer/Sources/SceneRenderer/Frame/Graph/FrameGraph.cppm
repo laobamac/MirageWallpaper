@@ -1,5 +1,6 @@
 module;
 
+#include <memory>
 #include "FrameGraph/Pass.hpp"
 
 export module sr.rgraph:render_graph;
