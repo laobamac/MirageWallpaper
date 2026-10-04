@@ -158,7 +158,7 @@ brew install cmake ninja pkg-config llvm molten-vk vulkan-loader vulkan-headers 
   glslang glfw freetype fontconfig lz4 ffmpeg dav1d nasm
 ```
 
-Renderer scripts automatically build a pinned decoder-only FFmpeg. Homebrew FFmpeg is used only to generate test media and is not bundled. dav1d supplies AV1 decoding; nasm supplies Intel assembly support.
+Renderer scripts automatically build a pinned decoder-only FFmpeg. Mobile scene export separately bundles Homebrew FFmpeg and a pinned EtcTool, including their required libraries and licenses. dav1d supplies AV1 decoding; nasm supplies Intel assembly support.
 
 ## Build from Source
 
@@ -166,7 +166,7 @@ Renderer scripts automatically build a pinned decoder-only FFmpeg. Homebrew FFmp
 git clone https://github.com/laobamac/MirageWallpaper.git
 cd MirageWallpaper
 
-./scripts/build_all.sh
+MIRAGE_ALLOW_NETWORK_FETCH=1 ./scripts/build_all.sh
 
 open "Mirage/dist/Mirage.app"
 ```
@@ -180,6 +180,8 @@ Mirage/dist/Mirage.app
 The app includes `MirageScreenSaver.saver`, which can be installed from **Settings → Screen Saver**. It is copied to `~/Library/Screen Savers` for the current user and does not require Mirage to remain running. The packaging script embeds the scene screen-saver runtime and required resources.
 
 `build_all.sh` builds the three renderers, Steam service, and main app in order, then packages the complete app bundle. Use `./scripts/build_all.sh debug` for a Debug build or `./scripts/build_all.sh app` to rebuild only the app.
+
+Set `MIRAGE_ALLOW_NETWORK_FETCH=1` for the first package build to fetch and verify the pinned Etc2Comp source. Once the source is cached, the variable can be omitted. Offline packaging requires this cache to be prepared beforehand.
 
 ### Configure a Built-in Steam Web API Key Locally
 

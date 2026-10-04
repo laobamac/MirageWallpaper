@@ -12,16 +12,19 @@ struct ExplorerItemMenu: SubviewOfContentView {
     @Bindable var viewModel: ContentViewModel
     @Bindable var wallpaperViewModel: WallpaperViewModel
     @Bindable var workshopViewModel: WorkshopViewModel
+    @ObservedObject var mobileDevicesViewModel: MobileDevicesViewModel
     
     var hoveredWallpaper: WEWallpaper
     
     init(contentViewModel viewModel: ContentViewModel,
          wallpaperViewModel: WallpaperViewModel,
          workshopViewModel: WorkshopViewModel = AppDelegate.shared.workshopViewModel,
+         mobileDevicesViewModel: MobileDevicesViewModel = AppDelegate.shared.mobileDevicesViewModel,
          current hoveredWallpaper: WEWallpaper) {
         self.wallpaperViewModel = wallpaperViewModel
         self.viewModel = viewModel
         self.workshopViewModel = workshopViewModel
+        self.mobileDevicesViewModel = mobileDevicesViewModel
         self.hoveredWallpaper = hoveredWallpaper
     }
     
@@ -153,6 +156,7 @@ struct ExplorerItemMenu: SubviewOfContentView {
                         Label("管理屏蔽列表", systemImage: "hand.raised.fill")
                     }
                 }.disabled(true)
+                mobileTransferMenu
             }
             
             Section {
@@ -194,6 +198,60 @@ struct ExplorerItemMenu: SubviewOfContentView {
 
     private var displays: [DisplayInfo] {
         wallpaperViewModel.connectedDisplays
+    }
+
+    private var mobileTransferMenu: some View {
+        Menu {
+            let connectedDevices = mobileDevicesViewModel.devices.filter(\.isConnected)
+            ForEach(connectedDevices) { device in
+                Button {
+                    sendToMobileDevice(device)
+                } label: {
+                    Label(L("发送至 %@", device.name), systemImage: "iphone")
+                }
+                .disabled(!canExportToMobile)
+            }
+            if !connectedDevices.isEmpty { Divider() }
+
+            Button(action: exportMPKG) {
+                Label("导出 .mpkg 文件", systemImage: "arrow.down.doc")
+            }
+            .disabled(!canExportToMobile)
+
+            Button {
+                AppDelegate.shared.navigationModel.isMobileDevicesPresented = true
+            } label: {
+                Label("连接新的移动设备", systemImage: "iphone.badge.plus")
+            }
+        } label: {
+            Label("发送到移动设备", systemImage: "iphone.radiowaves.left.and.right")
+        }
+    }
+
+    private var canExportToMobile: Bool {
+        hoveredWallpaper.isValid && [.video, .scene].contains(hoveredWallpaper.kind)
+    }
+
+    private func sendToMobileDevice(_ device: MobileDevice) {
+        if hoveredWallpaper.kind == .scene {
+            viewModel.pendingSceneMobileExport = SceneMobileExportRequest(
+                wallpaper: hoveredWallpaper,
+                destination: .device(device)
+            )
+        } else {
+            mobileDevicesViewModel.send(wallpaper: hoveredWallpaper, to: device) { _ in }
+        }
+    }
+
+    private func exportMPKG() {
+        if hoveredWallpaper.kind == .scene {
+            viewModel.pendingSceneMobileExport = SceneMobileExportRequest(
+                wallpaper: hoveredWallpaper,
+                destination: .file
+            )
+        } else {
+            viewModel.presentMobileMPKGSavePanel(for: hoveredWallpaper)
+        }
     }
 
     private var canApply: Bool {

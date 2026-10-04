@@ -110,6 +110,9 @@ ditto "$APP" "$OUT/Mirage.app"
 echo "[build] 内嵌渲染器与依赖..."
 bash "$HERE/bundle_renderers.sh" "$OUT/Mirage.app" "$ROOT" "$SIGN_IDENTITY"
 
+echo "[build] 内嵌场景移动端转换组件..."
+bash "$HERE/bundle_scene_mobile_tools.sh" "$OUT/Mirage.app" "$ROOT" "$TARGET_ARCH" "$SIGN_IDENTITY"
+
 codesign --verify --deep --strict --verbose=2 "$OUT/Mirage.app"
 bash "$HERE/report_bundle_size.sh" "$OUT/Mirage.app"
 

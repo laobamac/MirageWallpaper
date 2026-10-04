@@ -204,6 +204,7 @@ jobs:
       - name: Build app bundle
         shell: bash
         env:
+          MIRAGE_ALLOW_NETWORK_FETCH: "1"
           MIRAGE_ARCH: ${{ matrix.arch }}
           MIRAGE_STEAM_WEB_API_KEY: ${{ secrets.MIRAGE_STEAM_WEB_API_KEY }}
           MIRAGE_GIT_COMMIT: ${{ github.sha }}

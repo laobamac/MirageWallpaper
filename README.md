@@ -153,7 +153,7 @@ brew install cmake ninja pkg-config llvm molten-vk vulkan-loader vulkan-headers 
   glslang glfw freetype fontconfig lz4 ffmpeg dav1d nasm
 ```
 
-渲染器构建脚本会自动构建固定版本的仅解码 FFmpeg；Homebrew FFmpeg 只用于生成测试媒体，不会打入应用。dav1d 用于 AV1 解码，nasm 用于 Intel 汇编优化。
+渲染器构建脚本会自动构建固定版本的仅解码 FFmpeg。场景移动端导出另行内嵌 Homebrew FFmpeg 和固定版本的 EtcTool；两者与所需依赖及许可证一起打包。dav1d 用于 AV1 解码，nasm 用于 Intel 汇编优化。
 
 ## 从源码构建
 
@@ -161,7 +161,7 @@ brew install cmake ninja pkg-config llvm molten-vk vulkan-loader vulkan-headers 
 git clone https://github.com/laobamac/MirageWallpaper.git
 cd MirageWallpaper
 
-./scripts/build_all.sh
+MIRAGE_ALLOW_NETWORK_FETCH=1 ./scripts/build_all.sh
 
 open "Mirage/dist/Mirage.app"
 ```
@@ -175,6 +175,8 @@ Mirage/dist/Mirage.app
 App 内包含可在“设置 → 屏保”中安装的 `MirageScreenSaver.saver`。屏保组件会被复制到当前用户的 `~/Library/Screen Savers`，不要求 Mirage 主程序保持运行。场景屏保运行库和所需资源由打包脚本一并嵌入。
 
 `build_all.sh` 会按顺序构建三个渲染器、Steam 服务和主程序，并完成 App Bundle 打包。Debug 构建使用 `./scripts/build_all.sh debug`；只重建主程序时可使用 `./scripts/build_all.sh app`。
+
+首次打包需要设置 `MIRAGE_ALLOW_NETWORK_FETCH=1`，以获取并校验固定版本的 Etc2Comp 源码。源码缓存就绪后可省略此变量；离线打包需预先准备该缓存。
 
 ### 本地配置内置 Steam Web API Key
 
