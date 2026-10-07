@@ -1,4 +1,10 @@
 #!/bin/bash
+#
+#  Mirage Wallpaper
+#
+#  Copyright © 2026 王孝慈. All rights reserved.
+#
+
 set -euo pipefail
 
 APP="${1:?用法: bundle_scene_mobile_tools.sh <Mirage.app> <项目根目录> <架构> [签名身份]}"

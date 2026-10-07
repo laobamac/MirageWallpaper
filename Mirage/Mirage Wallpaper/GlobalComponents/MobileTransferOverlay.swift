@@ -1,6 +1,9 @@
 //
 //  Mirage Wallpaper
 //
+//  Copyright © 2026 王孝慈. All rights reserved.
+//
+
 //  Non-modal transfer cards shown at the bottom of the main window.
 //
 

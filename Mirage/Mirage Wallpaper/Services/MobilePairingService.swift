@@ -1,6 +1,9 @@
 //
 //  Mirage Wallpaper
 //
+//  Copyright © 2026 王孝慈. All rights reserved.
+//
+
 //  Native Wallpaper Engine Android discovery and pairing service.
 //
 

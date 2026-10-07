@@ -1,4 +1,10 @@
 #!/bin/bash
+#
+#  Mirage Wallpaper
+#
+#  Copyright © 2026 王孝慈. All rights reserved.
+#
+
 set -euo pipefail
 
 CONFIG="${1:-Release}"

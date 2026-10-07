@@ -1,6 +1,9 @@
 //
 //  Mirage Wallpaper
 //
+//  Copyright © 2026 王孝慈. All rights reserved.
+//
+
 //  Native conversion of desktop scene packages for Wallpaper Engine Android.
 //
 

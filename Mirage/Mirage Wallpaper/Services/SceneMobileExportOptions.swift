@@ -1,3 +1,9 @@
+//
+//  Mirage Wallpaper
+//
+//  Copyright © 2026 王孝慈. All rights reserved.
+//
+
 import Foundation
 
 /// Value copied into each export job so changing the sheet cannot affect a running conversion.

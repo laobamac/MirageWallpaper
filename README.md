@@ -1,3 +1,8 @@
+<!--
+  MirageWallpaper
+  Copyright © 2026 王孝慈. All rights reserved.
+-->
+
 <p align="center">
   <img src="Mirage/Mirage%20Wallpaper/Resources/Assets.xcassets/AppIcon.appiconset/icon_256.png" width="128" alt="Mirage 图标">
 </p>
