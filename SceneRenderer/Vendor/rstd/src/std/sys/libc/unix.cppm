@@ -3,6 +3,9 @@ module;
 
 #ifdef RSTD_OS_LINUX
 #include <linux/futex.h>
+#include <sys/epoll.h>
+#include <sys/eventfd.h>
+#include <sys/timerfd.h>
 #include <sys/syscall.h>
 #include <sys/sysmacros.h>
 #endif
@@ -11,7 +14,11 @@ module;
 #include <sys/wait.h>
 #include <sys/stat.h>
 #include <sys/file.h>
+#include <sys/socket.h>
 #include <sys/types.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <unistd.h>
 #include <sched.h>
 #include <stdlib.h>
@@ -86,7 +93,13 @@ inline constexpr auto _O_TRUNC     = O_TRUNC;
 inline constexpr auto _O_APPEND    = O_APPEND;
 inline constexpr auto _O_NOFOLLOW  = O_NOFOLLOW;
 inline constexpr auto _O_DIRECTORY = O_DIRECTORY;
+inline constexpr auto _O_NONBLOCK  = O_NONBLOCK;
 inline constexpr auto _F_DUPFD_CLOEXEC = F_DUPFD_CLOEXEC;
+inline constexpr auto _F_GETFL     = F_GETFL;
+inline constexpr auto _F_SETFL     = F_SETFL;
+inline constexpr auto _F_GETFD     = F_GETFD;
+inline constexpr auto _F_SETFD     = F_SETFD;
+inline constexpr auto _FD_CLOEXEC  = FD_CLOEXEC;
 inline constexpr auto _SEEK_SET = SEEK_SET;
 inline constexpr auto _SEEK_CUR = SEEK_CUR;
 inline constexpr auto _SEEK_END = SEEK_END;
@@ -114,6 +127,44 @@ inline constexpr auto _LOCK_NB = LOCK_NB;
 inline constexpr auto _LOCK_UN = LOCK_UN;
 
 inline constexpr auto _UTIME_OMIT = UTIME_OMIT;
+
+#ifdef RSTD_OS_LINUX
+inline constexpr auto _EPOLL_CLOEXEC = EPOLL_CLOEXEC;
+inline constexpr auto _EPOLL_CTL_ADD = EPOLL_CTL_ADD;
+inline constexpr auto _EPOLL_CTL_MOD = EPOLL_CTL_MOD;
+inline constexpr auto _EPOLL_CTL_DEL = EPOLL_CTL_DEL;
+inline constexpr auto _EPOLLIN       = EPOLLIN;
+inline constexpr auto _EPOLLOUT      = EPOLLOUT;
+inline constexpr auto _EPOLLERR      = EPOLLERR;
+inline constexpr auto _EPOLLHUP      = EPOLLHUP;
+#ifdef EPOLLRDHUP
+inline constexpr auto _EPOLLRDHUP = EPOLLRDHUP;
+inline constexpr bool _HAS_EPOLLRDHUP = true;
+#else
+inline constexpr auto _EPOLLRDHUP = 0;
+inline constexpr bool _HAS_EPOLLRDHUP = false;
+#endif
+inline constexpr auto _EFD_NONBLOCK = EFD_NONBLOCK;
+inline constexpr auto _EFD_CLOEXEC  = EFD_CLOEXEC;
+inline constexpr auto _TFD_NONBLOCK = TFD_NONBLOCK;
+inline constexpr auto _TFD_CLOEXEC  = TFD_CLOEXEC;
+#endif
+
+#ifdef MSG_NOSIGNAL
+inline constexpr auto _MSG_NOSIGNAL = MSG_NOSIGNAL;
+#else
+inline constexpr auto _MSG_NOSIGNAL = 0;
+#endif
+
+inline constexpr auto _AF_INET       = AF_INET;
+inline constexpr auto _AF_INET6      = AF_INET6;
+inline constexpr auto _SOCK_STREAM   = SOCK_STREAM;
+inline constexpr auto _SOL_SOCKET    = SOL_SOCKET;
+inline constexpr auto _SO_REUSEADDR  = SO_REUSEADDR;
+inline constexpr auto _SO_ERROR      = SO_ERROR;
+inline constexpr auto _IPPROTO_TCP   = IPPROTO_TCP;
+inline constexpr auto _TCP_NODELAY   = TCP_NODELAY;
+inline constexpr auto _SHUT_WR       = SHUT_WR;
 
 #ifdef RSTD_OS_LINUX
 #undef SYS_futex
@@ -178,7 +229,13 @@ inline constexpr auto _UTIME_OMIT = UTIME_OMIT;
 #undef O_APPEND
 #undef O_NOFOLLOW
 #undef O_DIRECTORY
+#undef O_NONBLOCK
 #undef F_DUPFD_CLOEXEC
+#undef F_GETFL
+#undef F_SETFL
+#undef F_GETFD
+#undef F_SETFD
+#undef FD_CLOEXEC
 #undef SEEK_SET
 #undef SEEK_CUR
 #undef SEEK_END
@@ -202,6 +259,31 @@ inline constexpr auto _UTIME_OMIT = UTIME_OMIT;
 #undef LOCK_NB
 #undef LOCK_UN
 #undef UTIME_OMIT
+#ifdef RSTD_OS_LINUX
+#undef EPOLL_CLOEXEC
+#undef EPOLL_CTL_ADD
+#undef EPOLL_CTL_MOD
+#undef EPOLL_CTL_DEL
+#undef EPOLLIN
+#undef EPOLLOUT
+#undef EPOLLERR
+#undef EPOLLHUP
+#undef EPOLLRDHUP
+#undef EFD_NONBLOCK
+#undef EFD_CLOEXEC
+#undef TFD_NONBLOCK
+#undef TFD_CLOEXEC
+#endif
+#undef MSG_NOSIGNAL
+#undef AF_INET
+#undef AF_INET6
+#undef SOCK_STREAM
+#undef SOL_SOCKET
+#undef SO_REUSEADDR
+#undef SO_ERROR
+#undef IPPROTO_TCP
+#undef TCP_NODELAY
+#undef SHUT_WR
 
 inline auto _rstd_make_dev(unsigned int ma, unsigned int mi) noexcept -> ::dev_t {
     return makedev(ma, mi);
@@ -349,12 +431,25 @@ using ::off_t;
 using ::ssize_t;
 using ::time_t;
 using ::dev_t;
+using ::sockaddr;
+using ::sockaddr_in;
+using ::sockaddr_in6;
+using ::sockaddr_storage;
+using ::socklen_t;
 using ::DIR;
 using ::dirent;
+#ifdef RSTD_OS_LINUX
+using ::epoll_event;
+using ::itimerspec;
+#endif
 /// `struct stat` aliased to avoid clash with the `::stat()` function.
 using stat_t     = struct ::stat;
 /// `struct timespec` aliased to avoid the `struct` keyword leaking into call sites.
 using timespec_t = struct ::timespec;
+#ifdef RSTD_OS_LINUX
+/// `struct itimerspec` aliased to avoid the `struct` keyword leaking into call sites.
+using itimerspec_t = struct ::itimerspec;
+#endif
 
 inline constexpr auto SIGKILL   = _SIGKILL;
 inline constexpr auto O_CLOEXEC = _O_CLOEXEC;
@@ -369,7 +464,13 @@ inline constexpr auto O_TRUNC     = _O_TRUNC;
 inline constexpr auto O_APPEND    = _O_APPEND;
 inline constexpr auto O_NOFOLLOW  = _O_NOFOLLOW;
 inline constexpr auto O_DIRECTORY = _O_DIRECTORY;
+inline constexpr auto O_NONBLOCK  = _O_NONBLOCK;
 inline constexpr auto F_DUPFD_CLOEXEC = _F_DUPFD_CLOEXEC;
+inline constexpr auto F_GETFL     = _F_GETFL;
+inline constexpr auto F_SETFL     = _F_SETFL;
+inline constexpr auto F_GETFD     = _F_GETFD;
+inline constexpr auto F_SETFD     = _F_SETFD;
+inline constexpr auto FD_CLOEXEC  = _FD_CLOEXEC;
 inline constexpr auto SEEK_SET    = _SEEK_SET;
 inline constexpr auto SEEK_CUR    = _SEEK_CUR;
 inline constexpr auto SEEK_END    = _SEEK_END;
@@ -401,6 +502,57 @@ inline constexpr auto LOCK_UN = _LOCK_UN;
 
 // ── utimensat sentinel ───────────────────────────────────────────────────
 inline constexpr auto UTIME_OMIT = _UTIME_OMIT;
+
+// ── Socket APIs ─────────────────────────────────────────────────────────────
+using ::socket;
+using ::setsockopt;
+using ::bind;
+using ::listen;
+using ::connect;
+using ::accept;
+using ::recv;
+using ::send;
+using ::shutdown;
+using ::getsockopt;
+using ::getsockname;
+using ::getpeername;
+using ::htons;
+using ::htonl;
+using ::ntohs;
+using ::ntohl;
+inline constexpr auto AF_INET      = _AF_INET;
+inline constexpr auto AF_INET6     = _AF_INET6;
+inline constexpr auto SOCK_STREAM  = _SOCK_STREAM;
+inline constexpr auto SOL_SOCKET   = _SOL_SOCKET;
+inline constexpr auto SO_REUSEADDR = _SO_REUSEADDR;
+inline constexpr auto SO_ERROR     = _SO_ERROR;
+inline constexpr auto IPPROTO_TCP  = _IPPROTO_TCP;
+inline constexpr auto TCP_NODELAY  = _TCP_NODELAY;
+inline constexpr auto MSG_NOSIGNAL = _MSG_NOSIGNAL;
+inline constexpr auto SHUT_WR      = _SHUT_WR;
+
+#ifdef RSTD_OS_LINUX
+using ::epoll_create1;
+using ::epoll_ctl;
+using ::epoll_wait;
+using ::eventfd;
+using ::timerfd_create;
+using ::timerfd_settime;
+inline constexpr auto EPOLL_CLOEXEC = _EPOLL_CLOEXEC;
+inline constexpr auto EPOLL_CTL_ADD = _EPOLL_CTL_ADD;
+inline constexpr auto EPOLL_CTL_MOD = _EPOLL_CTL_MOD;
+inline constexpr auto EPOLL_CTL_DEL = _EPOLL_CTL_DEL;
+inline constexpr auto EPOLLIN       = _EPOLLIN;
+inline constexpr auto EPOLLOUT      = _EPOLLOUT;
+inline constexpr auto EPOLLERR      = _EPOLLERR;
+inline constexpr auto EPOLLHUP      = _EPOLLHUP;
+inline constexpr auto EPOLLRDHUP    = _EPOLLRDHUP;
+inline constexpr bool HAS_EPOLLRDHUP = _HAS_EPOLLRDHUP;
+inline constexpr auto EFD_NONBLOCK  = _EFD_NONBLOCK;
+inline constexpr auto EFD_CLOEXEC   = _EFD_CLOEXEC;
+inline constexpr auto TFD_NONBLOCK  = _TFD_NONBLOCK;
+inline constexpr auto TFD_CLOEXEC   = _TFD_CLOEXEC;
+#endif
 
 inline constexpr auto ENOENT = _ENOENT, EACCES = _EACCES, EPERM = _EPERM, ECONNREFUSED = _ECONNREFUSED;
 inline constexpr auto ECONNRESET = _ECONNRESET, EHOSTUNREACH = _EHOSTUNREACH, ENETUNREACH = _ENETUNREACH;

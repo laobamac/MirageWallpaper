@@ -1,0 +1,68 @@
+Source: miragewallpaper
+Section: graphics
+Priority: optional
+Maintainer: elysia-best <a.elysia@proton.me>
+Build-Depends:
+ debhelper-compat (= 13),
+ build-essential,
+ clang,
+ cmake,
+ dotnet-sdk-10.0,
+ glslang-tools,
+ libasound2-dev,
+ libass-dev,
+ libavcodec-dev,
+ libavformat-dev,
+ libavutil-dev,
+ libdbus-1-dev,
+ libdrm-dev,
+ libegl-dev,
+ libfontconfig1-dev,
+ libfreetype-dev,
+ libgles2-mesa-dev,
+ libglvnd-dev,
+ libmpv-dev,
+ libpipewire-0.3-dev,
+ libplacebo-dev,
+ libpulse-dev,
+ libswresample-dev,
+ libswscale-dev,
+ libvulkan-dev,
+ libx11-dev,
+ libxkbcommon-dev,
+ ninja-build,
+ pkg-config,
+ qt6-5compat-dev,
+ qt6-base-dev,
+ qt6-declarative-dev,
+ qt6-shadertools-dev,
+ qt6-wayland-dev,
+ qt6-webchannel-dev,
+ qt6-webengine-dev
+Standards-Version: 4.7.0
+Rules-Requires-Root: no
+Homepage: https://github.com/laobamac/MirageWallpaper
+Vcs-Git: https://github.com/laobamac/MirageWallpaper.git
+
+Package: miragewallpaper
+Architecture: amd64
+Depends:
+ ${shlibs:Depends},
+ ${misc:Depends},
+ qt6-qpa-plugins,
+ qml6-module-qt5compat-graphicaleffects,
+ qml6-module-qtquick,
+ qml6-module-qtquick-controls,
+ qml6-module-qtquick-dialogs,
+ qml6-module-qtquick-layouts,
+ qml6-module-qtquick-shapes,
+ qml6-module-qtquick-templates,
+ qml6-module-qtquick-window,
+ qml6-module-qtwebengine,
+ qml6-module-qtwebengine-controlsdelegates
+Description: Wallpaper Engine-compatible desktop wallpaper manager
+ MirageWallpaper is a Qt desktop application that manages Wallpaper Engine
+ projects and drives the mirage-display desktop wallpaper protocol.
+ .
+ The package contains the Qt application, scene/video/web renderer hosts,
+ shared wallpaper assets, and a self-contained SteamKit2 service runtime.

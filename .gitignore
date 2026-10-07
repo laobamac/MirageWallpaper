@@ -34,3 +34,5 @@ cmake-build-debug
 .secrets/
 xcuserdata
 .reasonix
+.workbuddy
+

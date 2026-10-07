@@ -1079,6 +1079,11 @@ int VideoDecoder::next_metal_frame_(MetalFrameView& out, Error* err) {
         }
     }
 }
+#else
+int VideoDecoder::next_metal_frame_(MetalFrameView& /*out*/, Error* err) {
+    fail(err, "next_metal_frame is only available on Apple platforms");
+    return -1;
+}
 #endif
 
 int VideoDecoder::next_drm_frame_(DrmFrameView& out, Error* err) {

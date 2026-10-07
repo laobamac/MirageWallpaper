@@ -20,6 +20,15 @@ set(ARGPARSE_INSTALL        OFF CACHE INTERNAL "")
 set(ARGPARSE_BUILD_TESTS    OFF CACHE INTERNAL "")
 set(ARGPARSE_BUILD_SAMPLES  OFF CACHE INTERNAL "")
 
+# fmt is used as the portable formatting backend. Build its static library
+# only; its optional C++ module target conflicts with our wrapper module.
+set(FMT_DOC                OFF CACHE INTERNAL "")
+set(FMT_INSTALL            OFF CACHE INTERNAL "")
+set(FMT_TEST               OFF CACHE INTERNAL "")
+set(FMT_FUZZ               OFF CACHE INTERNAL "")
+set(FMT_MODULE             OFF CACHE INTERNAL "")
+set(FMT_SYSTEM_HEADERS      ON CACHE INTERNAL "")
+
 # QuickJS-NG: only the static library is needed; suppress the CLI / examples
 # / install rules so they don't clutter our tree.
 set(QJS_BUILD_EXAMPLES      OFF CACHE INTERNAL "")
@@ -39,6 +48,7 @@ set(BUILD_EXTERNAL          OFF CACHE INTERNAL "")
 set(GLSLANG_TESTS           OFF CACHE INTERNAL "")
 set(BUILD_TESTING           OFF CACHE INTERNAL "")
 
+add_subdirectory(fmt)
 add_subdirectory(rstd)
 add_subdirectory(wavsen)
 add_subdirectory(spirv_reflect)

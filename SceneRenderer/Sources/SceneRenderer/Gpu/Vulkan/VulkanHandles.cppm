@@ -2,7 +2,9 @@ module;
 
 #include <unistd.h>
 
+#if defined(__APPLE__)
 #define VK_USE_PLATFORM_METAL_EXT
+#endif
 #include <rstd/macro.hpp>
 
 #include "vk_mem_alloc.h"
@@ -258,6 +260,7 @@ struct DeviceDispatch : InstanceDispatch {
     PFN_vkCmdPushConstants                       vkCmdPushConstants {};
     PFN_vkCmdPushDescriptorSetKHR                vkCmdPushDescriptorSetKHR {};
     PFN_vkCmdPushDescriptorSetWithTemplateKHR    vkCmdPushDescriptorSetWithTemplateKHR {};
+    PFN_vkCmdResetQueryPool                      vkCmdResetQueryPool {};
     PFN_vkCmdResolveImage                        vkCmdResolveImage {};
     PFN_vkCmdSetBlendConstants                   vkCmdSetBlendConstants {};
     PFN_vkCmdSetDepthBias                        vkCmdSetDepthBias {};
@@ -269,6 +272,7 @@ struct DeviceDispatch : InstanceDispatch {
     PFN_vkCmdSetStencilReference                 vkCmdSetStencilReference {};
     PFN_vkCmdSetStencilWriteMask                 vkCmdSetStencilWriteMask {};
     PFN_vkCmdSetViewport                         vkCmdSetViewport {};
+    PFN_vkCmdWriteTimestamp                      vkCmdWriteTimestamp {};
     PFN_vkCmdWaitEvents                          vkCmdWaitEvents {};
     PFN_vkCreateBuffer                           vkCreateBuffer {};
     PFN_vkCreateBufferView                       vkCreateBufferView {};
@@ -323,7 +327,9 @@ struct DeviceDispatch : InstanceDispatch {
     PFN_vkGetImageMemoryRequirements             vkGetImageMemoryRequirements {};
     PFN_vkGetImageSubresourceLayout              vkGetImageSubresourceLayout {};
     PFN_vkGetPipelineCacheData                   vkGetPipelineCacheData {};
+#if defined(__APPLE__)
     PFN_vkExportMetalObjectsEXT                  vkExportMetalObjectsEXT {};
+#endif
     PFN_vkGetImageDrmFormatModifierPropertiesEXT vkGetImageDrmFormatModifierPropertiesEXT {};
     PFN_vkGetPipelineExecutablePropertiesKHR     vkGetPipelineExecutablePropertiesKHR {};
     PFN_vkGetPipelineExecutableStatisticsKHR     vkGetPipelineExecutableStatisticsKHR {};
@@ -687,6 +693,16 @@ public:
 
     void EndQuery(VkQueryPool query_pool, uint32_t query) const noexcept {
         dld->vkCmdEndQuery(handle, query_pool, query);
+    }
+
+    void ResetQueryPool(VkQueryPool query_pool, uint32_t first_query,
+                        uint32_t query_count) const noexcept {
+        dld->vkCmdResetQueryPool(handle, query_pool, first_query, query_count);
+    }
+
+    void WriteTimestamp(VkPipelineStageFlagBits stage, VkQueryPool query_pool,
+                        uint32_t query) const noexcept {
+        dld->vkCmdWriteTimestamp(handle, stage, query_pool, query);
     }
 
     void BindDescriptorSets(VkPipelineBindPoint bind_point, VkPipelineLayout layout, uint32_t first,

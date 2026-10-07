@@ -1,0 +1,15 @@
+# Build output
+dist/
+
+# Astro generated types & cache
+.astro/
+
+# Dependencies
+node_modules/
+
+# Local env
+.env
+.env.production
+
+# macOS
+.DS_Store
