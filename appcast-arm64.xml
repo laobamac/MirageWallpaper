@@ -6,6 +6,98 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Mirage</title>
         <item>
+            <title>1.1.5</title>
+            <pubDate>Wed, 07 Oct 2026 14:08:59 +0000</pubDate>
+            <link>https://github.com/laobamac/MirageWallpaper</link>
+            <sparkle:version>523</sparkle:version>
+            <sparkle:shortVersionString>1.1.5</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="markdown"><![CDATA[# Mirage 1.1.5
+
+本版本新增壁纸烘焙与 Android 壁纸传输，优化场景渲染性能，并修复播放规则、壁纸缓存、Steam 服务和屏保兼容性等问题。发布包现已使用 Developer ID 签名并通过 Apple 公证。
+
+## 重大更新：壁纸烘焙与 Android 传输
+
+- 新增“烘焙为视频”：将场景、网页和视频壁纸按当前属性生成新的 SDR 视频壁纸，支持输出分辨率预设与自定义尺寸、时长、画质及壁纸自身音频选项，并提供任务进度和取消操作。
+- 烘焙结果会固定原壁纸的动态交互，鼠标交互、时钟和实时媒体信息不会继续更新，首尾不保证无缝；网页烘焙需要屏幕录制权限。
+- 新增 Wallpaper Engine Android 设备发现、PIN 配对、已配对设备重连，以及兼容视频和场景壁纸的无线传输与 `.mpkg` 导出（PR #30）。
+- 场景移动端导出支持质量预设、纹理分辨率和像素画优化。当前不支持网页壁纸、场景预设或预渲染视频导出，场景导出需要 `scene.pkg`。
+
+## 场景性能与渲染兼容性
+
+- 静态场景改为按需渲染，复用文字布局、动画数据与 GPU 资源，并减少空闲音频处理和定时器唤醒，降低不必要的渲染开销。
+- 修复场景合成导致部分壁纸全黑的问题（Issue #66），并改进合成图层捕获、渲染目标尺寸、变换效果像素坐标及部分光照效果的兼容性。
+- 修复替换图片的比例、填充与裁切更新，以及文字背景、透明度、定位和动态文字尺寸变化后的效果范围。
+- 改进 SceneScript 属性初始化、初始化返回值应用和运行时对象绑定；修复粒子实例脚本绑定、手动发射及振荡时序和位移。
+
+## 播放、缓存与稳定性
+
+- 修复刘海屏及 Chrome 多窗口全屏场景下，“其他应用全屏时”播放规则未触发的问题（Issue #73）。
+- 排除 Siri 听取、系统提示音和控制中心音量反馈对其他应用音频检测的干扰，减少壁纸音频不必要的暂停或静音（Issue #72）。
+- 修复桌面壁纸缓存持续增长的问题；macOS 26 及以上新增自动清理和手动清理入口，仅清理 Mirage 产生且不再使用的缓存（Issue #77）。
+- 改进 Steam 服务无响应时的恢复和退出清理，减少服务进程残留及持续占用 CPU 的问题（Issue #78）。
+- 修复场景包使用 `gifscene.pkg` 等自定义文件名时，屏保无法识别已选壁纸的问题（Issue #76）。
+- 稳定壁纸自定义面板的布局与更新，正确处理标签中的 HTML 实体，并取消过时的 HTML 内容加载。
+
+## 工坊下载与软件更新
+
+- 新增可选的免登录工坊下载，在“设置 → 通用”输入本机专用激活码后启用；该模式仅支持下载，订阅、收藏和评论仍需登录 Steam。
+- 修复自动检查更新与更新提醒，并完善相关设置。
+- 发布包改为 Developer ID 签名和 Apple 公证；Sparkle 更新包与更新源继续使用 Ed25519 签名校验。
+
+## 下载
+
+- `arm64`：Apple Silicon Mac
+- `x86_64`：Intel Mac
+- 应用与屏保组件要求 macOS 14.2 或更高版本；原生动态锁屏功能要求 macOS 26 或更高版本
+
+---
+
+
+# Mirage 1.1.5
+
+This release adds wallpaper baking and Android wallpaper transfers, improves scene rendering performance, and fixes playback rules, wallpaper caching, Steam service recovery, and screen-saver compatibility. Release packages now use Developer ID signing and Apple notarization.
+
+## Major Update: Wallpaper Baking and Android Transfers
+
+- Added Bake to Video: turn scene, web, and video wallpapers into new SDR video wallpapers using their current properties. Options include resolution presets and custom dimensions, duration, quality, and the wallpaper's own audio, with task progress and cancellation.
+- Baked videos freeze the original wallpaper's interactive behavior: mouse interaction, clocks, and live media information no longer update, and seamless looping is not guaranteed. Web baking requires Screen Recording permission.
+- Added Wallpaper Engine Android device discovery, PIN pairing, reconnection to paired devices, and wireless transfer and `.mpkg` export for compatible video and scene wallpapers (PR #30).
+- Mobile scene export includes quality presets, texture resolution options, and pixel-art optimization. Web wallpapers, scene presets, and prerendered video export are currently unsupported; scene export requires `scene.pkg`.
+
+## Scene Performance and Rendering Compatibility
+
+- Static scenes now render on demand. Reused text layouts, animation data, and GPU resources, and reduced idle audio processing and timer wakeups to avoid unnecessary rendering work.
+- Fixed scene compositing that caused some wallpapers to render entirely black (Issue #66), and improved composite-layer capture, render-target sizing, pixel coordinates in transform effects, and compatibility with certain lighting effects.
+- Fixed replacement-image proportions, fill behavior, and crop updates, along with text backgrounds, transparency, positioning, and effect bounds after dynamic text resizing.
+- Improved SceneScript property initialization, application of initialization return values, and runtime-object binding. Fixed particle instance script binding, manual emission, and oscillation timing and displacement.
+
+## Playback, Caching, and Stability
+
+- Fixed playback rules for other fullscreen apps not triggering on notched displays and with Chrome's multi-window fullscreen layout (Issue #73).
+- Excluded Siri listening, system alerts, and Control Center volume feedback from other-app audio detection, reducing unnecessary pauses or muting of wallpaper audio (Issue #72).
+- Fixed continuous desktop wallpaper cache growth. Added automatic and manual cleanup on macOS 26 and later, limited to unused caches created by Mirage (Issue #77).
+- Improved recovery from an unresponsive Steam service and cleanup on exit, reducing orphaned service processes and sustained CPU usage (Issue #78).
+- Fixed screen savers failing to recognize selected scenes whose packages use custom filenames such as `gifscene.pkg` (Issue #76).
+- Stabilized wallpaper customization layout and updates, correctly decoded HTML entities in labels, and cancelled stale HTML content loading.
+
+## Workshop Downloads and Software Updates
+
+- Added optional Workshop downloads without Steam login, enabled with a device-specific activation code under Settings → General. This mode supports downloads only; subscriptions, favorites, and comments still require Steam login.
+- Fixed automatic update checks and reminders, and improved the related settings.
+- Release packages now use Developer ID signing and Apple notarization. Sparkle update packages and feeds continue to use Ed25519 signature verification.
+
+## Downloads
+
+- `arm64` for Apple Silicon Mac
+- `x86_64` for Intel Mac
+- The app and screen-saver component require macOS 14.2 or later; native dynamic lock-screen features require macOS 26 or later
+
+]]></description>
+            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/v1.1.5/Mirage-523-c5fda60e16ba-macOS-arm64.zip" length="110299981" type="application/octet-stream" sparkle:edSignature="Mw3S0cA+C96uBcSkPPnSsB22szvBZSWsnlZG5l0Fh1MLyoTXX8lFydchGA8WrZqUAeemhNSxTMUmSMs3OyJ/BQ=="/>
+        </item>
+        <item>
             <title>1.1.4</title>
             <pubDate>Wed, 07 Oct 2026 10:53:21 +0000</pubDate>
             <link>https://github.com/laobamac/MirageWallpaper</link>
@@ -22,96 +114,6 @@ fix(wallpaper): prevent unbounded desktop cache growth
 
 ]]></description>
             <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-518-1c6c80008648-macOS-arm64.zip" length="108722801" type="application/octet-stream" sparkle:edSignature="3o9MyU+VYUUsLnTKkiEcxEYXzXNXjbYQzEypGA/4yoLWDQiooTIAFmE6JTOGBpShSdvIO+Uzc7M/2ig3PGjaCw=="/>
-        </item>
-        <item>
-            <title>1.1.4</title>
-            <pubDate>Thu, 01 Oct 2026 11:23:15 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>517</sparkle:version>
-            <sparkle:shortVersionString>1.1.4</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="plain-text"><![CDATA[Commit: 5e5bdaa5c7357e0f1c6bd9fa4ad6ddbad69a8f37
-Channel: beta
-
-fix(audio): exclude ControlCenter volume feedback from playback detection
-
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-517-5e5bdaa5c735-macOS-arm64.zip" length="108703081" type="application/octet-stream" sparkle:edSignature="wolZlbYrSI8iGqkvnyWI5WiLNuK1T8DX5r5tH/o3kxDa+EIVE9Gipi06ssO/32rwUiMwa/VesKkzLUTqq3QKBA=="/>
-        </item>
-        <item>
-            <title>1.1.4</title>
-            <pubDate>Thu, 01 Oct 2026 07:31:42 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>515</sparkle:version>
-            <sparkle:shortVersionString>1.1.4</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="plain-text"><![CDATA[Commit: 77e4886e619514391f3f0ebd9433cce525eb261b
-Channel: beta
-
-fix(renderer): correct particle oscillation timing and displacement
-
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-515-77e4886e6195-macOS-arm64.zip" length="108702497" type="application/octet-stream" sparkle:edSignature="h/ciRUNbJdTT/bDkYIU1dn46Ml6hRvP4FxbQslu8vhq5RiRg/peoy9pOiKsFJNuQJ5Ox0oz3/qtY8yLFHTNaDw=="/>
-        </item>
-        <item>
-            <title>1.1.4</title>
-            <pubDate>Thu, 01 Oct 2026 06:46:31 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>513</sparkle:version>
-            <sparkle:shortVersionString>1.1.4</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="plain-text"><![CDATA[Commit: 5a989a249b0eb0937463918745066c705cd68885
-Channel: beta
-
-fix(text): update effect extents when text size changes
-
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-513-5a989a249b0e-macOS-arm64.zip" length="108703145" type="application/octet-stream" sparkle:edSignature="LIYSV/ktmNyHoAaWQIiHX1t/b8MWwr70NmOZEfzP/PZgLyKSjYZQGb50c6ajxn1vKKSUBTuYZGQSENEys2a7Dg=="/>
-        </item>
-        <item>
-            <title>1.1.4</title>
-            <pubDate>Thu, 01 Oct 2026 05:19:25 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>510</sparkle:version>
-            <sparkle:shortVersionString>1.1.4</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="plain-text"><![CDATA[Commit: 473f85683a130d961fa62c01332893ec8169d09d
-Channel: beta
-
-build(linux): add Qt UI build and desktop entry
-
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-510-473f85683a13-macOS-arm64.zip" length="108701720" type="application/octet-stream" sparkle:edSignature="HK027OKMBvpeUTyGcd4GP7MrARsRCtXvGibMtZX0q7uzHShY0uq087eThtevaXR/3lWYbLz5RRSAuDdro/B7DQ=="/>
-        </item>
-        <item>
-            <title>1.1.4</title>
-            <pubDate>Thu, 01 Oct 2026 04:37:02 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:channel>beta</sparkle:channel>
-            <sparkle:version>507</sparkle:version>
-            <sparkle:shortVersionString>1.1.4</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="plain-text"><![CDATA[Commit: 5b3775b2f5de50238ca46568337c7c8ea30843f1
-Channel: beta
-
-fix(particles): bind instance scripts and support manual emission
-
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/prerelease/Mirage-507-5b3775b2f5de-macOS-arm64.zip" length="108701683" type="application/octet-stream" sparkle:edSignature="NGnegrZPoIXAKuO3TxfLJfH9DFL8l4H2EqqKatAFeb6eTqOEpBD3g/Tylwkf86y+T6ohJU93lJ+MIHl7jF2bAQ=="/>
         </item>
         <item>
             <title>1.1.4</title>
@@ -503,79 +505,9 @@ Builds use ad-hoc signing; macOS may require “Open Anyway” under System Sett
 ]]></description>
             <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/v1.1.0/Mirage-375-e36d37da220c-macOS-arm64.zip" length="361384478" type="application/octet-stream" sparkle:edSignature="IjHguA3P7CEBlmlH/XO+/0yYPx3SJcUMqhTd5IpZcDO1x4ItKw3q3ze9HerrjeepJykJCwaN1RXHZY7Tvy8iAQ=="/>
         </item>
-        <item>
-            <title>1.1.0</title>
-            <pubDate>Mon, 24 Aug 2026 18:14:42 +0000</pubDate>
-            <link>https://github.com/laobamac/MirageWallpaper</link>
-            <sparkle:version>372</sparkle:version>
-            <sparkle:shortVersionString>1.1.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# Mirage 1.1.0
-
-本版本带来视频和场景动态锁屏、独立的屏保动态锁屏配置，并修复视频循环、屏保显示尺寸、锁屏退出后的桌面回退和场景木偶动画等问题。
-
-## 重大更新：动态锁屏与屏保壁纸
-
-- 新增原生动态锁屏支持：视频和场景壁纸可以在锁屏界面继续播放或渲染，解锁后恢复桌面壁纸显示。此功能使用 macOS 26 的系统 API，仅在 macOS 26 或更高版本可用。
-- 新增屏保动态锁屏模式，可在屏保设置中启用；屏保可以使用独立配置的场景或视频壁纸，不再只能跟随当前播放壁纸。此方案使用 Mirage 屏保组件，支持 macOS 14.2 或更高版本。
-- 改进动态锁屏和屏保组件的生命周期与桌面回退：修复动态内容泄漏到桌面、退出 Mirage 后锁屏状态失效，以及锁屏退出后桌面未及时恢复的问题。
-- 屏保配置与屏保动态锁屏配置现在相互独立，分别更新和恢复，避免更换其中一项时覆盖另一项。
-
-## 播放与屏保修复
-
-- 修复视频壁纸循环切换时的间隙，使视频循环衔接更加连续；视频资源也可在锁屏和屏保环境中稳定加载。
-- 改进屏保组件的显示尺寸校正，按屏幕实际显示尺寸更新布局，减少缩放显示器下的错位和比例异常（Issue #24）。
-
-## 场景渲染修复
-
-- 修复木偶动画的图层混合与可见性处理，使带有动画可见性条件的场景能够正确响应运行时属性变化（Issue #37）。
-
-## 下载
-
-- `arm64`：Apple Silicon Mac
-- `x86_64`：Intel Mac
-- 应用与屏保组件要求 macOS 14.2 或更高版本；原生动态锁屏功能要求 macOS 26 或更高版本
-
-当前构建使用临时签名，首次打开时可能需要在「系统设置 → 隐私与安全性」中选择“仍要打开”。
-
----
-
-
-# Mirage 1.1.0
-
-This release adds video and Scene dynamic lock screens, an independently configured screen-saver dynamic lock screen, and fixes video looping, screen-saver display sizing, desktop fallback after unlocking or quitting, and Scene puppet animation layering.
-
-## Major Update: Dynamic Lock Screen and Screen Saver Wallpapers
-
-- Added native dynamic lock-screen support for video and Scene wallpapers. They can continue playing or rendering on the lock screen, with the desktop wallpaper restored after unlocking. This feature uses macOS 26 system APIs and is available only on macOS 26 or later.
-- Added a Screen Saver Dynamic Lock Screen mode that can be enabled from Screen Saver settings. The screen saver can use an independently configured Scene or video wallpaper instead of always following the current playing wallpaper. This mode uses the Mirage screen-saver component and supports macOS 14.2 or later.
-- Improved dynamic lock-screen and screen-saver component lifecycle and desktop fallback behavior. Fixed dynamic content leaking onto the desktop, lock-screen state being lost when Mirage quits, and the desktop not being restored promptly after unlocking.
-- Screen-saver and Screen Saver Dynamic Lock Screen configurations are now independent and are updated and restored separately, so changing one no longer overwrites the other.
-
-## Playback and Screen Saver Fixes
-
-- Fixed gaps when video wallpapers loop or switch, making playback transitions more continuous; video assets also load more reliably in lock-screen and screen-saver environments.
-- Improved screen-saver display sizing by updating layout for the display's actual dimensions, reducing misalignment and aspect-ratio errors on scaled displays (Issue #24).
-
-## Scene Rendering Fix
-
-- Fixed puppet animation layer blending and visibility handling so scenes with animation visibility conditions respond correctly to runtime property changes (Issue #37).
-
-## Downloads
-
-- `arm64` for Apple Silicon Mac
-- `x86_64` for Intel Mac
-- The app and screen-saver component require macOS 14.2 or later; native dynamic lock-screen features require macOS 26 or later
-
-Builds use ad-hoc signing; macOS may require “Open Anyway” under System Settings → Privacy & Security on first launch.
-
-]]></description>
-            <enclosure url="https://github.com/laobamac/MirageWallpaper/releases/download/v1.1.0/Mirage-372-252e5045ac7c-macOS-arm64.zip" length="361367545" type="application/octet-stream" sparkle:edSignature="0GDwoLYzCTpGtsTjyB79Ep1jP6FLEKkqWT//Rqw8SS31bOqyfK24UxtSBDrEiYLbagNb3669diYTZ5zcoHwBCA=="/>
-        </item>
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: bz/E+bl+i4zqio+VjveGrc99YOdWsmhtpEw2JNR+vV5er+6FdymAjzfk354Ib2HWylE+YjYvBVejqmo3/frBBQ==
-length: 42876
+edSignature: liVij8Wa2Sw3d4L6gQEDtSNTyjx8DkQUXDzlMIEnmKYy8wfiQb8rDW1fKCe5X1KY78E76v0XxvB4wmJoGgABAg==
+length: 40563
 -->
