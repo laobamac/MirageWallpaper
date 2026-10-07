@@ -72,3 +72,7 @@ Mirage 对 Wallpaper Engine 场景格式的兼容性仍在完善。复杂作品�
 ### 屏保需要 Mirage 一直运行吗？
 
 不需要。屏保组件被复制到 `~/Library/Screen Savers`，独立运行。详见[屏保](/screensaver/overview/)。
+
+### 动态锁屏支持哪些系统？
+
+方案 A 需要 macOS 26 或更高版本，方案 B 需要 macOS 14.2 或更高版本。两者都是实验性功能，只支持视频和场景壁纸，可能随 macOS 更新失效。

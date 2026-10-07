@@ -48,3 +48,6 @@ Steam 服务同样是独立辅助进程，通过标准输入输出的逐行 JSON
 - 构建这些组件见[从源码构建](/advanced/build/)。
 - 单独调试某个渲染器见[调试渲染器](/advanced/debug-renderers/)。
 - 各类型壁纸的能力对比见[壁纸类型](/formats/wallpaper-types/)。
+
+
+场景运行库和运行时 assets 仅保存在壁纸扩展内部，供沙箱直接读取。主 App 通过包内相对符号链接复用同一份文件，安装到用户目录的轻量屏保通过记录的 App 路径或 LaunchServices 定位它们。发布包不再重复携带屏保和锁屏的场景依赖。

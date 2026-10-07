@@ -55,7 +55,7 @@ Mirage 通过 GitHub Actions 工作流 [`build-macos.yml`](https://github.com/la
 
 ## 屏保组件同步
 
-App 更新后的下一次启动会检查已安装到 `~/Library/Screen Savers` 的 Mirage 屏保组件；仅当其构建号落后于 App 内置组件时，才会原子替换并重启相关系统屏保服务。详见 [屏保](/screensaver/overview/)。
+App 更新后的下一次启动会检查已安装到 `~/Library/Screen Savers` 的 Mirage 屏保组件。组件或共享渲染依赖的指纹变化时，会原子替换组件并重启相关系统屏保服务。屏保只保留轻量加载器，通过记录的 App 路径与 LaunchServices 查找共享引擎。移动 App 后先启动一次 Mirage，以更新记录。详见 [屏保](/screensaver/overview/)。
 
 ## 所需 Secrets
 
@@ -83,3 +83,6 @@ gh secret set MIRAGE_STEAM_WEB_API_KEY < .secrets/steam_web_api_key
 :::note[关于内置 Key 的可提取性]
 GitHub Secrets 可以避免 Key 出现在仓库和普通构建日志中，但无法让客户端内置 Key 成为真正的秘密：发布后的 App 必须包含它，有能力分析 App 的人仍可以提取。若未来需要不可提取的凭据，应把对应请求放到受控服务端，由服务端持有 Key，而不是依赖客户端混淆。
 :::
+
+
+发布构建关闭覆盖率插桩并剥离本地符号。CI 校验共享引擎清单、无重复屏保依赖和实际音视频解码，并限制应用体积为 260 MiB。FFmpeg 缓存区分架构、构建脚本和工具链。

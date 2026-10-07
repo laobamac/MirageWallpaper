@@ -6,7 +6,7 @@
 
 import Foundation
 
-enum MirageLockAnyValue: Codable {
+enum MirageLockAnyValue: Codable, Equatable {
     case string(String)
     case number(Double)
     case bool(Bool)
@@ -48,21 +48,41 @@ enum MirageLockAnyValue: Codable {
     }
 }
 
-struct MirageLockDisplayConfiguration: Codable {
+struct MirageLockDisplayConfiguration: Codable, Equatable {
     let displayID: UInt32
     let wallpaperID: String
     let title: String
     let kind: String
     let renderDirectory: String
     let entryPath: String
-    let previewPath: String?
-    let desktopFallbackPath: String?
+    var previewPath: String?
+    var desktopFallbackPath: String?
     let rawProperties: [String: MirageLockAnyValue]
     let fps: Int
     let fillMode: String
     var position: WallpaperPosition? = nil
     let loadFromMemory: Bool?
     var renderedPreviewPath: String? = nil
+    var displayKey: String? = nil
+    var speed: Float? = nil
+    var scriptStorage: [String: String]? = nil
+    var runtimeRevision: UUID? = nil
+
+    var playbackSpeed: Float {
+        guard let speed, speed.isFinite, speed > 0 else { return 1 }
+        return speed
+    }
+
+    var renderIdentity: String {
+        var value = self
+        value.previewPath = nil
+        value.renderedPreviewPath = nil
+        value.desktopFallbackPath = nil
+        value.runtimeRevision = nil
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        return (try? encoder.encode(value)).map(MirageLockBridge.digest) ?? ""
+    }
 }
 
 struct MirageLockConfiguration: Codable {

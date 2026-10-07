@@ -71,6 +71,7 @@ public:
         }
 
         desc_ = { channels, sample_rate };
+        mix_scratch_.resize(1024u * channels);
         {
             std::lock_guard<std::mutex> lk(channels_mu_);
             for (auto& c : channels_) {
@@ -252,12 +253,21 @@ private:
     void fill_output(float* out_f, std::uint32_t n_frames, std::uint32_t channels,
                      std::uint32_t sample_rate) {
         if (! out_f || n_frames == 0 || channels == 0) return;
+        if (n_frames > 1024) {
+            for (std::uint32_t offset = 0; offset < n_frames; offset += 1024)
+                fill_output(out_f + static_cast<std::size_t>(offset) * channels,
+                            std::min(1024u, n_frames - offset),
+                            channels,
+                            sample_rate);
+            return;
+        }
         const auto total_samples = static_cast<std::size_t>(n_frames) * channels;
         std::memset(out_f, 0, total_samples * sizeof(float));
+        if (total_samples > mix_scratch_.size()) return;
 
         std::uint64_t produced_total = 0;
         if (! muted_.load(std::memory_order_relaxed)) {
-            std::vector<float> scratch(total_samples);
+            auto& scratch = mix_scratch_;
             {
                 std::lock_guard<std::mutex> lk(channels_mu_);
                 for (auto& ch : channels_) {
@@ -322,6 +332,7 @@ private:
 
     std::mutex                                 channels_mu_;
     std::vector<std::unique_ptr<IPullChannel>> channels_;
+    std::vector<float>                         mix_scratch_;
     std::atomic<std::uint64_t> callbacks_ { 0 };
     std::atomic<std::uint64_t> raw_callbacks_ { 0 };
 

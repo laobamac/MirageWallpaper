@@ -38,9 +38,11 @@ SCENE_BIN="$ROOT/SceneRenderer/build/$SCENE_PRESET/Tools/SceneWallpaper/SceneWal
 SCENE_SAVER_LIB="$ROOT/SceneRenderer/build/$SCENE_PRESET/Tools/SceneScreenSaver/libMirageSceneSaver.dylib"
 WEB_BIN="$ROOT/WebRenderer/build/release/Tools/WebWallpaper/WebWallpaper"
 VIDEO_BIN="$ROOT/VideoRenderer/build/release/Tools/VideoWallpaper/VideoWallpaper"
+SCENE_BAKER="$ROOT/SceneRenderer/build/$SCENE_PRESET/Tools/SceneBaker/SceneBaker"
+WEB_BAKER="$ROOT/WebRenderer/build/release/Tools/WebBaker/WebBaker"
+VIDEO_BAKER="$ROOT/VideoRenderer/build/release/Tools/VideoBaker/VideoBaker"
 ASSETS_DIR="$ROOT/assets"
 EXTENSION="$CONTENTS/Extensions/MirageWallpaperExtension.appex"
-EXTENSION_FRAMEWORKS="$EXTENSION/Contents/Frameworks"
 APP_ENTITLEMENTS="$ROOT/Mirage/Mirage Wallpaper/Mirage_Wallpaper.entitlements"
 EXTENSION_ENTITLEMENTS="$ROOT/Mirage/Mirage Wallpaper Extension/MirageWallpaperExtension.entitlements"
 if [ "$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$CONTENTS/Info.plist")" = "cn.laobamac.Mirage.Development" ]; then
@@ -48,13 +50,14 @@ if [ "$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$CONTENTS/Info.pl
     EXTENSION_ENTITLEMENTS="$ROOT/Mirage/Mirage Wallpaper Extension/MirageWallpaperExtension.Development.entitlements"
 fi
 
-BREW_PREFIX="$(brew --prefix)"
-MOLTENVK="$BREW_PREFIX/opt/molten-vk/lib/libMoltenVK.dylib"
+MOLTENVK_DIR="${MIRAGE_MOLTENVK_DIR:-$ROOT/Mirage/build/MoltenVK-1.4.2-color-transfer-v1}"
+python3 "$ROOT/Mirage/scripts/build_moltenvk.py" --mode production --output "$MOLTENVK_DIR"
+MOLTENVK="$MOLTENVK_DIR/libMoltenVK.dylib"
 
 echo "[bundle] App:  $APP"
 echo "[bundle] Root: $ROOT"
 
-for f in "$SCENE_BIN" "$SCENE_SAVER_LIB" "$WEB_BIN" "$VIDEO_BIN"; do
+for f in "$SCENE_BIN" "$SCENE_SAVER_LIB" "$WEB_BIN" "$VIDEO_BIN" "$SCENE_BAKER" "$WEB_BAKER" "$VIDEO_BAKER"; do
     [ -f "$f" ] || { echo "[bundle] 缺少渲染器: $f" >&2; exit 1; }
 done
 [ -d "$ASSETS_DIR" ] || { echo "[bundle] 缺少 assets 目录: $ASSETS_DIR" >&2; exit 1; }
@@ -65,7 +68,12 @@ mkdir -p "$FRAMEWORKS" "$RENDERERS" "$VK_ICD_DIR"
 cp -f "$SCENE_BIN" "$RENDERERS/SceneWallpaper"
 cp -f "$WEB_BIN"   "$RENDERERS/WebWallpaper"
 cp -f "$VIDEO_BIN" "$RENDERERS/VideoWallpaper"
+cp -f "$SCENE_BAKER" "$RENDERERS/SceneBaker"
+cp -f "$WEB_BAKER" "$RENDERERS/WebBaker"
+cp -f "$VIDEO_BAKER" "$RENDERERS/VideoBaker"
 chmod +x "$RENDERERS"/*
+cp -f "$SCENE_SAVER_LIB" "$FRAMEWORKS/libMirageSceneSaver.dylib"
+chmod u+w "$FRAMEWORKS/libMirageSceneSaver.dylib"
 
 is_bundleable() {
     case "$1" in
@@ -116,21 +124,33 @@ collect_deps() {
 
 echo "[bundle] 收集场景引擎依赖..."
 collect_deps "$RENDERERS/SceneWallpaper"
-collect_deps "$SCENE_SAVER_LIB"
+collect_deps "$FRAMEWORKS/libMirageSceneSaver.dylib"
 
 # 视频渲染器依赖 libav*（转码无法解码的编码，如 VP9/AV1）。场景引擎恰好也链接同一批
 # 库，但不能依赖这个副作用：否则场景引擎一旦不再链接 ffmpeg，视频渲染器就会带着
 # 绝对路径的 /usr/local 依赖发布，在没有 Homebrew 的机器上启动即失败。
 echo "[bundle] 收集视频引擎依赖..."
 collect_deps "$RENDERERS/VideoWallpaper"
+collect_deps "$RENDERERS/SceneBaker"
+collect_deps "$RENDERERS/WebBaker"
+collect_deps "$RENDERERS/VideoBaker"
 
 MVK_BASE=$(basename "$MOLTENVK")
+cp -f "$MOLTENVK" "$FRAMEWORKS/$MVK_BASE"
+chmod u+w "$FRAMEWORKS/$MVK_BASE"
 if ! is_copied "$MVK_BASE"; then
-    cp -f "$(resolve "$MOLTENVK")" "$FRAMEWORKS/$MVK_BASE"
-    chmod u+w "$FRAMEWORKS/$MVK_BASE"
     mark_copied "$MVK_BASE"
-    collect_deps "$FRAMEWORKS/$MVK_BASE"
 fi
+collect_deps "$FRAMEWORKS/$MVK_BASE"
+
+FFMPEG_PREFIX="${MIRAGE_FFMPEG_DIR:-$ROOT/Mirage/build/ffmpeg/$(uname -m)}"
+[ -f "$FFMPEG_PREFIX/.mirage-ffmpeg" ] || { echo "[bundle] missing minimal FFmpeg build" >&2; exit 1; }
+mkdir -p "$RESOURCES/Licenses/FFmpeg" "$RESOURCES/Licenses/dav1d"
+cp -R "$FFMPEG_PREFIX/Licenses/." "$RESOURCES/Licenses/FFmpeg/"
+cp "$(brew --prefix dav1d)/COPYING" "$RESOURCES/Licenses/dav1d/COPYING"
+for forbidden in "$FRAMEWORKS"/libx26*.dylib "$FRAMEWORKS"/libSvtAv1Enc*.dylib "$FRAMEWORKS"/libssl*.dylib; do
+    [ ! -e "$forbidden" ] || { echo "[bundle] unexpected encoder/network dependency: $forbidden" >&2; exit 1; }
+done
 
 echo "[bundle] 已内嵌 $(wc -l < "$COPIED_LIST" | tr -d ' ') 个 dylib"
 
@@ -141,11 +161,21 @@ if [ -n "$VK_REAL" ]; then
     echo "[bundle] 已创建 libvulkan 软链 -> $VK_REAL"
 fi
 
+remove_build_rpaths() {
+    local target="$1" rpath
+    while IFS= read -r rpath; do
+        case "$rpath" in
+            /*) install_name_tool -delete_rpath "$rpath" "$target" ;;
+        esac
+    done < <(otool -l "$target" | awk '/cmd LC_RPATH/ {getline; getline; sub(/^ *path /, ""); sub(/ \(offset.*$/, ""); print}')
+}
+
 retarget_lib() {
     local lib="$1"
     local base
     base=$(basename "$lib")
-    install_name_tool -id "@rpath/$base" "$lib" 2>/dev/null || true
+    remove_build_rpaths "$lib"
+    install_name_tool -id "@rpath/$base" "$lib"
     local deps
     deps=$(otool -L "$lib" | tail -n +2 | awk '{print $1}')
     while IFS= read -r dep; do
@@ -154,19 +184,37 @@ retarget_lib() {
         local db
         db=$(basename "$(resolve "$dep")")
         if [ -f "$FRAMEWORKS/$db" ]; then
-            install_name_tool -change "$dep" "@rpath/$db" "$lib" 2>/dev/null || true
+            install_name_tool -change "$dep" "@loader_path/$db" "$lib"
         fi
     done <<< "$deps"
 }
 
 echo "[bundle] 重写内嵌库的 install name..."
 for lib in "$FRAMEWORKS"/*.dylib; do
-    [ -f "$lib" ] || continue
+    [ -f "$lib" ] && [ ! -L "$lib" ] || continue
     retarget_lib "$lib"
+done
+install_name_tool -add_rpath "@loader_path" "$FRAMEWORKS/libMirageSceneSaver.dylib" 2>/dev/null || true
+
+strip_item() {
+    case "$(basename "$1")" in
+        "$MVK_BASE") return 0 ;;
+    esac
+    strip -x "$1" 2>/dev/null || strip -S "$1"
+}
+
+echo "[bundle] 剥离符号..."
+for lib in "$FRAMEWORKS"/*.dylib; do
+    [ -f "$lib" ] && [ ! -L "$lib" ] || continue
+    strip_item "$lib"
+done
+for bin in "$RENDERERS/SceneWallpaper" "$RENDERERS/WebWallpaper" "$RENDERERS/VideoWallpaper" "$RENDERERS/SceneBaker" "$RENDERERS/WebBaker" "$RENDERERS/VideoBaker"; do
+    strip_item "$bin"
 done
 
 retarget_bin() {
     local bin="$1"
+    remove_build_rpaths "$bin"
     local deps
     deps=$(otool -L "$bin" | tail -n +2 | awk '{print $1}')
     while IFS= read -r dep; do
@@ -183,9 +231,22 @@ retarget_bin() {
 }
 
 echo "[bundle] 重写渲染器可执行文件的 install name..."
-for bin in "$RENDERERS/SceneWallpaper" "$RENDERERS/WebWallpaper" "$RENDERERS/VideoWallpaper"; do
+for bin in "$RENDERERS/SceneWallpaper" "$RENDERERS/WebWallpaper" "$RENDERERS/VideoWallpaper" "$RENDERERS/SceneBaker" "$RENDERERS/WebBaker" "$RENDERERS/VideoBaker"; do
     retarget_bin "$bin"
 done
+
+if [ -n "${MIRAGE_SCENE_DIAGNOSTICS_DIR:-}" ]; then
+    DIAGNOSTICS="$RESOURCES/SceneDiagnostics"
+    test -f "$MIRAGE_SCENE_DIAGNOSTICS_DIR/manifest.json"
+    test ! -e "$DIAGNOSTICS"
+    cp -R "$MIRAGE_SCENE_DIAGNOSTICS_DIR" "$DIAGNOSTICS"
+    for variant in baseline patched; do
+        lib="$DIAGNOSTICS/$variant/libMoltenVK.dylib"
+        test -f "$lib"
+        sign_runtime_item "$lib"
+        codesign --verify --strict "$lib"
+    done
+fi
 
 rm -f "$COPIED_LIST"
 
@@ -194,7 +255,7 @@ cat > "$VK_ICD_DIR/MoltenVK_icd.json" <<EOF
 {
     "file_format_version" : "1.0.0",
     "ICD": {
-        "library_path": "../../../../Frameworks/$MVK_BASE",
+        "library_path": "../../../../Extensions/MirageWallpaperExtension.appex/Contents/Frameworks/$MVK_BASE",
         "api_version" : "1.4.0",
         "is_portability_driver" : true
     }
@@ -202,44 +263,29 @@ cat > "$VK_ICD_DIR/MoltenVK_icd.json" <<EOF
 EOF
 echo "[bundle] 已生成内嵌 ICD"
 
-echo "[bundle] 拷贝 assets (~85MB)..."
+echo "[bundle] 拷贝并裁剪 assets..."
 rm -rf "$RESOURCES/assets"
 cp -R "$ASSETS_DIR" "$RESOURCES/assets"
+bash "$ROOT/Mirage/scripts/trim_assets.sh" "$RESOURCES/assets"
+echo "[bundle] assets: $(du -sh "$RESOURCES/assets" | cut -f1)"
 
 SAVER="$RESOURCES/Screen Savers/MirageScreenSaver.saver"
 DYNAMIC_SAVER="$RESOURCES/Screen Savers/MirageDynamicLockScreen.saver"
 rm -rf "$RESOURCES/Mirage Components/MirageDynamicLockScreen.saver"
-rm -rf "$RESOURCES/Screen Savers/MirageDynamicLockScreen.saver"
 rm -rf "$RESOURCES/Screen Savers/.MirageDynamicLockScreen.saver"
 rm -rf "$DYNAMIC_SAVER"
-if [ -d "$SAVER" ]; then
-    SAVER_FRAMEWORKS="$SAVER/Contents/Frameworks"
-    SAVER_RESOURCES="$SAVER/Contents/Resources"
-    mkdir -p "$SAVER_FRAMEWORKS" "$SAVER_RESOURCES/vulkan/icd.d"
-    cp -f "$SCENE_SAVER_LIB" "$SAVER_FRAMEWORKS/libMirageSceneSaver.dylib"
-    chmod u+w "$SAVER_FRAMEWORKS/libMirageSceneSaver.dylib"
-    retarget_lib "$SAVER_FRAMEWORKS/libMirageSceneSaver.dylib"
-    install_name_tool -add_rpath "@loader_path" "$SAVER_FRAMEWORKS/libMirageSceneSaver.dylib" 2>/dev/null || true
-    for lib in "$FRAMEWORKS"/*.dylib; do
-        [ -f "$lib" ] || continue
-        cp -f "$lib" "$SAVER_FRAMEWORKS/$(basename "$lib")"
+
+thin_component() {
+    local component="$1"
+    rm -rf "$component/Contents/Frameworks" "$component/Contents/Resources/assets" "$component/Contents/Resources/vulkan"
+    for executable in "$component/Contents/MacOS"/*; do
+        [ -f "$executable" ] || continue
+        strip_item "$executable"
     done
-    rm -rf "$SAVER_RESOURCES/assets"
-    cp -R "$ASSETS_DIR" "$SAVER_RESOURCES/assets"
-    cat > "$SAVER_RESOURCES/vulkan/icd.d/MoltenVK_icd.json" <<EOF
-{
-    "file_format_version" : "1.0.0",
-    "ICD": {
-        "library_path": "../../../Frameworks/$MVK_BASE",
-        "api_version" : "1.4.0",
-        "is_portability_driver" : true
-    }
 }
-EOF
-fi
 
 if [ -d "$SAVER" ]; then
-    rm -rf "$DYNAMIC_SAVER"
+    thin_component "$SAVER"
     cp -R "$SAVER" "$DYNAMIC_SAVER"
     plutil -replace CFBundleIdentifier -string "cn.laobamac.Mirage.DynamicLockScreen" \
         "$DYNAMIC_SAVER/Contents/Info.plist"
@@ -250,48 +296,7 @@ if [ -d "$SAVER" ]; then
 fi
 
 if [ -d "$EXTENSION" ]; then
-    EXTENSION_RESOURCES="$EXTENSION/Contents/Resources"
-    EXTENSION_VK_ICD_DIR="$EXTENSION_RESOURCES/vulkan/icd.d"
-    mkdir -p "$EXTENSION_FRAMEWORKS" "$EXTENSION_RESOURCES"
-    rm -f "$EXTENSION_FRAMEWORKS"/*.dylib
-    cp -f "$SCENE_SAVER_LIB" "$EXTENSION_FRAMEWORKS/libMirageSceneSaver.dylib"
-    chmod u+w "$EXTENSION_FRAMEWORKS/libMirageSceneSaver.dylib"
-    for lib in "$FRAMEWORKS"/*.dylib; do
-        [ -f "$lib" ] || continue
-        cp -f "$lib" "$EXTENSION_FRAMEWORKS/$(basename "$lib")"
-    done
-    for lib in "$EXTENSION_FRAMEWORKS"/*.dylib; do
-        [ -f "$lib" ] || continue
-        retarget_lib "$lib"
-        install_name_tool -add_rpath "@loader_path" "$lib" 2>/dev/null || true
-    done
-    rm -rf "$EXTENSION_RESOURCES/assets"
-    cp -R "$ASSETS_DIR" "$EXTENSION_RESOURCES/assets"
-    mkdir -p "$EXTENSION_VK_ICD_DIR"
-    cat > "$EXTENSION_VK_ICD_DIR/MoltenVK_icd.json" <<EOF
-{
-    "file_format_version" : "1.0.0",
-    "ICD": {
-        "library_path" : "../../../Frameworks/$MVK_BASE",
-        "api_version" : "1.4.0",
-        "is_portability_driver" : true
-    }
-}
-EOF
-    echo "[bundle] 已生成扩展内嵌 ICD"
-    for lib in "$EXTENSION_FRAMEWORKS"/*.dylib; do
-        [ -f "$lib" ] || continue
-        sign_item "$lib"
-    done
-    for executable in "$EXTENSION/Contents/MacOS"/*.dylib; do
-        [ -f "$executable" ] || continue
-        sign_item "$executable"
-    done
-    for executable in "$EXTENSION/Contents/MacOS/MirageWallpaperExtension"; do
-        [ -f "$executable" ] || continue
-        sign_item "$executable"
-    done
-    codesign --force "${SIGN_ARGS[@]}" --entitlements "$EXTENSION_ENTITLEMENTS" --sign "$SIGN_IDENTITY" "$EXTENSION"
+    thin_component "$EXTENSION"
 fi
 
 echo "[bundle] 重新签名..."
@@ -299,9 +304,38 @@ for lib in "$FRAMEWORKS"/*.dylib; do
     [ -f "$lib" ] || continue
     sign_item "$lib"
 done
-for bin in "$RENDERERS/SceneWallpaper" "$RENDERERS/WebWallpaper" "$RENDERERS/VideoWallpaper"; do
+for bin in "$RENDERERS/SceneWallpaper" "$RENDERERS/WebWallpaper" "$RENDERERS/VideoWallpaper" "$RENDERERS/SceneBaker" "$RENDERERS/WebBaker" "$RENDERERS/VideoBaker"; do
     sign_item "$bin"
 done
+NOW_PLAYING="$RESOURCES/NowPlaying/libMirageNowPlaying.dylib"
+if [ -f "$NOW_PLAYING" ]; then
+    sign_item "$NOW_PLAYING"
+fi
+[ -d "$EXTENSION" ] || { echo "[bundle] shared runtime requires the wallpaper extension" >&2; exit 1; }
+SHARED_FRAMEWORKS="$EXTENSION/Contents/Frameworks"
+SHARED_RESOURCES="$EXTENSION/Contents/Resources"
+mkdir -p "$SHARED_FRAMEWORKS" "$SHARED_RESOURCES/vulkan/icd.d" "$SHARED_RESOURCES/MoltenVK"
+for lib in "$FRAMEWORKS"/*.dylib; do
+    name="$(basename "$lib")"
+    mv "$lib" "$SHARED_FRAMEWORKS/$name"
+    ln -s "../Extensions/MirageWallpaperExtension.appex/Contents/Frameworks/$name" "$FRAMEWORKS/$name"
+done
+mv "$RESOURCES/assets" "$SHARED_RESOURCES/assets"
+ln -s "../Extensions/MirageWallpaperExtension.appex/Contents/Resources/assets" "$RESOURCES/assets"
+rm -rf "$RESOURCES/MoltenVK"
+ln -s "../Extensions/MirageWallpaperExtension.appex/Contents/Resources/MoltenVK" "$RESOURCES/MoltenVK"
+ln -sf "../Extensions/MirageWallpaperExtension.appex/Contents/Resources/scene-runtime.json" "$RESOURCES/scene-runtime.json"
+cat > "$SHARED_RESOURCES/vulkan/icd.d/MoltenVK_icd.json" <<EOF
+{
+    "file_format_version": "1.0.0",
+    "ICD": {"library_path": "../../../Frameworks/$MVK_BASE", "api_version": "1.4.0", "is_portability_driver": true}
+}
+EOF
+python3 "$ROOT/Mirage/scripts/build_moltenvk.py" --record-bundle "$APP" --output "$MOLTENVK_DIR"
+python3 "$ROOT/Mirage/scripts/scene_runtime_manifest.py" "$APP"
+if [ -d "$EXTENSION" ]; then
+    codesign --force "${SIGN_ARGS[@]}" --entitlements "$EXTENSION_ENTITLEMENTS" --sign "$SIGN_IDENTITY" "$EXTENSION"
+fi
 SPARKLE="$FRAMEWORKS/Sparkle.framework/Versions/B"
 if [ -d "$SPARKLE" ]; then
     codesign --force "${RUNTIME_SIGN_ARGS[@]}" --entitlements "$ROOT/Mirage/scripts/SparkleAutoupdate.entitlements" --sign "$SIGN_IDENTITY" "$SPARKLE/Autoupdate"
@@ -311,20 +345,16 @@ if [ -d "$SPARKLE" ]; then
     sign_runtime_item "$FRAMEWORKS/Sparkle.framework"
 fi
 if [ -d "${SAVER:-}" ]; then
-    for lib in "$SAVER_FRAMEWORKS"/*.dylib; do
-        [ -f "$lib" ] || continue
-        sign_item "$lib"
-    done
     sign_bundle "$SAVER"
 fi
 if [ -d "${DYNAMIC_SAVER:-}" ]; then
-    for lib in "$DYNAMIC_SAVER/Contents/Frameworks"/*.dylib; do
-        [ -f "$lib" ] || continue
-        sign_item "$lib"
-    done
     sign_bundle "$DYNAMIC_SAVER"
 fi
 LOGIN_ITEM="$APP/Contents/Library/LoginItems/Mirage Login Item.app"
+for executable in "$APP/Contents/MacOS"/* "$LOGIN_ITEM/Contents/MacOS"/*; do
+    [ -f "$executable" ] && file "$executable" | grep -q Mach-O || continue
+    strip_item "$executable"
+done
 if [ -d "$LOGIN_ITEM" ]; then
     for executable in "$LOGIN_ITEM/Contents/MacOS"/*.dylib; do
         [ -f "$executable" ] || continue
@@ -337,5 +367,7 @@ for executable in "$APP/Contents/MacOS"/*.dylib; do
     sign_item "$executable"
 done
 codesign --force "${SIGN_ARGS[@]}" --entitlements "$APP_ENTITLEMENTS" --sign "$SIGN_IDENTITY" "$APP"
+python3 "$ROOT/Mirage/scripts/build_moltenvk.py" --verify-bundle "$APP"
+python3 "$ROOT/Mirage/scripts/scene_runtime_manifest.py" "$APP" --verify
 
 echo "[bundle] 完成"

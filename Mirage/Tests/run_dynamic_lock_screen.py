@@ -5,6 +5,8 @@
 #
 
 from pathlib import Path
+import argparse
+import os
 import platform
 import plistlib
 import shutil
@@ -14,6 +16,10 @@ import uuid
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--native-runtime", action="store_true")
+    parser.add_argument("--app", type=Path)
+    args = parser.parse_args()
     project = Path(__file__).resolve().parents[1]
     artifacts = Path(tempfile.mkdtemp(prefix="mirage-lock-regression-"))
     app = artifacts / "LockRegression.app"
@@ -52,7 +58,19 @@ def main():
     shutil.copy2(executable, service / "Contents/MacOS/LockRegressionService")
     for bundle in [service, app]:
         subprocess.run(["codesign", "--force", "--sign", "-", str(bundle)], check=True)
-    subprocess.run([str(executable)], check=True, timeout=30)
+    command = [str(executable)]
+    environment = os.environ.copy()
+    if args.native_runtime:
+        root = project.parent
+        if args.app:
+            contents = args.app.resolve() / "Contents"
+            command += ["--native-runtime", str(contents / "Frameworks/libMirageSceneSaver.dylib"), str(contents / "Resources/assets")]
+            icd = str(contents / "Resources/Renderers/vulkan/icd.d/MoltenVK_icd.json")
+            environment.update(VK_ICD_FILENAMES=icd, VK_DRIVER_FILES=icd)
+        else:
+            preset = "macos-arm64-clang-release" if platform.machine() == "arm64" else "macos-clang-release"
+            command += ["--native-runtime", str(root / "SceneRenderer/build" / preset / "Tools/SceneScreenSaver/libMirageSceneSaver.dylib"), str(root / "assets")]
+    subprocess.run(command, check=True, env=environment, timeout=90 if args.native_runtime else 30)
 
 
 if __name__ == "__main__":

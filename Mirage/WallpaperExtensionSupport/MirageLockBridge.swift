@@ -48,21 +48,25 @@ enum MirageLockBridge {
 
     static func fingerprint(at extensionURL: URL) throws -> String {
         let fm = FileManager.default
-        var directory: ObjCBool = false
-        guard fm.fileExists(atPath: extensionURL.appendingPathComponent("Contents/Resources/assets").path,
-                            isDirectory: &directory), directory.boolValue else {
-            throw failure("Wallpaper extension scene resources are missing")
-        }
         let paths = [
             "Contents/Info.plist",
-            "Contents/MacOS/MirageWallpaperExtension",
-            "Contents/Frameworks/libMirageSceneSaver.dylib",
-            "Contents/Resources/vulkan/icd.d/MoltenVK_icd.json"
+            "Contents/MacOS/MirageWallpaperExtension"
         ]
         var hasher = SHA256()
         for path in paths {
             hasher.update(data: Data(path.utf8))
             hasher.update(data: try Data(contentsOf: extensionURL.appendingPathComponent(path), options: .mappedIfSafe))
+        }
+        let contents = extensionURL.appendingPathComponent("Contents", isDirectory: true)
+        var directory: ObjCBool = false
+        guard fm.fileExists(atPath: contents.appendingPathComponent("Resources/assets").path,
+                            isDirectory: &directory), directory.boolValue else {
+            throw failure("Wallpaper extension scene resources are missing")
+        }
+        for path in ["Frameworks/libMirageSceneSaver.dylib", "Resources/vulkan/icd.d/MoltenVK_icd.json",
+                     "Resources/MoltenVK/manifest.json", "Resources/scene-runtime.json"] {
+            hasher.update(data: Data(path.utf8))
+            hasher.update(data: try Data(contentsOf: contents.appendingPathComponent(path), options: .mappedIfSafe))
         }
         let signature = extensionURL.appendingPathComponent("Contents/_CodeSignature/CodeResources")
         if fm.fileExists(atPath: signature.path) {

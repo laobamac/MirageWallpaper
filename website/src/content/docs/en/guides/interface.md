@@ -7,15 +7,16 @@ The top of Mirage's main window is a row of tabs and entry buttons, with the con
 
 ![The Mirage main window with the installed library, filters, wallpaper grid, and playback panel](/images/docs/library-overview.webp)
 
-*Real interface: the Installed view in Mirage 1.0.0. Filters sit on the left, the wallpaper library is in the middle, and the selected work and playback properties appear on the right.*
+*Real interface: the Installed view in the current build. Filters sit on the left, the wallpaper library is in the middle, and the selected work and playback properties appear on the right.*
 
 ## Top tabs
 
-The main window has three primary tabs across the top:
+The main window has four primary tabs across the top:
 
 - **Installed**: your local wallpaper library, where you browse, search, filter, and play installed wallpapers. See [Wallpaper library](/en/wallpapers/library/).
 - **Discover**: the content discovery page, showing recommendations and category entries.
 - **Workshop**: browse and download from the Steam Workshop. Switching to this tab requires completing the [Steam Workshop setup](/en/workshop/overview/) first. When downloads are in progress, a badge on the tab shows the number of active downloads.
+- **Subscribed**: sign in to Steam to load your subscribed Wallpaper Engine items, search them, filter by downloaded status, and queue missing items for download.
 
 There are also a few entry buttons on the right side of the tab bar:
 

@@ -55,6 +55,7 @@ struct MacDesktopHost {
     NSWindow*                        window { nil };
     CGDirectDisplayID                display_id { 0 };
     NSTimer*                         input_timer { nil };
+    id                               geometry_observer { nil };
     SRHostRef*                       hostRef { nil };  // ObjC wrapper for safe weak reference
     CAMetalLayer*                    surface_layer { nil };
     NSUInteger                       last_buttons { 0 };
@@ -301,6 +302,45 @@ void EncodeTexture(MacDesktopHost* host, id<MTLCommandBuffer> command_buffer,
     [encoder setFragmentSamplerState:host->present_sampler atIndex:0];
     [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     [encoder endEncoding];
+}
+
+void CaptureDiagnosticPresentation(id<MTLCommandBuffer> command_buffer, id<MTLTexture> texture) {
+    static bool recorded = false;
+    const char* directory = std::getenv("SCENERENDERER_DIAGNOSTICS_DIR");
+    if (directory == nullptr || recorded || texture.pixelFormat != MTLPixelFormatBGRA8Unorm) return;
+    NSString* root = [NSString stringWithUTF8String:directory];
+    if (![NSFileManager.defaultManager fileExistsAtPath:[root stringByAppendingPathComponent:@"capture"]]) return;
+    const NSUInteger width = texture.width;
+    const NSUInteger height = texture.height;
+    const NSUInteger row_bytes = (width * 4 + 255) & ~NSUInteger(255);
+    if (height == 0 || row_bytes > 256 * 1024 * 1024 / height) return;
+    id<MTLBuffer> buffer = [texture.device newBufferWithLength:row_bytes * height options:MTLResourceStorageModeShared];
+    if (buffer == nil) return;
+    id<MTLBlitCommandEncoder> blit = [command_buffer blitCommandEncoder];
+    if (blit == nil) { [buffer release]; return; }
+    [blit copyFromTexture:texture sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0)
+              sourceSize:MTLSizeMake(width, height, 1) toBuffer:buffer destinationOffset:0
+              destinationBytesPerRow:row_bytes destinationBytesPerImage:row_bytes * height];
+    [blit endEncoding];
+    recorded = true;
+    NSString* destination = [root stringByAppendingPathComponent:@"metalfx-present.ppm"];
+    [command_buffer addCompletedHandler:^(id<MTLCommandBuffer> completed) {
+        if (completed.status == MTLCommandBufferStatusCompleted) {
+            NSMutableData* data = [NSMutableData data];
+            NSString* header = [NSString stringWithFormat:@"P6\n%lu %lu\n255\n", width, height];
+            [data appendData:[header dataUsingEncoding:NSASCIIStringEncoding]];
+            const auto* bytes = static_cast<const uint8_t*>(buffer.contents);
+            for (NSUInteger y = 0; y < height; ++y) {
+                for (NSUInteger x = 0; x < width; ++x) {
+                    const auto* pixel = bytes + y * row_bytes + x * 4;
+                    const uint8_t rgb[] = { pixel[2], pixel[1], pixel[0] };
+                    [data appendBytes:rgb length:3];
+                }
+            }
+            [data writeToFile:destination atomically:YES];
+        }
+    }];
+    [buffer release];
 }
 
 void CopyTexture(id<MTLCommandBuffer> command_buffer, id<MTLTexture> source,
@@ -665,6 +705,8 @@ extern "C" void* SceneRendererMacDesktopCreate(const SceneRendererMacDesktopConf
         window.collectionBehavior    = NSWindowCollectionBehaviorCanJoinAllSpaces |
                                     NSWindowCollectionBehaviorStationary |
                                     NSWindowCollectionBehaviorIgnoresCycle;
+        const bool diagnostic = std::getenv("SCENERENDERER_DIAGNOSTICS_DIR") != nullptr;
+        if (diagnostic) window.level = NSNormalWindowLevel + 1;
         const bool deferred_show     = config != nullptr && config->deferred_show;
         host->activation_confirmed.store(! deferred_show);
         window.opaque                = deferred_show ? NO : YES;
@@ -715,7 +757,18 @@ extern "C" void* SceneRendererMacDesktopCreate(const SceneRendererMacDesktopConf
                                                        MacDesktopHost* h = static_cast<MacDesktopHost*>(ref.hostPtr);
                                                        if (h != nullptr) PollInput(h);
                                                      }];
+        host->input_timer.tolerance = interval * 0.1;
         [NSRunLoop.mainRunLoop addTimer:host->input_timer forMode:NSRunLoopCommonModes];
+        host->geometry_observer = [[NSNotificationCenter.defaultCenter
+            addObserverForName:NSApplicationDidChangeScreenParametersNotification
+                        object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification*) {
+                auto* current = static_cast<MacDesktopHost*>(ref.hostPtr);
+                if (current != nullptr) {
+                    NormalizeGeometry(current);
+                    if (current->callbacks.redraw_requested)
+                        current->callbacks.redraw_requested(current->callbacks.userdata);
+                }
+            }] retain];
         PollInput(host);
         return host;
     }
@@ -737,6 +790,11 @@ extern "C" void SceneRendererMacDesktopDestroy(void* handle) {
     }
 
     auto cleanup = ^{
+      if (host->geometry_observer != nil) {
+          [NSNotificationCenter.defaultCenter removeObserver:host->geometry_observer];
+          [host->geometry_observer release];
+          host->geometry_observer = nil;
+      }
       if (host->input_timer != nil) {
           [host->input_timer invalidate];
           host->input_timer = nil;
@@ -768,6 +826,17 @@ extern "C" int SceneRendererMacDesktopRun(void* handle) {
 }
 
 extern "C" void SceneRendererMacDesktopStop(void*) { StopApplicationOnMainThread(); }
+
+extern "C" void SceneRendererMacDesktopSetPaused(void* handle, bool paused) {
+    auto* host = static_cast<MacDesktopHost*>(handle);
+    if (host == nullptr || host->hostRef == nil) return;
+    SRHostRef* ref = host->hostRef;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        auto* current = static_cast<MacDesktopHost*>(ref.hostPtr);
+        if (current == nullptr || current->input_timer == nil) return;
+        current->input_timer.fireDate = paused ? NSDate.distantFuture : NSDate.date;
+    });
+}
 
 extern "C" void SceneRendererMacDesktopWake(void* handle) {
     auto* host = static_cast<MacDesktopHost*>(handle);
@@ -805,6 +874,8 @@ extern "C" void SceneRendererMacDesktopActivate(void* handle) {
       host->window.alphaValue = 0.0;
       [host->window orderFrontRegardless];
       [CATransaction flush];
+      if (host->callbacks.redraw_requested)
+          host->callbacks.redraw_requested(host->callbacks.userdata);
     };
     if (NSThread.isMainThread) {
         activate();
@@ -938,6 +1009,7 @@ extern "C" void SceneRendererMacDesktopPresentMetalFrame(
             NSLog(@"SceneRenderer MetalFX Spatial unavailable for this frame; using linear fallback");
         }
 
+        CaptureDiagnosticPresentation(command_buffer, drawable.texture);
         SRHostRef* ref = host->hostRef;
         [drawable addPresentedHandler:^(id<MTLDrawable>) {
           ScheduleFramePresented(ref);

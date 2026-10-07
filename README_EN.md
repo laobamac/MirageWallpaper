@@ -26,6 +26,10 @@
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-GPL--3.0-blue"></a>
 </p>
 
+<p align="center">
+  <a href="#development-team">Development Team</a>
+</p>
+
 > [!IMPORTANT]
 > **Mirage is still in an early stage.** If you encounter a problem, please file a detailed [GitHub Issue](https://github.com/laobamac/MirageWallpaper/issues/new/choose) with your macOS/App version, reproduction steps, expected and actual results, and relevant logs. You can also join the QQ feedback group: **2160040437**.
 
@@ -60,9 +64,11 @@ Please independently verify the network, address, and amount before transferring
 - Calls SteamKit2 manifest and CDN APIs directly for Workshop downloads. The implementation follows proven design patterns from [DepotDownloader](https://github.com/SteamRE/DepotDownloader) without bundling or launching its executable.
 - Reuses one persistent Steam session instead of starting and signing in again for every download.
 - Downloads up to three Workshop items concurrently with live CDN byte counts, speed, progress, and estimated time remaining. Each task can be canceled independently.
-- Plays downloaded works directly and exposes volume, playback rate, fill mode, and wallpaper-provided properties.
-- Supports multi-display coverage, menu-bar controls, login launch, and restoring a desktop placeholder image.
-- Installs Mirage's standalone dynamic screen saver, which can play video, web, and scene wallpapers while retaining the selected preset and custom properties.
+- Plays downloaded works directly and exposes volume, playback rate, fill mode, position, and wallpaper-provided properties.
+- Per-display playlists can rotate wallpapers by timer, logon, time of day, day of week, or video end, with sorted/random order and transitions.
+- Supports multi-display coverage, menu-bar controls, login launch, the subscribed-items tab, and restoring a desktop placeholder image.
+- Installs Mirage's standalone dynamic screen saver, which independently plays video and scene wallpapers while retaining the selected preset and custom properties.
+- Offers two experimental dynamic lock-screen schemes: Scheme A requires macOS 26+, Scheme B requires macOS 14.2+; both support video and scene wallpapers only.
 - Lets you continue, mute, pause, or stop playback when another app is fullscreen, another app plays audio, the display sleeps, or the Mac is on battery.
 - Restores playback after macOS "click wallpaper to reveal desktop" interaction.
 - Shows a security confirmation before first running a web wallpaper and supports Wallpaper Engine user properties and mouse events.
@@ -149,8 +155,10 @@ Install dependencies:
 ```bash
 xcode-select --install
 brew install cmake ninja pkg-config llvm molten-vk vulkan-loader vulkan-headers \
-  glslang glfw freetype fontconfig lz4 ffmpeg
+  glslang glfw freetype fontconfig lz4 ffmpeg dav1d nasm
 ```
+
+Renderer scripts automatically build a pinned decoder-only FFmpeg. Mobile scene export separately bundles Homebrew FFmpeg and a pinned EtcTool, including their required libraries and licenses. dav1d supplies AV1 decoding; nasm supplies Intel assembly support.
 
 ## Build from Source
 
@@ -158,7 +166,7 @@ brew install cmake ninja pkg-config llvm molten-vk vulkan-loader vulkan-headers 
 git clone https://github.com/laobamac/MirageWallpaper.git
 cd MirageWallpaper
 
-./scripts/build_all.sh
+MIRAGE_ALLOW_NETWORK_FETCH=1 ./scripts/build_all.sh
 
 open "Mirage/dist/Mirage.app"
 ```
@@ -172,6 +180,8 @@ Mirage/dist/Mirage.app
 The app includes `MirageScreenSaver.saver`, which can be installed from **Settings → Screen Saver**. It is copied to `~/Library/Screen Savers` for the current user and does not require Mirage to remain running. The packaging script embeds the scene screen-saver runtime and required resources.
 
 `build_all.sh` builds the three renderers, Steam service, and main app in order, then packages the complete app bundle. Use `./scripts/build_all.sh debug` for a Debug build or `./scripts/build_all.sh app` to rebuild only the app.
+
+Set `MIRAGE_ALLOW_NETWORK_FETCH=1` for the first package build to fetch and verify the pinned Etc2Comp source. Once the source is cached, the variable can be omitted. Offline packaging requires this cache to be prepared beforehand.
 
 ### Configure a Built-in Steam Web API Key Locally
 
@@ -206,6 +216,11 @@ Before the first run, add these Repository Secrets in **Settings → Secrets and
 ```text
 MIRAGE_STEAM_WEB_API_KEY      32-character Steam Web API key
 MIRAGE_SPARKLE_PRIVATE_KEY    Mirage's Sparkle Ed25519 private key
+APPLE_DEVELOPER_ID_APPLICATION_P12             Base64-encoded Developer ID Application P12 certificate
+APPLE_DEVELOPER_ID_APPLICATION_P12_PASSWORD    P12 certificate password
+APPLE_NOTARY_APPLE_ID                          Apple ID
+APPLE_NOTARY_PASSWORD                          Apple ID app-specific password
+APPLE_DEVELOPER_TEAM_ID                        Apple Developer Team ID
 ```
 
 If GitHub CLI is installed locally, you can run:
@@ -215,6 +230,18 @@ gh secret set MIRAGE_STEAM_WEB_API_KEY < .secrets/steam_web_api_key
 ```
 
 `MIRAGE_SPARKLE_PRIVATE_KEY` is only used by Actions to generate Ed25519-signed updates and appcasts. Never commit it. Keep the original key in a logged-in keychain and maintain an offline backup. The client only contains the public key.
+
+To compile the optional sign-in-free download component in the same Action, keep its source in a separate **private** repository and configure MirageWallpaper as follows:
+
+| Type | Name | Value |
+| --- | --- | --- |
+| Repository variable | `MIRAGE_DIRECT_WORKSHOP_REPOSITORY` | The private component repository's `owner/name` |
+| Repository variable | `MIRAGE_DIRECT_WORKSHOP_REF` | Its full 40-character commit SHA, shared by both architecture builds |
+| Repository secret | `MIRAGE_DIRECT_WORKSHOP_DEPLOY_KEY` | An SSH deploy private key restricted to reading that repository; add its public key under the private repository's Deploy keys without write access |
+
+The private repository must contain `Service`, `Tests/Tests.csproj`, `Tests/Program.cs`, `build.sh`, and `LICENSE`. Preserve the existing public `Service/VerificationKey.cs`; do not regenerate the signing identity. Do not commit `secrets/`, the activation signing private key, or test activation codes, or supply them to Actions. The workflow fetches the pinned commit into the runner's temporary directory, tests and compiles the helper, and bundles only its `dist` binaries. Private source and compiler logs are never uploaded as artifacts. Packaging verification checks that the helper starts and rejects an invalid activation code.
+
+Leaving all three settings unset builds the standard edition. Partial configuration or a private build failure fails the job rather than silently omitting the feature. After updating the component, update `MIRAGE_DIRECT_WORKSHOP_REF` and run the Action manually or trigger the next main repository build. Changes to the private repository alone do not trigger the main workflow.
 
 The workflow writes the full Git commit and an incrementing build number from `git rev-list --count` into the App. No manual version bump is required. Only a build with a greater build number is installed, preventing a newer development build from being downgraded to an older release.
 
@@ -227,7 +254,7 @@ On the next launch after updating, Mirage also checks any installed `MirageScree
 
 GitHub Secrets prevent a key from appearing in the repository and ordinary build logs, but they cannot make a key embedded in a distributed client truly secret. Anyone capable of inspecting the App can extract it. If a non-extractable credential is required later, move the request to a controlled server that holds the key; do not rely on client-side obfuscation.
 
-The current workflow uses temporary signing and does not include Apple Developer ID signing or notarization. First-time users may need to manually allow Mirage in macOS Gatekeeper, while subsequent update authenticity is verified with the built-in Ed25519 public key.
+The workflow imports the Developer ID Application certificate into a temporary keychain, signs the complete App with Hardened Runtime and a secure timestamp, submits it to Apple for notarization, staples the ticket, and verifies its signature, ticket, and Gatekeeper acceptance before packaging. Sparkle Ed25519 signing continues to protect the authenticity of subsequent updates independently.
 
 ## Data Directories
 
@@ -277,6 +304,15 @@ Before submitting a change, verify at least that:
 3. The App bundle contains all three renderers, runtime libraries, the MoltenVK ICD, and `assets`.
 4. No API keys, Steam sign-in data, build directories, or user wallpapers are committed.
 
+## Development Team
+
+| Name | Role | GitHub |
+| --- | --- | --- |
+| Xiaoci Wang | Project Author · Developer | [@laobamac](https://github.com/laobamac) |
+| Jiale Yu | Developer | [@dawalishi821](https://github.com/dawalishi821) |
+| Pikachu Ren | Developer | [@PIKACHUIM](https://github.com/PIKACHUIM) |
+| Yinan Qin | Developer | [@elysia-best](https://github.com/elysia-best) |
+
 ## Acknowledgements
 
 - [SteamKit2](https://github.com/SteamRE/SteamKit) — direct dependency of Mirage's embedded Steam service; version 3.4.0, licensed under LGPL-2.1.
@@ -290,3 +326,5 @@ Before submitting a change, verify at least that:
 ## License
 
 Mirage is released under [GPL-3.0](LICENSE). Steam service notices are stored in [`SteamService/Licenses`](SteamService/Licenses); all other third-party code and resources remain under their respective licenses. Mirage is not affiliated with or endorsed by Valve, Steam, or Wallpaper Engine.
+
+Optional sign-in-free Workshop downloads are disabled by default and require a device-specific activation code in Settings → General. This mode supports downloads only, without Steam subscriptions, favorites or comments. Its independent helper is not included in this open-source repository; builds without it retain normal Steam downloads. Release builds can supply a precompiled component using `MIRAGE_DIRECT_WORKSHOP_BUNDLE`. Do not include private source or activation signing material in this repository.

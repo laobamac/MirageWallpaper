@@ -70,6 +70,9 @@ BUILD_DIR="$PROJECT_DIR/build/$PRESET"
 command -v cmake >/dev/null || die "cmake not found. brew install cmake"
 command -v ninja >/dev/null || die "ninja not found. brew install ninja"
 xcrun --find clang >/dev/null 2>&1 || die "Xcode CLT not found: xcode-select --install"
+command -v pkg-config >/dev/null || die "pkg-config not found. brew install pkg-config"
+
+
 
 JOBS="${JOBS:-$(sysctl -n hw.logicalcpu 2>/dev/null || echo 8)}"
 
@@ -79,12 +82,17 @@ do_clean() {
 }
 
 do_configure() {
+    FFMPEG_ARCH="$(uname -m)"
+    FFMPEG_PREFIX="${MIRAGE_FFMPEG_DIR:-$PROJECT_DIR/../Mirage/build/ffmpeg/$FFMPEG_ARCH}"
+    "$PROJECT_DIR/../scripts/build_ffmpeg.sh" "$FFMPEG_ARCH"
+    [[ -f "$FFMPEG_PREFIX/lib/pkgconfig/libavcodec.pc" ]] || die "bundled FFmpeg missing at $FFMPEG_PREFIX (run scripts/build_ffmpeg.sh)"
+    export PKG_CONFIG_PATH="$FFMPEG_PREFIX/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
     info "configuring preset: $PRESET"
-    cmake --preset "$PRESET"
+    cmake -U '*VR_AV*' -U '*VR_SW*' --preset "$PRESET"
 }
 
 do_build() {
-    [[ -f "$BUILD_DIR/CMakeCache.txt" ]] || do_configure
+    do_configure
     info "building preset: $PRESET (jobs=$JOBS)"
     cmake --build "$BUILD_DIR" --parallel "$JOBS"
 }
@@ -107,7 +115,7 @@ case "$ACTION" in
     clean)     do_clean ;;
     configure) do_configure ;;
     build)     do_build; report ;;
-    all)       do_configure; do_build; report ;;
+    all)       do_build; report ;;
 esac
 
 good "done."

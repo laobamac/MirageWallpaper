@@ -35,6 +35,8 @@ struct VulkanSurfaceInfo {
 struct RenderInitInfo {
     bool enable_valid_layer { false };
     bool offscreen { false };
+    bool manual_frames { false };
+    uint32_t random_seed { 1 };
 
     std::span<const std::uint8_t> uuid;
     TexTiling                     offscreen_tiling { TexTiling::OPTIMAL };
@@ -49,6 +51,9 @@ struct RenderInitInfo {
     ReDrawCB redraw_callback;
     MetalFrameCB metal_frame_callback;
     RenderFailureCB failure_callback;
+    // Hosts enabling this must request frames after activation, resize and capture.
+    bool                              allow_on_demand { false };
+    std::function<void(bool running)> frame_activity_callback;
 };
 
 std::unique_ptr<rg::RenderGraph> sceneToRenderGraph(Scene&);

@@ -19,8 +19,10 @@ Mirage consists of three independent renderers (C++ / Objective-C++), a SwiftUI 
 ```bash
 xcode-select --install
 brew install cmake ninja pkg-config llvm molten-vk vulkan-loader vulkan-headers \
-  glslang glfw freetype fontconfig lz4 ffmpeg
+  glslang glfw freetype fontconfig lz4 ffmpeg dav1d nasm
 ```
+
+Renderer scripts automatically build a pinned decoder-only FFmpeg. Homebrew FFmpeg is used only to generate test media and is not bundled. dav1d supplies AV1 decoding; nasm supplies Intel assembly support.
 
 These dependencies serve, respectively: the scene renderer (Vulkan/MoltenVK, glslang, GLFW, FreeType, Fontconfig, LZ4), the video renderer (FFmpeg), and the C++20 toolchain provided by Homebrew LLVM. The .NET 10 SDK publishes the SteamKit2 service as a self-contained `osx-arm64` or `osx-x64` executable.
 

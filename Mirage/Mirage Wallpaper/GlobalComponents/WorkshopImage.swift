@@ -428,6 +428,7 @@ struct WorkshopImage: View {
     var isAnimating: Bool
     var isLoadingEnabled: Bool
     var preloadsWhenInactive: Bool
+    var showsLoadingIndicator: Bool
 
     @Environment(\.displayScale) private var displayScale
     @Environment(\.mirageContentActive) private var contentActive
@@ -440,16 +441,19 @@ struct WorkshopImage: View {
     @State private var loadedKey: String?
 
     init(url: URL?, contentMode: ContentMode = .fill, isAnimating: Bool = false,
-         isLoadingEnabled: Bool = true, preloadsWhenInactive: Bool = false) {
+         isLoadingEnabled: Bool = true, preloadsWhenInactive: Bool = false,
+         showsLoadingIndicator: Bool = true) {
         source = url.map { WorkshopImageLoader.Source(url: $0) }
         self.contentMode = contentMode
         self.isAnimating = isAnimating
         self.isLoadingEnabled = isLoadingEnabled
         self.preloadsWhenInactive = preloadsWhenInactive
+        self.showsLoadingIndicator = showsLoadingIndicator
     }
 
     init(wallpaper: WEWallpaper, contentMode: ContentMode = .fill, isAnimating: Bool = false,
-         isLoadingEnabled: Bool = true, preloadsWhenInactive: Bool = false) {
+         isLoadingEnabled: Bool = true, preloadsWhenInactive: Bool = false,
+         showsLoadingIndicator: Bool = true) {
         source = wallpaper.project.preview.isEmpty ? nil : WorkshopImageLoader.Source(
             url: wallpaper.wallpaperDirectory.appending(path: wallpaper.project.preview),
             directory: wallpaper.wallpaperDirectory, relativePath: wallpaper.project.preview)
@@ -457,6 +461,7 @@ struct WorkshopImage: View {
         self.isAnimating = isAnimating
         self.isLoadingEnabled = isLoadingEnabled
         self.preloadsWhenInactive = preloadsWhenInactive
+        self.showsLoadingIndicator = showsLoadingIndicator
     }
 
     var body: some View {
@@ -475,8 +480,12 @@ struct WorkshopImage: View {
                     Image(systemName: "photo")
                         .font(.title2)
                         .foregroundStyle(.tertiary)
-                } else {
+                } else if showsLoadingIndicator && source != nil {
                     ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: "photo")
+                        .font(.title2)
+                        .foregroundStyle(.tertiary)
                 }
             }
             .clipped()

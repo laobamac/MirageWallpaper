@@ -1,5 +1,8 @@
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <cmath>
 #include <iostream>
 #include <numbers>
@@ -34,6 +37,59 @@ sr::Json Parse(std::string_view source) {
     ++g_failures;
     std::cerr << "FAIL: invalid test JSON\n";
     return sr::Json::Null();
+}
+
+void TestStorageSnapshots() {
+    const auto directory = std::filesystem::temp_directory_path() /
+        ("mirage-storage-regression-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(directory);
+    const auto path = directory / "desktop.json";
+    const std::string original = R"({"position":"[12,34]","enabled":"true"})";
+    { std::ofstream file(path); file << original; }
+    {
+        std::string published;
+        sr::script::JsRuntime desktop;
+        desktop.SetPersistence(path.string());
+        desktop.SetStorageCallback([&](std::string value) { published = std::move(value); });
+        Check(Parse(published) == Parse(original), "desktop storage publishes its initial snapshot");
+        const auto snapshot = desktop.StorageSnapshot();
+        sr::script::JsRuntime saver;
+        saver.SetPersistence(path.string());
+        saver.SetStorageSnapshot(snapshot);
+        auto* script = saver.MakeFieldScript(
+            R"JS(
+                let initial = 0;
+                export function init() { initial = localStorage.get('position')[0]; }
+                export function update() {
+                    localStorage.set('position', [99, 100]);
+                    return initial;
+                }
+            )JS", "test/saver_storage", sr::script::FieldKind::Scalar, Parse("{}"), Parse("0"));
+        Check(script != nullptr, "storage snapshot script compiles");
+        if (script) {
+            sr::SceneNode root;
+            saver.SetSceneRoot(&root);
+            saver.TickAll();
+            const auto* value = std::get_if<sr::script::ScalarValue>(&script->last_value());
+            Check(value && value->v == 12, "script init sees inherited storage");
+        }
+        saver.PublishStorageSnapshot();
+        Check(saver.StorageSnapshot() != snapshot, "isolated script writes stay available in memory");
+        std::ifstream file(path);
+        const std::string persisted(std::istreambuf_iterator<char>(file), {});
+        Check(persisted == original, "saver writes never overwrite desktop storage");
+        sr::script::JsRuntime other;
+        other.SetStorageSnapshot(snapshot);
+        saver.ResetLocalStorage();
+        Check(Parse(saver.StorageSnapshot()) == Parse("{}"), "reset clears the isolated snapshot");
+        Check(Parse(other.StorageSnapshot()) == Parse(original), "different instances do not share storage");
+        desktop.ResetLocalStorage();
+        Check(Parse(published) == Parse("{}"), "desktop reset publishes an empty snapshot");
+        std::ifstream resetFile(path);
+        const std::string reset(std::istreambuf_iterator<char>(resetFile), {});
+        Check(Parse(reset) == Parse("{}"), "desktop reset persists atomically");
+    }
+    std::filesystem::remove_all(directory);
 }
 
 void TestVectorAngle2() {
@@ -1592,7 +1648,111 @@ void TestUserShortcutOpening() {
 
 } // namespace
 
+void TestBoolReturnTypeContract() {
+    sr::script::JsRuntime runtime;
+    sr::Scene             scene;
+    auto                  root  = rstd::sync::Arc<sr::SceneNode>::make();
+    auto                  media = rstd::sync::Arc<sr::SceneNode>::make(
+        Eigen::Vector3f::Zero(), Eigen::Vector3f::Ones(), Eigen::Vector3f::Zero(), "media");
+    root->AppendChild(media.clone());
+    runtime.SetScene(&scene);
+
+    auto* script = runtime.MakeFieldScript(
+        R"JS(
+            let state = 0;
+            export function mediaPlaybackChanged(event) { state = event.state; }
+            export function update(value) {
+                thisScene.getLayer("media").visible = state !== 0;
+                return 0;
+            }
+        )JS",
+        "test/bool_return_type_contract",
+        sr::script::FieldKind::Bool,
+        Parse("{}"),
+        Parse("true"),
+        media.as_ptr());
+    Check(script != nullptr, "bool return contract script compiles");
+    if (! script) return;
+    runtime.SetSceneRoot(root.as_ptr());
+    auto apply = sr::script::MakeNodeVisibleApply(media.clone(), &scene);
+
+    runtime.TickAll();
+    apply(script->last_value());
+    Check(std::holds_alternative<std::monostate>(script->last_value()),
+          "numeric return on a bool property is ignored");
+    Check(! media->Visible(), "script-driven hide survives a numeric return");
+
+    runtime.SetMediaStatus(sr::script::MediaStatus { .state = 1, .title = "Song" });
+    runtime.TickAll();
+    apply(script->last_value());
+    Check(media->Visible(), "script-driven show survives a numeric return");
+
+    runtime.SetMediaStatus(sr::script::MediaStatus { .state = 0 });
+    runtime.TickAll();
+    apply(script->last_value());
+    Check(! media->Visible(), "script-driven hide follows playback stop");
+
+    auto* toggled = runtime.MakeFieldScript(
+        R"JS(
+            export function update(value) { return !value; }
+        )JS",
+        "test/bool_return_toggle",
+        sr::script::FieldKind::Bool,
+        Parse("{}"),
+        Parse("true"));
+    Check(toggled != nullptr, "bool toggle script compiles");
+    if (! toggled) return;
+    runtime.TickAll();
+    const auto* first = std::get_if<sr::script::BoolValue>(&toggled->last_value());
+    Check(first && ! first->v, "boolean return is applied");
+    runtime.TickAll();
+    const auto* second = std::get_if<sr::script::BoolValue>(&toggled->last_value());
+    Check(second && second->v, "boolean return feeds the next update value");
+}
+
+void TestInitReturnAppliesToProperty() {
+    sr::script::JsRuntime runtime;
+    auto* script = runtime.MakeFieldScript(
+        R"JS(
+            let seen = null;
+            export function init(value) { return ""; }
+            export function update(value) {
+                if (seen === null) seen = value;
+                return seen === "" ? "typed" : "stale";
+            }
+        )JS",
+        "test/init_return_applies",
+        sr::script::FieldKind::String,
+        Parse("{}"),
+        Parse("\"Text Layer\""));
+    Check(script != nullptr, "init return script compiles");
+    if (! script) return;
+    sr::SceneNode root;
+    runtime.SetSceneRoot(&root);
+    const auto* initial = std::get_if<sr::script::StringValue>(&script->last_value());
+    Check(initial && initial->s.empty(), "init return replaces the authored value");
+    runtime.TickAll();
+    const auto* updated = std::get_if<sr::script::StringValue>(&script->last_value());
+    Check(updated && updated->s == "typed", "update receives the init return as value");
+
+    auto* ignored = runtime.MakeFieldScript(
+        R"JS(
+            export function init(value) { return 1; }
+            export function update(value) { return value; }
+        )JS",
+        "test/init_return_ignored",
+        sr::script::FieldKind::Bool,
+        Parse("{}"),
+        Parse("true"));
+    Check(ignored != nullptr, "init mismatch script compiles");
+    if (! ignored) return;
+    runtime.TickAll();
+    const auto* kept = std::get_if<sr::script::BoolValue>(&ignored->last_value());
+    Check(kept && kept->v, "non-boolean init return leaves a bool property untouched");
+}
+
 int main() {
+    TestStorageSnapshots();
     TestVectorAngle2();
     TestMediaCompatibilityFields();
     TestImplicitFieldAnimation();
@@ -1624,6 +1784,8 @@ int main() {
     TestSceneLayerEnumeration();
     TestFieldScriptUpdateDetection();
     TestUserShortcutOpening();
+    TestBoolReturnTypeContract();
+    TestInitReturnAppliesToProperty();
     if (g_failures == 0) std::cout << "ScriptCompatibilityRegression: ok\n";
     return g_failures == 0 ? 0 : 1;
 }

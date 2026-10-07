@@ -29,6 +29,7 @@ struct FrameCapture {
     std::condition_variable ready;
     std::array<std::uint8_t, 3> color {};
     unsigned count {};
+    bool                        idle { false };
     std::uint32_t width {}, height {};
 };
 
@@ -58,8 +59,31 @@ static void WaitForColor(FrameCapture& capture, unsigned previous, int channel) 
     }
 }
 
-static void Run(const char* assets, const std::filesystem::path& directory, bool vertical) {
+static void Run(const char* assets, const std::filesystem::path& directory, bool vertical,
+                bool direct_metal = false, unsigned msaa = 1, bool effect = false,
+                bool media = false) {
     std::filesystem::create_directories(directory / "cache");
+    if (effect) {
+        std::filesystem::create_directories(directory / "effects/performance");
+        std::ofstream(directory / "effects/performance/effect.json") << R"({
+            "passes":[
+                {"material":"materials/util/effectpassthrough.json","target":"_rt_Performance",
+                 "bind":[{"name":"previous","index":0}]},
+                {"material":"materials/util/effectpassthrough.json",
+                 "bind":[{"name":"_rt_Performance","index":0}]}],
+            "fbos":[{"name":"_rt_Performance","scale":1,"format":"rgba_backbuffer"}]
+        })";
+    }
+    if (media) {
+        std::filesystem::create_directories(directory / "models");
+        std::filesystem::create_directories(directory / "materials");
+        std::ofstream(directory / "models/media.json") <<
+            R"({"material":"materials/media.json","solidlayer":true})";
+        std::ofstream(directory / "materials/media.json") << R"({"passes":[{
+            "shader":"genericimage2","textures":["util/white"],"combos":{"VERSION":2},
+            "blending":"translucent","depthtest":"disabled","depthwrite":"disabled","cullmode":"nocull"
+        }]})";
+    }
     const int width = vertical ? 1080 : 1920;
     const int height = vertical ? 1920 : 1080;
     std::ostringstream json;
@@ -67,11 +91,17 @@ static void Run(const char* assets, const std::filesystem::path& directory, bool
          << width << ",\"height\":" << height << "}},\"objects\":[";
     for (int i = 0; i < 3; ++i) {
         if (i != 0) json << ',';
-        json << "{\"id\":" << i + 1 << ",\"image\":\"models/util/solidlayer.json\",\"origin\":["
+        json << "{\"id\":" << i + 1 << ",\"image\":\""
+             << (media ? "models/media.json" : "models/util/solidlayer.json") << "\",\"origin\":["
              << (vertical ? 540 : 320 + i * 640) << ',' << (vertical ? 1600 - i * 640 : 540)
              << ",0],\"size\":[" << (vertical ? 1080 : 640) << ',' << (vertical ? 640 : 1080)
              << "],\"color\":[" << (i == 0 ? 1 : 0) << ',' << (i == 1 ? 1 : 0) << ','
-             << (i == 2 ? 1 : 0) << "],\"visible\":true}";
+             << (i == 2 ? 1 : 0) << "],\"visible\":true";
+        if (effect)
+            json << R"(,"effects":[{"file":"effects/performance/effect.json","visible":true}])";
+        if (media)
+            json << R"(,"instance":{"usertextures":[{"type":"system","name":"$mediaThumbnail"}]})";
+        json << '}';
     }
     json << "]}";
     std::ofstream(directory / "scene.json") << json.str();
@@ -90,12 +120,81 @@ static void Run(const char* assets, const std::filesystem::path& directory, bool
         config.position = { 0, 0 };
         sr::RenderInitInfo info;
         info.offscreen = true;
+        info.msaa_samples            = msaa;
+        info.allow_on_demand         = true;
+        info.frame_activity_callback = [&](bool running) {
+            std::lock_guard lock(capture.mutex);
+            capture.idle = ! running;
+            capture.ready.notify_all();
+        };
+        info.enable_valid_layer = std::getenv("SCENERENDERER_TEST_VALIDATION") != nullptr;
+        if (direct_metal)
+            info.metal_frame_callback = [](void*, void*, std::uint32_t, std::uint32_t) {
+            };
         info.width = vertical ? 192 : 108;
         info.height = vertical ? 108 : 192;
         wallpaper.configure(std::move(config));
         wallpaper.initVulkan(std::move(info));
         if (!wallpaper.waitVulkanInited(30000)) throw std::runtime_error("Vulkan initialization failed");
+        if (direct_metal && wallpaper.exSwapchain() != nullptr)
+            throw std::runtime_error("direct Metal output allocated unused swapchain slots");
         WaitForColor(capture, 0, 0);
+        if (! effect) {
+            std::unique_lock lock(capture.mutex);
+            if (! capture.ready.wait_for(lock, std::chrono::seconds(5), [&] {
+                    return capture.idle;
+                }))
+                throw std::runtime_error("static scene did not enter on-demand mode");
+        }
+        unsigned idle_count;
+        {
+            std::lock_guard lock(capture.mutex);
+            idle_count = capture.count;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(120));
+        {
+            std::lock_guard lock(capture.mutex);
+            if (! effect && capture.count != idle_count)
+                throw std::runtime_error("static scene kept submitting frames");
+        }
+        if (!effect && !media) {
+            sr::MediaStatus unrelated;
+            unrelated.title   = "Unrelated media";
+            unrelated.art_url = "/unused-artwork";
+            wallpaper.setMediaStatus(std::move(unrelated));
+            std::this_thread::sleep_for(std::chrono::milliseconds(120));
+            std::lock_guard lock(capture.mutex);
+            if (capture.count != idle_count)
+                throw std::runtime_error("unconsumed media updates woke a static scene");
+        }
+        wallpaper.requestFrame();
+        WaitForColor(capture, idle_count, 0);
+        if (effect) {
+            std::mutex              diagnostic_mutex;
+            std::condition_variable diagnostic_ready;
+            bool                    checked = false, limited_usage = false;
+            wallpaper.requestPreparedPassDiagnostics([&](auto passes) {
+                std::lock_guard lock(diagnostic_mutex);
+                for (const auto& pass : passes)
+                    for (const auto& texture : pass.texture_requests)
+                        if (texture.request && texture.request->cache_key) {
+                            const auto usage = texture.request->cache_key->image_usage;
+                            if ((usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) &&
+                                ! (usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT))
+                                limited_usage = true;
+                        }
+                checked = true;
+                diagnostic_ready.notify_all();
+            });
+            std::unique_lock lock(diagnostic_mutex);
+            if (! diagnostic_ready.wait_for(lock,
+                                            std::chrono::seconds(5),
+                                            [&] {
+                                                return checked;
+                                            }) ||
+                ! limited_usage)
+                throw std::runtime_error("effect targets did not get restricted image usage");
+        }
         wallpaper.pause();
         std::this_thread::sleep_for(std::chrono::milliseconds(150));
         for (int channel : { 1, 2, 0 }) {
@@ -119,6 +218,30 @@ static void Run(const char* assets, const std::filesystem::path& directory, bool
             std::lock_guard lock(capture.mutex);
             if (capture.count != paused_count) throw std::runtime_error("moving the crop resumed playback");
         }
+        if (media) {
+            wallpaper.play();
+            for (int index = 0; index < 12; ++index) {
+                const int channel = index % 3;
+                const auto image = directory / ("art-" + std::to_string(index) + ".ppm");
+                {
+                    std::ofstream pixels(image, std::ios::binary);
+                    pixels << "P6\n2 2\n255\n";
+                    for (int pixel = 0; pixel < 4; ++pixel)
+                        for (int component = 0; component < 3; ++component)
+                            pixels.put(component == channel ? char(255) : char(0));
+                }
+                unsigned previous;
+                { std::lock_guard lock(capture.mutex); previous = capture.count; }
+                sr::MediaStatus status;
+                status.art_url = image.string();
+                wallpaper.setMediaStatus(std::move(status));
+                WaitForColor(capture, previous, channel);
+            }
+            unsigned previous;
+            { std::lock_guard lock(capture.mutex); previous = capture.count; }
+            wallpaper.setMediaStatus({});
+            WaitForColor(capture, previous, 0);
+        }
     }
     SceneRendererSetLiveFrameCallback(nullptr, nullptr);
 }
@@ -134,6 +257,10 @@ int main() {
     try {
         Run(assets, directory / "horizontal", false);
         Run(assets, directory / "vertical", true);
+        Run(assets, directory / "direct-metal", false, true);
+        Run(assets, directory / "direct-metal-msaa", false, true, 2);
+        Run(assets, directory / "effect", false, true, 2, true);
+        Run(assets, directory / "media", false, true, 1, false, true);
         std::filesystem::remove_all(directory);
         std::cout << "WallpaperPositionRenderRegression: ok\n";
         return 0;

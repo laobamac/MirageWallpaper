@@ -27,6 +27,7 @@ public:
         ImageParameters vk_dst;
     };
 
+    const Desc& desc() const { return m_desc; }
     CopyPass(const Desc&);
     virtual ~CopyPass();
 

@@ -1,0 +1,17 @@
+# Mirage Wallpaper
+# Copyright © 2026 王孝慈. All rights reserved.
+# This notice applies to the Mirage patch modifications.
+# Upstream code retains its original copyright and license.
+
+diff --git a/EtcLib/Etc/EtcColorFloatRGBA.h b/EtcLib/Etc/EtcColorFloatRGBA.h
+--- a/EtcLib/Etc/EtcColorFloatRGBA.h
++++ b/EtcLib/Etc/EtcColorFloatRGBA.h
+@@ -272 +272 @@
+-			if (frgba.fR < 0.0f) { frgba.fR = 0.0f; }
++			if (!(frgba.fR > 0.0f)) { frgba.fR = 0.0f; }
+@@ -274 +274 @@
+-			if (frgba.fG < 0.0f) { frgba.fG = 0.0f; }
++			if (!(frgba.fG > 0.0f)) { frgba.fG = 0.0f; }
+@@ -276 +276 @@
+-			if (frgba.fB < 0.0f) { frgba.fB = 0.0f; }
++			if (!(frgba.fB > 0.0f)) { frgba.fB = 0.0f; }

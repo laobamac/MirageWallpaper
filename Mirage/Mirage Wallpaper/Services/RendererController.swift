@@ -503,6 +503,7 @@ struct RenderOptions: Equatable {
     var loadFromMemory: Bool = false
     var enableHDRVideo: Bool = false
     var userProperties: [String: WEProjectProperty] = [:]
+    var scriptStorage: [String: String]? = nil
     var powerState: MiragePowerState = .run
     var powerFps: Int?
     /// Identifies the UI assignment that owns these playback options. A newer
@@ -514,6 +515,27 @@ struct RenderOptions: Equatable {
 // Subprocess control: the renderer receives JSON-line commands via stdin.
 final class RendererController {
     var onPositionAvailabilityChanged: ((CGDirectDisplayID) -> Void)?
+    var onScriptStorageChanged: ((CGDirectDisplayID, String, UUID?, [String: String]) -> Void)?
+    private var storageRequests: [String: (RendererProcess, () -> Void)] = [:]
+
+    func refreshScriptStorage(wallpaperID: String? = nil) async {
+        await withCheckedContinuation { continuation in
+            queue.async { [self] in
+                let group = DispatchGroup()
+                for handle in running.values where handle.wallpaper.kind == .scene &&
+                    (wallpaperID == nil || handle.wallpaper.id == wallpaperID) {
+                    let token = UUID().uuidString
+                    group.enter()
+                    storageRequests[token] = (handle, { group.leave() })
+                    handle.send(["cmd": "exportScriptStorage", "token": token])
+                    queue.asyncAfter(deadline: .now() + 2) { [weak self] in
+                        self?.storageRequests.removeValue(forKey: token)?.1()
+                    }
+                }
+                group.notify(queue: .main) { continuation.resume() }
+            }
+        }
+    }
     private enum TransitionPhase: String {
         case preparing
         case waitingForVisibilityBlockers
@@ -824,6 +846,18 @@ final class RendererController {
                     }
                     arguments += ["--user-properties", properties.path]
                     handle.tempFiles.append(properties)
+                }
+                let runtimeFile = FileManager.default.temporaryDirectory.appending(path: "mirage_runtime_\(token).json")
+                do {
+                    let runtime: [String: Any] = ["speed": options.speed,
+                        "scriptStorage": options.scriptStorage ?? WallpaperRenderSnapshot.storedScriptStorage(for: wallpaper)]
+                    try JSONSerialization.data(withJSONObject: runtime, options: .sortedKeys).write(to: runtimeFile, options: .atomic)
+                    arguments += ["--runtime", runtimeFile.path]
+                    handle.tempFiles.append(runtimeFile)
+                } catch {
+                    handle.cleanupAfterExit()
+                    rejectPreview(token, completion: completion)
+                    return
                 }
                 if let icd = moltenVKICD {
                     environment["VK_ICD_FILENAMES"] = icd.path
@@ -1515,6 +1549,23 @@ final class RendererController {
         if isVisibilityBlocker {
             if event == "deactivated" || event == "activation-failed" {
                 visibilityBlockerBecameHiddenLocked(handle)
+            }
+            return
+        }
+
+        if event == "script-storage" {
+            let token = message["token"] as? String
+            let request = token.flatMap { storageRequests[$0] }
+            guard request == nil || request?.0 === handle else { return }
+            let completion = token.flatMap { storageRequests.removeValue(forKey: $0)?.1 }
+            let wallpaperID = handle.wallpaper.id
+            let assignmentID = handle.assignmentID
+            let values = message["values"] as? [String: String]
+            DispatchQueue.main.async { [weak self] in
+                if isActive, let values, values.count <= 1024 {
+                    self?.onScriptStorageChanged?(displayID, wallpaperID, assignmentID, values)
+                }
+                completion?()
             }
             return
         }
@@ -3166,30 +3217,7 @@ final class RendererController {
 
     private func writeUserPropertiesFile(_ props: [String: WEProjectProperty], for wallpaper: WEWallpaper) -> URL? {
         guard !props.isEmpty else { return nil }
-        var obj: [String: Any] = [:]
-        for (key, prop) in props {
-            switch prop.propertyType {
-            case .color:
-                obj[key] = ["type": "color", "value": prop.value.stringValue]
-            case .bool:
-                obj[key] = prop.value.boolValue
-            case .slider:
-                obj[key] = prop.value.doubleValue
-            case .scenetexture, .file:
-                obj[key] = ["type": "scenetexture", "value": prop.value.stringValue]
-            case .combo:
-                obj[key] = prop.value.jsonObjectValue
-            case .usershortcut:
-                var value: [String: Any] = [
-                    "type": "usershortcut",
-                    "value": prop.value.stringValue
-                ]
-                if let icon = prop.mirageShortcutIcon { value["icon"] = icon }
-                obj[key] = value
-            default:
-                obj[key] = prop.value.stringValue
-            }
-        }
+        let obj = WallpaperPropertyEncoding.values(props)
         guard let data = try? JSONSerialization.data(withJSONObject: obj, options: []) else { return nil }
         let tmp = FileManager.default.temporaryDirectory
             .appending(path: "mirage_props_\(abs(wallpaper.id.hashValue))_\(UUID().uuidString).json")

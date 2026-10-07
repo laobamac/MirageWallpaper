@@ -335,7 +335,9 @@ inline size_t GenAuthoredRopeData(
     const auto one_size = sv.OneSize();
     for (const auto& inst : instances) {
         if (inst->IsNoLiveParticle()) continue;
-        std::vector<const Particle*> particles;
+        static thread_local std::vector<const Particle*> particles;
+        particles.clear();
+        particles.reserve(inst->Particles().size());
         for (const auto& particle : inst->Particles())
             if (ParticleModify::LifetimeOk(particle)) particles.push_back(&particle);
         std::sort(particles.begin(), particles.end(), [](const Particle* lhs, const Particle* rhs) {
@@ -578,7 +580,9 @@ inline size_t GenAuthoredRopeQuadData(
     size_t total    = 0;
     for (const auto& inst : instances) {
         if (inst->IsNoLiveParticle()) continue;
-        std::vector<const Particle*> particles;
+        static thread_local std::vector<const Particle*> particles;
+        particles.clear();
+        particles.reserve(inst->Particles().size());
         for (const auto& particle : inst->Particles())
             if (ParticleModify::LifetimeOk(particle)) particles.push_back(&particle);
         std::sort(particles.begin(), particles.end(), [](const Particle* lhs, const Particle* rhs) {

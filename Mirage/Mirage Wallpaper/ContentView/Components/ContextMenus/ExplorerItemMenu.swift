@@ -12,16 +12,19 @@ struct ExplorerItemMenu: SubviewOfContentView {
     @Bindable var viewModel: ContentViewModel
     @Bindable var wallpaperViewModel: WallpaperViewModel
     @Bindable var workshopViewModel: WorkshopViewModel
+    @ObservedObject var mobileDevicesViewModel: MobileDevicesViewModel
     
     var hoveredWallpaper: WEWallpaper
     
     init(contentViewModel viewModel: ContentViewModel,
          wallpaperViewModel: WallpaperViewModel,
          workshopViewModel: WorkshopViewModel = AppDelegate.shared.workshopViewModel,
+         mobileDevicesViewModel: MobileDevicesViewModel = AppDelegate.shared.mobileDevicesViewModel,
          current hoveredWallpaper: WEWallpaper) {
         self.wallpaperViewModel = wallpaperViewModel
         self.viewModel = viewModel
         self.workshopViewModel = workshopViewModel
+        self.mobileDevicesViewModel = mobileDevicesViewModel
         self.hoveredWallpaper = hoveredWallpaper
     }
     
@@ -60,6 +63,19 @@ struct ExplorerItemMenu: SubviewOfContentView {
                     Label("设为屏保", systemImage: "sparkles.tv")
                 }
                 .disabled(!canApply || (hoveredWallpaper.kind != .video && hoveredWallpaper.kind != .scene))
+
+                Button {
+                    WallpaperBakeService.shared.presentedWallpaper = hoveredWallpaper
+                } label: {
+                    Label("烘焙为视频", systemImage: "flame.fill")
+                }
+                .disabled(!canApply)
+
+                Button {
+                    WallpaperBakeService.shared.showsTasks = true
+                } label: {
+                    Label("烘焙任务", systemImage: "list.bullet.rectangle")
+                }
 
                 Button(action: setAsDynamicLockScreen) {
                     Label("设为动态锁屏", systemImage: "lock.rectangle")
@@ -103,7 +119,7 @@ struct ExplorerItemMenu: SubviewOfContentView {
                         systemImage: isFavorite ? "heart.slash.fill" : "heart.fill"
                     )
                 }
-                .disabled(workshopID.map { workshopViewModel.changingFavoriteIDs.contains($0) } == true)
+                .disabled(workshopID.map { workshopViewModel.directDownloadMode || workshopViewModel.changingFavoriteIDs.contains($0) } == true)
             }
             
             Section {
@@ -140,6 +156,7 @@ struct ExplorerItemMenu: SubviewOfContentView {
                         Label("管理屏蔽列表", systemImage: "hand.raised.fill")
                     }
                 }.disabled(true)
+                mobileTransferMenu
             }
             
             Section {
@@ -158,6 +175,16 @@ struct ExplorerItemMenu: SubviewOfContentView {
                         Label(LocalizedStringKey("移除快捷键"), systemImage: "command.square.fill")
                     }
                 }
+                if hoveredWallpaper.kind == .scene,
+                   let resources = Bundle.main.resourceURL,
+                   FileManager.default.fileExists(atPath: resources.appending(path: "SceneDiagnostics/manifest.json").path) {
+                    Button {
+                        wallpaperViewModel.diagnoseSceneColors(hoveredWallpaper)
+                    } label: {
+                        Label("场景颜色诊断", systemImage: "stethoscope")
+                    }
+                    .disabled(!canApply)
+                }
                 Button {
                     NSWorkspace.shared.selectFile(nil,
                                                   inFileViewerRootedAtPath: hoveredWallpaper.wallpaperDirectory.path(percentEncoded: false))
@@ -171,6 +198,60 @@ struct ExplorerItemMenu: SubviewOfContentView {
 
     private var displays: [DisplayInfo] {
         wallpaperViewModel.connectedDisplays
+    }
+
+    private var mobileTransferMenu: some View {
+        Menu {
+            let connectedDevices = mobileDevicesViewModel.devices.filter(\.isConnected)
+            ForEach(connectedDevices) { device in
+                Button {
+                    sendToMobileDevice(device)
+                } label: {
+                    Label(L("发送至 %@", device.name), systemImage: "iphone")
+                }
+                .disabled(!canExportToMobile)
+            }
+            if !connectedDevices.isEmpty { Divider() }
+
+            Button(action: exportMPKG) {
+                Label("导出 .mpkg 文件", systemImage: "arrow.down.doc")
+            }
+            .disabled(!canExportToMobile)
+
+            Button {
+                AppDelegate.shared.navigationModel.isMobileDevicesPresented = true
+            } label: {
+                Label("连接新的移动设备", systemImage: "iphone.badge.plus")
+            }
+        } label: {
+            Label("发送到移动设备", systemImage: "iphone.radiowaves.left.and.right")
+        }
+    }
+
+    private var canExportToMobile: Bool {
+        hoveredWallpaper.isValid && [.video, .scene].contains(hoveredWallpaper.kind)
+    }
+
+    private func sendToMobileDevice(_ device: MobileDevice) {
+        if hoveredWallpaper.kind == .scene {
+            viewModel.pendingSceneMobileExport = SceneMobileExportRequest(
+                wallpaper: hoveredWallpaper,
+                destination: .device(device)
+            )
+        } else {
+            mobileDevicesViewModel.send(wallpaper: hoveredWallpaper, to: device) { _ in }
+        }
+    }
+
+    private func exportMPKG() {
+        if hoveredWallpaper.kind == .scene {
+            viewModel.pendingSceneMobileExport = SceneMobileExportRequest(
+                wallpaper: hoveredWallpaper,
+                destination: .file
+            )
+        } else {
+            viewModel.presentMobileMPKGSavePanel(for: hoveredWallpaper)
+        }
     }
 
     private var canApply: Bool {
@@ -249,10 +330,19 @@ struct ExplorerItemMenu: SubviewOfContentView {
 
     private func setAsScreenSaver() {
         let wallpaper = hoveredWallpaper
+        let requestedAt = ProcessInfo.processInfo.systemUptime
+        Task { @MainActor in
+            await wallpaperViewModel.refreshScriptStorage(for: wallpaper)
+            configureScreenSaver(wallpaper, requestedAt: requestedAt)
+        }
+    }
+
+    private func configureScreenSaver(_ wallpaper: WEWallpaper, requestedAt: TimeInterval) {
         let runtime = wallpaperViewModel.loadRuntime(for: wallpaper)
         let properties = wallpaperViewModel.effectiveProperties(for: wallpaper, runtime: runtime)
         let fps = Int(AppDelegate.shared.globalSettingsViewModel.settings.fps)
-        let context = ScreenSaverManager.ConfigurationContext(wallpaperID: wallpaper.id, runtime: runtime, fps: fps)
+        var context = ScreenSaverManager.ConfigurationContext(wallpaperID: wallpaper.id, runtime: runtime, fps: fps)
+        context.capturedAt = requestedAt
         let manager = ScreenSaverManager.shared
         let needsInstallation = !manager.isInstalled
 
@@ -270,11 +360,13 @@ struct ExplorerItemMenu: SubviewOfContentView {
             DispatchQueue.main.async {
                 switch result {
                 case .success:
+                    wallpaperViewModel.saveRuntime()
                     viewModel.screenSaverFeedback = ScreenSaverFeedback(
                         title: "已设为屏保",
                         message: "“\(wallpaper.project.title)”将在下次启动屏保时显示。"
                     )
                 case .failure(let error):
+                    guard !(error is CancellationError) else { return }
                     viewModel.screenSaverFeedback = ScreenSaverFeedback(
                         title: "设置屏保失败",
                         message: error.localizedDescription
@@ -394,7 +486,9 @@ struct WorkshopCardContextMenu: View {
     var body: some View {
         Group {
             Section {
-                if workshopViewModel.subscriptionState(for: item.publishedFileId) == .subscribed {
+                if workshopViewModel.directDownloadMode {
+                    Label("免登录下载已开启", systemImage: "arrow.down.circle")
+                } else if workshopViewModel.subscriptionState(for: item.publishedFileId) == .subscribed {
                     Button(role: .destructive) {
                         workshopViewModel.unsubscribe(item)
                     } label: {
@@ -432,7 +526,9 @@ struct WorkshopCardContextMenu: View {
             }
 
             Section {
-                if workshopViewModel.changingFavoriteIDs.contains(item.publishedFileId) {
+                if workshopViewModel.directDownloadMode {
+                    Label("免登录模式仅支持下载，请关闭此模式并登录 Steam 以使用社区功能", systemImage: "info.circle")
+                } else if workshopViewModel.changingFavoriteIDs.contains(item.publishedFileId) {
                     Label("正在同步收藏状态…", systemImage: "arrow.triangle.2.circlepath")
                 } else {
                     Button {

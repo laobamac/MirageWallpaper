@@ -48,3 +48,6 @@ The RendererController prefers the renderer binaries **bundled inside the app**.
 - To build these components, see [Building from Source](/en/advanced/build/).
 - To debug a single renderer on its own, see [Debugging Renderers](/en/advanced/debug-renderers/).
 - For a capability comparison across wallpaper types, see [Wallpaper Types](/en/formats/wallpaper-types/).
+
+
+The scene runtime libraries and runtime assets have one physical copy inside the wallpaper extension, where App Sandbox can read them directly. The host app reuses them through relative in-bundle symbolic links. Lightweight screen savers installed in the user directory locate the app through a saved path or LaunchServices. The release bundle no longer duplicates scene dependencies for each host.

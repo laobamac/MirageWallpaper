@@ -1,3 +1,8 @@
+<!--
+  MirageWallpaper
+  Copyright © 2026 王孝慈. All rights reserved.
+-->
+
 <p align="center">
   <img src="Mirage/Mirage%20Wallpaper/Resources/Assets.xcassets/AppIcon.appiconset/icon_256.png" width="128" alt="Mirage 图标">
 </p>
@@ -19,6 +24,10 @@
   <img alt="Swift" src="https://img.shields.io/badge/Swift-5-F05138?logo=swift&logoColor=white">
   <img alt="C++" src="https://img.shields.io/badge/C%2B%2B-20-00599C?logo=cplusplus&logoColor=white">
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-GPL--3.0-blue"></a>
+</p>
+
+<p align="center">
+  <a href="#开发团队">开发团队</a>
 </p>
 
 > [!IMPORTANT]
@@ -55,9 +64,11 @@ Mirage 会继续免费开放开发。如果它为你的桌面带来了价值，�
 - 创意工坊下载器直接调用 SteamKit2 的清单与 CDN API，实现参考 [DepotDownloader](https://github.com/SteamRE/DepotDownloader) 的成熟下载流程，但不捆绑或启动 DepotDownloader 可执行程序。
 - 复用一个长驻 Steam 会话，避免每次下载前重复启动和登录。
 - 最多同时下载三个创意工坊作品，实时显示 CDN 接收字节、下载速度、进度和预计剩余时间；每个任务可独立取消。
-- 已下载作品可直接播放，并打开音量、速度、填充模式及作品自定义属性侧栏。
-- 支持多显示器覆盖、菜单栏控制、登录启动和桌面占位图恢复。
-- 可安装 Mirage 自带的动态屏保，直接播放视频、网页和场景壁纸，并保留当前预设与自定义属性。
+- 已下载作品可直接播放，并打开音量、速度、填充模式、画面位置及作品自定义属性侧栏。
+- 支持按显示器保存播放列表，可按计时器、登录、当日时间、星期或视频结束自动切换，并提供有序/随机顺序和过渡效果。
+- 支持多显示器覆盖、菜单栏控制、登录启动、已订阅作品页和桌面占位图恢复。
+- 可安装 Mirage 自带的动态屏保，独立播放视频和场景壁纸，并保留当前预设与自定义属性。
+- 设置中提供两套实验性动态锁屏方案：方案 A 需要 macOS 26+，方案 B 需要 macOS 14.2+；两者都只支持视频和场景壁纸。
 - 可在全屏应用、其他应用播放音频、屏幕休眠或电池供电时选择继续、静音、暂停或停止。
 - 使用 macOS“点按墙纸以显示桌面”时会自动恢复播放。
 - 网页壁纸首次运行前显示安全确认，并支持 Wallpaper Engine 用户属性与鼠标事件。
@@ -144,8 +155,10 @@ Mirage 会解析作品声明的入口文件，并对部分非标准目录布局�
 ```bash
 xcode-select --install
 brew install cmake ninja pkg-config llvm molten-vk vulkan-loader vulkan-headers \
-  glslang glfw freetype fontconfig lz4 ffmpeg
+  glslang glfw freetype fontconfig lz4 ffmpeg dav1d nasm
 ```
+
+渲染器构建脚本会自动构建固定版本的仅解码 FFmpeg。场景移动端导出另行内嵌 Homebrew FFmpeg 和固定版本的 EtcTool；两者与所需依赖及许可证一起打包。dav1d 用于 AV1 解码，nasm 用于 Intel 汇编优化。
 
 ## 从源码构建
 
@@ -153,7 +166,7 @@ brew install cmake ninja pkg-config llvm molten-vk vulkan-loader vulkan-headers 
 git clone https://github.com/laobamac/MirageWallpaper.git
 cd MirageWallpaper
 
-./scripts/build_all.sh
+MIRAGE_ALLOW_NETWORK_FETCH=1 ./scripts/build_all.sh
 
 open "Mirage/dist/Mirage.app"
 ```
@@ -167,6 +180,8 @@ Mirage/dist/Mirage.app
 App 内包含可在“设置 → 屏保”中安装的 `MirageScreenSaver.saver`。屏保组件会被复制到当前用户的 `~/Library/Screen Savers`，不要求 Mirage 主程序保持运行。场景屏保运行库和所需资源由打包脚本一并嵌入。
 
 `build_all.sh` 会按顺序构建三个渲染器、Steam 服务和主程序，并完成 App Bundle 打包。Debug 构建使用 `./scripts/build_all.sh debug`；只重建主程序时可使用 `./scripts/build_all.sh app`。
+
+首次打包需要设置 `MIRAGE_ALLOW_NETWORK_FETCH=1`，以获取并校验固定版本的 Etc2Comp 源码。源码缓存就绪后可省略此变量；离线打包需预先准备该缓存。
 
 ### 本地配置内置 Steam Web API Key
 
@@ -201,6 +216,11 @@ MIRAGE_STEAM_WEB_API_KEY='YOUR_32_CHARACTER_STEAM_WEB_API_KEY' \
 ```text
 MIRAGE_STEAM_WEB_API_KEY      32 位 Steam Web API Key
 MIRAGE_SPARKLE_PRIVATE_KEY    Mirage 专用 Sparkle Ed25519 私钥
+APPLE_DEVELOPER_ID_APPLICATION_P12             Base64 编码的 Developer ID Application P12 证书
+APPLE_DEVELOPER_ID_APPLICATION_P12_PASSWORD    P12 证书密码
+APPLE_NOTARY_APPLE_ID                          Apple ID
+APPLE_NOTARY_PASSWORD                          Apple ID 专用密码
+APPLE_DEVELOPER_TEAM_ID                        Apple Developer Team ID
 ```
 
 如果本机安装了 GitHub CLI，也可以执行：
@@ -210,6 +230,18 @@ gh secret set MIRAGE_STEAM_WEB_API_KEY < .secrets/steam_web_api_key
 ```
 
 `MIRAGE_SPARKLE_PRIVATE_KEY` 只用于 Actions 生成 Ed25519 签名的更新包和 appcast。它绝不能提交到仓库；应保留登录钥匙串中的原始密钥，并另存一份离线备份。客户端仅包含可公开的公钥。
+
+如需在同一次 Action 中编译免登录下载组件，将组件源码放在独立的 **Private** 仓库，再为 MirageWallpaper 配置：
+
+| 类型 | 名称 | 内容 |
+| --- | --- | --- |
+| Repository Variable | `MIRAGE_DIRECT_WORKSHOP_REPOSITORY` | 私有组件仓库的 `owner/name` |
+| Repository Variable | `MIRAGE_DIRECT_WORKSHOP_REF` | 私有组件的完整 40 位提交 SHA，两种架构使用同一版本 |
+| Repository Secret | `MIRAGE_DIRECT_WORKSHOP_DEPLOY_KEY` | 仅用于读取上述私有仓库的 SSH 部署私钥；对应公钥加入私有仓库 Deploy keys，不启用写权限 |
+
+私有仓库须包含 `Service`、`Tests/Tests.csproj`、`Tests/Program.cs`、`build.sh` 和 `LICENSE`；保留原来的 `Service/VerificationKey.cs` 公钥，不要重新生成签名身份。`secrets/`、签发私钥和测试激活码均不提交，也不配置到 Actions。工作流在 runner 临时目录读取指定提交，运行私有组件测试并编译，仅将 `dist` 二进制打入 App；私有源码和编译日志不会作为 artifact 上传。打包后会验证辅助进程可以运行，并拒绝无效激活码。
+
+三项全部未配置时构建普通版本；配置不完整或私有组件构建失败时整个任务失败，避免悄悄发布缺少功能的版本。更新组件后修改 `MIRAGE_DIRECT_WORKSHOP_REF`，再手动运行 Action 或触发下一次主仓库构建。只更新私有仓库不会自动触发主仓库。
 
 Workflow 为每次构建自动将完整 Git commit 与 `git rev-list --count` 生成的递增构建号写入 App，因此不需要手动更新版本号。只有构建号更高的 commit 才会被安装，避免把较新的开发构建降级为较旧 Release。
 
@@ -222,7 +254,7 @@ App 更新后的下一次启动会同时检查已经安装到 `~/Library/Screen 
 
 GitHub Secrets 可以避免 Key 出现在仓库和普通构建日志中，但无法让客户端内置 Key 成为真正的秘密：发布后的 App 必须包含它，有能力分析 App 的人仍可以提取。若未来需要不可提取的凭据，应把对应请求放到受控服务端，由服务端持有 Key；不要依赖客户端混淆。
 
-当前 Workflow 使用临时签名，不包含 Apple Developer ID 签名和公证。首次安装的用户仍可能需要在 macOS Gatekeeper 中手动允许 Mirage；但后续更新的真实性由内置 Ed25519 公钥验证。
+Workflow 会在临时钥匙串中导入 Developer ID Application 证书，以 Hardened Runtime 和安全时间戳签名完整 App，提交 Apple 公证、装订公证凭证，并在打包前通过签名、公证凭证和 Gatekeeper 校验。Sparkle Ed25519 签名继续独立保护后续更新的真实性。
 
 ## 数据目录
 
@@ -272,6 +304,15 @@ VideoRenderer/build/release/Tools/VideoViewer/VideoViewer <video-wallpaper-direc
 3. App Bundle 中包含三个渲染器、运行时动态库、MoltenVK ICD 和 `assets`；
 4. 没有提交 API Key、Steam 登录数据、构建目录或用户壁纸。
 
+## 开发团队
+
+| 姓名 | 身份 | GitHub |
+| --- | --- | --- |
+| Xiaoci Wang | 项目作者 · 开发者 | [@laobamac](https://github.com/laobamac) |
+| Jiale Yu | 开发者 | [@dawalishi821](https://github.com/dawalishi821) |
+| Pikachu Ren | 开发者 | [@PIKACHUIM](https://github.com/PIKACHUIM) |
+| Yinan Qin | 开发者 | [@elysia-best](https://github.com/elysia-best) |
+
 ## 鸣谢
 
 - [SteamKit2](https://github.com/SteamRE/SteamKit) — Mirage 内置 Steam 服务的直接依赖，版本 3.4.0，使用 LGPL-2.1 许可证
@@ -285,3 +326,5 @@ VideoRenderer/build/release/Tools/VideoViewer/VideoViewer <video-wallpaper-direc
 ## 许可证
 
 Mirage 使用 [GPL-3.0](LICENSE) 发布。Steam 服务相关第三方声明位于 [`SteamService/Licenses`](SteamService/Licenses)，其余第三方代码与资源继续遵循各自许可证。Mirage 与 Valve、Steam 或 Wallpaper Engine 没有关联，也未获得其官方认可。
+
+可选的免登录工坊下载默认关闭，需要在「设置 → 通用」输入本机专用激活码。该模式仅支持下载，不支持 Steam 订阅、收藏或评论。其独立辅助组件不包含在本开源仓库中；未提供该组件的构建仍可正常使用 Steam 下载。发布构建通过 `MIRAGE_DIRECT_WORKSHOP_BUNDLE` 指定预编译组件目录，勿将私有源码或激活签发材料加入仓库。

@@ -170,6 +170,52 @@ private final class RegistrySimulation {
     }
 }
 
+private final class NativeFrameProbe {
+    private let lock = NSLock()
+    private var color: [UInt8] = []
+    private var count = 0
+    private var readyFrames = 0
+
+    var readyCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return readyFrames
+    }
+
+    func markReady() {
+        lock.lock()
+        readyFrames += 1
+        lock.unlock()
+    }
+
+    var description: String {
+        lock.lock()
+        defer { lock.unlock() }
+        return "\(count) frames, RGB \(color)"
+    }
+
+    func receive(_ pixels: UnsafePointer<UInt8>, width: UInt32, height: UInt32) {
+        let offset = (Int(height / 2) * Int(width) + Int(width / 2)) * 4
+        lock.lock()
+        color = [pixels[offset], pixels[offset + 1], pixels[offset + 2]]
+        count += 1
+        lock.unlock()
+    }
+
+    func reset() {
+        lock.lock()
+        color = []
+        lock.unlock()
+    }
+
+    func matches(_ channel: Int) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return color.count == 3 && color[channel] > 200 &&
+            color[(channel + 1) % 3] < 40 && color[(channel + 2) % 3] < 40
+    }
+}
+
 @main
 private struct DynamicLockScreenRegression {
     static func main() {
@@ -184,6 +230,10 @@ private struct DynamicLockScreenRegression {
             return
         }
         do {
+            if let index = CommandLine.arguments.firstIndex(of: "--native-runtime"), index + 2 < CommandLine.arguments.count {
+                try testNativeRuntime(libraryPath: CommandLine.arguments[index + 1], assetsPath: CommandLine.arguments[index + 2])
+                return
+            }
             try testRegistry()
             try testRequestCancellation()
             try testConfigurationAndSettings()
@@ -200,6 +250,115 @@ private struct DynamicLockScreenRegression {
             fputs("FAIL: \(error)\n", stderr)
             exit(1)
         }
+    }
+
+    static func testNativeRuntime(libraryPath: String, assetsPath: String) throws {
+        typealias FrameCallback = @convention(c) (UnsafePointer<UInt8>?, UInt32, UInt32, UnsafeMutableRawPointer?) -> Void
+        typealias SetFrameCallback = @convention(c) (FrameCallback?, UnsafeMutableRawPointer?) -> Void
+        typealias CreateSaver = @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<CChar>?, UnsafePointer<CChar>?,
+            UnsafePointer<CChar>?, UInt32, UInt32, UInt32, UInt32, UInt32, UnsafePointer<CChar>?, Double, Double,
+            UnsafePointer<CChar>?) -> UnsafeMutableRawPointer?
+        typealias CreateDesktop = @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<CChar>?, UnsafePointer<CChar>?,
+            UnsafePointer<CChar>?, UInt32, UInt32, UInt32, UnsafePointer<CChar>?, Double, Double,
+            UnsafePointer<CChar>?) -> UnsafeMutableRawPointer?
+        typealias Pause = @convention(c) (UnsafeMutableRawPointer?, Int32) -> Void
+        typealias Destroy = @convention(c) (UnsafeMutableRawPointer?) -> Void
+        typealias ReadyCallback = @convention(c) (UnsafeMutableRawPointer?) -> Void
+        typealias SetReady = @convention(c) (UnsafeMutableRawPointer?, ReadyCallback?, UnsafeMutableRawPointer?) -> Void
+        guard let library = dlopen(libraryPath, RTLD_NOW | RTLD_LOCAL) else {
+            throw RegressionFailure(description:"Cannot load native scene library: \(String(cString: dlerror()))")
+        }
+        defer { dlclose(library) }
+        guard let saverSymbol = dlsym(library, "MirageSceneSaverCreateWithRuntime"),
+              let desktopSymbol = dlsym(library, "MirageSceneDesktopCreateWithRuntime"),
+              let pauseSymbol = dlsym(library, "MirageSceneSaverSetPaused"),
+              let destroySymbol = dlsym(library, "MirageSceneSaverDestroy"),
+              let readySymbol = dlsym(library, "MirageSceneDesktopSetFirstFrameCallback"),
+              let frameSymbol = dlsym(library, "SceneRendererSetLiveFrameCallback") else {
+            throw RegressionFailure(description:"Native runtime ABI is incomplete")
+        }
+        let createSaver = unsafeBitCast(saverSymbol, to: CreateSaver.self)
+        let createDesktop = unsafeBitCast(desktopSymbol, to: CreateDesktop.self)
+        let pause = unsafeBitCast(pauseSymbol, to: Pause.self)
+        let destroy = unsafeBitCast(destroySymbol, to: Destroy.self)
+        let setReady = unsafeBitCast(readySymbol, to: SetReady.self)
+        let setFrame = unsafeBitCast(frameSymbol, to: SetFrameCallback.self)
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("mirage-native-runtime-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let scene: [String: Any] = [
+            "camera": [:], "general": ["clearcolor": [1, 0, 0], "orthogonalprojection": ["width": 500, "height": 500]],
+            "objects": [["id": 1, "image": "models/util/solidlayer.json", "origin": [250, 250, 0], "size": [500, 500],
+                "visible": ["user": "enabled", "value": false],
+                "color": ["value": [1, 0, 0], "script": "let tint = new Vec3(1,0,0); export function init() { const c = localStorage.get('tint'); tint = new Vec3(c[0], c[1], c[2]); } export function update() { localStorage.set('seen', true); return tint; }"]]]
+        ]
+        let scenePath = root.appendingPathComponent("scene.json")
+        try JSONSerialization.data(withJSONObject: scene).write(to: scenePath)
+        try JSONSerialization.data(withJSONObject: ["general": ["properties": ["enabled": ["type": "bool", "value": false]]]])
+            .write(to: root.appendingPathComponent("project.json"))
+        let probe = NativeFrameProbe()
+        let callback: FrameCallback = { pixels, width, height, pointer in
+            guard let pixels, let pointer, width > 0, height > 0 else { return }
+            Unmanaged<NativeFrameProbe>.fromOpaque(pointer).takeUnretainedValue().receive(pixels, width: width, height: height)
+        }
+        setFrame(callback, Unmanaged.passUnretained(probe).toOpaque())
+        defer { setFrame(nil, nil) }
+        _ = NSApplication.shared
+        func wait(_ channel: Int) throws {
+            let deadline = Date().addingTimeInterval(15)
+            while !probe.matches(channel), Date() < deadline {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+            }
+            try require(probe.matches(channel), "Native runtime did not render expected channel \(channel): \(probe.description)")
+        }
+        for saver in [true, false] {
+            let views = (0..<3).map { _ in NSView(frame: NSRect(x: 0, y: 0, width: 500, height: 500)) }
+            views.forEach { $0.wantsLayer = true }
+            var readyProbes: [NativeFrameProbe] = []
+            var handles: [UnsafeMutableRawPointer] = []
+            defer {
+                withExtendedLifetime(readyProbes) {
+                    handles.forEach { setReady($0, nil, nil); destroy($0) }
+                }
+            }
+            for (index, color) in ["[0,1,0]", "[0,0,1]", "[0,1,0]"].enumerated() {
+                let runtime = "{\"speed\":1.5,\"scriptStorage\":{\"tint\":\"\(color)\"}}"
+                let target = saver ? Unmanaged.passUnretained(views[index]).toOpaque()
+                    : Unmanaged.passUnretained(views[index].layer!).toOpaque()
+                let handle = assetsPath.withCString { assets in
+                    scenePath.path.withCString { scene in
+                        "{\"enabled\":true}".withCString { properties in
+                            "cover".withCString { fill in
+                                runtime.withCString { runtime in
+                                    saver ? createSaver(target, assets, scene, properties, 500, 500, 500, 500, 30, fill, 0.5, 0.5, runtime)
+                                        : createDesktop(target, assets, scene, properties, 500, 500, 30, fill, 0.5, 0.5, runtime)
+                                }
+                            }
+                        }
+                    }
+                }
+                guard let handle else { throw RegressionFailure(description:"Native renderer creation failed") }
+                handles.append(handle)
+                let ready = NativeFrameProbe()
+                readyProbes.append(ready)
+                setReady(handle, { pointer in
+                    guard let pointer else { return }
+                    Unmanaged<NativeFrameProbe>.fromOpaque(pointer).takeUnretainedValue().markReady()
+                }, Unmanaged.passUnretained(ready).toOpaque())
+                if saver { try require(ready.readyCount == 0, "A new paused view inherited another view's readiness") }
+                probe.reset()
+                pause(handle, 0)
+                try wait(index == 1 ? 2 : 1)
+                try require(ready.readyCount == 1, "First-frame readiness was not delivered exactly once per view")
+                pause(handle, 1)
+            }
+            probe.reset()
+            pause(handles[0], 0)
+            try wait(1)
+            pause(handles[0], 1)
+            withExtendedLifetime(views) {}
+        }
+        print("PASS: both native saver and lock entry points render saved visibility and pre-init storage, with isolated shared-scene instances")
     }
 
     static func testRegistry() throws {
@@ -364,9 +523,7 @@ private struct DynamicLockScreenRegression {
         ], format: .xml, options: 0)
         let files: [String: Data] = [
             "Contents/Info.plist": info,
-            "Contents/MacOS/MirageWallpaperExtension": Data("executable fixture".utf8),
-            "Contents/Frameworks/libMirageSceneSaver.dylib": Data("renderer fixture".utf8),
-            "Contents/Resources/vulkan/icd.d/MoltenVK_icd.json": Data("{}".utf8)
+            "Contents/MacOS/MirageWallpaperExtension": Data("executable fixture".utf8)
         ]
         for (path, data) in files {
             let url = extensionURL.appendingPathComponent(path)
@@ -374,6 +531,12 @@ private struct DynamicLockScreenRegression {
             try data.write(to: url)
         }
         try FileManager.default.createDirectory(at: extensionURL.appendingPathComponent("Contents/Resources/assets"), withIntermediateDirectories: true)
+        for path in ["Contents/Frameworks/libMirageSceneSaver.dylib", "Contents/Resources/vulkan/icd.d/MoltenVK_icd.json",
+                     "Contents/Resources/MoltenVK/manifest.json", "Contents/Resources/scene-runtime.json"] {
+            let url = extensionURL.appendingPathComponent(path)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data("fixture".utf8).write(to: url)
+        }
         let display = MirageLockDisplayConfiguration(displayID: 7, wallpaperID: "preserved-video",
             title: "Preserved video", kind: "video", renderDirectory: root.path,
             entryPath: root.appendingPathComponent("video.mp4").path, previewPath: nil,
@@ -383,6 +546,16 @@ private struct DynamicLockScreenRegression {
         let configurationURL = root.appendingPathComponent(MirageLockBridge.configurationName)
         try configuration.write(to: configurationURL)
         let fingerprint = try MirageLockBridge.fingerprint(at: extensionURL)
+        let shared = extensionURL.appendingPathComponent("Contents/Resources/scene-runtime.json")
+        try Data("updated dependency".utf8).write(to: shared)
+        let updatedFingerprint = try MirageLockBridge.fingerprint(at: extensionURL)
+        try require(updatedFingerprint != fingerprint, "Shared runtime updates did not invalidate the extension")
+        try FileManager.default.removeItem(at: shared)
+        do {
+            _ = try MirageLockBridge.fingerprint(at: extensionURL)
+            try require(false, "Missing shared runtime was accepted")
+        } catch is CocoaError { }
+        try Data("fixture".utf8).write(to: shared)
         let normal = RegistrySimulation()
         for _ in 0..<20 {
             let registration = try WallpaperExtensionController.register(appURL: app, extensionURL: extensionURL,

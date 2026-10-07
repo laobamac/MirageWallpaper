@@ -104,7 +104,6 @@ LLVM_FORMULA="${LLVM_FORMULA:-llvm}"
 # Each entry: "formula|description"
 REQUIRED_FORMULAS=(
     "$LLVM_FORMULA|Clang 22 compiler (C++20 modules)"
-    "molten-vk|MoltenVK Vulkan ICD"
     "vulkan-loader|libvulkan loader"
     "vulkan-headers|Vulkan headers"
     "glslang|glslangValidator shader compiler"
@@ -112,7 +111,7 @@ REQUIRED_FORMULAS=(
     "freetype|FreeType (text rasterization)"
     "fontconfig|Fontconfig (font discovery)"
     "lz4|liblz4 (.pkg decompression)"
-    "ffmpeg|ffmpeg (wavsen video decode)"
+    "dav1d|libdav1d (AV1 decode for the bundled FFmpeg)"
 )
 
 # One brew call for the full installed set, then membership-check.
@@ -130,6 +129,8 @@ if [[ ${#missing[@]} -gt 0 ]]; then
     die "missing Homebrew dependencies (see above)."
 fi
 command -v glslangValidator >/dev/null || die "glslangValidator not found. Run: brew install glslang"
+
+
 
 LLVM_PREFIX="$(brew --prefix "$LLVM_FORMULA")"
 CLANG_BIN="$LLVM_PREFIX/bin/clang"
@@ -154,17 +155,22 @@ do_clean() {
 }
 
 do_configure() {
+    FFMPEG_ARCH="$(uname -m)"
+    FFMPEG_PREFIX="${MIRAGE_FFMPEG_DIR:-$PROJECT_DIR/../Mirage/build/ffmpeg/$FFMPEG_ARCH}"
+    "$PROJECT_DIR/../scripts/build_ffmpeg.sh" "$FFMPEG_ARCH"
+    [[ -f "$FFMPEG_PREFIX/lib/pkgconfig/libavcodec.pc" ]] || die "bundled FFmpeg missing at $FFMPEG_PREFIX (run scripts/build_ffmpeg.sh)"
+    export PKG_CONFIG_PATH="$FFMPEG_PREFIX/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
     info "configuring preset: $PRESET"
     info "  project:  $PROJECT_DIR"
     info "  build dir:$BUILD_DIR"
     info "  compiler: $CLANG_BIN"
-    cmake --preset "$PRESET" \
+    cmake -U '*WAVSEN_AV*' -U '*WAVSEN_SW*' --preset "$PRESET" \
         -DCMAKE_C_COMPILER="$CLANG_BIN" \
         -DCMAKE_CXX_COMPILER="$CLANGXX_BIN"
 }
 
 do_build() {
-    [[ -f "$BUILD_DIR/CMakeCache.txt" ]] || do_configure
+    do_configure
     info "building preset: $PRESET (jobs=$JOBS)"
     local build_args=(--build "$BUILD_DIR" --parallel "$JOBS")
     if [[ "${KEEP_GOING:-0}" == "1" ]]; then
@@ -203,7 +209,7 @@ case "$ACTION" in
     clean)     do_clean ;;
     configure) do_configure ;;
     build)     do_build; report ;;
-    all)       do_configure; do_build; report ;;
+    all)       do_build; report ;;
 esac
 
 good "done."

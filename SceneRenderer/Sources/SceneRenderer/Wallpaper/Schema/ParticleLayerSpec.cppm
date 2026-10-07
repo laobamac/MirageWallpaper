@@ -192,6 +192,7 @@ public:
     std::string              particle;
     Particle                 particleObj;
     ParticleInstanceoverride instanceoverride;
+    FieldBindings instance_field_bindings;
 
     // Common cross-kind metadata.
     bool                      locktransforms { false };

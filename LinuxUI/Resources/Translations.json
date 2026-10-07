@@ -1,0 +1,398 @@
+{
+  "_copyright": "Copyright © 2026 王孝慈. All rights reserved.",
+  "Linux 动态壁纸引擎": {
+    "en": "Linux live wallpaper engine",
+    "zh-Hans": "Linux 动态壁纸引擎",
+    "zh-Hant": "Linux 動態桌布引擎"
+  },
+  "Steam Guard 验证码": {
+    "en": "Steam Guard code",
+    "zh-Hans": "Steam Guard 验证码",
+    "zh-Hant": "Steam Guard 驗證碼"
+  },
+  "Steam 服务尚未连接": {
+    "en": "Steam service is not connected",
+    "zh-Hans": "Steam 服务尚未连接",
+    "zh-Hant": "Steam 服務尚未連線"
+  },
+  "Steam 账户": {
+    "en": "Steam account",
+    "zh-Hans": "Steam 账户",
+    "zh-Hant": "Steam 帳戶"
+  },
+  "从文件夹导入…": {
+    "en": "Import from folder…",
+    "zh-Hans": "从文件夹导入…",
+    "zh-Hant": "從資料夾匯入…"
+  },
+  "作品": {
+    "en": "Wallpapers",
+    "zh-Hans": "作品",
+    "zh-Hant": "作品"
+  },
+  "作者主页": {
+    "en": "Creator profile",
+    "zh-Hans": "作者主页",
+    "zh-Hant": "作者主頁"
+  },
+  "使用当前壁纸": {
+    "en": "Use current wallpaper",
+    "zh-Hans": "使用当前壁纸",
+    "zh-Hant": "使用目前桌布"
+  },
+  "保留 Mirage 的界面布局、操作方式与个性化设置。": {
+    "en": "The familiar Mirage layout, controls and personalization.",
+    "zh-Hans": "保留 Mirage 的界面布局、操作方式与个性化设置。",
+    "zh-Hant": "保留 Mirage 的介面配置、操作方式與個人化設定。"
+  },
+  "修改保存在 Mirage 配置中，不改动原壁纸文件。": {
+    "en": "Changes are saved in Mirage settings; original wallpaper files are unchanged.",
+    "zh-Hans": "修改保存在 Mirage 配置中，不改动原壁纸文件。",
+    "zh-Hant": "變更儲存於 Mirage 設定，不更動原始桌布檔案。"
+  },
+  "修改时间": {
+    "en": "Modified",
+    "zh-Hans": "修改时间",
+    "zh-Hant": "修改時間"
+  },
+  "内置插件": {
+    "en": "Built-in plugins",
+    "zh-Hans": "内置插件",
+    "zh-Hant": "內建外掛"
+  },
+  "创意工坊服务尚未连接": {
+    "en": "Workshop service is not connected",
+    "zh-Hans": "创意工坊服务尚未连接",
+    "zh-Hant": "工作坊服務尚未連線"
+  },
+  "刷新壁纸库": {
+    "en": "Refresh library",
+    "zh-Hans": "刷新壁纸库",
+    "zh-Hant": "重新整理桌布庫"
+  },
+  "发表评论…": {
+    "en": "Write a comment…",
+    "zh-Hans": "发表评论…",
+    "zh-Hant": "發表評論…"
+  },
+  "启动时": {
+    "en": "At startup",
+    "zh-Hans": "启动时",
+    "zh-Hant": "啟動時"
+  },
+  "在文件管理器中显示": {
+    "en": "Show in file manager",
+    "zh-Hans": "在文件管理器中显示",
+    "zh-Hant": "在檔案管理員中顯示"
+  },
+  "壁纸不可用": {
+    "en": "Wallpaper unavailable",
+    "zh-Hans": "壁纸不可用",
+    "zh-Hant": "桌布無法使用"
+  },
+  "安装屏保组件": {
+    "en": "Install screen saver",
+    "zh-Hans": "安装屏保组件",
+    "zh-Hant": "安裝螢幕保護程式"
+  },
+  "定时": {
+    "en": "Timer",
+    "zh-Hans": "定时",
+    "zh-Hant": "定時"
+  },
+  "导入视频": {
+    "en": "Import video",
+    "zh-Hans": "导入视频",
+    "zh-Hant": "匯入影片"
+  },
+  "导入视频…": {
+    "en": "Import video…",
+    "zh-Hans": "导入视频…",
+    "zh-Hant": "匯入影片…"
+  },
+  "将壁纸添加到播放列表": {
+    "en": "Add wallpapers to your playlist",
+    "zh-Hans": "将壁纸添加到播放列表",
+    "zh-Hant": "將桌布加入播放清單"
+  },
+  "尚未设置屏保壁纸": {
+    "en": "No screen saver wallpaper selected",
+    "zh-Hans": "尚未设置屏保壁纸",
+    "zh-Hant": "尚未設定螢幕保護桌布"
+  },
+  "屏保服务尚未连接": {
+    "en": "Screen saver service is not connected",
+    "zh-Hans": "屏保服务尚未连接",
+    "zh-Hant": "螢幕保護服務尚未連線"
+  },
+  "已安装插件": {
+    "en": "Installed plugins",
+    "zh-Hans": "已安装插件",
+    "zh-Hant": "已安裝外掛"
+  },
+  "微信支付": {
+    "en": "WeChat Pay",
+    "zh-Hans": "微信支付",
+    "zh-Hant": "微信支付"
+  },
+  "打开系统设置": {
+    "en": "Open system settings",
+    "zh-Hans": "打开系统设置",
+    "zh-Hant": "開啟系統設定"
+  },
+  "扫码登录": {
+    "en": "Sign in with QR code",
+    "zh-Hans": "扫码登录",
+    "zh-Hant": "掃碼登入"
+  },
+  "按下快捷键": {
+    "en": "Press a keyboard shortcut",
+    "zh-Hans": "按下快捷键",
+    "zh-Hant": "按下快速鍵"
+  },
+  "搜索作品、作者或作品 ID…": {
+    "en": "Search wallpapers, creators or IDs…",
+    "zh-Hans": "搜索作品、作者或作品 ID…",
+    "zh-Hant": "搜尋作品、作者或作品 ID…"
+  },
+  "搜索已订阅壁纸…": {
+    "en": "Search subscriptions…",
+    "zh-Hans": "搜索已订阅壁纸…",
+    "zh-Hant": "搜尋已訂閱桌布…"
+  },
+  "播放": {
+    "en": "Playback",
+    "zh-Hans": "播放",
+    "zh-Hant": "播放"
+  },
+  "播放列表名称": {
+    "en": "Playlist name",
+    "zh-Hans": "播放列表名称",
+    "zh-Hant": "播放清單名稱"
+  },
+  "支付宝": {
+    "en": "Alipay",
+    "zh-Hans": "支付宝",
+    "zh-Hant": "支付寶"
+  },
+  "时间": {
+    "en": "Time of day",
+    "zh-Hans": "时间",
+    "zh-Hant": "時間"
+  },
+  "更新服务尚未连接": {
+    "en": "Update service is not connected",
+    "zh-Hans": "更新服务尚未连接",
+    "zh-Hant": "更新服務尚未連線"
+  },
+  "最新": {
+    "en": "Most recent",
+    "zh-Hans": "最新",
+    "zh-Hant": "最新"
+  },
+  "最热门": {
+    "en": "Most popular",
+    "zh-Hans": "最热门",
+    "zh-Hant": "最熱門"
+  },
+  "最高评分": {
+    "en": "Top rated",
+    "zh-Hans": "最高评分",
+    "zh-Hant": "最高評分"
+  },
+  "极高": {
+    "en": "Ultra",
+    "zh-Hans": "极高",
+    "zh-Hant": "極高"
+  },
+  "欢迎": {
+    "en": "Welcome",
+    "zh-Hans": "欢迎",
+    "zh-Hant": "歡迎"
+  },
+  "此功能使用 macOS 系统扩展，当前平台不可用。": {
+    "en": "This feature requires macOS system extensions and is unavailable on this platform.",
+    "zh-Hans": "此功能使用 macOS 系统扩展，当前平台不可用。",
+    "zh-Hant": "此功能使用 macOS 系統延伸功能，目前平台無法使用。"
+  },
+  "此壁纸没有可自定义的属性": {
+    "en": "This wallpaper has no customizable properties",
+    "zh-Hans": "此壁纸没有可自定义的属性",
+    "zh-Hant": "此桌布沒有可自訂的屬性"
+  },
+  "每页": {
+    "en": "Per page",
+    "zh-Hans": "每页",
+    "zh-Hant": "每頁"
+  },
+  "没有可显示的壁纸": {
+    "en": "No wallpapers to display",
+    "zh-Hans": "没有可显示的壁纸",
+    "zh-Hant": "沒有可顯示的桌布"
+  },
+  "淡入淡出": {
+    "en": "Fade",
+    "zh-Hans": "淡入淡出",
+    "zh-Hant": "淡入淡出"
+  },
+  "渲染服务尚未连接": {
+    "en": "Renderer is not connected",
+    "zh-Hans": "渲染服务尚未连接",
+    "zh-Hant": "渲染服務尚未連線"
+  },
+  "渲染设置将在渲染服务连接后应用。MetalFX 为 macOS 专属功能。": {
+    "en": "Rendering settings apply when the renderer is connected. MetalFX is exclusive to macOS.",
+    "zh-Hans": "渲染设置将在渲染服务连接后应用。MetalFX 为 macOS 专属功能。",
+    "zh-Hant": "渲染設定將在渲染服務連線後套用。MetalFX 為 macOS 專屬功能。"
+  },
+  "烘焙服务尚未连接": {
+    "en": "Baking service is not connected",
+    "zh-Hans": "烘焙服务尚未连接",
+    "zh-Hant": "烘焙服務尚未連線"
+  },
+  "现在可以浏览和下载创意工坊壁纸": {
+    "en": "You can now browse and download Workshop wallpapers",
+    "zh-Hans": "现在可以浏览和下载创意工坊壁纸",
+    "zh-Hant": "現在可以瀏覽並下載工作坊桌布"
+  },
+  "申请 Steam API Key": {
+    "en": "Get a Steam API key",
+    "zh-Hans": "申请 Steam API Key",
+    "zh-Hant": "申請 Steam API Key"
+  },
+  "登录 Steam 后查看评论": {
+    "en": "Sign in to Steam to view comments",
+    "zh-Hans": "登录 Steam 后查看评论",
+    "zh-Hant": "登入 Steam 後查看評論"
+  },
+  "登录 Steam 后，可以浏览订阅、管理收藏并下载壁纸。": {
+    "en": "Sign in to Steam to browse subscriptions, manage favorites and download wallpapers.",
+    "zh-Hans": "登录 Steam 后，可以浏览订阅、管理收藏并下载壁纸。",
+    "zh-Hant": "登入 Steam 後，可以瀏覽訂閱、管理收藏並下載桌布。"
+  },
+  "登录以查看已订阅壁纸": {
+    "en": "Sign in to view subscriptions",
+    "zh-Hans": "登录以查看已订阅壁纸",
+    "zh-Hant": "登入以查看已訂閱桌布"
+  },
+  "登录完成": {
+    "en": "Signed in",
+    "zh-Hans": "登录完成",
+    "zh-Hant": "登入完成"
+  },
+  "确定要重置此壁纸的所有自定义属性吗？": {
+    "en": "Reset all customized properties of this wallpaper?",
+    "zh-Hans": "确定要重置此壁纸的所有自定义属性吗？",
+    "zh-Hant": "確定要重設此桌布的所有自訂屬性嗎？"
+  },
+  "禁用": {
+    "en": "Disabled",
+    "zh-Hans": "禁用",
+    "zh-Hant": "停用"
+  },
+  "移除壁纸目录只会从 Mirage 壁纸库中移除，不会删除原文件。": {
+    "en": "Removing a source removes it from Mirage only. Original files are kept.",
+    "zh-Hans": "移除壁纸目录只会从 Mirage 壁纸库中移除，不会删除原文件。",
+    "zh-Hant": "移除桌布目錄只會從 Mirage 桌布庫移除，不會刪除原始檔案。"
+  },
+  "移除目录": {
+    "en": "Remove source",
+    "zh-Hans": "移除目录",
+    "zh-Hant": "移除目錄"
+  },
+  "等待登录二维码": {
+    "en": "Waiting for sign-in QR code",
+    "zh-Hans": "等待登录二维码",
+    "zh-Hant": "等待登入 QR 碼"
+  },
+  "编辑壁纸信息": {
+    "en": "Edit wallpaper information",
+    "zh-Hans": "编辑壁纸信息",
+    "zh-Hant": "編輯桌布資訊"
+  },
+  "记住登录状态": {
+    "en": "Remember this account",
+    "zh-Hans": "记住登录状态",
+    "zh-Hant": "記住登入狀態"
+  },
+  "设置专属 Key 可提高创意工坊浏览稳定性": {
+    "en": "A personal API key improves Workshop browsing reliability",
+    "zh-Hans": "设置专属 Key 可提高创意工坊浏览稳定性",
+    "zh-Hant": "設定專屬 Key 可提升工作坊瀏覽穩定性"
+  },
+  "详情": {
+    "en": "Details",
+    "zh-Hans": "详情",
+    "zh-Hant": "詳細資訊"
+  },
+  "账户密码": {
+    "en": "Account and password",
+    "zh-Hans": "账户密码",
+    "zh-Hant": "帳戶密碼"
+  },
+  "质量": {
+    "en": "Quality",
+    "zh-Hans": "质量",
+    "zh-Hant": "品質"
+  },
+  "载入播放列表": {
+    "en": "Load playlist",
+    "zh-Hans": "载入播放列表",
+    "zh-Hant": "載入播放清單"
+  },
+  "连接 Steam 创意工坊": {
+    "en": "Connect to Steam Workshop",
+    "zh-Hans": "连接 Steam 创意工坊",
+    "zh-Hant": "連接 Steam 工作坊"
+  },
+  "连接服务后可浏览发现、搜索结果和壁纸详情": {
+    "en": "Connect the service to browse Discover, search results and wallpaper details",
+    "zh-Hans": "连接服务后可浏览发现、搜索结果和壁纸详情",
+    "zh-Hant": "連線服務後可瀏覽探索、搜尋結果與桌布詳細資訊"
+  },
+  "选择壁纸以查看详情": {
+    "en": "Select a wallpaper to view details",
+    "zh-Hans": "选择壁纸以查看详情",
+    "zh-Hant": "選擇桌布以查看詳細資訊"
+  },
+  "选择壁纸目录": {
+    "en": "Choose wallpaper folder",
+    "zh-Hans": "选择壁纸目录",
+    "zh-Hant": "選擇桌布目錄"
+  },
+  "选择文件": {
+    "en": "Choose file",
+    "zh-Hans": "选择文件",
+    "zh-Hant": "選擇檔案"
+  },
+  "选择本地壁纸目录，或导入视频文件": {
+    "en": "Choose a local wallpaper folder or import a video",
+    "zh-Hans": "选择本地壁纸目录，或导入视频文件",
+    "zh-Hant": "選擇本機桌布目錄，或匯入影片檔案"
+  },
+  "遇到问题请认真撰写 Issue，或加入 QQ 交流群 2160040437 反馈。": {
+    "en": "Report issues on GitHub, or join QQ group 2160040437.",
+    "zh-Hans": "遇到问题请认真撰写 Issue，或加入 QQ 交流群 2160040437 反馈。",
+    "zh-Hant": "遇到問題請認真撰寫 Issue，或加入 QQ 交流群 2160040437 回報。"
+  },
+  "顺序": {
+    "en": "In order",
+    "zh-Hans": "顺序",
+    "zh-Hant": "順序"
+  },
+  "预热": {
+    "en": "Warm-up",
+    "zh-Hans": "预热",
+    "zh-Hant": "預熱"
+  },
+  "下载中": {
+    "en": "Downloading",
+    "zh-Hans": "下载中",
+    "zh-Hant": "下載中"
+  },
+  "进行中": {
+    "en": "In progress",
+    "zh-Hans": "进行中",
+    "zh-Hant": "進行中"
+  }
+}

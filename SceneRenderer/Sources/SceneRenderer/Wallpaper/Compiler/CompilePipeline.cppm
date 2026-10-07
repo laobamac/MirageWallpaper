@@ -131,6 +131,8 @@ struct ParseContext {
     Set<std::int32_t>                             linked_source_ids;
     Set<std::int32_t>                             hidden_link_source_ids;
     std::string                                    script_persistence_path;
+    std::optional<std::string>                      script_storage_snapshot;
+    std::optional<uint32_t>                         offline_seed;
     Set<std::string>                              unresolved_shader_values;
     bool                                          scene_has_scripts { false };
     bool                                          scene_accesses_effects { false };
@@ -173,7 +175,8 @@ std::array<i32, 2> ResolveOrthoProjectionExtent(const wpscene::SceneMetadata&,
 ParseContext BuildContext(fs::VFS&, std::string_view scene_id, const wpscene::SceneMetadata&,
                           std::array<i32, 2>                       ortho_extent,
                           rstd::Option<rstd::ref<rstd::json::Map>> user_properties = rstd::None(),
-                          std::string script_persistence_path = {});
+                          std::string script_persistence_path = {},
+                          std::optional<std::string> script_storage_snapshot = {});
 
 // Per-object dispatch. Brackets glslang init/finalize around the visit
 // loop. opts.kinds masks which kinds run; default is all-kinds. Sound

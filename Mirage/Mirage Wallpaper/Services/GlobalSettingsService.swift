@@ -161,9 +161,14 @@ struct GlobalSettings: Codable, Equatable {
     // Optional solely for backwards-compatible decoding of settings written
     // before the desktop-override section existed.
     var overrideWallpaper: Bool? = false
+    var automaticWallpaperCacheCleaning: Bool? = true
 
     var shouldOverrideWallpaper: Bool {
         overrideWallpaper ?? false
+    }
+
+    var shouldAutomaticallyCleanWallpaperCache: Bool {
+        automaticWallpaperCacheCleaning ?? true
     }
 
     // MARK: Appearance
@@ -265,6 +270,7 @@ class GlobalSettingsViewModel {
     var didChangeStatusItemIconCancellable: Cancellable?
     var didChangeDeveloperModeCancellable: Cancellable?
     var didChangeOverrideWallpaperCancellable: Cancellable?
+    var didChangeWallpaperCacheCleaningCancellable: Cancellable?
     var playbackPolicySettingsCancellable: Cancellable?
     
     // In-memory snapshot of what is persisted, so the settings UI can tell
@@ -323,8 +329,10 @@ class GlobalSettingsViewModel {
         didChangeStatusItemIconCancellable?.cancel()
         didChangeDeveloperModeCancellable?.cancel()
         didChangeOverrideWallpaperCancellable?.cancel()
+        didChangeWallpaperCacheCleaningCancellable?.cancel()
         playbackPolicySettingsCancellable?.cancel()
         playbackEvalTimer?.invalidate()
+        playbackAudioMonitor?.stop()
         settlingEvalWorkItems.forEach { $0.cancel() }
         playbackRecoveryWorkItems.forEach { $0.cancel() }
         if let powerSourceRunLoopSource { CFRunLoopSourceInvalidate(powerSourceRunLoopSource) }
@@ -373,6 +381,15 @@ class GlobalSettingsViewModel {
             .map { $0.shouldOverrideWallpaper }
             .sink { DesktopOverrideService.shared.didChangeEnabled($0) }
 
+        self.didChangeWallpaperCacheCleaningCancellable =
+        self.settingsChanges
+            .removeDuplicates {
+                $0.shouldAutomaticallyCleanWallpaperCache
+                    == $1.shouldAutomaticallyCleanWallpaperCache
+            }
+            .map { $0.shouldAutomaticallyCleanWallpaperCache }
+            .sink { DesktopOverrideService.shared.didChangeCacheCleaningEnabled($0) }
+
         let lifecycleNotifications: [(Notification.Name, PlaybackLifecycleEvent)] = [
             (NSWorkspace.willSleepNotification, .systemSleep),
             (NSWorkspace.didWakeNotification, .systemWake),
@@ -386,8 +403,8 @@ class GlobalSettingsViewModel {
             playbackLifecycleObservers.append(observer)
         }
         NotificationCenter.default.addObserver(
-            self, selector: #selector(playbackDisplaysDidChange),
-            name: NSApplication.didChangeScreenParametersNotification, object: nil)
+            self, selector: #selector(playbackDisplaysDidChange(_:)),
+            name: DisplayRegistry.didChangeNotification, object: DisplayRegistry.shared)
 
         // Low Power Mode and thermal pressure are global signals: the user has
         // either asked the machine to conserve, or the machine is already
@@ -420,6 +437,9 @@ class GlobalSettingsViewModel {
     }
 
     private var playbackEvalTimer: Timer?
+    private var playbackAudioMonitor: PlaybackAudioMonitor?
+    private var audioMonitoringGeneration: UInt64 = 0
+    private var otherAudioPlaying = false
     private var settlingEvalWorkItems: [DispatchWorkItem] = []
     private var playbackRecoveryWorkItems: [DispatchWorkItem] = []
     private var workspacePlaybackObservers: [NSObjectProtocol] = []
@@ -442,6 +462,7 @@ class GlobalSettingsViewModel {
     private let policyQueue = DispatchQueue(label: "com.mirage.playback-policy", qos: .utility)
     private var playbackEvaluation = PlaybackEvaluationState()
     private var lastPolicyReadFailure: PolicyReadFailure?
+    private var lastFullscreenDiagnostics: [CGDirectDisplayID: String] = [:]
 
     struct PlaybackEvaluationState {
         struct Completion {
@@ -556,6 +577,8 @@ class GlobalSettingsViewModel {
             self.desktopClickMonitor = nil
         }
 
+        configureAudioMonitoring()
+
         guard settings.hasPlaybackRules,
               AppDelegate.shared.wallpaperViewModel.hasAnyWallpaper else {
             effectivePlaybackActions.removeAll()
@@ -621,6 +644,39 @@ class GlobalSettingsViewModel {
         schedulePlaybackTimer(interval: basePollInterval)
     }
 
+    private func configureAudioMonitoring() {
+        let needsAudio = settings.otherApplicationPlayingAudio != .keepRunning &&
+            AppDelegate.shared.wallpaperViewModel.hasAnyWallpaper
+        guard needsAudio, !playbackEvaluation.isSleeping else {
+            audioMonitoringGeneration &+= 1
+            playbackAudioMonitor?.stop()
+            playbackAudioMonitor = nil
+            if !needsAudio { otherAudioPlaying = false }
+            return
+        }
+        guard playbackAudioMonitor == nil else { return }
+        audioMonitoringGeneration &+= 1
+        let generation = audioMonitoringGeneration
+        let renderer = AppDelegate.shared.wallpaperViewModel.renderer
+        let selfPID = ProcessInfo.processInfo.processIdentifier
+        let monitor = PlaybackAudioMonitor(
+            initiallyActive: otherAudioPlaying,
+            excludedPIDs: { [weak renderer] in
+                (renderer?.processIdentifiers ?? []).union([selfPID])
+            },
+            onChange: { [weak self] active in
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.audioMonitoringGeneration == generation,
+                          self.otherAudioPlaying != active else { return }
+                    self.otherAudioPlaying = active
+                    self.playbackEvaluation.invalidate()
+                    self.evaluatePlaybackState()
+                }
+            })
+        playbackAudioMonitor = monitor
+        monitor.start()
+    }
+
     private func configurePowerSourceMonitoring() {
         guard powerSourceRunLoopSource == nil, settings.laptopOnBattery != .keepRunning,
               AppDelegate.shared.wallpaperViewModel.hasAnyWallpaper else { return }
@@ -644,7 +700,8 @@ class GlobalSettingsViewModel {
         scheduleSettlingEvaluations()
     }
 
-    @objc private func playbackDisplaysDidChange() {
+    @objc private func playbackDisplaysDidChange(_ notification: Notification) {
+        guard DisplayRegistry.Change.from(notification)?.topologyChanged == true else { return }
         handlePlaybackLifecycleEvent(.displaysChanged)
     }
 
@@ -668,10 +725,10 @@ class GlobalSettingsViewModel {
             playbackEvaluation.invalidate(force: true)
         case .displaysChanged:
             playbackEvaluation.invalidate(force: true)
-            DisplayRegistry.shared.invalidate()
         }
         playbackEvalTimer?.invalidate()
         playbackEvalTimer = nil
+        configureAudioMonitoring()
         MirageLogService.shared.append(
             "event=\(event.rawValue) generation=\(playbackEvaluation.generation)",
             source: "playback-policy")
@@ -998,6 +1055,7 @@ class GlobalSettingsViewModel {
         var onFocused = GSPlayback.keepRunning
         var onFullscreen = GSPlayback.keepRunning
         var onAudio = GSPlayback.keepRunning
+        var otherAudioPlaying = false
         var pauseOnCoverage = false
         var coverageThreshold: CGFloat = 0.9
 
@@ -1013,6 +1071,8 @@ class GlobalSettingsViewModel {
         /// `NSWorkspace.runningApplications` is AppKit state.
         var regularPIDs: Set<pid_t> = []
         var wallpaperDisplays: [CGDirectDisplayID: CGRect] = [:]
+        var fullscreenSafeAreas: [CGDirectDisplayID: CGRect] = [:]
+        var diagnoseFullscreen = false
     }
 
     private struct PlaybackPolicySettingsKey: Equatable {
@@ -1034,9 +1094,13 @@ class GlobalSettingsViewModel {
         var alpha: Double
     }
 
+    private struct FullscreenMatch {
+        let window: WindowEntry
+        var companion: WindowEntry? = nil
+    }
+
     struct PolicyProbes {
         var onBattery: () -> Bool? = GlobalSettingsViewModel.isOnBattery
-        var otherAppPlayingAudio: (pid_t, Set<pid_t>) -> Bool = GlobalSettingsViewModel.isOtherAppPlayingAudio
         var displayAsleep: (CGDirectDisplayID) -> Bool = { CGDisplayIsAsleep($0) != 0 }
         var windows: () -> [WindowEntry]? = GlobalSettingsViewModel.captureWindowList
     }
@@ -1044,6 +1108,7 @@ class GlobalSettingsViewModel {
     struct PolicyResult {
         let actions: [CGDirectDisplayID: GSPlayback]
         let onBattery: Bool?
+        var fullscreenDiagnostics: [CGDirectDisplayID: String] = [:]
     }
 
     enum PolicyReadFailure: String, Error {
@@ -1100,7 +1165,9 @@ class GlobalSettingsViewModel {
         inputs.onBattery = settings.laptopOnBattery
         inputs.onFocused = settings.otherApplicationFocused
         inputs.onFullscreen = settings.otherApplicationFullscreen
+        inputs.diagnoseFullscreen = settings.isDeveloperModeEnabled && inputs.onFullscreen != .keepRunning
         inputs.onAudio = settings.otherApplicationPlayingAudio
+        inputs.otherAudioPlaying = otherAudioPlaying
         inputs.pauseOnCoverage = settings.shouldPauseWhenWindowCoverageExceeds
         inputs.coverageThreshold = CGFloat(settings.normalizedWindowCoverageThreshold / 100)
 
@@ -1109,6 +1176,14 @@ class GlobalSettingsViewModel {
         let needsWindowGeometry = settings.hasWindowPlaybackRules
         for info in DisplayRegistry.shared.connected where wallpaperViewModel.displayStates[info.key] != nil {
             inputs.wallpaperDisplays[info.displayID] = needsWindowGeometry ? CGDisplayBounds(info.displayID) : .zero
+        }
+        if inputs.onFullscreen != .keepRunning {
+            for screen in NSScreen.screens {
+                guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber,
+                      let bounds = inputs.wallpaperDisplays[number.uint32Value] else { continue }
+                inputs.fullscreenSafeAreas[number.uint32Value] = Self.fullscreenSafeArea(
+                    display: bounds, screenFrame: screen.frame, insets: screen.safeAreaInsets)
+            }
         }
         let needsRendererPIDs = needsWindowGeometry ||
             settings.otherApplicationPlayingAudio != .keepRunning
@@ -1146,8 +1221,7 @@ class GlobalSettingsViewModel {
             onBattery = sampled
             if sampled { globalActions.append(inputs.onBattery) }
         }
-        if inputs.onAudio != .keepRunning,
-           probes.otherAppPlayingAudio(inputs.selfPID, inputs.rendererPIDs) {
+        if inputs.onAudio != .keepRunning, inputs.otherAudioPlaying {
             globalActions.append(inputs.onAudio)
         }
         let needsWindows = inputs.onFocused != .keepRunning ||
@@ -1166,6 +1240,7 @@ class GlobalSettingsViewModel {
         let isDesktopFinder = inputs.frontBundleID == "com.apple.finder" &&
             !appHasVisibleWindows(windows, pid: inputs.frontPID)
         var result: [CGDirectDisplayID: GSPlayback] = [:]
+        var fullscreenDiagnostics: [CGDirectDisplayID: String] = [:]
         for (displayID, bounds) in inputs.wallpaperDisplays {
             var actions = globalActions
             if inputs.onDisplayAsleep != .keepRunning,
@@ -1176,23 +1251,31 @@ class GlobalSettingsViewModel {
                windowCoverageExceedsThreshold(windows, display: bounds, inputs: inputs) {
                 actions.append(.pause)
             }
-            if let frontPID = inputs.frontPID,
-               inputs.frontIsRegular,
-               !isSelf,
-               !isDesktopFinder,
-               !inputs.revealGraceDisplays.contains(displayID),
-               !isDesktopExposed(windows, display: bounds, inputs: inputs),
-               appHasVisibleWindow(windows, pid: frontPID, display: bounds) {
+            let revealing = inputs.revealGraceDisplays.contains(displayID)
+            let desktopExposed = needsWindows && isDesktopExposed(windows, display: bounds, inputs: inputs)
+            var fullscreen: FullscreenMatch?
+            if !revealing, !desktopExposed {
                 if inputs.onFullscreen != .keepRunning,
-                   appIsFullscreen(windows, pid: frontPID, display: bounds) {
+                   let window = fullscreenWindow(windows, display: bounds,
+                                                 safeArea: inputs.fullscreenSafeAreas[displayID], inputs: inputs) {
+                    fullscreen = window
                     actions.append(inputs.onFullscreen)
-                } else if inputs.onFocused != .keepRunning {
+                } else if inputs.onFocused != .keepRunning,
+                          let frontPID = inputs.frontPID, inputs.frontIsRegular,
+                          !isSelf, !isDesktopFinder,
+                          appHasVisibleWindow(windows, pid: frontPID, display: bounds) {
                     actions.append(inputs.onFocused)
                 }
             }
+            if inputs.diagnoseFullscreen {
+                fullscreenDiagnostics[displayID] = fullscreenDiagnostic(
+                    windows, display: bounds, safeArea: inputs.fullscreenSafeAreas[displayID],
+                    inputs: inputs, match: fullscreen, revealing: revealing, desktopExposed: desktopExposed)
+            }
             result[displayID] = strongestAction(actions)
         }
-        return .success(PolicyResult(actions: result, onBattery: onBattery))
+        return .success(PolicyResult(actions: result, onBattery: onBattery,
+                                     fullscreenDiagnostics: fullscreenDiagnostics))
     }
 
     /// Main-thread tail: publish the decision and retune the polling cadence.
@@ -1214,6 +1297,11 @@ class GlobalSettingsViewModel {
         }
         effectivePlaybackActions = actions
         AppDelegate.shared.wallpaperViewModel.applyPlaybackPolicies(actions, force: force)
+        for (displayID, diagnostic) in result.fullscreenDiagnostics.sorted(by: { $0.key < $1.key })
+        where diagnostic != lastFullscreenDiagnostics[displayID] {
+            MirageLogService.shared.append("display=\(displayID) \(diagnostic)", source: "playback-fullscreen")
+        }
+        lastFullscreenDiagnostics = result.fullscreenDiagnostics
         if changed || force {
             let decisions = result.actions.sorted { $0.key < $1.key }
                 .map { "\($0.key):\($0.value.rawValue)" }.joined(separator: ",")
@@ -1257,66 +1345,33 @@ class GlobalSettingsViewModel {
         }
     }
 
-    private static func isOtherAppPlayingAudio(selfPID: pid_t,
-                                               rendererPIDs: Set<pid_t>) -> Bool {
-        let system = AudioObjectID(kAudioObjectSystemObject)
-        var size: UInt32 = 0
-        var addr = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyProcessObjectList,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain)
-        guard AudioObjectGetPropertyDataSize(system, &addr, 0, nil, &size) == noErr else { return false }
-
-        let count = Int(size) / MemoryLayout<AudioObjectID>.size
-        guard count > 0 else { return false }
-        var processes = [AudioObjectID](repeating: kAudioObjectUnknown, count: count)
-        guard AudioObjectGetPropertyData(system, &addr, 0, nil, &size, &processes) == noErr else { return false }
-
-        var excludedPIDs = rendererPIDs
-        excludedPIDs.insert(selfPID)
-
-        for process in processes {
-            guard audioProcessIsRunningOutput(process),
-                  let pid = audioProcessPID(process) else { continue }
-            if excludedPIDs.contains(pid) || isWebWallpaperAudioProcess(pid) { continue }
-            return true
-        }
-        return false
+    static func fullscreenSafeArea(display: CGRect, screenFrame: CGRect, insets: NSEdgeInsets) -> CGRect? {
+        let dimensions = [display.width, display.height, screenFrame.width, screenFrame.height]
+        let margins = [insets.top, insets.left, insets.bottom, insets.right]
+        guard dimensions.allSatisfy({ $0.isFinite && $0 > 0 }),
+              display.minX.isFinite, display.minY.isFinite,
+              margins.allSatisfy({ $0.isFinite && $0 >= 0 }), margins.contains(where: { $0 > 0 }),
+              insets.left + insets.right < screenFrame.width,
+              insets.top + insets.bottom < screenFrame.height else { return nil }
+        let scaleX = display.width / screenFrame.width
+        let scaleY = display.height / screenFrame.height
+        return CGRect(x: display.minX + insets.left * scaleX,
+                      y: display.minY + insets.top * scaleY,
+                      width: display.width - (insets.left + insets.right) * scaleX,
+                      height: display.height - (insets.top + insets.bottom) * scaleY)
     }
 
-    private static func isWebWallpaperAudioProcess(_ pid: pid_t) -> Bool {
-        guard let application = NSRunningApplication(processIdentifier: pid),
-              application.bundleIdentifier == "com.apple.WebKit.GPU",
-              let name = application.localizedName else { return false }
-        return name == "WebWallpaper" || name.hasPrefix("WebWallpaper ")
+    private static func isFullscreenCandidate(_ window: WindowEntry, inputs: PolicyInputs) -> Bool {
+        window.layer == 0 && window.alpha > 0.05 &&
+            window.pid != inputs.selfPID && !inputs.rendererPIDs.contains(window.pid) &&
+            inputs.regularPIDs.contains(window.pid) &&
+            window.bounds.width >= 120 && window.bounds.height >= 80
     }
 
-    private static func audioProcessIsRunningOutput(_ process: AudioObjectID) -> Bool {
-        var running: UInt32 = 0
-        var size = UInt32(MemoryLayout<UInt32>.size)
-        var addr = AudioObjectPropertyAddress(
-            mSelector: kAudioProcessPropertyIsRunningOutput,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain)
-        guard AudioObjectGetPropertyData(process, &addr, 0, nil, &size, &running) == noErr else { return false }
-        return running != 0
-    }
-
-    private static func audioProcessPID(_ process: AudioObjectID) -> pid_t? {
-        var pid: pid_t = 0
-        var size = UInt32(MemoryLayout<pid_t>.size)
-        var addr = AudioObjectPropertyAddress(
-            mSelector: kAudioProcessPropertyPID,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain)
-        guard AudioObjectGetPropertyData(process, &addr, 0, nil, &size, &pid) == noErr else { return nil }
-        return pid
-    }
-
-    private static func appIsFullscreen(_ windows: [WindowEntry], pid: pid_t,
-                                        display: CGRect) -> Bool {
-        for window in windows where window.pid == pid && window.layer == 0 && window.alpha > 0.05 {
-            guard window.bounds.width >= 120, window.bounds.height >= 80 else { continue }
+    private static func fullscreenWindow(_ windows: [WindowEntry], display: CGRect,
+                                         safeArea: CGRect?, inputs: PolicyInputs) -> FullscreenMatch? {
+        let candidates = windows.filter { isFullscreenCandidate($0, inputs: inputs) }
+        for window in candidates {
             let intersection = window.bounds.intersection(display)
             guard !intersection.isNull else { continue }
             let displayArea = display.width * display.height
@@ -1329,10 +1384,55 @@ class GlobalSettingsViewModel {
                 abs(window.bounds.maxY - display.maxY) <= tolerance
             if edgesMatch || (intersectionArea / max(displayArea, 1) >= 0.985 &&
                               intersectionArea / max(windowArea, 1) >= 0.90) {
-                return true
+                return FullscreenMatch(window: window)
+            }
+            if let safeArea, safeArea.width > 0, safeArea.height > 0, display.contains(safeArea),
+               abs(window.bounds.minX - safeArea.minX) <= 1,
+               abs(window.bounds.minY - safeArea.minY) <= 1,
+               abs(window.bounds.maxX - safeArea.maxX) <= 1,
+               abs(window.bounds.maxY - safeArea.maxY) <= 1 {
+                return FullscreenMatch(window: window)
             }
         }
-        return false
+        var targets = [display]
+        if let safeArea, safeArea.width > 0, safeArea.height > 0, display.contains(safeArea) {
+            targets.append(safeArea)
+        }
+        for target in targets {
+            let aligned = candidates.filter {
+                abs($0.bounds.minX - target.minX) <= 1 &&
+                    abs($0.bounds.maxX - target.maxX) <= 1
+            }
+            for upper in aligned where abs(upper.bounds.minY - target.minY) <= 1 {
+                for lower in aligned where lower.pid == upper.pid {
+                    guard abs(lower.bounds.maxY - target.maxY) <= 1,
+                          lower.bounds.height > target.height / 2,
+                          upper.bounds.height < lower.bounds.height,
+                          lower.bounds.minY > upper.bounds.minY + 1,
+                          upper.bounds.maxY < lower.bounds.maxY - 1,
+                          upper.bounds.maxY - lower.bounds.minY > 1 else { continue }
+                    return FullscreenMatch(window: lower, companion: upper)
+                }
+            }
+        }
+        return nil
+    }
+
+    private static func fullscreenDiagnostic(_ windows: [WindowEntry], display: CGRect, safeArea: CGRect?,
+                                             inputs: PolicyInputs, match: FullscreenMatch?, revealing: Bool,
+                                             desktopExposed: Bool) -> String {
+        func rectangle(_ bounds: CGRect) -> String {
+            "\(bounds.minX),\(bounds.minY),\(bounds.width),\(bounds.height)"
+        }
+        let candidates = windows.lazy.filter {
+            $0.bounds.width >= 120 && $0.bounds.height >= 80 && !$0.bounds.intersection(display).isNull
+        }.prefix(6).map {
+            "pid=\($0.pid),layer=\($0.layer),alpha=\($0.alpha),eligible=\(isFullscreenCandidate($0, inputs: inputs)),bounds=\(rectangle($0.bounds))"
+        }.joined(separator: ";")
+        let safe = safeArea.map(rectangle) ?? "none"
+        let matched = match.map { "\($0.window.pid):\(rectangle($0.window.bounds))" } ?? "none"
+        let companion = match?.companion.map { "\($0.pid):\(rectangle($0.bounds))" } ?? "none"
+        return "bounds=\(rectangle(display)) safe=\(safe) front=\(inputs.frontPID ?? 0) reveal=\(revealing) exposed=\(desktopExposed) match=\(matched) companion=\(companion) windows=[\(candidates)]"
     }
 
     private static func appHasVisibleWindows(_ windows: [WindowEntry], pid: pid_t?) -> Bool {
@@ -1462,5 +1562,310 @@ class GlobalSettingsViewModel {
             }
         }
         return true
+    }
+}
+
+
+final class PlaybackAudioMonitor {
+    struct ActivityState {
+        private(set) var isActive: Bool
+        private var candidate: Bool?
+        private var candidateSince: TimeInterval = 0
+        private var unavailableSince: TimeInterval?
+
+        init(isActive: Bool = false) {
+            self.isActive = isActive
+        }
+
+        mutating func update(_ sample: Bool?, at now: TimeInterval) -> TimeInterval? {
+            guard let sample else {
+                candidate = nil
+                if unavailableSince == nil { unavailableSince = now }
+                if now - unavailableSince! >= 5 {
+                    isActive = false
+                    return nil
+                }
+                return 0.25
+            }
+            unavailableSince = nil
+            guard sample != isActive else {
+                candidate = nil
+                return nil
+            }
+            if candidate != sample {
+                candidate = sample
+                candidateSince = now
+            }
+            let remaining = (sample ? 0.5 : 1.5) - (now - candidateSince)
+            if remaining <= 0 {
+                isActive = sample
+                candidate = nil
+                return nil
+            }
+            return remaining
+        }
+    }
+
+    struct ProcessActivity {
+        var pid: pid_t = 0
+        var bundleID = ""
+        var name: String?
+        var executablePath: String?
+        var output = false
+        var input: Bool?
+
+        func exclusionReason(excludedPIDs: Set<pid_t>) -> String? {
+            if excludedPIDs.contains(pid) { return "mirage" }
+            if executablePath == "/usr/sbin/systemsoundserverd" ||
+                executablePath == "/usr/libexec/audiomxd" ||
+                executablePath == "/System/Library/CoreServices/loginwindow.app/Contents/MacOS/loginwindow" ||
+                executablePath == "/System/Library/CoreServices/ControlCenter.app/Contents/MacOS/ControlCenter" ||
+                (executablePath == nil && (bundleID == "com.apple.loginwindow" || bundleID == "com.apple.controlcenter")) {
+                return "system-sound"
+            }
+            if executablePath == "/System/Library/PrivateFrameworks/CoreSpeech.framework/corespeechd" ||
+                executablePath == "/System/Library/PrivateFrameworks/CoreSpeech.framework/corespeechd_system" {
+                return "speech-listener"
+            }
+            if bundleID == "com.apple.WebKit.GPU", let name,
+               name == "WebWallpaper" || name.hasPrefix("WebWallpaper ") {
+                return "web-wallpaper"
+            }
+            return nil
+        }
+    }
+
+    struct Property: Hashable {
+        var object: AudioObjectID
+        var selector: AudioObjectPropertySelector
+
+        var address: AudioObjectPropertyAddress {
+            AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal,
+                                       mElement: kAudioObjectPropertyElementMain)
+        }
+    }
+
+    struct ReadFailure: Error, CustomStringConvertible {
+        var property: Property
+        var status: OSStatus
+
+        var description: String {
+            "object=\(property.object) selector=\(property.selector) status=\(status)"
+        }
+    }
+
+    struct Backend {
+        var processIDs: () throws -> [AudioObjectID] = PlaybackAudioMonitor.readProcessIDs
+        var activity: (AudioObjectID) throws -> ProcessActivity = PlaybackAudioMonitor.readActivity
+        var addListener: (Property, DispatchQueue, @escaping AudioObjectPropertyListenerBlock) -> OSStatus = {
+            property, queue, block in
+            var address = property.address
+            return AudioObjectAddPropertyListenerBlock(property.object, &address, queue, block)
+        }
+        var removeListener: (Property, DispatchQueue, @escaping AudioObjectPropertyListenerBlock) -> Void = {
+            property, queue, block in
+            var address = property.address
+            AudioObjectRemovePropertyListenerBlock(property.object, &address, queue, block)
+        }
+    }
+
+    private let queue = DispatchQueue(label: "cn.laobamac.Mirage.playback-audio", qos: .utility)
+    private let backend: Backend
+    private let excludedPIDs: () -> Set<pid_t>
+    private let onChange: (Bool) -> Void
+    private let log: (String) -> Void
+    private var state: ActivityState
+    private var running = false
+    private var timer: DispatchSourceTimer?
+    private var work: DispatchWorkItem?
+    private var revision: UInt64 = 0
+    private var listeners: [Property: AudioObjectPropertyListenerBlock] = [:]
+    private var listenerFailures: [Property: OSStatus] = [:]
+    private var lastDiagnostic: String?
+
+    init(initiallyActive: Bool = false, backend: Backend = Backend(),
+         excludedPIDs: @escaping () -> Set<pid_t>,
+         log: @escaping (String) -> Void = { MirageLogService.shared.append($0, source: "playback-audio") },
+         onChange: @escaping (Bool) -> Void) {
+        state = ActivityState(isActive: initiallyActive)
+        self.backend = backend
+        self.excludedPIDs = excludedPIDs
+        self.log = log
+        self.onChange = onChange
+    }
+
+    deinit {
+        work?.cancel()
+        timer?.cancel()
+        for (property, block) in listeners { backend.removeListener(property, queue, block) }
+    }
+
+    func start() {
+        queue.async { [self] in
+            guard !running else { return }
+            running = true
+            let timer = DispatchSource.makeTimerSource(queue: queue)
+            timer.schedule(deadline: .now() + 2, repeating: 2, leeway: .milliseconds(200))
+            timer.setEventHandler { [weak self] in self?.scheduleSample(after: 0) }
+            self.timer = timer
+            timer.resume()
+            sample()
+        }
+    }
+
+    func stop() {
+        queue.async { [self] in
+            running = false
+            revision &+= 1
+            work?.cancel()
+            work = nil
+            timer?.cancel()
+            timer = nil
+            removeListeners()
+        }
+    }
+
+    private func removeListeners() {
+        for (property, block) in listeners { backend.removeListener(property, queue, block) }
+        listeners.removeAll()
+        listenerFailures.removeAll()
+    }
+
+    private func observe(_ property: Property) {
+        guard listeners[property] == nil else { return }
+        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            guard let self else { return }
+            if property.selector == kAudioHardwarePropertyServiceRestarted {
+                self.removeListeners()
+            }
+            self.scheduleSample(after: 0)
+        }
+        let status = backend.addListener(property, queue, block)
+        if status == noErr {
+            listeners[property] = block
+            listenerFailures[property] = nil
+        } else if listenerFailures[property] != status {
+            listenerFailures[property] = status
+            log("listener unavailable \(ReadFailure(property: property, status: status))")
+        }
+    }
+
+    private func scheduleSample(after delay: TimeInterval) {
+        guard running else { return }
+        revision &+= 1
+        let expected = revision
+        work?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self, self.running, self.revision == expected else { return }
+            self.work = nil
+            self.sample()
+        }
+        work = item
+        queue.asyncAfter(deadline: .now() + delay, execute: item)
+    }
+
+    private func sample() {
+        guard running else { return }
+        let system = AudioObjectID(kAudioObjectSystemObject)
+        observe(Property(object: system, selector: kAudioHardwarePropertyProcessObjectList))
+        observe(Property(object: system, selector: kAudioHardwarePropertyServiceRestarted))
+        var active = false
+        var failed = false
+        var diagnostics: [String] = []
+        do {
+            let ids = try backend.processIDs()
+            let properties = Set(ids.map { Property(object: $0, selector: kAudioProcessPropertyIsRunningOutput) })
+            for property in Array(listeners.keys)
+            where property.object != system && !properties.contains(property) {
+                if let block = listeners.removeValue(forKey: property) {
+                    backend.removeListener(property, queue, block)
+                }
+            }
+            listenerFailures = listenerFailures.filter { $0.key.object == system || properties.contains($0.key) }
+            let excluded = excludedPIDs()
+            for object in ids.sorted() {
+                observe(Property(object: object, selector: kAudioProcessPropertyIsRunningOutput))
+                do {
+                    let activity = try backend.activity(object)
+                    guard activity.output else { continue }
+                    let reason = activity.exclusionReason(excludedPIDs: excluded)
+                    if reason == nil { active = true }
+                    let input = activity.input.map { $0 ? "1" : "0" } ?? "unknown"
+                    diagnostics.append("object=\(object) pid=\(activity.pid) bundle=\(activity.bundleID) path=\(activity.executablePath ?? "unknown") input=\(input) output=1 reason=\(reason ?? "external")")
+                } catch {
+                    failed = true
+                    diagnostics.append("read failed \(error)")
+                }
+            }
+        } catch {
+            failed = true
+            diagnostics.append("process list failed \(error)")
+        }
+        let value: Bool? = active ? true : (failed ? nil : false)
+        let previous = state.isActive
+        let next = state.update(value, at: ProcessInfo.processInfo.systemUptime)
+        let raw = value.map { $0 ? "active" : "inactive" } ?? "unknown"
+        let diagnostic = "raw=\(raw) confirmed=\(state.isActive) sources=[\(diagnostics.joined(separator: "; "))]"
+        if diagnostic != lastDiagnostic {
+            log(diagnostic)
+            lastDiagnostic = diagnostic
+        }
+        if previous != state.isActive { onChange(state.isActive) }
+        if let next { scheduleSample(after: next) }
+    }
+
+    private static func read<T>(_ property: Property, initial: T) throws -> T {
+        var address = property.address
+        var value = initial
+        var size = UInt32(MemoryLayout<T>.size)
+        let status = withUnsafeMutablePointer(to: &value) {
+            AudioObjectGetPropertyData(property.object, &address, 0, nil, &size, $0)
+        }
+        guard status == noErr, size == MemoryLayout<T>.size else {
+            throw ReadFailure(property: property, status: status == noErr ? kAudioHardwareBadPropertySizeError : status)
+        }
+        return value
+    }
+
+    private static func readProcessIDs() throws -> [AudioObjectID] {
+        let property = Property(object: AudioObjectID(kAudioObjectSystemObject),
+                                selector: kAudioHardwarePropertyProcessObjectList)
+        var address = property.address
+        var size: UInt32 = 0
+        var status = AudioObjectGetPropertyDataSize(property.object, &address, 0, nil, &size)
+        guard status == noErr else { throw ReadFailure(property: property, status: status) }
+        guard size > 0 else { return [] }
+        guard size % UInt32(MemoryLayout<AudioObjectID>.size) == 0 else {
+            throw ReadFailure(property: property, status: kAudioHardwareBadPropertySizeError)
+        }
+        var ids = [AudioObjectID](repeating: kAudioObjectUnknown,
+                                 count: Int(size) / MemoryLayout<AudioObjectID>.size)
+        let capacity = size
+        status = ids.withUnsafeMutableBytes {
+            AudioObjectGetPropertyData(property.object, &address, 0, nil, &size, $0.baseAddress!)
+        }
+        guard status == noErr, size <= capacity, size % UInt32(MemoryLayout<AudioObjectID>.size) == 0 else {
+            throw ReadFailure(property: property, status: status == noErr ? kAudioHardwareBadPropertySizeError : status)
+        }
+        return Array(ids.prefix(Int(size) / MemoryLayout<AudioObjectID>.size))
+    }
+
+    private static func readActivity(_ object: AudioObjectID) throws -> ProcessActivity {
+        let output = try read(Property(object: object, selector: kAudioProcessPropertyIsRunningOutput), initial: UInt32(0))
+        guard output != 0 else { return ProcessActivity() }
+        let pid = try read(Property(object: object, selector: kAudioProcessPropertyPID), initial: pid_t(0))
+        guard pid > 0 else {
+            throw ReadFailure(property: Property(object: object, selector: kAudioProcessPropertyPID),
+                              status: kAudioHardwareBadObjectError)
+        }
+        let bundle = try read(Property(object: object, selector: kAudioProcessPropertyBundleID),
+                              initial: Optional<Unmanaged<CFString>>.none)
+        let bundleID = bundle?.takeRetainedValue() as String? ?? ""
+        var path = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+        let executablePath = proc_pidpath(pid, &path, UInt32(path.count)) > 0 ? String(cString: path) : nil
+        let input = try? read(Property(object: object, selector: kAudioProcessPropertyIsRunningInput), initial: UInt32(0))
+        return ProcessActivity(pid: pid, bundleID: bundleID,
+                               name: bundleID == "com.apple.WebKit.GPU" ? NSRunningApplication(processIdentifier: pid)?.localizedName : nil,
+                               executablePath: executablePath, output: true, input: input.map { $0 != 0 })
     }
 }

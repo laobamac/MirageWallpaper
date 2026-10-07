@@ -291,8 +291,8 @@ void StagingBuffer::unallocateSubRef(const StagingBufferRef& ref) {
 
 VkResult StagingBuffer::mapStageBuf() { return m_stage_buf.handle.MapMemory(&m_stage_raw); }
 
-bool StagingBuffer::writeToBuf(const StagingBufferRef& ref, std::span<uint8_t> data,
-                               size_t offset) {
+bool StagingBuffer::writeToBuf(const StagingBufferRef& ref, std::span<uint8_t> data, size_t offset,
+                               bool skip_unchanged) {
     CHECK_REF(ref, return false);
     if (m_upload_active) return false;
 
@@ -307,6 +307,9 @@ bool StagingBuffer::writeToBuf(const StagingBufferRef& ref, std::span<uint8_t> d
     }
     VkDeviceSize size = std::min<VkDeviceSize>(ref.size - offset, data.size());
     uint8_t*     raw  = (uint8_t*)m_stage_raw;
+    if (skip_unchanged && size > 0 && size <= 256 &&
+        std::memcmp(raw + ref.offset + offset, data.data(), size) == 0)
+        return true;
     std::copy(data.begin(), data.begin() + size, raw + ref.offset + offset);
     markDirty(ref.offset + offset, size);
     return true;

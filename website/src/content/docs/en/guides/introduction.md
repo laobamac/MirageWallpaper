@@ -23,7 +23,7 @@ Mirage is under active development, and compatibility with the Wallpaper Engine 
 - **Connect to the Steam Workshop**: browse trending, latest, popular, top-rated, and tag-based content, and recognize and download Workshop presets.
 - **Embedded Steam service**: Mirage handles QR or password sign-in, Steam Guard, concurrent downloads, live speed, and content validation.
 - **System integration**: multi-display coverage, menu bar control, launch at login, and desktop placeholder image recovery.
-- **Live screen savers**: package video, web, and scene wallpapers into standalone screen savers that keep the current preset and custom properties.
+- **Live screen savers**: package video and scene wallpapers into standalone screen savers that keep the current preset and custom properties.
 - **Smart power saving**: continue, mute, pause, or stop playback when a full-screen app is active, another app is playing audio, the screen sleeps, or the Mac is on battery power.
 
 ## Core design: multi-process rendering

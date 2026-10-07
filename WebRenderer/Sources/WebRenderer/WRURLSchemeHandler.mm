@@ -1,4 +1,5 @@
 #import "WRURLSchemeHandler.h"
+#import "WRLive2DCompatibility.h"
 
 static NSString *const kScheme = @"we-wallpaper";
 static NSString *const kHost   = @"wallpaper";
@@ -242,6 +243,20 @@ static NSString *MIMEForExtension(NSString *ext) {
             }
         }
 
+        NSString *compatibilityETag = nil;
+        NSString *extension = filePath.pathExtension.lowercaseString;
+        if (([extension isEqualToString:@"js"] || [extension isEqualToString:@"mjs"]) &&
+            fileSize <= 4 * 1024 * 1024) {
+            NSData *source = memoryData ?: [NSData dataWithContentsOfFile:filePath
+                options:NSDataReadingMappedIfSafe error:nil];
+            NSData *adapted = source != nil ? WRAdaptLive2DScript(source) : nil;
+            if (adapted != nil) {
+                memoryData = adapted;
+                fileSize = adapted.length;
+                compatibilityETag = WRLive2DScriptETag(adapted);
+            }
+        }
+
         NSString *mime = MIMEForExtension(filePath.pathExtension);
         NSUInteger total = (NSUInteger)fileSize;
 
@@ -279,7 +294,7 @@ static NSString *MIMEForExtension(NSString *ext) {
         NSTimeInterval modified = memoryModificationTime != nil
                                       ? memoryModificationTime.doubleValue
                                       : [attributes[NSFileModificationDate] timeIntervalSince1970];
-        NSString *etag = [NSString stringWithFormat:@"\"%llx-%llx\"",
+        NSString *etag = compatibilityETag ?: [NSString stringWithFormat:@"\"%llx-%llx\"",
                           fileSize, (unsigned long long)modified];
         NSString *ifNoneMatch = [task.request valueForHTTPHeaderField:@"If-None-Match"];
         if (!hasRange && [ifNoneMatch isEqualToString:etag]) {

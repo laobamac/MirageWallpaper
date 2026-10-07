@@ -16,12 +16,14 @@
 #pragma once
 
 #include <string>
+#include <functional>
 
 namespace mirage {
 
 // Returns true when `path` was written (HEIC, falling back to JPEG on Macs with
-// no HEVC encoder). Gives up after roughly `timeout_seconds` without a frame,
-// which is what happens when the wallpaper is paused while fully occluded.
-bool WriteSceneSnapshot(const std::string& path, double timeout_seconds = 4.0);
+// no HEVC encoder). request_frame runs after the capture callback is installed,
+// allowing paused and on-demand scenes to supply one frame without resuming.
+bool WriteSceneSnapshot(const std::string& path, double timeout_seconds = 4.0,
+                        std::function<void()> request_frame = {});
 
 } // namespace mirage

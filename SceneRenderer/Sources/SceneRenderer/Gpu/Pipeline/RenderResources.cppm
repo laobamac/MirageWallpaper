@@ -48,7 +48,8 @@ inline bool SameTextureSample(const TextureSample& lhs, const TextureSample& rhs
 inline bool SameTextureKey(const TextureKey& lhs, const TextureKey& rhs) {
     return lhs.width == rhs.width && lhs.height == rhs.height && lhs.usage == rhs.usage &&
            lhs.format == rhs.format && SameTextureSample(lhs.sample, rhs.sample) &&
-           lhs.mipmap_level == rhs.mipmap_level && lhs.samples == rhs.samples;
+           lhs.mipmap_level == rhs.mipmap_level && lhs.samples == rhs.samples &&
+           lhs.image_usage == rhs.image_usage;
 }
 
 inline bool SameRenderTextureDescId(const RenderTextureDescId& lhs,
@@ -93,6 +94,7 @@ inline void WriteTextureKeyIdentity(PipelineKeyWriter& writer, const TextureKey&
     WriteTextureSampleIdentity(writer, key.sample);
     writer.writeU32(key.mipmap_level);
     WritePipelineScalar(writer, key.samples);
+    WritePipelineScalar(writer, key.image_usage);
 }
 
 inline void WriteRenderTextureDescIdIdentity(PipelineKeyWriter&         writer,
@@ -178,6 +180,12 @@ inline sr::TextureFormat RenderTargetColorFormat(const sr::SceneRenderTarget& rt
     return rt.hdr_format ? sr::TextureFormat::RGBA16F : sr::TextureFormat::RGBA8;
 }
 
+inline VkImageUsageFlags RenderTargetImageUsage(const sr::SceneRenderTarget& rt) {
+    return VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+           (rt.transfer_source ? VK_IMAGE_USAGE_TRANSFER_SRC_BIT : 0u) |
+           (rt.transfer_destination ? VK_IMAGE_USAGE_TRANSFER_DST_BIT : 0u);
+}
+
 inline TextureKey RenderTargetTextureKey(sr::SceneRenderTarget rt) {
     return TextureKey {
         .width        = rt.PhysicalWidth(),
@@ -186,22 +194,25 @@ inline TextureKey RenderTargetTextureKey(sr::SceneRenderTarget rt) {
         .format       = RenderTargetColorFormat(rt),
         .sample       = rt.sample,
         .mipmap_level = rt.mipmap_level,
+        .image_usage  = RenderTargetImageUsage(rt),
     };
 }
 
 inline TextureKey RenderTargetTextureKeyNoMip(sr::SceneRenderTarget rt) {
     return TextureKey {
-        .width  = rt.PhysicalWidth(),
-        .height = rt.PhysicalHeight(),
-        .usage  = {},
-        .format = RenderTargetColorFormat(rt),
-        .sample = rt.sample,
+        .width       = rt.PhysicalWidth(),
+        .height      = rt.PhysicalHeight(),
+        .usage       = {},
+        .format      = RenderTargetColorFormat(rt),
+        .sample      = rt.sample,
+        .image_usage = RenderTargetImageUsage(rt),
     };
 }
 
 inline TextureKey MsaaTextureKey(sr::SceneRenderTarget rt, VkSampleCountFlagBits samples) {
     auto key    = RenderTargetTextureKey(rt);
     key.samples = samples;
+    key.image_usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     return key;
 }
 
@@ -901,7 +912,6 @@ struct RenderingResources {
     vvk::CommandBuffer command;
 
     vvk::Semaphore sem_swap_wait_image;
-    vvk::Semaphore sem_export;
     vvk::Semaphore sem_upload;
     vvk::Fence     fence_frame;
     uint64_t       upload_timeline_value { 0 };

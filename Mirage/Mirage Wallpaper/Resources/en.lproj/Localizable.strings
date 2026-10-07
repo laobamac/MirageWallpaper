@@ -1,4 +1,30 @@
+/*
+  Mirage Wallpaper
+  Copyright © 2026 王孝慈. All rights reserved.
+*/
+
 /* Mirage user-visible strings. */
+
+"正在收集诊断数据…" = "Collecting diagnostic data…";
+"场景颜色诊断" = "Scene Color Diagnostics";
+"诊断：当前依赖" = "Current runtime";
+"诊断：受控基线" = "Controlled baseline";
+"诊断：官方保护修复" = "Upstream compression safeguard";
+"诊断：关闭快速数学" = "Fast math disabled";
+"诊断：关闭 MetalFX" = "MetalFX disabled";
+"诊断资源不完整，请使用专用诊断构建。" = "Diagnostic resources are missing. Please use a diagnostic build.";
+"自动对照不会修改壁纸或保存设置。请观察每组的实际画面并选择结果；导出的图片可能与屏幕显示不同。" = "These comparisons do not modify your wallpaper or saved settings. Observe each live result and select an answer; exported images may differ from what you see.";
+"报告包含设备信息、脱敏参数和壁纸渲染画面，不含桌面截图或脚本存储；不会自动上传。" = "The report contains device information, redacted parameters and wallpaper renderings, not desktop screenshots or script storage. Nothing is uploaded automatically.";
+"请根据诊断窗口中的实际壁纸画面选择，不要根据导出图片判断。" = "Judge the live wallpaper behind this panel, not an exported image.";
+"正在等待场景开场动画结束，首次编译可能需要较长时间。" = "Waiting for the opening animation to finish. Initial shader compilation may take longer.";
+"仍然发绿" = "Still green";
+"颜色正常" = "Colors normal";
+"其他异常" = "Other problem";
+"无法判断" = "Cannot tell";
+"诊断已结束。结果仅用于定位，不代表问题已经修复。请导出报告并回传到原 issue。" = "Diagnostics finished. Results help locate the problem; they do not prove a fix. Export the report and attach it to the original issue.";
+"取消诊断" = "Cancel diagnostics";
+"导出诊断报告…" = "Export diagnostic report…";
+"开始诊断" = "Start diagnostics";
 
 " · 主屏" = " · Main Display";
 "%d%% 下载中…" = "%d%% Downloading...";
@@ -160,6 +186,19 @@
 "关闭" = "Close";
 "关闭窗口" = "Close Window";
 "关闭自动更新后，Mirage 不会在后台检查或下载；仍可通过菜单中的“检查更新…”手动检查。开启测试版后，Mirage 会在正式更新之外检查最新的测试版。" = "When automatic updates are turned off, Mirage will not check or download in the background; you can still check manually via \"Check for Updates...\" in the menu. When beta is turned on, Mirage will check for the latest beta version in addition to official updates.";
+"自动更新已关闭" = "Automatic updates are off";
+"尚未检查更新" = "Updates have not been checked yet";
+"正在检查更新…" = "Checking for updates…";
+"发现新版本 %@" = "Version %@ is available";
+"正在下载版本 %@…" = "Downloading version %@…";
+"版本 %@ 已就绪，将在退出 Mirage 后安装" = "Version %@ is ready and will be installed after Mirage quits";
+"上次检查：%@" = "Last checked: %@";
+"已是最新版本 · %@" = "Up to date · %@";
+"未找到适用于此 Mac 的更新 · %@" = "No compatible updates found for this Mac · %@";
+"检查更新失败：%@" = "Update check failed: %@";
+"更新状态" = "Update Status";
+"立即检查更新" = "Check Now";
+"开启自动更新后，Mirage 会在启动时检查，并在后台定期检查和下载更新；关闭后仍可手动检查。开启测试版后，Mirage 也会检查测试版更新。" = "When automatic updates are enabled, Mirage checks at launch and periodically checks and downloads updates in the background. You can still check manually when they are disabled. Enable beta updates to also receive beta releases.";
 "其他应用全屏时" = "When other apps are full screen";
 "其他应用播放音频时" = "When other apps play audio";
 "其他应用获得焦点时" = "When another app gets focus";
@@ -990,3 +1029,289 @@
 "上一张" = "Previous Wallpaper";
 "下一张" = "Next Wallpaper";
 "正在应用壁纸…" = "Applying wallpaper…";
+
+"开发团队" = "Development Team";
+"项目作者 · 开发者" = "Project Author · Developer";
+"开发者" = "Developer";
+"打开 %@ 的 GitHub 主页" = "Open %@’s GitHub profile";
+
+"免登录下载" = "Sign-in-free downloads";
+
+"无需登录 Steam 或拥有 Wallpaper Engine，即可下载公开壁纸。此模式仅支持下载，不支持 Steam 订阅、收藏或评论。" = "Download public wallpapers without signing into Steam or owning Wallpaper Engine. This mode supports downloads only; Steam subscriptions, favorites and comments are unavailable.";
+
+"为控制资源使用，本功能限量开放。QQ群 2160040437 不定期发放激活资格，领取时请提供下方设备码。激活码一机一码，仅适用于本机。" = "Access is limited to control resource usage. Activation access is offered periodically in QQ group 2160040437. Provide the device code below when requesting a code. Each activation code is bound to one device.";
+
+"已复制群号" = "Group number copied";
+
+"复制QQ群号" = "Copy QQ group number";
+
+"已复制设备码" = "Device code copied";
+
+"复制设备码" = "Copy device code";
+
+"本机已激活" = "Activated on this device";
+
+"移除激活" = "Remove activation";
+
+"有效期至 %@" = "Valid until %@";
+
+"输入本机激活码" = "Enter this device’s activation code";
+
+"免登录下载使用第三方服务，作品标识和网络信息会发送给相关服务。服务可能失效，激活不代表获得 Steam 许可证，也不保证符合平台条款。" = "Sign-in-free downloads use third-party services, which receive item identifiers and network information. Services may stop working. Activation does not grant a Steam license or guarantee compliance with platform terms.";
+
+"我已了解并接受上述限制与风险" = "I understand and accept these limitations and risks";
+
+"激活并开启" = "Activate and enable";
+
+"更改立即生效；关闭此模式会取消正在进行的免登录下载。" = "Changes apply immediately. Switching modes cancels current downloads.";
+
+"免登录工坊下载" = "Sign-in-free Workshop downloads";
+
+"移除本机激活？" = "Remove activation from this device?";
+
+"将关闭免登录下载并清除本机保存的激活码，已下载壁纸不受影响。" = "This turns off sign-in-free downloads and removes the saved activation code. Downloaded wallpapers are kept.";
+
+"此版本未包含免登录下载组件" = "This build does not include the sign-in-free download component";
+
+"无法将激活信息保存到钥匙串" = "Could not save activation to Keychain";
+
+"无法清除钥匙串中的激活信息" = "Could not remove activation from Keychain";
+
+"请先激活并开启免登录下载" = "Activate and enable sign-in-free downloads first";
+
+"激活码无效，请检查后重试" = "Invalid activation code. Check it and try again.";
+
+"此激活码不适用于本机，请使用本机设备码领取" = "This code is for another device. Request a code using this device’s code.";
+
+"激活码已过期，请领取新的激活码" = "This activation code has expired. Request a new code.";
+
+"无法读取本机设备标识" = "Could not read this device’s identifier";
+
+"免登录下载服务暂不可用，请稍后重试" = "Sign-in-free downloads are temporarily unavailable. Try again later.";
+
+"无法获取此创意工坊作品的下载内容" = "Could not obtain downloadable content for this Workshop item";
+
+"下载内容未通过安全或完整性校验" = "Downloaded content failed security or integrity validation";
+
+"免登录下载失败，请检查网络后重试" = "Sign-in-free download failed. Check your connection and retry.";
+
+"免登录模式仅支持下载，请关闭此模式并登录 Steam 以使用社区功能" = "This mode supports downloads only. Turn it off and sign into Steam to use community features.";
+
+"免登录下载已开启" = "Sign-in-free downloads enabled";
+
+"已烘焙" = "Baked";
+
+"已烘焙的视频壁纸" = "Baked video wallpaper";
+
+"烘焙为视频" = "Bake to Video";
+
+"烘焙任务" = "Baking Tasks";
+
+"输出尺寸" = "Output size";
+
+"自定义" = "Custom";
+
+"宽度" = "Width";
+
+"高度" = "Height";
+
+"时长" = "Duration";
+
+"烘焙时长（秒）" = "Duration (seconds)";
+
+"预热：%d 秒" = "Warm-up: %d seconds";
+
+"包含壁纸自身音频" = "Include wallpaper audio";
+
+"高画质（文件更大）" = "High quality (larger file)";
+
+"烘焙会固定当前属性，生成新的 SDR 视频壁纸。鼠标交互、时钟和实时媒体信息不会继续更新；首尾不保证无缝。" = "Baking freezes the current properties into a new SDR video wallpaper. Mouse interaction, clocks and live media information will no longer update. A seamless loop is not guaranteed.";
+
+
+"我信任此网页壁纸并允许运行其脚本" = "I trust this web wallpaper and allow its scripts to run";
+
+"允许屏幕录制" = "Allow Screen Recording";
+
+"授权后可能需要重新启动 Mirage。" = "You may need to restart Mirage after granting permission.";
+
+"预计视频大小：%@" = "Estimated video size: %@";
+
+"尺寸需为 128–4096 的偶数，时长需为 1–600 秒。" = "Dimensions must be even numbers from 128 to 4096. Duration must be 1–600 seconds.";
+
+"开始烘焙" = "Start Baking";
+
+"清除已结束任务" = "Clear Finished Tasks";
+
+"暂无烘焙任务" = "No baking tasks";
+
+"取消烘焙" = "Cancel Baking";
+
+"查看日志" = "View Log";
+
+"等待烘焙" = "Queued";
+
+"检查源文件" = "Checking source files";
+
+"准备烘焙" = "Preparing";
+
+"预热场景" = "Warming up scene";
+
+"正在烘焙" = "Baking";
+
+"验证烘焙结果" = "Verifying";
+
+"烘焙完成" = "Completed";
+
+"烘焙已取消" = "Cancelled";
+
+"正在取消烘焙" = "Cancelling";
+
+"烘焙失败" = "Failed";
+
+"%@ · 已烘焙" = "%@ · Baked";
+
+
+"网页烘焙需要屏幕录制权限。请在系统设置中允许 Mirage，重新启动后重试。" = "Web baking requires Screen Recording permission. Allow Mirage in System Settings, restart it and try again.";
+
+"网页捕获速度不足，请降低分辨率或帧率后重试。" = "Web capture is too slow. Reduce the resolution or frame rate and try again.";
+
+"烘焙等待画面超时，请检查壁纸资源后重试。" = "Timed out waiting for a frame. Check the wallpaper resources and try again.";
+
+"壁纸源文件在烘焙期间发生变化，请重新烘焙。" = "The source wallpaper changed during baking. Please bake it again.";
+
+"可用磁盘空间不足，无法完成烘焙。" = "There is not enough free disk space to complete baking.";
+
+"未找到烘焙组件，请重新构建或安装完整的 Mirage。" = "Baking components are missing. Rebuild or install the complete Mirage application.";
+
+"烘焙参数无效，请检查尺寸、时长和播放速度。" = "Invalid baking settings. Check the dimensions, duration and playback speed.";
+
+"当前烘焙输出仅支持 SDR，不能烘焙 HDR 视频。" = "Baking currently supports SDR output only. HDR video cannot be baked.";
+
+"当前设备无法以所选尺寸启动视频编码器。" = "The video encoder could not start with the selected dimensions on this device.";
+
+"无法读取壁纸或解码其视频。" = "The wallpaper could not be read or its video could not be decoded.";
+
+"无法读取壁纸音轨，烘焙未完成。" = "The wallpaper audio track could not be read. Baking did not complete.";
+
+"烘焙失败，未生成壁纸。请检查任务日志后重试。" = "Baking failed and no wallpaper was created. Check the task log and try again.";
+
+// Mobile wallpaper transfer strings
+"正在将“%@”传输至“%@”" = "Transferring “%@” to “%@”";
+"正在打包壁纸" = "Packaging wallpaper";
+"正在上传至移动设备" = "Uploading to mobile device";
+"传输失败：%@" = "Transfer failed: %@";
+"移动设备" = "Mobile Devices";
+"移动设备连接失败" = "Mobile device connection failed";
+"在 Android 手机或平板电脑上免费安装 Wallpaper Engine，即可随时随地使用动画壁纸。" = "Install Wallpaper Engine for free on your Android phone or tablet to use animated wallpapers anywhere.";
+"右键单击兼容的壁纸并选择“发送到移动设备”，以将壁纸无线传输到您的手机或平板电脑。" = "Right-click a compatible wallpaper and choose “Send to Mobile Device” to transfer it wirelessly to your phone or tablet.";
+"下载应用程序" = "Download App";
+"需要 Android 10 或更高版本" = "Requires Android 10 or later";
+"打开 Wallpaper Engine Android 下载页面" = "Open the Wallpaper Engine Android download page";
+"在您的移动设备上输入此 PIN 以进行连接:" = "Enter this PIN on your mobile device to connect:";
+"连接新设备" = "Connect New Device";
+"连接新的移动设备" = "Connect a New Mobile Device";
+"关闭移动设备窗口" = "Close the mobile devices window";
+"删除此移动设备" = "Remove this mobile device";
+"访问我们的网站以获取更多帮助:" = "Visit our website for more help:";
+"移动设备版 Wallpaper Engine 帮助" = "Wallpaper Engine Mobile Help";
+"已连接" = "Connected";
+"未连接" = "Disconnected";
+"发送到移动设备" = "Send to Mobile Device";
+"发送至 %@" = "Send to %@";
+"配对 PIN %@" = "Pairing PIN %@";
+"导出 .mpkg 文件" = "Export .mpkg File";
+"确认" = "Confirm";
+"动态" = "Dynamic";
+"高质量" = "High Quality";
+"均衡" = "Balanced";
+"预渲染" = "Pre-rendered";
+"高性能" = "High Performance";
+"实时动态场景" = "Real-time dynamic scene";
+"即将推出" = "Coming soon";
+"动态 · 高质量" = "Dynamic · High Quality";
+"Mirage 会针对移动设备转换场景壁纸。请选择最适合设备的性能等级；以后可以重新转换并发送其他版本。" = "Mirage converts scene wallpapers for mobile devices. Choose the performance level that best suits your device; you can convert and send another version later.";
+"高分辨率场景对移动设备的性能要求较高。如果出现卡顿，可以在后续版本中改用均衡或预渲染模式。" = "High-resolution scenes require more mobile performance. If playback stutters, a future version will let you use Balanced or Pre-rendered mode.";
+"将“%@”发送至 Android" = "Send “%@” to Android";
+"导出“%@”以在 Android 上使用" = "Export “%@” for Android";
+"设备保持连接时，转换完成后会自动开始发送，无需先导出文件。" = "If the device stays connected, transfer starts automatically after conversion; you do not need to export a file first.";
+"转换完成后会将可供 Wallpaper Engine Android 使用的 .mpkg 文件保存到所选位置。" = "After conversion, a Wallpaper Engine Android-compatible .mpkg file will be saved to the selected location.";
+"正在导出“%@”" = "Exporting “%@”";
+"正在转换场景壁纸" = "Converting scene wallpaper";
+"正在连接移动设备" = "Connecting to mobile device";
+"导出失败：%@" = "Export failed: %@";
+"导出 .mpkg 失败" = "Failed to export .mpkg";
+"暂不支持将%@壁纸导出到移动设备。" = "Exporting %@ wallpapers to mobile devices is not supported yet.";
+"壁纸包含不安全或无效的文件路径。" = "The wallpaper contains an unsafe or invalid file path.";
+"无法生成移动设备壁纸项目。" = "Unable to generate the mobile wallpaper project.";
+"无法读取壁纸文件：%@" = "Unable to read wallpaper file: %@";
+"移动设备壁纸不能超过 4 GB。" = "Mobile wallpapers cannot exceed 4 GB.";
+"移动设备发送了无效的数据帧" = "The mobile device sent an invalid data frame";
+"移动设备已断开连接" = "The mobile device disconnected";
+"移动设备发送了无效的配对数据" = "The mobile device sent invalid pairing data";
+"移动设备发送了无效的加密会话" = "The mobile device sent invalid encryption session data";
+"无法读取移动设备配对公钥" = "Unable to read the mobile device pairing public key";
+"无法生成移动设备配对身份" = "Unable to generate the mobile device pairing identity";
+"无法解密移动设备配对请求" = "Unable to decrypt the mobile device pairing request";
+"移动设备加密失败：%d" = "Mobile device encryption failed: %d";
+"移动设备当前未连接。" = "The mobile device is not currently connected.";
+"该移动设备已有传输任务正在进行。" = "A transfer is already running for this mobile device.";
+"无法读取要发送的 MPKG 文件。" = "Unable to read the MPKG file to transfer.";
+"暂不支持将%@壁纸转换到移动设备。" = "Converting %@ wallpapers for mobile devices is not supported yet.";
+"暂不支持直接转换场景预设，请发送基础场景壁纸。" = "Scene presets cannot be converted directly yet. Send the base scene wallpaper instead.";
+"场景壁纸的 project.json 无效。" = "The scene wallpaper project.json is invalid.";
+"场景壁纸包含不安全或重复的文件路径。" = "The scene wallpaper contains unsafe or duplicate file paths.";
+"场景壁纸的 scene.pkg 无效。" = "The scene wallpaper scene.pkg is invalid.";
+"场景壁纸文件不完整。" = "The scene wallpaper file is incomplete.";
+"暂不支持场景包版本 %@。" = "Scene package version %@ is not supported yet.";
+"无法读取场景纹理：%@" = "Unable to read scene texture: %@";
+"暂不支持该场景纹理布局：%@" = "This scene texture layout is not supported yet: %@";
+"暂不支持纹理 %@ 的格式 %d。" = "Texture %@ format %d is not supported yet.";
+"ETC2 编码器返回了无效纹理。" = "The ETC2 encoder returned an invalid texture.";
+"App 缺少场景转换组件，请重新安装 Mirage。" = "The app is missing scene conversion components. Reinstall Mirage.";
+"场景转换失败：%@" = "Scene conversion failed: %@";
+"移动设备场景壁纸不能超过 4 GB。" = "Mobile scene wallpapers cannot exceed 4 GB.";
+
+// Scene mobile export options
+"最高质量 -（不降低纹理分辨率）" = "Highest quality - (Keep original texture resolution)";
+"更佳性能 -（将纹理分辨率降低至原来的一半）" = "Better performance - (Reduce textures to half their resolution)";
+"高性能 -（将纹理分辨率降低至原来的四分之一）" = "High performance - (Reduce textures to a quarter of their resolution)";
+"Mirage 将优化壁纸，以便您的设备达到最佳性能。请选择最能代表您设备的性能等级。如果视觉质量或性能不符合您的喜好，您可以稍后更改此选择，然后将壁纸重新上传到设备。" = "Mirage will optimize your wallpaper for your device. Choose the performance level that best suits your device. You can change this selection and send the wallpaper again if the visual quality or performance is not to your liking.";
+"预渲染视频导出暂不可用" = "Pre-rendered video export is not yet available";
+"显示高级设置" = "Show advanced settings";
+"像素画优化" = "Pixel art optimization";
+"纹理分辨率降低" = "Texture reduction";
+"保留 RGBA 纹理，减少像素画的压缩损失。文件可能增大。" = "Preserve RGBA textures to reduce compression artifacts in pixel art. Files may be larger.";
+"蒙版和较小纹理保留原尺寸。最高质量会保留原始纹理分辨率。" = "Masks and small textures keep their original size. Highest quality keeps the original texture resolution.";
+"提示：" = "Tip: ";
+"将您的 Android 设备连接到 Mirage，即可无线传输壁纸，无需先导出。" = "Connect your Android device to Mirage to send wallpapers wirelessly without exporting them first. ";
+"点击此处了解更多信息。" = "Click here to learn more.";
+"已开启" = "On";
+"已关闭" = "Off";
+
+"网页将以原速在后台实时录制，输出静音，不改变当前桌面壁纸。" = "Web wallpapers are recorded in the background in real time at their original speed, without audio or changing your desktop wallpaper.";
+"本阶段 %d%%" = "This stage: %d%%";
+"已检查 %@ / %@" = "Checked %@ / %@";
+"已处理 %@ / %@ 帧" = "Processed %@ / %@ frames";
+"已发现 %@ 个项目" = "Found %@ items";
+"转换源视频" = "Converting source video";
+"完成视频编码" = "Finishing video encoding";
+"合并音视频" = "Merging audio and video";
+"复查源文件" = "Rechecking source files";
+"生成烘焙封面" = "Creating baked wallpaper preview";
+"整理烘焙结果" = "Finalizing baked wallpaper";
+
+"自动清理 macOS 壁纸缓存" = "Automatically Clean macOS Wallpaper Cache";
+"立即清理壁纸缓存…" = "Clean Wallpaper Cache Now…";
+"Mirage 只会清理自己产生且已不再使用的缓存。首次手动清理时，macOS 可能要求你授权 Wallpaper Agent 的图像缓存目录。" = "Mirage only removes unused cache files that it created. The first manual cleanup may ask you to grant access to Wallpaper Agent’s image cache folder.";
+"请选择 Wallpaper Agent 的图像缓存目录。" = "Please select Wallpaper Agent’s image cache folder.";
+"授权" = "Grant Access";
+"选择的目录不正确" = "The Selected Folder Is Incorrect";
+"请选择以下目录：\n%@" = "Please select this folder:\n%@";
+"无法保存壁纸缓存目录授权" = "Couldn’t Save Wallpaper Cache Access";
+"Mirage 无法保存对该目录的访问权限。" = "Mirage couldn’t save access to this folder.";
+"壁纸缓存清理完成" = "Wallpaper Cache Cleaned";
+"已删除 %d 个缓存文件，释放 %@。" = "Removed %d cache files and freed %@.";
+"需要访问壁纸缓存" = "Wallpaper Cache Access Required";
+"macOS 26 不会自动清理壁纸缓存。Mirage 需要你授权后，才能删除自己产生且已不再使用的缓存。" = "macOS 26 does not automatically clear its wallpaper cache. Grant access so Mirage can remove only the unused cache files it created.";
+"授权访问" = "Grant Access";
+"关闭自动清理" = "Turn Off Automatic Cleaning";

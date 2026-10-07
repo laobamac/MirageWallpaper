@@ -28,6 +28,7 @@ enum MainSection: String, CaseIterable, Hashable {
 
 final class MainNavigationModel: ObservableObject {
     @Published var selection: MainSection
+    @Published var isMobileDevicesPresented = false
 
     init(selection: MainSection = .installed) {
         self.selection = selection
@@ -75,11 +76,13 @@ struct ContentView: View {
     @Bindable var workshopViewModel: WorkshopViewModel
     @ObservedObject var navigationModel: MainNavigationModel
     @ObservedObject private var shortcutManager = WallpaperShortcutManager.shared
+    @ObservedObject private var bakeService = WallpaperBakeService.shared
     @ObservedObject private var dynamicLockScreenManager = DynamicLockScreenManager.shared
     @ObservedObject private var screenSaverDynamicLockScreenManager = ScreenSaverDynamicLockScreenManager.shared
     @StateObject private var steamSetupViewModel = SteamSetupViewModel()
     @State private var loadedSections: Set<MainSection>
     @State private var hasPresentedUI = false
+    @State private var pendingSceneFileExport: (wallpaper: WEWallpaper, options: SceneMobileExportOptions)?
 
     init(
         viewModel: ContentViewModel,
@@ -314,6 +317,29 @@ struct ContentView: View {
             FirstLaunchView()
                 .environment(globalSettingsViewModel)
         }
+        .sheet(isPresented: $navigationModel.isMobileDevicesPresented) {
+            MobileDevicesView(viewModel: AppDelegate.shared.mobileDevicesViewModel)
+        }
+        .sheet(item: $viewModel.pendingSceneMobileExport, onDismiss: {
+            guard let export = pendingSceneFileExport else { return }
+            pendingSceneFileExport = nil
+            DispatchQueue.main.async {
+                viewModel.presentMobileMPKGSavePanel(for: export.wallpaper, sceneOptions: export.options)
+            }
+        }) { request in
+            SceneMobileExportOptionsView(request: request) { options in
+                switch request.destination {
+                case .device(let device):
+                    AppDelegate.shared.mobileDevicesViewModel.send(
+                        wallpaper: request.wallpaper,
+                        to: device,
+                        sceneOptions: options
+                    ) { _ in }
+                case .file:
+                    pendingSceneFileExport = (request.wallpaper, options)
+                }
+            }
+        }
         .sheet(item: $shortcutManager.recordingWallpaper, onDismiss: {
             shortcutManager.cancelRecording()
         }) { wallpaper in
@@ -321,6 +347,15 @@ struct ContentView: View {
                 wallpaper: wallpaper,
                 manager: shortcutManager
             )
+        }
+        .sheet(item: $bakeService.presentedWallpaper, onDismiss: {
+            if !bakeService.jobs.isEmpty { bakeService.showsTasks = true }
+        }) { wallpaper in
+            WallpaperBakeView(wallpaper: wallpaper)
+        }
+        .sheet(isPresented: Binding(get: { bakeService.showsTasks && bakeService.presentedWallpaper == nil },
+                                    set: { bakeService.showsTasks = $0 })) {
+            WallpaperBakeTasksView()
         }
         .sheet(item: $viewModel.pendingTrustRequest) { request in
             UnsafeWallpaper(request: request)
@@ -337,6 +372,9 @@ struct ContentView: View {
         .overlay(alignment: .bottomTrailing) {
             VideoTranscodeOverlay()
                 .allowsHitTesting(false)
+        }
+        .overlay(alignment: .bottom) {
+            MobileTransferOverlay()
         }
         .environment(\.locale, localization.locale)
         .environment(\.mirageContentActive, interfaceActive)

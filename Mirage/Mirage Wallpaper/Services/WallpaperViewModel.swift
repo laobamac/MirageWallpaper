@@ -41,6 +41,26 @@ class WallpaperViewModel: PlaylistPlayback {
     let renderer = RendererController()
     let propertyModel = WallpaperPropertyModel()
     let controlState = WallpaperControlState()
+    private var externalLockPreparation: UUID?
+    private var resetStorageAssignments: [DisplayKey: UUID] = [:]
+    private var scriptStorageSnapshots: [DisplayKey: (wallpaperID: String, values: [String: String])] = [:]
+
+    func renderSnapshots(for wallpaperID: String) -> [String: WallpaperRenderSnapshot] {
+        Dictionary(uniqueKeysWithValues: displayStates.compactMap { key, state in
+            let wallpaper = state.wallpaper
+            guard wallpaper.id == wallpaperID else { return nil }
+            let storage = scriptStorageSnapshots[key].flatMap {
+                $0.wallpaperID == wallpaper.id ? $0.values : nil
+            }
+            return (key.rawValue, WallpaperRenderSnapshot(runtime: state.runtime,
+                properties: effectiveProperties(for: wallpaper, runtime: state.runtime), scriptStorage: storage))
+        })
+    }
+
+    @MainActor
+    func refreshScriptStorage(for wallpaper: WEWallpaper? = nil) async {
+        await renderer.refreshScriptStorage(wallpaperID: wallpaper?.id)
+    }
 
     private struct PreviewSelection {
         let id: UUID
@@ -154,7 +174,6 @@ class WallpaperViewModel: PlaylistPlayback {
     private var dynamicLockScreenPaused = false
     private var externalLockScreenSuspended = false
     private var sessionMuted = false
-    @ObservationIgnored private var lastDisplayTopology = DisplayTopologySnapshot.capture()
 
     static var invalidWallpaper: WEWallpaper {
         WEWallpaper(using: .invalid,
@@ -195,14 +214,26 @@ class WallpaperViewModel: PlaylistPlayback {
         displayStatesChanges.send(loaded)
         committedAssignmentIDs = Dictionary(uniqueKeysWithValues: loaded.keys.map { ($0, UUID()) })
 
+        renderer.onScriptStorageChanged = { [weak self] displayID, wallpaperID, assignmentID, values in
+            guard let self, self.persistsChanges,
+                  let key = DisplayRegistry.shared.info(forDisplay: displayID)?.key,
+                  let state = self.displayStates[key], state.wallpaper.id == wallpaperID,
+                  assignmentID == self.committedAssignmentIDs[key],
+                  assignmentID != self.resetStorageAssignments[key] else { return }
+            self.resetStorageAssignments[key] = nil
+            if let previous = self.scriptStorageSnapshots[key],
+               previous.wallpaperID == wallpaperID, previous.values == values { return }
+            self.scriptStorageSnapshots[key] = (wallpaperID, values)
+            self.scheduleRuntimeSave(for: key)
+        }
         renderer.isWallpaperTrusted = { WallpaperViewModel.isWallpaperTrusted($0) }
         renderer.onPositionAvailabilityChanged = { [weak self] displayID in
             guard let self, self.selectedDisplay?.displayID == displayID else { return }
             self.positionAvailabilityGeneration &+= 1
         }
         NotificationCenter.default.addObserver(
-            self, selector: #selector(displayTopologyChanged),
-            name: NSApplication.didChangeScreenParametersNotification, object: nil)
+            self, selector: #selector(displayTopologyChanged(_:)),
+            name: DisplayRegistry.didChangeNotification, object: DisplayRegistry.shared)
         persistStates()
     }
 
@@ -905,6 +936,46 @@ class WallpaperViewModel: PlaylistPlayback {
         }
     }
 
+    func diagnoseSceneColors(_ wallpaper: WEWallpaper) {
+        guard wallpaper.kind == .scene else { return }
+        Task { @MainActor in
+            await refreshScriptStorage(for: wallpaper)
+            guard let display = connectedDisplays.first(where: { renderer.currentWallpaper(onDisplay: $0.displayID)?.id == wallpaper.id })
+                    ?? connectedDisplays.first(where: \.isMain) ?? connectedDisplays.first else { return }
+            let runtime = loadRuntime(for: wallpaper)
+            let options = makeRenderOptions(for: wallpaper, runtime: runtime, assignmentID: UUID(), playbackAction: .keepRunning)
+            let bundle = Bundle.main
+            guard let resources = bundle.resourceURL else { return }
+            do {
+                let properties = try JSONSerialization.data(withJSONObject: WallpaperPropertyEncoding.values(options.userProperties), options: [.sortedKeys])
+                let snapshot = try JSONSerialization.data(withJSONObject: ["speed": runtime.speed,
+                    "scriptStorage": WallpaperRenderSnapshot.storedScriptStorage(for: wallpaper)])
+                var arguments = ["--fps", "30", "--display-id", String(display.displayID),
+                                 "--render-scale", String(options.renderScale), "--msaa", String(options.msaaSamples),
+                                 "--fill", options.fillMode.rawValue, "--position-x", String(options.position.x),
+                                 "--position-y", String(options.position.y)]
+                if options.loadFromMemory { arguments.append("--load-from-memory") }
+                SceneColorDiagnosticWindow.show(SceneDiagnosticRequest(
+                    package: wallpaper.resolvedEntryURL, assets: resources.appending(path: "assets"),
+                    renderer: resources.appending(path: "Renderers/SceneWallpaper"),
+                    frameworks: bundle.bundleURL.appending(path: "Contents/Frameworks"),
+                    payload: resources.appending(path: "SceneDiagnostics"), properties: properties, runtime: snapshot,
+                    arguments: arguments, metadata: ["version": bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "",
+                        "build": bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "",
+                        "commit": bundle.object(forInfoDictionaryKey: "MirageGitCommit") as? String ?? "",
+                        "wallpaper_id": wallpaper.id, "original_fps": String(options.fps),
+                        "original_spectrum": String(options.enableSpectrum)],
+                    fastMath: ProcessInfo.processInfo.environment["MVK_CONFIG_FAST_MATH_ENABLED"] ?? "default",
+                    metalFX: options.enableMetalFX))
+            } catch {
+                let alert = NSAlert()
+                alert.messageText = L("场景颜色诊断")
+                alert.informativeText = error.localizedDescription
+                alert.runModal()
+            }
+        }
+    }
+
     private func makeRenderOptions(for w: WEWallpaper,
                                    runtime state: WallpaperRuntimeState,
                                    assignmentID: UUID,
@@ -947,13 +1018,14 @@ class WallpaperViewModel: PlaylistPlayback {
 
     // MARK: 拓扑变化
 
-    @objc private func displayTopologyChanged() {
-        let topology = DisplayTopologySnapshot.capture()
-        guard topology != lastDisplayTopology else { return }
-        lastDisplayTopology = topology
-
-        DisplayRegistry.shared.invalidate()
-        let connected = DisplayRegistry.shared.connected
+    @objc private func displayTopologyChanged(_ notification: Notification) {
+        guard let change = DisplayRegistry.Change.from(notification) else { return }
+        let connected = change.connected
+        guard change.topologyChanged else {
+            rebuildCurrentByScreen(connected)
+            syncStatusItems()
+            return
+        }
         let connectedIDs = Set(connected.map(\.displayID))
         let connectedKeys = Set(connected.map(\.key))
 
@@ -1003,12 +1075,7 @@ class WallpaperViewModel: PlaylistPlayback {
         }
         if seeded { persistStates() }
 
-        var rebuilt: [Int: WEWallpaper] = [:]
-        for info in connected {
-            guard let wallpaper = renderer.currentWallpaper(onDisplay: info.displayID) else { continue }
-            rebuilt[info.index] = wallpaper
-        }
-        currentByScreen = rebuilt
+        rebuildCurrentByScreen(connected)
 
         DesktopOverrideService.shared.scheduleCaptureForAllScreens()
         stoppedByPlaybackPolicy = stoppedByPlaybackPolicy.intersection(connectedKeys)
@@ -1016,6 +1083,15 @@ class WallpaperViewModel: PlaylistPlayback {
             AppDelegate.shared.globalSettingsViewModel.effectivePlaybackActions,
             force: true)
         syncStatusItems()
+    }
+
+    private func rebuildCurrentByScreen(_ connected: [DisplayInfo]) {
+        var rebuilt: [Int: WEWallpaper] = [:]
+        for info in connected {
+            guard let wallpaper = renderer.currentWallpaper(onDisplay: info.displayID) else { continue }
+            rebuilt[info.index] = wallpaper
+        }
+        currentByScreen = rebuilt
     }
 
     // MARK: 运行时状态持久化
@@ -1169,7 +1245,7 @@ class WallpaperViewModel: PlaylistPlayback {
         let properties = Self.propertyValues(for: wallpaper, runtime: normalized)
         let context = ScreenSaverManager.ConfigurationContext(
             wallpaperID: wallpaper.id, runtime: normalized,
-            fps: Int(AppDelegate.shared.globalSettingsViewModel.settings.fps))
+            fps: Int(AppDelegate.shared.globalSettingsViewModel.settings.fps), sourceDisplay: key)
         persistenceQueue.submit(key: "runtime:" + wallpaper.id) {
             guard let data = try? JSONEncoder().encode(shared) else { return }
             UserDefaults.standard.set(data, forKey: Self.runtimeKey(for: wallpaper))
@@ -1178,9 +1254,10 @@ class WallpaperViewModel: PlaylistPlayback {
         }
         if let displayID = DisplayRegistry.shared.displayID(for: key) {
             MainActor.assumeIsolated {
-                DynamicLockScreenManager.shared.updatePosition(
-                    normalized.position, fillMode: normalized.fillMode,
-                    wallpaperID: wallpaper.id, displayID: displayID)
+                if let snapshot = context.runtimeByDisplay[key.rawValue] {
+                    DynamicLockScreenManager.shared.updateRuntime(snapshot, wallpaper: wallpaper,
+                        displayKey: key.rawValue, displayID: displayID)
+                }
             }
         }
     }
@@ -1405,6 +1482,9 @@ class WallpaperViewModel: PlaylistPlayback {
             prop.mirageShortcutIcon = UserTextureCache.shared.shortcutIconPath(
                 for: normalizedValue.stringValue)
         }
+        if displayKey == selectedDisplayKey, previewWallpaper.id == state.wallpaper.id {
+            propertyModel.setOverride(normalizedValue, for: propertyKey)
+        }
         mutateRuntime(for: displayKey) { $0.propertyOverrides[propertyKey] = normalizedValue }
 
         switch state.wallpaper.kind {
@@ -1522,6 +1602,8 @@ class WallpaperViewModel: PlaylistPlayback {
         let key = selectedDisplayKey
         guard var state = displayStates[key] else { return }
         state.runtime = WallpaperRuntimeState()
+        scriptStorageSnapshots[key] = (state.wallpaper.id, [:])
+        resetStorageAssignments[key] = committedAssignmentIDs[key]
         displayStates[key] = state
         lastAppliedPlayback[key] = nil
         persistStates()
@@ -1617,6 +1699,22 @@ class WallpaperViewModel: PlaylistPlayback {
             force: true)
     }
 
+    @MainActor
+    func prepareForExternalLockScreen() async -> Bool {
+        guard !externalLockScreenSuspended else { return false }
+        let request = UUID()
+        externalLockPreparation = request
+        await refreshScriptStorage()
+        guard externalLockPreparation == request else { return false }
+        externalLockPreparation = nil
+        saveRuntime()
+        flushPendingSaves()
+        ScreenSaverManager.shared.flushConfigurationUpdates()
+        DynamicLockScreenManager.shared.flushConfigurationUpdates()
+        suspendForExternalLockScreen()
+        return true
+    }
+
     func suspendForExternalLockScreen() {
         guard !externalLockScreenSuspended else { return }
         externalLockScreenSuspended = true
@@ -1636,6 +1734,7 @@ class WallpaperViewModel: PlaylistPlayback {
     }
 
     func resumeAfterExternalLockScreen() {
+        externalLockPreparation = nil
         guard externalLockScreenSuspended, renderer.resumeAfterSuspension() else { return }
         externalLockScreenSuspended = false
         UserDefaults.standard.set(false, forKey: "Mirage.DynamicLockScreen.Locked")

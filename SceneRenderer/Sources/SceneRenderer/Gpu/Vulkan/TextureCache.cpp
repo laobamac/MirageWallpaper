@@ -349,6 +349,8 @@ std::size_t TextureKey::HashValue(const TextureKey& k) {
     utils::hash_combine(seed, (int)k.sample.wrapT);
     utils::hash_combine(seed, (int)k.sample.magFilter);
     utils::hash_combine(seed, (int)k.samples);
+    utils::hash_combine(seed, (int)k.sample.minFilter);
+    utils::hash_combine(seed, k.image_usage);
     return seed;
 }
 
@@ -522,9 +524,7 @@ std::optional<VmaImageParameters> TextureCache::CreateTex(TextureKey tex_key) {
         VkExtent3D          ext { (u32)tex_key.width, (u32)tex_key.height, 1 };
         const bool          depth_usage = tex_key.usage == TexUsage::DEPTH;
         VkImageUsageFlags   usage =
-            depth_usage ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
-                        : VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-                              VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+            depth_usage ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT : tex_key.image_usage;
 
         if (auto opt = CreateImage(m_device,
                                    ext,
@@ -1355,6 +1355,32 @@ void TextureCache::Clear() {
     m_pending_initializations.clear();
     m_pending_uploads.clear();
     m_recorded_uploads.clear();
+}
+
+void TextureCache::RetainImportedTextures(std::span<const std::string> keys) {
+    std::unordered_set<std::string> retained(keys.begin(), keys.end());
+    // Hidden videos retain playback state and decoder position. Their activity
+    // epoch already stops decoding; do not restart them as an image-cache eviction.
+    if (m_video_registry)
+        for (const auto& slot : m_video_registry->slots) retained.insert(slot->key);
+    std::unordered_set<VkImage> retired_images;
+    for (const auto& [key, texture] : m_tex_map) {
+        if (retained.contains(key)) continue;
+        for (const auto& image : texture.slots)
+            retired_images.insert(ToImageParameters(image).handle);
+    }
+    std::erase_if(m_pending_initializations, [&](const auto& init) {
+        return retired_images.contains(init.image.handle);
+    });
+    std::erase_if(m_pending_uploads, [&](const auto& upload) {
+        return retired_images.contains(upload.image.handle);
+    });
+    for (auto it = m_tex_map.begin(); it != m_tex_map.end();) {
+        if (! retained.contains(it->first))
+            it = m_tex_map.erase(it);
+        else
+            ++it;
+    }
 }
 
 void TextureCache::ClearTransientGraphResources() {

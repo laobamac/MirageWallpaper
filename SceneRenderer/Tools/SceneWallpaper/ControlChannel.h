@@ -56,32 +56,22 @@ public:
                         std::function<void()> on_activate = {},
                         std::function<void()> on_deactivate = {},
                         std::function<void(const std::string&, const std::string&)>
-                            on_snapshot = {})
+                            on_snapshot = {},
+                        std::function<void(const std::string&)> on_storage = {})
         : m_wallpaper(wallpaper),
           m_on_quit(std::move(on_quit)),
           m_on_activate(std::move(on_activate)),
           m_on_deactivate(std::move(on_deactivate)),
-          m_on_snapshot(std::move(on_snapshot)) {}
+          m_on_snapshot(std::move(on_snapshot)),
+          m_on_storage(std::move(on_storage)) {}
 
     ~SceneControlChannel() { stop(); }
 
     SceneControlChannel(const SceneControlChannel&)            = delete;
     SceneControlChannel& operator=(const SceneControlChannel&) = delete;
 
-    void start() {
-        if (m_running.exchange(true)) return;
-        m_thread = std::thread([this] { readLoop(); });
-    }
-
-    void stop() {
-        m_running.store(false);
-        if (m_thread.joinable()) {
-            // readLoop polls stdin with a short timeout, so shutdown can join
-            // safely instead of leaving a detached thread holding references
-            // to this channel and SceneWallpaper during teardown.
-            m_thread.join();
-        }
-    }
+    void start();
+    void stop();
 
 private:
     void readLoop();
@@ -92,6 +82,8 @@ private:
     std::function<void()> m_on_activate;
     std::function<void()> m_on_deactivate;
     std::function<void(const std::string&, const std::string&)> m_on_snapshot;
+    std::function<void(const std::string&)> m_on_storage;
+    int                                                         m_wake_fds[2] { -1, -1 };
     std::atomic<bool>     m_running { false };
     std::thread           m_thread;
 };

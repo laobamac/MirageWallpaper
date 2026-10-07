@@ -69,6 +69,7 @@ void FrameTimer::FrameEnd() {
     UpdateFrametime();
 
     m_frame_busy_count.store(0, std::memory_order_release);
+    m_timer.NotifyReady();
 }
 
 void FrameTimer::SetCallback(const std::function<void()>& cb) {

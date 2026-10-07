@@ -41,6 +41,8 @@ public:
 
     void mount(std::unique_ptr<SoundStream>);
     void unmount_all();
+    void set_offline(std::uint32_t sample_rate);
+    std::vector<float> render_offline(std::uint32_t frames);
 
     auto init() -> bool;
     auto is_inited() const -> bool;

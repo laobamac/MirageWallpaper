@@ -128,7 +128,8 @@ bool EncodeRGBA(const std::vector<uint8_t>& pixels, uint32_t width, uint32_t hei
 
 } // namespace
 
-bool WriteSceneSnapshot(const std::string& path, double timeout_seconds) {
+bool WriteSceneSnapshot(const std::string& path, double timeout_seconds,
+                         std::function<void()> request_frame) {
     if (path.empty()) return false;
 
     auto sink = std::make_shared<FrameSink>();
@@ -139,6 +140,7 @@ bool WriteSceneSnapshot(const std::string& path, double timeout_seconds) {
         ActiveSink() = sink;
     }
     SceneRendererSetLiveFrameCallback(&OnLiveFrame, nullptr);
+    if (request_frame) request_frame();
 
     bool filled = false;
     {

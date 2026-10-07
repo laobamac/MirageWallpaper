@@ -136,6 +136,7 @@ struct Options {
     std::string               scene_pkg;
     std::string               cache_dir;
     std::string               user_properties;
+    std::string               runtime_settings;
     std::optional<Resolution> resolution;
     std::optional<std::array<double, 2>> mouse_position;
     std::uint32_t             fps { 30 };
@@ -392,6 +393,10 @@ bool ParseArgs(int argc, char** argv, Options& out) {
             const char* value = require_value(i, arg);
             if (value == nullptr) return false;
             out.user_properties = value;
+        } else if (arg == "--runtime") {
+            const char* value = require_value(i, arg);
+            if (value == nullptr) return false;
+            out.runtime_settings = value;
         } else if (arg == "--mouse-position") {
             const char* value = require_value(i, arg);
             if (value == nullptr) return false;
@@ -506,12 +511,9 @@ int main(int argc, char** argv) {
     if (! ParseArgs(argc, argv, options)) return 1;
 
     setenv("MVK_CONFIG_PRESENT_WITH_COMMAND_BUFFER", "1", /*overwrite=*/0);
-    // MVK_CONFIG_SYNCHRONOUS_QUEUE_SUBMITS is deliberately NOT set: it makes
-    // every vkQueueSubmit block the calling thread until the Metal command
-    // buffer completes, which stalls the host on top of the frame's own fence
-    // wait and defeats any CPU/GPU overlap. The renderer's synchronisation is
-    // explicit (fences + semaphores), so the asynchronous default is correct.
-    // Still overrideable from the shell for debugging.
+    // Keep MoltenVK's submission-thread policy at the driver default. In 1.4.2,
+    // SYNCHRONOUS_QUEUE_SUBMITS defaults to 1 and encodes on the caller thread;
+    // it does not wait for GPU completion. Fences govern resource reuse below.
 
     auto     wallpaper = std::make_unique<sr::SceneWallpaper>();
     AppState state;
@@ -529,11 +531,16 @@ int main(int argc, char** argv) {
         .mouse_button = MouseButtonCallback,
         .mouse_enter  = MouseEnterCallback,
         .closed       = nullptr,
+        .redraw_requested =
+            [](void* userdata) {
+                auto* state = static_cast<AppState*>(userdata);
+                if (state->wallpaper) state->wallpaper->requestFrame();
+            },
         .first_frame_presented = FirstFramePresentedCallback,
-        .activated    = ActivatedCallback,
-        .activation_failed = ActivationFailedCallback,
-        .deactivated  = DeactivatedCallback,
-        .userdata     = &state,
+        .activated             = ActivatedCallback,
+        .activation_failed     = ActivationFailedCallback,
+        .deactivated           = DeactivatedCallback,
+        .userdata              = &state,
     };
     state.desktop = SceneRendererMacDesktopCreate(&desktop_config, callbacks);
     if (state.desktop == nullptr) {
@@ -577,10 +584,39 @@ int main(int argc, char** argv) {
     config.spectrum_enabled = options.spectrum_enabled;
     config.external_spectrum = options.external_spectrum;
     config.load_from_memory = options.load_from_memory;
+    config.script_storage_callback = [](std::string snapshot) {
+        std::lock_guard lock(LifecycleOutputMutex());
+        std::cout << "{\"event\":\"script-storage\",\"values\":" << snapshot << "}\n" << std::flush;
+    };
     if (options.cache_dir.empty())
         config.cache_dir = sr::platform::GetCachePath("SceneRenderer");
     else
         config.cache_dir = options.cache_dir;
+
+    if (!options.runtime_settings.empty()) {
+        std::ifstream file(options.runtime_settings);
+        std::string source(std::istreambuf_iterator<char>(file), {});
+        auto parsed = sr::ParseJson(source, { .allow_comments = false });
+        if (!file || parsed.is_err()) {
+            wallpaper.reset();
+            state.wallpaper = nullptr;
+            SceneRendererMacDesktopDestroy(state.desktop);
+            return 1;
+        }
+        auto runtime = parsed.unwrap();
+        if (!runtime.is_object()) {
+            wallpaper.reset();
+            state.wallpaper = nullptr;
+            SceneRendererMacDesktopDestroy(state.desktop);
+            return 1;
+        }
+        if (auto speed = runtime.get("speed"); speed.is_some())
+            config.speed = static_cast<float>((*speed)->as_f64().unwrap_or(1.0));
+        config.script_storage_snapshot = "{}";
+        config.script_storage_callback = {};
+        if (auto storage = runtime.get("scriptStorage"); storage.is_some() && (*storage)->is_object())
+            config.script_storage_snapshot = sr::Dump(**storage);
+    }
 
     if (! LoadUserProperties(options.user_properties, config)) {
         wallpaper.reset();
@@ -594,9 +630,18 @@ int main(int argc, char** argv) {
     const bool use_metalfx = options.metalfx &&
                              SceneRendererMacDesktopPrepareMetalFX(state.desktop);
     info.offscreen          = use_metalfx;
+    if (const char* directory = std::getenv("SCENERENDERER_DIAGNOSTICS_DIR")) {
+        std::ofstream mode(std::string(directory) + "/presentation.json");
+        mode << "{\"metalfx_requested\":" << (options.metalfx ? "true" : "false")
+             << ",\"metalfx_presenter\":" << (use_metalfx ? "true" : "false") << "}\n";
+    }
     info.width              = ClampRenderExtent(render_width, 1920);
     info.height             = ClampRenderExtent(render_height, 1080);
     info.msaa_samples       = options.msaa;
+    info.allow_on_demand         = true;
+    info.frame_activity_callback = [&state](bool running) {
+        SceneRendererMacDesktopSetPaused(state.desktop, ! running);
+    };
     info.redraw_callback    = [&state]() {
         SceneRendererMacDesktopWake(state.desktop);
     };
@@ -697,12 +742,27 @@ int main(int argc, char** argv) {
         void* desktop = state.desktop;
         control.emplace(
             *wallpaper,
-            [desktop]() { SceneRendererMacDesktopStop(desktop); },
-            [desktop]() { SceneRendererMacDesktopActivate(desktop); },
-            [desktop]() { SceneRendererMacDesktopDeactivate(desktop); },
-            [](const std::string& path, const std::string& token) {
-                const bool ok = ! path.empty() && mirage::WriteSceneSnapshot(path);
+            [desktop]() {
+                SceneRendererMacDesktopStop(desktop);
+            },
+            [desktop]() {
+                SceneRendererMacDesktopActivate(desktop);
+            },
+            [desktop]() {
+                SceneRendererMacDesktopDeactivate(desktop);
+            },
+            [renderer = wallpaper.get()](const std::string& path, const std::string& token) {
+                const bool ok = ! path.empty() && mirage::WriteSceneSnapshot(path, 4.0, [renderer] {
+                    renderer->requestFrame();
+                });
                 EmitSnapshotDone(token, ok);
+            },
+            [renderer = wallpaper.get()](const std::string& token) {
+                renderer->exportScriptStorage([token](std::string snapshot) {
+                    std::lock_guard lock(LifecycleOutputMutex());
+                    std::cout << "{\"event\":\"script-storage\",\"token\":\"" << JsonEscaped(token)
+                              << "\",\"values\":" << snapshot << "}\n" << std::flush;
+                });
             });
         control->start();
     }

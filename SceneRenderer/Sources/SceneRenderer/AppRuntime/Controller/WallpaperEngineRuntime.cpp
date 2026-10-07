@@ -52,6 +52,13 @@ struct RenderSetPosition {
 struct RenderSetSpeed {
     float speed;
 };
+struct RenderSetFps {
+    uint32_t fps;
+};
+struct RenderSetAudioCapture {
+    bool enabled;
+    bool external;
+};
 struct RenderSetUserProperty {
     std::string key;
     Json        property;
@@ -63,6 +70,13 @@ struct RenderStop {
     bool stop;
 };
 struct RenderDraw {};
+struct RenderOfflineFrame {
+    double time;
+    double step;
+    uint32_t audio_frames;
+    std::function<void(int, std::vector<float>)> callback;
+};
+struct RenderRequestFrame {};
 struct RenderSwapchainReady {
     bool     ready;
     uint32_t width;
@@ -72,15 +86,19 @@ struct RenderRequestPreparedPassDiagnostics {
     RenderPassDiagnosticCallback cb;
 };
 struct RenderResetScriptStorage {};
+struct RenderExportScriptStorage {
+    std::function<void(std::string)> callback;
+};
 
 // Wrapped in a non-std struct so the rstd channel's internal `addressof`
 // calls don't fall into ADL ambiguity with std::addressof when the element
 // type sits in namespace std.
 struct RenderMsg {
     std::variant<RenderInit, RenderSetScene, RenderSetFillMode, RenderSetPosition, RenderSetSpeed,
-                 RenderSetUserProperty, RenderSetMediaStatus, RenderStop, RenderDraw,
-                 RenderSwapchainReady, RenderRequestPreparedPassDiagnostics,
-                 RenderResetScriptStorage>
+                 RenderSetFps, RenderSetAudioCapture, RenderSetUserProperty, RenderSetMediaStatus,
+                 RenderStop, RenderDraw, RenderOfflineFrame, RenderRequestFrame, RenderSwapchainReady,
+                 RenderRequestPreparedPassDiagnostics, RenderResetScriptStorage,
+                 RenderExportScriptStorage>
         v;
 };
 
@@ -424,6 +442,27 @@ void ApplySolidColorNeutralization(Scene&                                       
                                    const Scene::MaterialSolidColorNeutralization& neutralization,
                                    SceneMaterial& material, bool texture_bound);
 
+void ApplyTextureAspectFill(Scene& scene, const Scene::MaterialTextureUserBinding& binding,
+                            const std::string& texture) {
+    if (! binding.aspect_fill.has_value() || ! binding.aspect_fill->mesh) return;
+    auto uv = binding.aspect_fill->fallback_uv;
+    auto it = scene.textures.find(texture);
+    if (texture != binding.fallback && it != scene.textures.end()) {
+        uv = AspectFillTextureUvRect(
+            it->second, binding.aspect_fill->target_size, binding.aspect_fill->nopadding);
+    }
+    binding.aspect_fill->mesh->SetCardTextureCoordinates(uv);
+    if (it == scene.textures.end() || binding.slot >= WE_GLTEX_RESOLUTION_NAMES.size()) return;
+    const std::array<float, 4> resolution {
+        static_cast<float>(it->second.width),
+        static_cast<float>(it->second.height),
+        static_cast<float>(it->second.content_width),
+        static_cast<float>(it->second.content_height),
+    };
+    scene.SetMaterialShaderValue(
+        *binding.material, WE_GLTEX_RESOLUTION_NAMES[binding.slot], resolution);
+}
+
 std::vector<SceneMaterialId>
 ApplyUserPropertyToMaterialTextures(Scene& scene, const std::string& key, const Json& prop) {
     std::vector<SceneMaterialId> changed_materials;
@@ -443,6 +482,8 @@ ApplyUserPropertyToMaterialTextures(Scene& scene, const std::string& key, const 
         if (mutation.changed && mutation.material.has_value()) {
             PushUniqueMaterialId(changed_materials, *mutation.material);
         }
+        if (binding.slot < binding.material->textures.size())
+            ApplyTextureAspectFill(scene, binding, binding.material->textures[binding.slot]);
         if (binding.solid_color.has_value()) {
             ApplySolidColorNeutralization(
                 scene, *binding.solid_color, *binding.material, next != binding.fallback);
@@ -956,7 +997,7 @@ bool ApplyUserPropertyToPostProcessEnable(Scene& scene, const std::string& key, 
 }
 
 void ApplyUserPropertyBeforeFirstGraph(Scene& scene, const std::string& key, const Json& prop) {
-    sr::script::SetSceneUserProperty(scene, key, prop);
+    scene.ApplyUserLightVisibilityBindings(key, prop);
     ApplyUserPropertyToClear(scene, key, prop);
     ApplyUserPropertyToShaderUniforms(scene, key, prop);
     (void)ApplyUserPropertyToMaterialTextures(scene, key, prop);
@@ -1030,6 +1071,27 @@ rstd::json::Map NormalizeUserProperties(const rstd::json::Map& input) {
 using MainSender   = msgloop::MessageLoop<MainMsg>::Sender;
 using RenderSender = msgloop::MessageLoop<RenderMsg>::Sender;
 
+bool SceneCanRenderOnDemand(const Scene& scene) {
+    // Deliberately exclude effect/history targets and arbitrary scripts. A
+    // steady image must be proven from the prepared scene, never guessed from
+    // consecutive identical pixels.
+    if (scene.script_scene || scene.uses_audio_spectrum || ! scene.shaderValueUpdater ||
+        scene.shaderValueUpdater->RequiresContinuousFrames() ||
+        (scene.paritileSys && ! scene.paritileSys->subsystems.empty()) ||
+        ! scene.camera_paths.empty() || ! scene.transform_updaters.empty() ||
+        ! scene.post_processes.empty() || scene.HasViewportScaleAnimation())
+        return false;
+    for (const auto& [name, target] : scene.renderTargets)
+        if (name != SpecTex_Default && name != WE_MIP_MAPPED_FRAME_BUFFER) return false;
+    for (const auto& [name, texture] : scene.textures)
+        if (texture.isVideo || texture.isSprite) return false;
+    for (const auto* node : scene.ResourceIndex().Nodes())
+        if (node && node->HasFieldAnimations()) return false;
+    for (const auto* material : scene.ResourceIndex().Materials())
+        if (material && ! material->customShader.valueAnimations.empty()) return false;
+    return true;
+}
+
 class SceneRenderController;
 
 class SceneRuntimeController {
@@ -1039,6 +1101,9 @@ public:
 
     bool init();
     auto renderController() const { return m_render_controller.get(); }
+    std::vector<float> renderOfflineAudio(uint32_t frames) {
+        return m_sound_manager->render_offline(frames);
+    }
     bool inited() const { return m_inited; }
 
     MainSender   mainSender() { return m_main_loop.sender(); }
@@ -1091,6 +1156,7 @@ private:
     PositionAvailabilityCallback                 m_position_cb;
     UserShortcutCallback                         m_user_shortcut_cb;
     uint64_t                                     m_audio_pause_generation { 0 };
+    bool                                         m_playback_paused { false };
     uint64_t                                     m_config_generation { 0 };
     uint64_t                                     m_prepared_scene_generation { 0 };
     uint64_t                                     m_submitted_scene_generation { 0 };
@@ -1117,13 +1183,33 @@ public:
     void updatePosition();
     void redrawStoppedFrame();
     void on(RenderSetSpeed&&);
+    void on(RenderSetAudioCapture&& m) { configureAudioCapture(m.enabled, m.external); }
+    void on(RenderSetFps&& m) {
+        frame_timer.SetRequiredFps(static_cast<uint16_t>(std::clamp(m.fps, 5u, 240u)));
+    }
     void on(RenderSetUserProperty&&);
     void on(RenderSetMediaStatus&&);
     void on(RenderStop&&);
     void on(RenderDraw&&);
+    void on(RenderOfflineFrame&&);
+    void on(RenderRequestFrame&&) {
+        if (m_stopped) {
+            redrawStoppedFrame();
+            return;
+        }
+        m_idle = false;
+        on(RenderDraw {});
+    }
+    void wakeIdleFrame() {
+        if (! m_idle || m_stopped) return;
+        m_idle = false;
+        if (m_frame_activity_cb) m_frame_activity_cb(true);
+        if (!m_manual_frames) frame_timer.Run();
+    }
     void on(RenderSwapchainReady&&);
     void on(RenderRequestPreparedPassDiagnostics&&);
     void on(RenderResetScriptStorage&&);
+    void on(RenderExportScriptStorage&&);
 
     ExSwapchain* exSwapchain() const { return m_render->exSwapchain(); }
     vulkan::VulkanRender* render() const { return m_render.get(); }
@@ -1157,7 +1243,8 @@ public:
     void configureAudioCapture(bool enabled, bool external) {
         m_audio_enabled.store(enabled, std::memory_order_release);
         m_external_audio.store(enabled && external, std::memory_order_release);
-        if (enabled) (void)m_audio_capture.init(! external);
+        m_audio_capture.uninit();
+        if (enabled && ! m_stopped) (void)m_audio_capture.init(! external);
     }
 
     void setExternalAudioSpectrum(std::array<float, 64> left,
@@ -1226,6 +1313,12 @@ private:
     std::optional<std::array<bool, 2>>      m_position_axes;
     std::optional<double>                  m_last_render_time;
     bool                                  m_stopped { false };
+    bool                                    m_idle { false };
+    bool                                    m_allow_on_demand { false };
+    bool                                    m_manual_frames { false };
+    bool                                    m_offline_drawing { false };
+    double                                  m_offline_step { 0.0 };
+    std::function<void(bool)>               m_frame_activity_cb;
 
     std::atomic<std::array<float, 2>> m_mouse_pos { std::array { 0.5f, 0.5f } };
     std::atomic<uint32_t>             m_buttons_down { 0 };
@@ -1254,24 +1347,34 @@ private:
 
 void SceneRenderController::on(RenderStop&& m) {
     m_stopped = m.stop;
+    m_idle    = false;
+    if (m_frame_activity_cb) m_frame_activity_cb(! m.stop);
     if (m.stop) {
         frame_timer.Stop();
+        m_audio_capture.uninit();
         m_render->flushPendingFrame();
     } else {
-        frame_timer.Run();
+        if (m_audio_enabled.load()) (void)m_audio_capture.init(! m_external_audio.load());
+        if (!m_manual_frames) frame_timer.Run();
     }
 }
 
 void SceneRenderController::on(RenderDraw&&) {
-    if (m_stopped) {
+    if (m_manual_frames && !m_offline_drawing) return;
+    if (m_stopped || m_idle) {
         frame_timer.FrameBegin();
         frame_timer.FrameEnd();
         return;
     }
     frame_timer.FrameBegin();
     if (m_rg) {
+        const bool diagnostic = std::getenv("SCENERENDERER_DIAGNOSTICS_DIR") != nullptr;
+        const double diagnostic_step = diagnostic && m_scene->elapsingTime < 20.0 ? 1.0 / 30.0 : 0.0;
+        const double step = m_manual_frames ? m_offline_step : frame_timer.IdeaTime() * m_speed;
+        if (m_manual_frames) m_scene->frameTime = step;
+        if (diagnostic) m_scene->frameTime = diagnostic_step;
         {
-            auto pos                 = m_mouse_pos.load();
+            auto pos                 = diagnostic ? std::array<float, 2> { 0.5f, 0.5f } : m_mouse_pos.load();
             m_scene->pointerPosition = pos;
             m_scene->shaderValueUpdater->MouseInput(pos[0], pos[1]);
         }
@@ -1284,18 +1387,19 @@ void SceneRenderController::on(RenderDraw&&) {
         // The runtime is a no-op when no ScriptScene is installed.
         {
             sr::script::FrameInputs fi;
-            fi.frametime = static_cast<float>(m_scene->frameTime * m_speed);
+            fi.frametime   = static_cast<float>(m_scene->frameTime);
             fi.runtime   = static_cast<float>(m_scene->elapsingTime);
             fi.canvas_w  = static_cast<float>(m_scene->ortho[0]);
             fi.canvas_h  = static_cast<float>(m_scene->ortho[1]);
             fi.screen_w  = fi.canvas_w;
             fi.screen_h  = fi.canvas_h;
-            fi.time_of_day = LocalTimeOfDay();
+            fi.time_of_day = m_manual_frames ? 0.5f : (m_scene->script_scene ? LocalTimeOfDay() : 0.0f);
             {
                 auto pos    = m_mouse_pos.load();
                 fi.cursor_x = pos[0];
                 fi.cursor_y = pos[1];
-                fi.cursor_world = m_scene->CursorPositionOnCanvas(pos[0], pos[1]);
+                if (m_scene->script_scene)
+                    fi.cursor_world = m_scene->CursorPositionOnCanvas(pos[0], pos[1]);
             }
             fi.cursor_in_window       = cursorInWindow();
             fi.mouse_buttons_down     = buttonsDown();
@@ -1303,7 +1407,7 @@ void SceneRenderController::on(RenderDraw&&) {
             fi.mouse_buttons_released = consumeReleased();
             wavsen::audio::AudioSpectrum spec;
             bool primed = false;
-            if (m_audio_enabled.load(std::memory_order_acquire)) {
+            if (!m_manual_frames && m_audio_enabled.load(std::memory_order_acquire)) {
                 primed = m_audio_capture.snapshot(spec);
                 wavsen::audio::AudioSpectrum external;
                 if (snapshotExternalAudio(external)) {
@@ -1333,6 +1437,17 @@ void SceneRenderController::on(RenderDraw&&) {
             const bool             stale =
                 ! primed || spec.publish_ms == 0 || (now_ms - spec.publish_ms) > kStaleMs;
             if (stale) spec.clear();
+            if (diagnostic) {
+                fi.frametime = static_cast<float>(diagnostic_step);
+                fi.time_of_day = 0.5f;
+                fi.cursor_x = 0.5f;
+                fi.cursor_y = 0.5f;
+                fi.cursor_world = m_scene->CursorPositionOnCanvas(0.5, 0.5);
+                fi.mouse_buttons_down = 0;
+                fi.mouse_buttons_pressed = 0;
+                fi.mouse_buttons_released = 0;
+                spec.clear();
+            }
             fi.audio_left    = spec.left;
             fi.audio_right   = spec.right;
             fi.audio_average = spec.average;
@@ -1350,7 +1465,7 @@ void SceneRenderController::on(RenderDraw&&) {
                 for (std::size_t i = begin; i < end; ++i) sum += fi.audio_average[i];
                 const float level = end > begin ? sum / static_cast<float>(end - begin) : 0.0f;
                 auto&       slot  = m_scene->audioAverage[bin];
-                const float old   = slot.load(std::memory_order_relaxed);
+                const float old   = diagnostic ? 0.0f : slot.load(std::memory_order_relaxed);
                 slot.store(std::max(old * 0.75f, level), std::memory_order_relaxed);
             }
             if (m_scene->uses_audio_spectrum) {
@@ -1376,7 +1491,7 @@ void SceneRenderController::on(RenderDraw&&) {
 
         /* Advance video textures (no-op if none) before drawFrame so
          * the new RGBA frame is sampled by the same render pass. */
-        m_render->pumpVideoTextures(frame_timer.IdeaTime() * m_speed);
+        m_render->pumpVideoTextures(m_manual_frames && m_scene->elapsingTime == 0.0 ? 0.0 : step);
 
         /* Upload any glyph rects the actuators added this tick. Runs after
          * TickSceneScripts (which calls FontFace::Populate) and before
@@ -1391,9 +1506,18 @@ void SceneRenderController::on(RenderDraw&&) {
             return;
         }
 
-        m_scene->PassFrameTime(frame_timer.IdeaTime() * m_speed);
+        m_scene->PassFrameTime(diagnostic ? diagnostic_step : step);
 
         m_scene->shaderValueUpdater->FrameEnd();
+
+        if (rendered && m_allow_on_demand && ! diagnostic &&
+            std::getenv("SCENERENDERER_DUMP_FRAME") == nullptr &&
+            SceneCanRenderOnDemand(*m_scene)) {
+            frame_timer.Stop();
+            m_render->flushPendingFrame();
+            m_idle = true;
+            if (m_frame_activity_cb) m_frame_activity_cb(false);
+        }
 
         if (rendered && ! m_scene->first_frame_ok) {
             m_scene->first_frame_ok = true;
@@ -1403,8 +1527,28 @@ void SceneRenderController::on(RenderDraw&&) {
     frame_timer.FrameEnd();
 }
 
+void SceneRenderController::on(RenderOfflineFrame&& message) {
+    if (!m_manual_frames || !m_scene || !m_rg || !m_render->readyToDraw() ||
+        !std::isfinite(message.time) || !std::isfinite(message.step) || message.step <= 0.0 ||
+        message.audio_frames > 192000) {
+        message.callback(1, {});
+        return;
+    }
+    m_stopped = false;
+    m_idle = false;
+    m_offline_drawing = true;
+    m_offline_step = message.step;
+    m_scene->elapsingTime = message.time;
+    auto audio = m_main.renderOfflineAudio(message.audio_frames);
+    on(RenderDraw {});
+    m_render->flushPendingFrame();
+    m_offline_drawing = false;
+    message.callback(m_render->failed() ? 3 : 0, std::move(audio));
+}
+
 void SceneRenderController::on(RenderSetFillMode&& m) {
     if (m.mode == m_fillmode) return;
+    wakeIdleFrame();
     m_fillmode = m.mode;
     if (m_scene && renderInited()) {
         m_render->UpdateCameraFillMode(*m_scene, m_fillmode);
@@ -1438,6 +1582,7 @@ void SceneRenderController::redrawStoppedFrame() {
 void SceneRenderController::on(RenderSetPosition&& m) {
     const auto position = m.position.Normalized();
     if (m_position == position) return;
+    wakeIdleFrame();
     m_position = position;
     updatePosition();
     redrawStoppedFrame();
@@ -1521,6 +1666,7 @@ void SceneRenderController::refreshPreparedMaterialDirtyEvents() {
 }
 
 void SceneRenderController::on(RenderSetScene&& m) {
+    wakeIdleFrame();
     m_scene_ready.store(false, std::memory_order_release);
     m_scene = std::move(m.scene);
     m_last_render_time.reset();
@@ -1534,6 +1680,7 @@ void SceneRenderController::on(RenderSetSpeed&& m) {
 }
 
 void SceneRenderController::on(RenderSetUserProperty&& m) {
+    wakeIdleFrame();
     if (! m_scene) return;
     std::string key                      = CanonicalUserPropertyKey(m.key);
     const bool  has_shader_combo_binding = m_scene->shader_combo_user_index.contains(key);
@@ -1602,8 +1749,15 @@ void SceneRenderController::on(RenderSetUserProperty&& m) {
 }
 
 void SceneRenderController::on(RenderSetMediaStatus&& m) {
+    const bool texture_changed = ! m_media_status || m_media_status->art_url != m.status.art_url ||
+                                 m_media_status->previous_art_url != m.status.previous_art_url;
     m_media_status = std::move(m.status);
     if (! m_scene) return;
+    const bool media_texture =
+        m_scene->material_texture_user_index.contains("$mediaThumbnail") ||
+        m_scene->material_texture_user_index.contains("$mediaPreviousThumbnail");
+    if (! m_scene->script_scene && (! media_texture || ! texture_changed)) return;
+    wakeIdleFrame();
     applyMediaStatus(*m_media_status);
 }
 
@@ -1625,13 +1779,25 @@ void SceneRenderController::applyMediaStatus(const MediaStatus& status) {
     }
 
     if (! texture_materials.empty() && renderInited() && m_rg) {
-        rebuildRenderGraph(vulkan::RenderGraphResourceRetention::KeepSceneTextures, false);
+        m_render_scene = ExtractRenderSceneSnapshot(*m_scene);
+        if (! m_render->refreshPreparedMaterialTextures(
+                *m_scene, m_render_scene, texture_materials))
+            rebuildRenderGraph(vulkan::RenderGraphResourceRetention::KeepSceneTextures, false);
+        else
+            refreshPreparedMaterialDirtyEvents();
         return;
     }
     if (renderInited() && m_rg) refreshPreparedMaterialDirtyEvents();
 }
 
 void SceneRenderController::on(RenderInit&& m) {
+    m_manual_frames = m.info->manual_frames;
+    if (m_manual_frames) {
+        frame_timer.Stop();
+        Random::seed(m.info->random_seed);
+    }
+    m_frame_activity_cb    = m.info->frame_activity_callback;
+    m_allow_on_demand      = m.info->allow_on_demand;
     const bool initialized = m_render->init(std::move(*m.info));
 
     // Subscribe to ExSwapchain ready/extent/format changes. The
@@ -1659,6 +1825,7 @@ void SceneRenderController::on(RenderInit&& m) {
 }
 
 void SceneRenderController::on(RenderSwapchainReady&& m) {
+    wakeIdleFrame();
     if (! m.ready) {
         frame_timer.Stop();
         return;
@@ -1670,7 +1837,7 @@ void SceneRenderController::on(RenderSwapchainReady&& m) {
         m_render->refreshPreparedResources(*m_scene, m_render_scene);
         redrawStoppedFrame();
     }
-    if (m_stopped)
+    if (m_stopped || m_manual_frames)
         frame_timer.Stop();
     else
         frame_timer.Run();
@@ -1683,6 +1850,10 @@ void SceneRenderController::on(RenderRequestPreparedPassDiagnostics&& m) {
         .cb          = std::move(m.cb),
         .diagnostics = std::move(diagnostics),
     } });
+}
+
+void SceneRenderController::on(RenderExportScriptStorage&& message) {
+    if (message.callback) message.callback(m_scene ? sr::script::SceneStorageSnapshot(*m_scene) : "{}");
 }
 
 void SceneRenderController::on(RenderResetScriptStorage&&) {
@@ -1707,8 +1878,11 @@ void SceneRuntimeController::on(MainConfigure&& m) {
         m.config.speed = 1.0f;
     }
     m_config          = std::move(m.config);
-    m_render_controller->configureAudioCapture(
-        m_config.spectrum_enabled, m_config.external_spectrum);
+    if (m_config.offline) {
+        Random::seed(m_config.random_seed);
+        m_sound_manager->set_offline(48000);
+        m_scene_parser.SetOfflineSeed(m_config.random_seed);
+    }
     m_user_properties = NormalizeUserProperties(m_config.user_properties);
     ++m_config_generation;
     // Preserve zero as the "not configured" sentinel after wraparound.
@@ -1735,7 +1909,7 @@ void SceneRuntimeController::on(MainConfigure&& m) {
 
 void SceneRuntimeController::on(MainSetFps&& m) {
     m_config.fps = m.fps;
-    if (m.fps >= 5) m_render_controller->frame_timer.SetRequiredFps(static_cast<uint8_t>(m.fps));
+    if (m.fps >= 5) (void)m_render_loop.sender().send(RenderMsg { RenderSetFps { m.fps } });
 }
 
 void SceneRuntimeController::on(MainSetVolume&& m) {
@@ -1833,6 +2007,7 @@ void SceneRuntimeController::on(MainPreparedPassDiagnostics&& m) {
 }
 
 void SceneRuntimeController::on(MainStop&& m) {
+    m_playback_paused         = m.stop;
     const uint64_t generation = ++m_audio_pause_generation;
     if (m.stop) {
         if (m.scale_audio) m_sound_manager->set_volume_scale(0.0f, m.fade_ms);
@@ -1866,18 +2041,10 @@ void SceneRuntimeController::loadScene() {
 
     rstd_info("loading scene: {}", m_config.source_pkg_path);
 
-    // Device lifecycle only here; playback is (re)started after the scene's
-    // sound streams are mounted below. loadScene can run with the device
-    // ALREADY inited — MainConfigure calls set_muted(false) before MainLoadScene,
-    // and set_muted(false) eagerly re-inits the device. If play() were gated on
-    // the `!is_inited()` branch, that pre-init makes loadScene take the else
-    // branch and the AudioQueue never starts, leaving all BGM silent.
-    // SoundManager::init() is a no-op when muted, so this stays mute-safe.
-    if (! m_sound_manager->is_inited()) {
-        m_sound_manager->init();
-    } else {
-        m_sound_manager->unmount_all();
-    }
+    // Streams are loaded without starting a device. This also removes streams
+    // left by a muted scene, whose device was already uninitialized.
+    m_sound_manager->pause();
+    m_sound_manager->unmount_all();
 
     std::shared_ptr<Scene> scene { nullptr };
 
@@ -1899,6 +2066,8 @@ void SceneRuntimeController::loadScene() {
     std::string scene_id = pkgPath_fs.parent_path().filename().native();
     MergeProjectUserProperties(pkgPath_fs.parent_path(), m_user_properties);
 
+    m_scene_parser.SetScriptStorageSnapshot(m_config.script_storage_snapshot);
+    if (!m_config.script_storage_snapshot) {
     std::filesystem::path script_storage_dir;
     if (! m_config.script_storage_dir.empty()) {
         script_storage_dir = m_config.script_storage_dir;
@@ -1926,6 +2095,9 @@ void SceneRuntimeController::loadScene() {
                                     storage_ec);
     }
     m_scene_parser.SetScriptPersistencePath(script_storage_file.native());
+    } else {
+        m_scene_parser.SetScriptPersistencePath({});
+    }
 
     // load pkgfile. Read pkg version stamp before move-mounting so we can
     // pass it to the scene parser; on fallback (loose dir) we have no
@@ -1968,13 +2140,16 @@ void SceneRuntimeController::loadScene() {
             rstd::ref<rstd::json::Map>::from_raw_parts(rstd::addressof(m_user_properties))));
         scene = m_scene_parser.Parse(scene_id, *scene_doc, vfs, *m_sound_manager);
         m_scene_parser.SetUserProperties(rstd::None());
+        if (! scene) return;
+        (void)m_render_loop.sender().send(RenderMsg {
+            RenderSetAudioCapture { m_config.spectrum_enabled &&
+                                    (scene->uses_audio_spectrum || scene->script_scene != nullptr),
+                                    m_config.external_spectrum } });
+        sr::script::SetSceneStorageCallback(*scene, m_config.script_storage_callback);
 
-        // Start (or resume) the output device now that this scene's sound
-        // streams are mounted. Unconditional on purpose: the device may have
-        // been inited earlier by set_muted(false), so gating on the init
-        // branch above would skip start and silence all BGM. start() is a
-        // no-op if the device isn't inited (e.g. muted) or already running.
-        if (! m_config.muted) m_sound_manager->play();
+        // Preserve playback intent while muted; unmuting starts the device only
+        // when at least one stream exists and playback has not been paused.
+        if (! m_playback_paused) m_sound_manager->play();
         // Apply initial bindings while the parsed Scene is still private to
         // this preparation loop. The VFS must be attached first for shader
         // combo and text asset resolution. Doing this before RenderSetScene
@@ -1986,6 +2161,7 @@ void SceneRuntimeController::loadScene() {
             const auto& prop               = *entry_value;
             ApplyUserPropertyBeforeFirstGraph(*scene, key, prop);
         });
+        sr::script::SetSceneUserProperties(*scene, m_user_properties);
         if (m_user_shortcut_cb) {
             sr::script::SetSceneUserShortcutOpener(
                 *scene,
@@ -2112,7 +2288,13 @@ void SceneWallpaper::pause(uint32_t fade_ms) {
     (void)m_runtime->mainSender().send(MainMsg { MainStop { true, fade_ms, true } });
 }
 void SceneWallpaper::requestFrame() {
-    (void)m_runtime->renderSender().send(RenderMsg { RenderDraw {} });
+    (void)m_runtime->renderSender().send(RenderMsg { RenderRequestFrame {} });
+}
+
+void SceneWallpaper::renderOfflineFrame(double time, double step, uint32_t audio_frames,
+                                        std::function<void(int, std::vector<float>)> callback) {
+    (void)m_runtime->renderSender().send(RenderMsg { RenderOfflineFrame {
+        time, step, audio_frames, std::move(callback) } });
 }
 
 void SceneWallpaper::mouseInput(double x, double y) {
@@ -2209,6 +2391,10 @@ void SceneWallpaper::setOnUserPropertyDiagnostics(UserPropertyDiagnosticCallback
 void SceneWallpaper::requestPreparedPassDiagnostics(RenderPassDiagnosticCallback cb) {
     (void)m_runtime->renderSender().send(
         RenderMsg { RenderRequestPreparedPassDiagnostics { std::move(cb) } });
+}
+
+void SceneWallpaper::exportScriptStorage(std::function<void(std::string)> callback) {
+    (void)m_runtime->renderSender().send(RenderMsg { RenderExportScriptStorage { std::move(callback) } });
 }
 
 void SceneWallpaper::resetScriptStorage() {

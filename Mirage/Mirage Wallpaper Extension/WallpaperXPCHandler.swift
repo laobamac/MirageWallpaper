@@ -333,23 +333,27 @@ final class MirageWallpaperXPCHandler: NSObject, WallpaperExtensionXPCProtocol {
         }
         renderedConfigurationDigest = digest
         let configuration = stored.configuration
-        readyContexts.removeAll()
-        rendererErrors.removeAll()
-        values.forEach {
-            $0.renderer?.stop()
-            $0.renderer = nil
-        }
         values.forEach { context in
             if context.isPreview {
                 updatePreview(context, configuration: configuration)
                 return
             }
+            let entry = configuration.displays["display-\(context.displayID)"] ?? configuration.displays.values.first
+            if let entry, let renderer = context.renderer,
+               renderer.matches(entry, enabled: configuration.enabled != false) {
+                renderer.updateDesktopFallback(path: entry.desktopFallbackPath)
+                return
+            }
+            readyContexts.remove(context.id)
+            rendererErrors.removeValue(forKey: context.id)
+            let previous = context.renderer
             let renderer = self.renderer(
                 for: context.displayID, rootLayer: context.rootLayer,
                 size: context.rootLayer.bounds.size,
                 scale: context.rootLayer.contentsScale,
                 configuration: configuration,
-                locked: context.isLocked, contextID: context.id)
+                locked: context.isLocked, contextID: context.id,
+                prepareImmediately: context.isLocked, replacing: previous)
             lock.lock()
             context.renderer = renderer
             lock.unlock()
@@ -532,16 +536,20 @@ final class MirageWallpaperXPCHandler: NSObject, WallpaperExtensionXPCProtocol {
     private func renderer(for displayID: UInt32, rootLayer: CALayer,
                                  size: CGSize, scale: CGFloat,
                                  configuration: MirageLockConfiguration? = nil,
-                                 locked: Bool, contextID: UInt32) -> MirageLockRenderer? {
+                                 locked: Bool, contextID: UInt32, prepareImmediately: Bool = true,
+                                 replacing previous: MirageLockRenderer? = nil) -> MirageLockRenderer? {
         let config = configuration ?? Self.loadConfiguration()
         guard let entry = config?.displays["display-\(displayID)"] ?? config?.displays.values.first else { return nil }
+        let instanceID = UUID()
         return MirageLockRenderer(
             rootLayer: rootLayer, size: size, scale: scale,
             configuration: entry,
             locked: locked && config?.enabled != false,
             dynamicEnabled: config?.enabled != false,
+            prepareImmediately: prepareImmediately, replacing: previous, instanceID: instanceID,
             onStateChange: { [weak self] error in
-                guard let self, !self.invalidated else { return }
+                guard let self, !self.invalidated,
+                      self.contexts[contextID]?.renderer?.instanceID == instanceID else { return }
                 if let error {
                     self.rendererErrors[contextID] = error
                     self.readyContexts.remove(contextID)

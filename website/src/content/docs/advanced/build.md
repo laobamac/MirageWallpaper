@@ -19,8 +19,10 @@ Mirage 由三个独立渲染器（C++ / Objective-C++）、一个 SwiftUI 主程
 ```bash
 xcode-select --install
 brew install cmake ninja pkg-config llvm molten-vk vulkan-loader vulkan-headers \
-  glslang glfw freetype fontconfig lz4 ffmpeg
+  glslang glfw freetype fontconfig lz4 ffmpeg dav1d nasm
 ```
+
+渲染器构建脚本会自动构建固定版本的仅解码 FFmpeg；Homebrew FFmpeg 只用于生成测试媒体，不会打入应用。dav1d 用于 AV1 解码，nasm 用于 Intel 汇编优化。
 
 这些依赖分别服务于：场景渲染器（Vulkan/MoltenVK、glslang、GLFW、FreeType、Fontconfig、LZ4）、视频渲染器（FFmpeg）以及 Homebrew LLVM 提供的 C++20 工具链。.NET 10 SDK 用于将 SteamKit2 服务分别发布为 `osx-arm64` 或 `osx-x64` 自包含程序。
 

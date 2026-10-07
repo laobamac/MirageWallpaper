@@ -361,6 +361,10 @@ struct TextureKey {
     unsigned              mipmap_level { 1 };
     VkSampleCountFlagBits samples { VK_SAMPLE_COUNT_1_BIT };
 
+    VkImageUsageFlags image_usage { VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                                    VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                                    VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT };
+
     static TexHash HashValue(const TextureKey&);
 };
 
@@ -375,6 +379,8 @@ public:
 
     void Clear();
     void ClearTransientGraphResources();
+    // Called only after pending GPU work retires and all prepared bindings are known.
+    void RetainImportedTextures(std::span<const std::string> keys);
 
     // Fast path for imported textures already uploaded by another material or
     // pass. This is intentionally checked before decoding the .tex payload.
@@ -612,7 +618,8 @@ public:
 
     bool allocateSubRef(VkDeviceSize size, StagingBufferRef&, VkDeviceSize alignment = 1);
     void unallocateSubRef(const StagingBufferRef&);
-    bool writeToBuf(const StagingBufferRef&, std::span<uint8_t>, size_t offset = 0);
+    bool writeToBuf(const StagingBufferRef&, std::span<uint8_t>, size_t offset = 0,
+                    bool skip_unchanged = false);
     bool fillBuf(const StagingBufferRef& ref, size_t offset, size_t size, uint8_t c);
 
     bool recordUpload(vvk::CommandBuffer&);

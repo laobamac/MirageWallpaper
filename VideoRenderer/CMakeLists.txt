@@ -73,6 +73,7 @@ if(VIDEORENDERER_BUILD_VIEWER)
 endif()
 if(VIDEORENDERER_BUILD_WALLPAPER)
     add_subdirectory(Tools/VideoWallpaper)
+    add_subdirectory(Tools/VideoBaker)
 endif()
 
 option(VIDEORENDERER_BUILD_TESTS "Build video layout regression tests" OFF)

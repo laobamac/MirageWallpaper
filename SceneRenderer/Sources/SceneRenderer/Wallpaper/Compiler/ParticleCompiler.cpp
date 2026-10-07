@@ -289,10 +289,13 @@ struct FrequencyValue {
     float phasemax { static_cast<float>(rstd::f32_::consts::TAU) };
 
     struct StorageRandom {
-        bool  reset { true };
-        float frequency { 0.0f };
-        float scale { 1.0f };
-        float phase { 0.0f };
+        bool   reset { true };
+        float  frequency { 0.0f };
+        float  scale { 1.0f };
+        float  phase { 0.0f };
+        double elapsed { 0.0 };
+        double previous { 0.0 };
+        double value { 0.0 };
     };
 
     std::vector<StorageRandom> storage;
@@ -318,31 +321,35 @@ struct FrequencyValue {
     inline void CheckAndResize(size_t s) {
         if (storage.size() < s) storage.resize(std::max(s, storage.size() * 2), StorageRandom {});
     }
-    inline void GenFrequency(Particle& p, uint32_t slot_id) {
-        CheckAndResize(static_cast<size_t>(slot_id) + 1);
-        auto& st = storage.at(slot_id);
-        // A compacted simulation array reuses physical vector positions. Slot
-        // ids follow the particle instead, and a fresh spawn must never inherit
-        // the oscillator state of the particle that previously used its slot.
-        if (! PM::LifetimeOk(p) || PM::IsNew(p)) st.reset = true;
+    inline bool Advance(const Particle& p, double time_pass) {
+        if (! PM::LifetimeOk(p) || ! std::isfinite(p.init.lifetime) ||
+            p.init.lifetime <= 0.0f || ! std::isfinite(time_pass))
+            return false;
+        CheckAndResize(static_cast<size_t>(p.slot_id) + 1);
+        auto& st = storage.at(p.slot_id);
+        if (PM::IsNew(p)) st.reset = true;
         if (st.reset) {
             st.frequency = Random::get(frequencymin, frequencymax);
             st.scale     = Random::get(scalemin, scalemax);
-            st.phase     = (float)Random::get((double)phasemin, phasemax + rstd::f64_::consts::TAU);
+            st.phase     = Random::get(phasemin, phasemax);
+            st.elapsed   = 0.0;
+            st.value     = std::cos(static_cast<double>(st.phase));
             st.reset     = false;
         }
+        st.previous = st.value;
+        st.elapsed += std::max(0.0, time_pass);
+        st.value = std::cos(rstd::f64_::consts::TAU * st.frequency *
+                               (st.elapsed / static_cast<double>(p.init.lifetime)) +
+                           st.phase);
+        return true;
     }
-    inline double GetScale(uint32_t slot_id, double time) {
+    inline double GetScale(uint32_t slot_id) const {
         const auto& st = storage.at(slot_id);
-        double      f  = st.frequency / (rstd::f32_::consts::TAU);
-        double      w  = rstd::f32_::consts::TAU * f;
-        return algorism::lerp((std::cos(w * time + st.phase) + 1.0f) * 0.5f, scalemin, scalemax);
+        return algorism::lerp((st.value + 1.0) * 0.5, scalemin, scalemax);
     }
-    inline double GetMove(uint32_t slot_id, double time, double timePass) {
+    inline double GetMove(uint32_t slot_id) const {
         const auto& st = storage.at(slot_id);
-        double      f  = st.frequency / (rstd::f32_::consts::TAU);
-        double      w  = rstd::f32_::consts::TAU * f;
-        return -1.0f * st.scale * w * std::sin(w * time + st.phase) * timePass;
+        return st.scale * (st.value - st.previous);
     }
 };
 
@@ -540,8 +547,8 @@ ParticleOperatorOp WPParticleParser::genParticleOperatorOp(const Json& wpj,
                 fv.CheckAndResize(info.particles.size());
                 for (unsigned i = 0; i < info.particles.size(); i++) {
                     auto& p = info.particles[i];
-                    fv.GenFrequency(p, p.slot_id);
-                    PM::MutiplyAlpha(p, fv.GetScale(p.slot_id, PM::LifetimePassed(p)));
+                    if (! fv.Advance(p, info.time_pass)) continue;
+                    PM::MutiplyAlpha(p, fv.GetScale(p.slot_id));
                 }
             };
         } else if (name == "oscillatesize") {
@@ -550,13 +557,12 @@ ParticleOperatorOp WPParticleParser::genParticleOperatorOp(const Json& wpj,
                 fv.CheckAndResize(info.particles.size());
                 for (unsigned i = 0; i < info.particles.size(); i++) {
                     auto& p = info.particles[i];
-                    fv.GenFrequency(p, p.slot_id);
-                    PM::MutiplySize(p, fv.GetScale(p.slot_id, PM::LifetimePassed(p)));
+                    if (! fv.Advance(p, info.time_pass)) continue;
+                    PM::MutiplySize(p, fv.GetScale(p.slot_id));
                 }
             };
 
         } else if (name == "oscillateposition") {
-            std::vector<Vector3f>         lastMove;
             FrequencyValue                fvx = FrequencyValue::ReadFromJson(wpj, name);
             std::array<FrequencyValue, 3> fxp = { fvx, fvx, fvx };
             return [=](const ParticleInfo& info) mutable {
@@ -564,11 +570,10 @@ ParticleOperatorOp WPParticleParser::genParticleOperatorOp(const Json& wpj,
                 for (unsigned i = 0; i < info.particles.size(); i++) {
                     auto&    p = info.particles[i];
                     Vector3d del { Vector3d::Zero() };
-                    auto     time = PM::LifetimePassed(p);
                     for (unsigned d = 0; d < 3; d++) {
-                        if (fxp[0].mask[d] < 0.01) continue;
-                        fxp[d].GenFrequency(p, p.slot_id);
-                        del[d] = fxp[d].GetMove(p.slot_id, time, info.time_pass);
+                        if (fxp[0].mask[d] == 0.0f) continue;
+                        if (! fxp[d].Advance(p, info.time_pass)) continue;
+                        del[d] = fxp[d].GetMove(p.slot_id) * fxp[0].mask[d];
                     }
 
                     PM::Move(p, del);

@@ -105,9 +105,9 @@ while (running)
                 break;
             }
             var subscriptionStart = Math.Max(0, command.StartIndex ?? 0);
-            await RunRequestAsync(command.RequestId, writer, async () =>
+            await RunRequestAsync(command.RequestId, writer, async cancellationToken =>
             {
-                var page = await session.GetSubscriptionsAsync(subscriptionStart, CancellationToken.None).ConfigureAwait(false);
+                var page = await session.GetSubscriptionsAsync(subscriptionStart, cancellationToken).ConfigureAwait(false);
                 writer.Response(command.RequestId, true, data: new
                 {
                     total = page.TotalResults,
@@ -131,9 +131,9 @@ while (running)
                 break;
             }
             var favoritesStart = Math.Max(0, command.StartIndex ?? 0);
-            await RunRequestAsync(command.RequestId, writer, async () =>
+            await RunRequestAsync(command.RequestId, writer, async cancellationToken =>
             {
-                var page = await session.GetFavoritesAsync(favoritesStart, CancellationToken.None).ConfigureAwait(false);
+                var page = await session.GetFavoritesAsync(favoritesStart, cancellationToken).ConfigureAwait(false);
                 writer.Response(command.RequestId, true, data: new
                 {
                     total = page.TotalResults,
@@ -156,9 +156,9 @@ while (running)
                 break;
             }
             var favorite = command.Command == "favorite";
-            await RunRequestAsync(command.RequestId, writer, async () =>
+            await RunRequestAsync(command.RequestId, writer, async cancellationToken =>
             {
-                await session.SetFavoriteAsync(favoriteId, favorite, CancellationToken.None).ConfigureAwait(false);
+                await session.SetFavoriteAsync(favoriteId, favorite, cancellationToken).ConfigureAwait(false);
                 writer.Response(command.RequestId, true, data: new
                 {
                     workshopId = favoriteId.ToString(),
@@ -178,9 +178,9 @@ while (running)
                 writer.Response(command.RequestId, false, "Subscription identifiers are invalid.", "INVALID_WORKSHOP_ID");
                 break;
             }
-            await RunRequestAsync(command.RequestId, writer, async () =>
+            await RunRequestAsync(command.RequestId, writer, async cancellationToken =>
             {
-                var states = await session.GetSubscriptionStatesAsync(subscriptionIds, CancellationToken.None).ConfigureAwait(false);
+                var states = await session.GetSubscriptionStatesAsync(subscriptionIds, cancellationToken).ConfigureAwait(false);
                 writer.Response(command.RequestId, true, data: new
                 {
                     items = subscriptionIds.Select(workshopId => new
@@ -202,9 +202,9 @@ while (running)
                 writer.Response(command.RequestId, false, "The workshop identifier is invalid.", "INVALID_WORKSHOP_ID");
                 break;
             }
-            await RunRequestAsync(command.RequestId, writer, async () =>
+            await RunRequestAsync(command.RequestId, writer, async cancellationToken =>
             {
-                await session.SubscribeAsync(subscribeId, CancellationToken.None).ConfigureAwait(false);
+                await session.SubscribeAsync(subscribeId, cancellationToken).ConfigureAwait(false);
                 writer.Response(command.RequestId, true, data: new { workshopId = subscribeId.ToString(), subscribed = true });
             }).ConfigureAwait(false);
             break;
@@ -219,9 +219,9 @@ while (running)
                 writer.Response(command.RequestId, false, "The workshop identifier is invalid.", "INVALID_WORKSHOP_ID");
                 break;
             }
-            await RunRequestAsync(command.RequestId, writer, async () =>
+            await RunRequestAsync(command.RequestId, writer, async cancellationToken =>
             {
-                await session.UnsubscribeAsync(unsubscribeId, CancellationToken.None).ConfigureAwait(false);
+                await session.UnsubscribeAsync(unsubscribeId, cancellationToken).ConfigureAwait(false);
                 writer.Response(command.RequestId, true, data: new { workshopId = unsubscribeId.ToString(), subscribed = false });
             }).ConfigureAwait(false);
             break;
@@ -238,9 +238,9 @@ while (running)
             }
             var commentStart = Math.Max(0, command.StartIndex ?? 0);
             var commentCount = Math.Clamp(command.Count ?? 30, 1, 50);
-            await RunRequestAsync(command.RequestId, writer, async () =>
+            await RunRequestAsync(command.RequestId, writer, async cancellationToken =>
             {
-                var page = await session.GetCommentsAsync(commentWorkshopId, commentCreatorSteamId, commentStart, commentCount, CancellationToken.None).ConfigureAwait(false);
+                var page = await session.GetCommentsAsync(commentWorkshopId, commentCreatorSteamId, commentStart, commentCount, cancellationToken).ConfigureAwait(false);
                 writer.Response(command.RequestId, true, data: new
                 {
                     total = page.TotalCount,
@@ -270,9 +270,9 @@ while (running)
                 writer.Response(command.RequestId, false, "Comment parameters are invalid.", "INVALID_COMMENT_REQUEST");
                 break;
             }
-            await RunRequestAsync(command.RequestId, writer, async () =>
+            await RunRequestAsync(command.RequestId, writer, async cancellationToken =>
             {
-                var commentId = await session.PostCommentAsync(postWorkshopId, postCreatorSteamId, command.Text, CancellationToken.None).ConfigureAwait(false);
+                var commentId = await session.PostCommentAsync(postWorkshopId, postCreatorSteamId, command.Text, cancellationToken).ConfigureAwait(false);
                 writer.Response(command.RequestId, true, data: new { commentId = commentId.ToString() });
             }).ConfigureAwait(false);
             break;
@@ -413,11 +413,16 @@ static async Task StopDownloadsAsync(ConcurrentDictionary<string, DownloadOperat
     try { await Task.WhenAll(active.Select(operation => operation.Task)).ConfigureAwait(false); } catch { }
 }
 
-static async Task RunRequestAsync(string? requestId, ProtocolWriter writer, Func<Task> action)
+static async Task RunRequestAsync(string? requestId, ProtocolWriter writer, Func<CancellationToken, Task> action)
 {
+    using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(60));
     try
     {
-        await action().ConfigureAwait(false);
+        await action(cancellation.Token).ConfigureAwait(false);
+    }
+    catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+    {
+        writer.Response(requestId, false, "Steam request timed out.", "STEAM_REQUEST_FAILED");
     }
     catch (AsyncJobFailedException)
     {

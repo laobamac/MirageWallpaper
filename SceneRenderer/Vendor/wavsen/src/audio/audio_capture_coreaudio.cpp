@@ -58,6 +58,7 @@ public:
 
     bool init(bool enable_system_capture) {
         if (is_inited()) return true;
+        loopback::subscribe();
 
         if (! enable_system_capture) {
             inited_.store(true, std::memory_order_release);
@@ -90,6 +91,8 @@ public:
     }
 
     void uninit() {
+        if (! inited_.exchange(false, std::memory_order_acq_rel)) return;
+        loopback::unsubscribe();
         wavsen_coreaudio_capture_destroy(capture_);
         capture_ = nullptr;
         inited_.store(false, std::memory_order_release);

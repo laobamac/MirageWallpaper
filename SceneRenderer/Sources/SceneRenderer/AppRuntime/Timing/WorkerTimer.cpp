@@ -19,9 +19,21 @@ bool ThreadTimer::Running() const { return m_running; }
 
 void ThreadTimer::SetInterval(micros v) {
     if (v <= micros::zero()) v = micros(1);
-    m_interval = v;
-    m_interval_revision.fetch_add(1, std::memory_order_release);
+    {
+        std::lock_guard lock(m_cond_mutex);
+        m_interval = v;
+        m_interval_revision.fetch_add(1, std::memory_order_release);
+    }
     m_condition.notify_all();
+    m_ready_condition.notify_all();
+}
+
+void ThreadTimer::NotifyReady() {
+    {
+        std::lock_guard lock(m_cond_mutex);
+        m_completion_revision.fetch_add(1, std::memory_order_release);
+    }
+    m_ready_condition.notify_all();
 }
 
 void ThreadTimer::Start() {
@@ -51,17 +63,20 @@ void ThreadTimer::Start() {
                 deadline = clock::now() + interval;
                 continue;
             }
+            const auto completed = m_completion_revision.load(std::memory_order_acquire);
             const bool fired = m_callback ? m_callback() : true;
             interval = m_interval.load();
             const auto now = clock::now();
             if (! fired) {
-                // Previous frame still in flight: don't skip a whole grid slot
-                // (that halves effective FPS on a frame that only slightly
-                // overran budget). Re-probe soon to catch the release, capped
-                // so a genuinely stuck frame doesn't busy-spin.
-                auto retry = interval / 8;
-                if (retry < micros(1000)) retry = micros(1000);
-                deadline = now + retry;
+                // Capture the revision before the callback to avoid losing a
+                // completion between the declined attempt and this wait.
+                std::unique_lock lock(m_cond_mutex);
+                m_ready_condition.wait(lock, [this, revision, completed] {
+                    return ! Running() ||
+                           m_interval_revision.load(std::memory_order_acquire) != revision ||
+                           m_completion_revision.load(std::memory_order_acquire) != completed;
+                });
+                deadline = clock::now();
             } else {
                 do {
                     deadline += interval;
@@ -81,6 +96,7 @@ void ThreadTimer::Stop() {
     {
         std::unique_lock<std::mutex> lock(m_cond_mutex);
         m_condition.notify_all();
+        m_ready_condition.notify_all();
     }
 
     if (m_timer_thread.joinable()) {

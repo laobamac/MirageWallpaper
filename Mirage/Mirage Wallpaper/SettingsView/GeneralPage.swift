@@ -8,6 +8,7 @@ import SwiftUI
 
 struct GeneralPage: SettingsPage {
     @Bindable var viewModel: GlobalSettingsViewModel
+    @ObservedObject private var updateManager = UpdateManager.shared
 
     @State private var librarySources: [WallpaperLibrarySource]
     @State private var showMirrorWarning = false
@@ -166,11 +167,25 @@ struct GeneralPage: SettingsPage {
                     set: { viewModel.settings.receivePrereleaseUpdates = $0 }
                 ))
                 .onChange(of: viewModel.settings.shouldReceivePrereleaseUpdates) { _, _ in
-                    if viewModel.settings.shouldAutomaticallyUpdate {
-                        UpdateManager.shared.checkForUpdates(nil)
-                    }
+                    UpdateManager.shared.applyUpdateChannelPreference()
                 }
-                Text("关闭自动更新后，Mirage 不会在后台检查或下载；仍可通过菜单中的“检查更新…”手动检查。开启测试版后，Mirage 会在正式更新之外检查最新的测试版。")
+                LabeledContent("更新状态") {
+                    HStack(spacing: 6) {
+                        if updateManager.isChecking {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Image(systemName: updateManager.statusSymbolName)
+                        }
+                        Text(updateManager.statusText)
+                    }
+                    .foregroundStyle(.secondary)
+                }
+                Button("立即检查更新") {
+                    updateManager.checkForUpdates(nil)
+                }
+                .disabled(updateManager.isChecking)
+                Text("开启自动更新后，Mirage 会在启动时检查，并在后台定期检查和下载更新；关闭后仍可手动检查。开启测试版后，Mirage 也会检查测试版更新。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } header: {
@@ -202,6 +217,19 @@ struct GeneralPage: SettingsPage {
                 Text("Mirage 会用当前壁纸的画面替换系统桌面图片，让菜单栏与程序坞的取色与壁纸一致。开启后将持续覆盖，退出 Mirage 后依然保留；关闭时仅在 Mirage 运行期间覆盖，退出会自动还原你原本的桌面图片。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                if #available(macOS 26, *) {
+                    Toggle("自动清理 macOS 壁纸缓存", isOn: Binding(
+                        get: { viewModel.settings.shouldAutomaticallyCleanWallpaperCache },
+                        set: { viewModel.settings.automaticWallpaperCacheCleaning = $0 }
+                    ))
+                    Button("立即清理壁纸缓存…") {
+                        DesktopOverrideService.shared.requestSystemCacheAccessAndClean()
+                    }
+                    Text("Mirage 只会清理自己产生且已不再使用的缓存。首次手动清理时，macOS 可能要求你授权 Wallpaper Agent 的图像缓存目录。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             } header: {
                 Label("外观", systemImage: "paintpalette.fill")
             }
@@ -233,6 +261,8 @@ struct GeneralPage: SettingsPage {
             } header: {
                 Label("壁纸库", systemImage: "folder.fill")
             }
+
+            DirectWorkshopSettingsSection()
 
             if MirageRegion.isMainlandChina {
                 Section {

@@ -57,6 +57,8 @@ struct SceneWallpaperConfig {
     std::string                             assets_dir;
     std::string                             cache_dir;
     std::string                             script_storage_dir;
+    std::optional<std::string>               script_storage_snapshot;
+    std::function<void(std::string)>         script_storage_callback;
     std::shared_ptr<wpscene::SceneDocument> scene_document;
     rstd::json::Map                         user_properties;
     uint32_t                                fps { 30 };
@@ -69,7 +71,11 @@ struct SceneWallpaperConfig {
     bool                                    spectrum_enabled { true };
     bool                                    external_spectrum { false };
     bool                                    load_from_memory { false };
+    bool                                    offline { false };
+    uint32_t                                random_seed { 1 };
 };
+
+bool SceneCanRenderOnDemand(const Scene&);
 
 class SceneRuntimeController;
 
@@ -87,6 +93,8 @@ public:
     void pause();
     void pause(uint32_t fade_ms);
     void requestFrame();
+    void renderOfflineFrame(double time, double step, uint32_t audio_frames,
+                            std::function<void(int, std::vector<float>)> callback);
     void mouseInput(double x, double y);
     // button: 0=left, 1=right, 2=middle (GLFW numbering). down=true on
     // press, false on release.
@@ -110,6 +118,7 @@ public:
     void setOnUserPropertyDiagnostics(UserPropertyDiagnosticCallback);
     void requestPreparedPassDiagnostics(RenderPassDiagnosticCallback);
     void resetScriptStorage();
+    void exportScriptStorage(std::function<void(std::string)> callback);
 
     // Install (or clear, with `nullptr`) a callback invoked on the
     // main thread after each scene is parsed, carrying the scene's

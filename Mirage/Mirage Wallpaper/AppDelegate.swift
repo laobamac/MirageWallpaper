@@ -19,6 +19,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var globalSettingsViewModel = GlobalSettingsViewModel()
     var workshopViewModel = WorkshopViewModel()
     var navigationModel = MainNavigationModel()
+    lazy var mobileDevicesViewModel = MobileDevicesViewModel()
 
     var importOpenPanel: NSOpenPanel!
     private var developerLogWindowController: DeveloperLogWindowController?
@@ -70,7 +71,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     let modeB = ScreenSaverDynamicLockScreenManager.shared.isEnabled
                         && ScreenSaverDynamicLockScreenManager.shared.isConfigured
                     guard modeA || modeB else { return }
-                    self.wallpaperViewModel.suspendForExternalLockScreen()
+                    guard await self.wallpaperViewModel.prepareForExternalLockScreen() else { return }
                     if modeB && !ScreenSaverDynamicLockScreenManager.shared.enterLockedState() {
                         self.wallpaperViewModel.resumeAfterExternalLockScreen()
                         return
@@ -196,6 +197,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         SteamServiceManager.shared.start()
+        mobileDevicesViewModel.startBackgroundReconnect()
 
         DynamicLockScreenManager.shared.prepareAtLaunch()
         if DynamicLockScreenManager.shared.isEnabled {
@@ -240,6 +242,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        WallpaperBakeService.shared.cancelAll()
         PlaylistManager.shared.stopAllRotators()
         if developerLogWindowWasOpened {
             MirageLogService.shared.saveAutomatically()
@@ -257,6 +260,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         wallpaperViewModel.renderer.stopAllAndWait()
 
         SteamServiceManager.shared.shutdown()
+        mobileDevicesViewModel.stopPairing()
 
         // Same constraint: a transient override is one Mirage only took for
         // tint consistency, so the user's own picture goes back synchronously

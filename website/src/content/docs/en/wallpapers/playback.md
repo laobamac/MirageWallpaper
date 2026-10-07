@@ -33,6 +33,10 @@ The supported property types depend on the work's definition, with common ones b
 
 Each wallpaper's runtime state (volume, speed, fill mode, property overrides) is persisted per wallpaper. Whether you switch wallpapers and switch back, or restart Mirage, your previous adjustments are restored.
 
+## Playlists
+
+Use the wallpaper context menu to add items to a per-display playlist. Drag thumbnails to reorder them, and use the menu-bar Previous and Next commands to navigate. Playlist settings support sorted or random order; timer, logon, time-of-day, day-of-week, or manual changes; 0.2–5 second transitions; and changing on video end. A day-of-week playlist uses its first seven items for Sunday through Saturday.
+
 ## Relationship to global playback rules
 
 The parameters above apply to a **single wallpaper**. On top of that, there's a layer of **global playback rules** that automatically take over playback behavior (continue / mute / pause / stop) in situations like a full-screen app being active, another app playing audio, the screen sleeping, or running on battery power. This is configured in [Performance & playback rules](/en/settings/performance/).

@@ -27,16 +27,23 @@ using FirstFrameCallback = void (*)(void*);
 struct SaverEngine {
     sr::SceneWallpaper wallpaper;
     std::string configuration_key;
-    bool first_frame_presented { false };
     bool paused { true };
+};
+
+struct FrameNotification {
+    std::mutex mutex;
+    FirstFrameCallback callback { nullptr };
+    void* userdata { nullptr };
+    bool presented { false };
+    bool active { true };
 };
 
 struct SaverInstance {
     SaverEngine* engine { nullptr };
     void* host { nullptr };
     bool paused { false };
-    FirstFrameCallback first_frame_callback { nullptr };
-    void* first_frame_userdata { nullptr };
+    bool frame_scheduled { false };
+    std::shared_ptr<FrameNotification> frame { std::make_shared<FrameNotification>() };
 };
 
 std::mutex g_engine_mutex;
@@ -56,12 +63,25 @@ void UpdatePlayback(SaverEngine* engine) {
 
 void Present(void* texture, std::uint32_t width, std::uint32_t height, void* userdata) {
     auto* engine = static_cast<SaverEngine*>(userdata);
-    std::scoped_lock lock(g_engine_mutex);
-    if (engine == nullptr) return;
-    for (auto* instance : g_instances) {
-        if (instance->engine == engine && !instance->paused) {
-            MirageSceneSaverHostPresent(instance->host, texture, width, height);
+    std::vector<std::shared_ptr<FrameNotification>> notifications;
+    {
+        std::scoped_lock lock(g_engine_mutex);
+        if (engine == nullptr) return;
+        for (auto* instance : g_instances) {
+            if (instance->engine == engine && !instance->paused) {
+                MirageSceneSaverHostPresent(instance->host, texture, width, height);
+                if (!instance->frame_scheduled) {
+                    instance->frame_scheduled = true;
+                    notifications.push_back(instance->frame);
+                }
+            }
         }
+    }
+    for (const auto& frame : notifications) {
+        std::scoped_lock lock(frame->mutex);
+        if (!frame->active || frame->presented) continue;
+        frame->presented = true;
+        if (frame->callback) frame->callback(frame->userdata);
     }
 }
 
@@ -90,7 +110,8 @@ void* CreateInstance(void* host, const char* assets_dir, const char* scene_pkg,
                      const char* properties_json, std::uint32_t width,
                      std::uint32_t height, std::uint32_t fps,
                      sr::FillMode fill_mode = sr::FillMode::ASPECTCROP,
-                     sr::WallpaperPosition position = {}, bool paused = true) {
+                     sr::WallpaperPosition position = {}, bool paused = true,
+                     const char* runtime_json = nullptr) {
     std::unique_ptr<void, decltype(&MirageSceneSaverHostDestroy)> owned_host(host, MirageSceneSaverHostDestroy);
     if (host == nullptr || assets_dir == nullptr || scene_pkg == nullptr || width == 0 || height == 0) return nullptr;
     std::scoped_lock creation_lock(g_creation_mutex);
@@ -109,7 +130,8 @@ void* CreateInstance(void* host, const char* assets_dir, const char* scene_pkg,
         std::to_string(width) + "x" + std::to_string(height) + "\n" +
         std::to_string(static_cast<int>(fill_mode)) + "\n" +
         std::to_string(std::bit_cast<std::uint64_t>(position.x)) + "\n" +
-        std::to_string(std::bit_cast<std::uint64_t>(position.y));
+        std::to_string(std::bit_cast<std::uint64_t>(position.y)) + "\n" +
+        (runtime_json == nullptr ? "" : runtime_json);
     std::unique_lock lock(g_engine_mutex);
     auto existing = std::find_if(g_engines.begin(), g_engines.end(), [&](auto* candidate) {
         return candidate->configuration_key == configuration_key;
@@ -130,23 +152,21 @@ void* CreateInstance(void* host, const char* assets_dir, const char* scene_pkg,
     config.muted = true;
     config.fill_mode = fill_mode;
     config.position = position;
+    config.script_storage_snapshot = "{}";
+    if (runtime_json != nullptr && runtime_json[0] != '\0') {
+        auto parsed = sr::ParseJson(runtime_json, { .allow_comments = false });
+        if (parsed.is_err()) return nullptr;
+        auto runtime = parsed.unwrap();
+        if (!runtime.is_object()) return nullptr;
+        if (auto speed = runtime.get("speed"); speed.is_some()) {
+            config.speed = static_cast<float>((*speed)->as_f64().unwrap_or(1.0));
+            if (!sr::IsValidScenePlaybackSpeed(config.speed)) config.speed = 1.0f;
+        }
+        if (auto storage = runtime.get("scriptStorage"); storage.is_some() && (*storage)->is_object())
+            config.script_storage_snapshot = sr::Dump(**storage);
+    }
     if (!LoadProperties(properties_json, config)) return nullptr;
     auto engine = std::make_unique<SaverEngine>();
-    auto* engine_pointer = engine.get();
-    engine->wallpaper.setOnFirstFrame([engine_pointer] {
-        std::vector<std::pair<FirstFrameCallback, void*>> callbacks;
-        {
-            std::scoped_lock lock(g_engine_mutex);
-            engine_pointer->first_frame_presented = true;
-            for (auto* instance : g_instances) {
-                if (instance->engine == engine_pointer && instance->first_frame_callback != nullptr) {
-                    callbacks.emplace_back(instance->first_frame_callback,
-                                           instance->first_frame_userdata);
-                }
-            }
-        }
-        for (const auto& [callback, userdata] : callbacks) callback(userdata);
-    });
     engine->configuration_key = configuration_key;
     auto instance = std::make_unique<SaverInstance>(engine.get(), host, paused);
     if (!engine->wallpaper.init()) return nullptr;
@@ -213,6 +233,25 @@ extern "C" void* MirageSceneDesktopCreateWithPosition(
                           ParseFillMode(fill_mode), { x, y }, false);
 }
 
+extern "C" void* MirageSceneSaverCreateWithRuntime(
+    void* ns_view, const char* assets_dir, const char* scene_pkg, const char* properties_json,
+    std::uint32_t width, std::uint32_t height, std::uint32_t drawable_width,
+    std::uint32_t drawable_height, std::uint32_t fps, const char* fill_mode, double x, double y,
+    const char* runtime_json) {
+    void* host = MirageSceneSaverHostCreate(ns_view, drawable_width, drawable_height);
+    return CreateInstance(host, assets_dir, scene_pkg, properties_json, width, height, fps,
+                          ParseFillMode(fill_mode), { x, y }, true, runtime_json);
+}
+
+extern "C" void* MirageSceneDesktopCreateWithRuntime(
+    void* ca_layer, const char* assets_dir, const char* scene_pkg, const char* properties_json,
+    std::uint32_t width, std::uint32_t height, std::uint32_t fps,
+    const char* fill_mode, double x, double y, const char* runtime_json) {
+    void* host = MirageSceneDesktopHostCreate(ca_layer, width, height);
+    return CreateInstance(host, assets_dir, scene_pkg, properties_json, width, height, fps,
+                          ParseFillMode(fill_mode), { x, y }, false, runtime_json);
+}
+
 extern "C" void MirageSceneSaverSetPaused(void* handle, int paused) {
     auto* instance = static_cast<SaverInstance*>(handle);
     std::scoped_lock lock(g_engine_mutex);
@@ -230,15 +269,17 @@ extern "C" void MirageSceneDesktopSetFirstFrameCallback(void* handle,
                                                           FirstFrameCallback callback,
                                                           void* userdata) {
     auto* instance = static_cast<SaverInstance*>(handle);
-    bool first_frame_presented = false;
+    std::shared_ptr<FrameNotification> frame;
     {
         std::scoped_lock lock(g_engine_mutex);
-        if (instance == nullptr || instance->engine == nullptr) return;
-        instance->first_frame_callback = callback;
-        instance->first_frame_userdata = userdata;
-        first_frame_presented = instance->engine->first_frame_presented;
+        if (std::find(g_instances.begin(), g_instances.end(), instance) == g_instances.end()) return;
+        frame = instance->frame;
     }
-    if (callback != nullptr && first_frame_presented) callback(userdata);
+    std::scoped_lock lock(frame->mutex);
+    if (!frame->active) return;
+    frame->callback = callback;
+    frame->userdata = userdata;
+    if (callback != nullptr && frame->presented) callback(userdata);
 }
 
 extern "C" void MirageSceneSaverDestroy(void* handle) {
@@ -248,6 +289,7 @@ extern "C" void MirageSceneSaverDestroy(void* handle) {
     if (std::find(g_instances.begin(), g_instances.end(), instance) == g_instances.end()) return;
     void* host = instance->host;
     auto* engine = instance->engine;
+    auto frame = instance->frame;
     std::erase(g_instances, instance);
     delete instance;
     const bool last = engine != nullptr && std::none_of(g_instances.begin(), g_instances.end(), [engine](auto* item) {
@@ -256,6 +298,12 @@ extern "C" void MirageSceneSaverDestroy(void* handle) {
     if (last) std::erase(g_engines, engine);
     else if (engine != nullptr) UpdatePlayback(engine);
     lock.unlock();
+    {
+        std::scoped_lock frame_lock(frame->mutex);
+        frame->active = false;
+        frame->callback = nullptr;
+        frame->userdata = nullptr;
+    }
     MirageSceneSaverHostDestroy(host);
     if (last) delete engine;
 }

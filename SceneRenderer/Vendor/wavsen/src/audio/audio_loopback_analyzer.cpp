@@ -15,6 +15,7 @@ namespace
 {
 
 constexpr std::uint32_t kFallbackRate = 48000;
+std::atomic<std::uint32_t> consumers { 0 };
 
 class Analyzer {
 public:
@@ -134,8 +135,12 @@ Analyzer& analyzer() {
 
 void ingest(const float* src, std::uint32_t n_frames, std::uint32_t channels,
             std::uint32_t sample_rate) {
+    if (consumers.load(std::memory_order_relaxed) == 0) return;
     analyzer().ingest(src, n_frames, channels, sample_rate);
 }
+
+void subscribe() { consumers.fetch_add(1, std::memory_order_relaxed); }
+void unsubscribe() { consumers.fetch_sub(1, std::memory_order_relaxed); }
 
 bool snapshot(SpectrumSnapshot& out) {
     return analyzer().snapshot(out);

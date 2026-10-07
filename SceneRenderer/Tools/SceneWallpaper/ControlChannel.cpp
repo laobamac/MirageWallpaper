@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <iostream>
 #include <poll.h>
+#include <fcntl.h>
 #include <string>
 #include <unistd.h>
 
@@ -35,6 +36,32 @@ bool ParseFillMode(const std::string& s, sr::FillMode& out) {
 }
 
 } // namespace
+
+void SceneControlChannel::start() {
+    if (m_running.exchange(true)) return;
+    if (::pipe(m_wake_fds) != 0) {
+        m_running.store(false);
+        if (m_on_quit) m_on_quit();
+        return;
+    }
+    for (int fd : m_wake_fds) ::fcntl(fd, F_SETFD, FD_CLOEXEC);
+    m_thread = std::thread([this] {
+        readLoop();
+    });
+}
+
+void SceneControlChannel::stop() {
+    if (m_running.exchange(false) && m_wake_fds[1] >= 0) {
+        const char wake = 1;
+        while (::write(m_wake_fds[1], &wake, 1) < 0 && errno == EINTR) {
+        }
+    }
+    if (m_thread.joinable()) m_thread.join();
+    for (int& fd : m_wake_fds) {
+        if (fd >= 0) ::close(fd);
+        fd = -1;
+    }
+}
 
 void SceneControlChannel::dispatchLine(const char* line) {
     if (line == nullptr) return;
@@ -230,6 +257,10 @@ void SceneControlChannel::dispatchLine(const char* line) {
         m_wallpaper.setMuted(true);
         m_wallpaper.pause();
         if (m_on_deactivate) m_on_deactivate();
+    } else if (cmd == "exportScriptStorage") {
+        auto token = msg.get("token");
+        if (m_on_storage && token.is_some() && (*token)->is_string())
+            m_on_storage(rstd::cppstd::to_string(*(*token)->as_str()));
     } else if (cmd == "resetScriptStorage") {
         m_wallpaper.resetScriptStorage();
     } else if (cmd == "quit") {
@@ -242,14 +273,14 @@ void SceneControlChannel::readLoop() {
     std::string pending;
     char        buffer[4096];
     while (m_running.load()) {
-        pollfd input {
-            .fd      = STDIN_FILENO,
-            .events  = POLLIN | POLLHUP,
-            .revents = 0,
+        pollfd inputs[2] {
+            { .fd = STDIN_FILENO, .events = POLLIN | POLLHUP, .revents = 0 },
+            { .fd = m_wake_fds[0], .events = POLLIN, .revents = 0 },
         };
+        auto& input = inputs[0];
         int ready;
         do {
-            ready = ::poll(&input, 1, 100);
+            ready = ::poll(inputs, 2, -1);
         } while (ready < 0 && errno == EINTR && m_running.load());
         if (! m_running.load()) break;
         if (ready == 0) continue;

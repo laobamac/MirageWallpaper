@@ -1,0 +1,11 @@
+# Copyright © 2026 王孝慈. All rights reserved.
+[Desktop Entry]
+Type=Application
+Name=Mirage
+Comment=Scene, web and video wallpaper manager
+Comment[zh_CN]=场景、网页和视频壁纸管理器
+Comment[zh_TW]=場景、網頁和影片桌布管理器
+Icon=mirage
+Exec=Mirage
+Terminal=false
+Categories=Utility;Settings;

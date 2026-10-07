@@ -257,7 +257,32 @@ void TestHiddenLayerPlaybackState() {
           "completed single puppet animation is removed");
 }
 
+void TestPoseCacheIsolationAndInvalidation() {
+    const int         dips[] { 5 };
+    auto              puppet = MakePuppet(41, 10, 10.0, 10.0f, dips);
+    auto              layers = OneLayer(41);
+    sr::WPPuppetLayer first(puppet), second(puppet);
+    first.prepared(layers);
+    second.prepared(layers);
+    (void)first.genFrame(0.0);
+    (void)second.genFrame(0.0);
+    auto       first_pose = first.genFrame(0.5);
+    const auto x          = first_pose[0].translation().x();
+    const auto alpha      = first.boneAlphas()[0];
+    (void)second.genFrame(0.8);
+    Check(Near(first.genFrame(0.5)[0].translation().x(), x) && Near(first.boneAlphas()[0], alpha),
+          "shared puppet instances retain independent cached poses and alpha");
+    const auto handle = first.animationLayer(0);
+    Check(handle.has_value(), "cached animation is addressable");
+    if (handle) {
+        first.setAnimationFrame(*handle, 2);
+        Check(! Near(first.genFrame(0.5)[0].translation().x(), x),
+              "same-time animation mutations invalidate the cached pose");
+    }
+}
+
 int main() {
+    TestPoseCacheIsolationAndInvalidation();
     TestBlinkEnvelopeDrivesAlphaNotPose();
     TestStaticTrackStillFades();
     TestFlatCurveLeavesPermutationAlone();

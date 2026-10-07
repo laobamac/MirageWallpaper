@@ -3,7 +3,7 @@ title: 壁纸库
 description: 在「已安装」标签中浏览、搜索、排序、筛选和收藏你的动态壁纸。
 ---
 
-「已安装」标签是你的本地壁纸库，展示所有已导入或已下载的壁纸。
+「已安装」标签是你的本地壁纸库，展示所有已导入或已下载的壁纸。「已订阅」标签则按 Steam 账号单独列出已订阅的 Wallpaper Engine 作品。
 
 ![Mirage 壁纸库总览](/images/docs/library-overview.webp)
 
@@ -52,5 +52,7 @@ description: 在「已安装」标签中浏览、搜索、排序、筛选和收�
 - [Steam 创意工坊下载的内容](/workshop/download/)
 
 各来源的实际存放位置见[数据目录](/advanced/data-directories/)。
+
+「已订阅」需要先登录 Steam；可以搜索订阅列表、筛选下载状态，并把尚未安装的作品加入下载队列。下载完成后作品才会出现在已安装库中。
 
 选好壁纸后，前往[应用壁纸](/wallpapers/apply/)将它设为桌面壁纸。

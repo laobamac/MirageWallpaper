@@ -163,13 +163,18 @@ final class ScreenSaverDynamicLockScreenManager: ObservableObject {
             throw ScreenSaverDynamicLockScreenError.unsupportedWallpaper
         }
         let manager = ScreenSaverManager.shared
-        let context = ScreenSaverManager.ConfigurationContext(
-            wallpaperID: wallpaper.id, runtime: runtime, fps: fps)
         let requestID = UUID()
         configurationRequestID = requestID
         defer {
             if configurationRequestID == requestID { configurationRequestID = nil }
         }
+        await AppDelegate.shared.wallpaperViewModel.refreshScriptStorage(for: wallpaper)
+        guard configurationRequestID == requestID, isEnabled,
+              DynamicLockScreenModeStore.active == .screenSaver, !Task.isCancelled else {
+            throw CancellationError()
+        }
+        let context = ScreenSaverManager.ConfigurationContext(
+            wallpaperID: wallpaper.id, runtime: runtime, fps: fps)
         let data: Data
         do {
             data = try await withCheckedThrowingContinuation { continuation in
@@ -194,6 +199,7 @@ final class ScreenSaverDynamicLockScreenManager: ObservableObject {
             throw CancellationError()
         }
         try manager.configure(with: data, forDynamicLockScreen: true)
+        AppDelegate.shared.wallpaperViewModel.saveRuntime()
         reassertIfEnabled()
     }
 

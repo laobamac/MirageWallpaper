@@ -55,7 +55,7 @@ Only a commit with a higher build number gets installed, which prevents a newer 
 
 ## Screen Saver Component Sync
 
-The next time the app launches after an update, it checks the Mirage screen saver component installed in `~/Library/Screen Savers`; only when its build number lags behind the app's bundled component does it atomically replace it and restart the relevant system screen saver services. See [Screen Saver](/en/screensaver/overview/) for details.
+After an update, the app checks the component installed in `~/Library/Screen Savers`. A change to the component or shared runtime fingerprint triggers atomic replacement and a screen saver service restart. The lightweight saver locates the shared engine using the recorded app path and LaunchServices. Launch Mirage once after moving it to update that record. See [Screen Saver](/en/screensaver/overview/).
 
 ## Required Secrets
 
@@ -83,3 +83,6 @@ The current workflow uses ad-hoc signing and **does not include Apple Developer 
 :::note[On the extractability of the built-in key]
 GitHub Secrets can keep the key out of the repository and out of ordinary build logs, but they cannot make a client-side built-in key a true secret: a released app must contain it, and anyone able to analyze the app can still extract it. If you ever need a credential that cannot be extracted, move the corresponding request to a controlled server that holds the key, rather than relying on client-side obfuscation.
 :::
+
+
+Release builds disable coverage instrumentation and strip local symbols. CI checks shared runtime fingerprints, duplicate component payloads, real audio/video decoding, and a 260 MiB bundle budget. FFmpeg caches are keyed by architecture, build script, and toolchain.

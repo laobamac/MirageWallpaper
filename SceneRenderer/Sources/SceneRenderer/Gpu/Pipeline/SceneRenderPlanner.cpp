@@ -32,14 +32,6 @@ void doCopy(RenderGraphBuilder& builder, vulkan::CopyPass::Desc& desc, TextureNo
 }
 } // namespace sr::rg
 
-static void TraverseNode(const std::function<void(SceneNode*)>& func, SceneNode* node,
-                         const Set<const SceneNode*>* skip_subtrees = nullptr) {
-    if (skip_subtrees != nullptr && skip_subtrees->count(static_cast<const SceneNode*>(node)) != 0)
-        return;
-    func(node);
-    for (auto& child : node->GetChildren()) TraverseNode(func, child.as_ptr(), skip_subtrees);
-}
-
 static void CheckAndSetSprite(const RenderSceneSnapshot&      render_scene,
                               vulkan::CustomShaderPass::Desc& desc,
                               std::span<const std::string>    texs) {
@@ -113,6 +105,8 @@ struct ExtraInfo {
     Map<usize, rg::TextureNodeRef>  mip_framebuffer_snapshots {};
     const RenderSceneSnapshot*      render_scene { nullptr };
     GraphLinkFinalizer              link_finalizer;
+    std::string group_output;
+    SceneCamera* group_camera { nullptr };
 };
 
 static std::optional<vulkan::TextureRequest> BuildGraphTextureRequest(ExtraInfo&       extra,
@@ -229,6 +223,8 @@ void GraphLinkFinalizer::apply(ExtraInfo& extra) {
             input.binding.name    = copy_desc.key;
             input.desc            = std::move(copy_desc);
             input.binding.request = BuildGraphTextureRequest(extra, input.binding.name);
+            // Every consumer refers to this same finalized source version.
+            output_it->second = input;
         }
 
         if (! extra.rgraph->readTexture(consumer.pass_id, input.ref)) {
@@ -262,7 +258,8 @@ static rg::TextureNodeRef AddMipFramebufferCopy(ExtraInfo& extra, rg::RenderGrap
 static void ToGraphPass(SceneNode* node, std::string_view output, i32 imgId, ExtraInfo& extra,
                         bool defer_effect = false,
                         SceneRenderViewKind render_view = SceneRenderViewKind::Primary,
-                        SceneRenderAlphaMode alpha_mode = SceneRenderAlphaMode::Composite) {
+                        SceneRenderAlphaMode alpha_mode = SceneRenderAlphaMode::Composite,
+                        bool clear_only = false) {
     auto& rgraph = *extra.rgraph;
     auto& scene  = *extra.scene;
 
@@ -344,16 +341,18 @@ static void ToGraphPass(SceneNode* node, std::string_view output, i32 imgId, Ext
             passName,
             rg::PassNode::Type::CustomShader,
             [material, node, smi, pass_output, preserve_output = submesh.preserve_output,
-             render_view, alpha_mode, &output, &imgId, &rgraph, &scene, &extra](
+             render_view, alpha_mode, clear_only, &output, &imgId, &rgraph, &scene, &extra](
                 rg::RenderGraphBuilder& builder, vulkan::CustomShaderPass::Desc& pdesc) {
                 const auto& pass    = builder.workPassNode();
                 pdesc.node          = node;
+                pdesc.clear_only    = clear_only;
                 pdesc.submesh_index = smi;
                 pdesc.render_view   = render_view;
                 pdesc.alpha_mode    = alpha_mode;
+                if (pass_output == extra.group_output) pdesc.camera_override = extra.group_camera;
                 pdesc.hide_when_node_invisible =
                     alpha_mode == SceneRenderAlphaMode::Composite &&
-                    pass_output == SpecTex_Default;
+                    (pass_output == SpecTex_Default || pdesc.camera_override != nullptr);
                 if (auto node_id = scene.ResourceIndex().nodeId(*node)) {
                     if (auto draw_item = scene.ResourceIndex().drawItemFor(*node_id, smi)) {
                         pdesc.draw_item = *draw_item;
@@ -369,9 +368,10 @@ static void ToGraphPass(SceneNode* node, std::string_view output, i32 imgId, Ext
                     CheckAndSetSprite(*extra.render_scene, pdesc, material->textures);
                 }
                 for (usize i = 0; i < material->textures.size(); i++) {
-                    const auto&                       url = material->textures[i];
+                    const auto& url = material->textures[i] == SpecTex_Default && ! extra.group_output.empty()
+                                          ? extra.group_output : material->textures[i];
                     std::optional<rg::TextureNodeRef> input;
-                    if (url.empty()) {
+                    if (clear_only || url.empty()) {
                         pdesc.texture_bindings.emplace_back();
                         continue;
                     } else if (IsSpecLinkTex(url)) {
@@ -432,6 +432,11 @@ static void ToGraphPass(SceneNode* node, std::string_view output, i32 imgId, Ext
                     ((first_output_write && output_rt.bind.screen) || pdesc.transparent_clear);
                 pdesc.preserve_output =
                     output_state->version > 0 && (output_rt.preserve_on_write || preserve_output);
+                if (clear_only) {
+                    pdesc.transparent_clear = true;
+                    pdesc.clear_output = true;
+                    pdesc.preserve_output = false;
+                }
                 const bool uses_depth =
                     output_rt.withDepth && vulkan::UsesDepthAttachment(*material);
                 pdesc.has_depth_attachment = uses_depth;
@@ -554,42 +559,52 @@ std::unique_ptr<rg::RenderGraph> sr::sceneToRenderGraph(Scene&                  
     // Pass B: emit passes. For elidable layers with a link consumer, route
     // into a private `_rt_link_<id>` RT instead of `_rt_default`; elidable
     // layers without a link consumer fall through and emit nothing.
-    TraverseNode(
-        [&extra, &scene, &linked_ids](SceneNode* node) {
-            const i32  nid      = WallpaperId(*node);
-            const bool elidable = scene.elidable_layer_ids.count(nid) != 0;
-            const bool linked   = linked_ids.count(nid) != 0;
-            SceneImageEffectLayer* image_effect { nullptr };
-            if (! node->Camera().empty()) {
-                auto cit = scene.cameras.find(node->Camera());
-                if (cit != scene.cameras.end() && cit->second->HasImgEffect())
-                    image_effect = cit->second->GetImgEffect().get();
-            }
-            if (! linked && ShouldSkipNoRuntimeEffect(node, scene)) return;
-            if (elidable) {
-                if (! linked) return;
-                auto* link_source =
-                    extra.render_scene->linkSource(WallpaperLayerId { .value = nid });
-                if (link_source == nullptr) {
+    auto emit = [&](auto&& self, SceneNode* node, const std::string& output) -> void {
+        if (emit_skip_subtrees.count(node)) return;
+        const i32 nid = WallpaperId(*node);
+        const bool elidable = scene.elidable_layer_ids.count(nid) != 0;
+        const bool linked = linked_ids.count(nid) != 0;
+        SceneImageEffectLayer* image_effect { nullptr };
+        if (auto it = scene.cameras.find(node->Camera());
+            it != scene.cameras.end() && it->second->HasImgEffect())
+            image_effect = it->second->GetImgEffect().get();
+        const auto group = scene.RenderGroupCamera(WallpaperLayerId { .value = nid });
+        if (group && image_effect) {
+            auto previous_output = std::move(extra.group_output);
+            auto* previous_camera = extra.group_camera;
+            extra.group_output = image_effect->FirstTarget();
+            extra.group_camera = scene.cameras.at(std::string(*group)).get();
+            ToGraphPass(node, extra.group_output, nid, extra, true,
+                        SceneRenderViewKind::Primary, SceneRenderAlphaMode::DependencyCapture, true);
+            for (const auto& child : node->GetChildren())
+                self(self, child.as_ptr(), extra.group_output);
+            extra.group_output = std::move(previous_output);
+            extra.group_camera = previous_camera;
+        }
+        if (linked || (! elidable && ! ShouldSkipNoRuntimeEffect(node, scene))) {
+            std::string target = output;
+            auto alpha_mode = SceneRenderAlphaMode::Composite;
+            if ((elidable || group) && linked) {
+                auto* source = extra.render_scene->linkSource(WallpaperLayerId { .value = nid });
+                if (! source) {
                     rstd_error("link render target for layer {} not found in snapshot", nid);
                     return;
                 }
-                std::string link_key = link_source->render_target_key;
-                if (image_effect) image_effect->SetFinalOutputOverride(link_key, true);
-                ToGraphPass(node,
-                            link_key,
-                            nid,
-                            extra,
-                            false,
-                            SceneRenderViewKind::Primary,
-                            SceneRenderAlphaMode::DependencyCapture);
-            } else {
-                if (image_effect) image_effect->ClearFinalOutputOverride();
-                ToGraphPass(node, SpecTex_Default, nid, extra);
+                target = source->render_target_key;
+                alpha_mode = SceneRenderAlphaMode::DependencyCapture;
             }
-        },
-        scene.sceneGraph.as_ptr(),
-        &emit_skip_subtrees);
+            if (image_effect) {
+                if (target == SpecTex_Default || image_effect->FinalTarget() != SpecTex_Default)
+                    image_effect->ClearFinalOutputOverride();
+                else image_effect->SetFinalOutputOverride(target, (elidable || group) && linked);
+            }
+            ToGraphPass(node, target, nid, extra, false, SceneRenderViewKind::Primary, alpha_mode);
+        }
+        if (! group) {
+            for (const auto& child : node->GetChildren()) self(self, child.as_ptr(), output);
+        }
+    };
+    emit(emit, scene.sceneGraph.as_ptr(), std::string(SpecTex_Default));
 
     // Emit global post-process passes after the main scene-graph traversal.
     // Each step is either a CustomShaderPass (built on the synthetic node's

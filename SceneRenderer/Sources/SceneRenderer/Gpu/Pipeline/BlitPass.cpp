@@ -37,6 +37,9 @@ PassInvalidationFlags CopyPass::finalizeResourceRequests(Scene& scene) {
         dst_request          = *m_desc.src_request;
         dst_request->name    = m_desc.dst;
         dst_request->persist = false;
+        if (dst_request->cache_key && scene.renderTargets.contains(m_desc.dst))
+            dst_request->cache_key->image_usage =
+                RenderTargetImageUsage(scene.renderTargets.at(m_desc.dst));
     }
     if (dst_request && SetTextureRequestIfChanged(m_desc.dst_request, std::move(dst_request))) {
         flags |= ToPassInvalidationFlags(PassInvalidation::Resources);

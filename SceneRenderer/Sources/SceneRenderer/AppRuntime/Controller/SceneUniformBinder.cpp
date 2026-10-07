@@ -102,6 +102,13 @@ void SceneUniformUpdater::FrameBegin() {
 
 void SceneUniformUpdater::FrameEnd() {}
 
+bool SceneUniformUpdater::RequiresContinuousFrames() const {
+    if (m_dynamic_uniforms || m_parallax.enable || m_cameraShake.enable) return true;
+    for (const auto& [node, data] : m_nodeDataMap)
+        if (data.puppet_layer) return true;
+    return false;
+}
+
 void SceneUniformUpdater::MouseInput(double x, double y) {
     using namespace std::chrono;
 
@@ -175,6 +182,11 @@ void SceneUniformUpdater::InitUniforms(SceneNode* pNode, const ExistsUniformOp& 
         value.has_mipmap     = existsOp(WE_GLTEX_MIPMAPINFO_NAMES[index]);
         return index + 1;
     });
+    m_dynamic_uniforms |=
+        info.has_TIME || info.has_FRAMETIME || info.has_DAYTIME || info.has_DAYTIME_LEGACY ||
+        info.has_POINTERPOSITION || info.has_POINTERPOSITIONLAST || info.has_PARALLAXPOSITION ||
+        info.has_BONES || info.has_BONESALPHA || info.has_audio_16_l || info.has_audio_16_r ||
+        info.has_audio_32_l || info.has_audio_32_r || info.has_audio_64_l || info.has_audio_64_r;
 }
 
 std::optional<SceneNodeRenderTransform>
@@ -190,13 +202,16 @@ SceneUniformUpdater::NodeScreenTransform(SceneNode* pNode, SceneRenderViewKind r
 
 std::optional<SceneNodeRenderTransform>
 SceneUniformUpdater::NodeTransform(SceneNode* pNode, SceneRenderViewKind render_view,
-                                   bool screen_camera, bool apply_geometry_transform) {
+                                   bool screen_camera, bool apply_geometry_transform,
+                                   SceneCamera* camera_override) {
     if (pNode == nullptr) return std::nullopt;
     pNode->UpdateTrans();
 
     SceneCamera*     camera { nullptr };
     std::string_view cam_name = pNode->Camera();
-    if (screen_camera) {
+    if (camera_override) {
+        camera = camera_override;
+    } else if (screen_camera) {
         SceneCamera* perspective { nullptr };
         if (auto it = m_scene->cameras.find("global_perspective"); it != m_scene->cameras.end())
             perspective = it->second.get();
@@ -305,14 +320,17 @@ SceneUniformUpdater::NodeTransform(SceneNode* pNode, SceneRenderViewKind render_
 void SceneUniformUpdater::UpdateUniforms(SceneNode* pNode, sprite_map_t& sprites,
                                          const UpdateUniformOp& updateOp,
                                          SceneRenderViewKind render_view,
-                                         SceneRenderAlphaMode alpha_mode) {
+                                         SceneRenderAlphaMode alpha_mode,
+                                         SceneCamera* camera_override) {
     if (! pNode->Mesh()) return;
 
     pNode->UpdateTrans();
 
     SceneCamera*     camera;
     std::string_view cam_name = pNode->Camera();
-    if (! pNode->Camera().empty()) {
+    if (camera_override) {
+        camera = camera_override;
+    } else if (! pNode->Camera().empty()) {
         camera = m_scene->cameras.at(cam_name.data()).get();
     } else if (pNode->Perspective()) {
         cam_name = "global_perspective";
@@ -392,7 +410,7 @@ void SceneUniformUpdater::UpdateUniforms(SceneNode* pNode, sprite_map_t& sprites
     bool reqETVP  = info.has_ETVP;
     bool reqETVPI = info.has_ETVPI;
 
-    auto node_render_transform = NodeRenderTransform(pNode, render_view);
+    auto node_render_transform = NodeTransform(pNode, render_view, false, true, camera_override);
     if (! node_render_transform) return;
     Matrix4d viewProTrans = node_render_transform->view_projection;
 

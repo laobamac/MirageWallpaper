@@ -25,10 +25,10 @@
         "CMAKE_CXX_COMPILER": "/usr/local/opt/llvm/bin/clang++",
         "CMAKE_LINKER_TYPE":  "DEFAULT",
         "CMAKE_OSX_DEPLOYMENT_TARGET": "14.2",
-        "CMAKE_PREFIX_PATH":  "/usr/local;/opt/homebrew;/usr/local/opt/llvm;/opt/homebrew/opt/llvm;/usr/local/opt/molten-vk;/opt/homebrew/opt/molten-vk;/usr/local/opt/vulkan-loader;/opt/homebrew/opt/vulkan-loader;/usr/local/opt/vulkan-headers;/opt/homebrew/opt/vulkan-headers;/usr/local/opt/ffmpeg;/opt/homebrew/opt/ffmpeg;/usr/local/opt/glfw;/opt/homebrew/opt/glfw;/usr/local/opt/freetype;/opt/homebrew/opt/freetype;/usr/local/opt/lz4;/opt/homebrew/opt/lz4"
+        "CMAKE_PREFIX_PATH":  "/usr/local;/opt/homebrew;/usr/local/opt/llvm;/opt/homebrew/opt/llvm;/usr/local/opt/molten-vk;/opt/homebrew/opt/molten-vk;/usr/local/opt/vulkan-loader;/opt/homebrew/opt/vulkan-loader;/usr/local/opt/vulkan-headers;/opt/homebrew/opt/vulkan-headers;/usr/local/opt/glfw;/opt/homebrew/opt/glfw;/usr/local/opt/freetype;/opt/homebrew/opt/freetype;/usr/local/opt/lz4;/opt/homebrew/opt/lz4"
       },
       "environment": {
-        "PKG_CONFIG_PATH": "/usr/local/lib/pkgconfig:/usr/local/share/pkgconfig:/opt/homebrew/lib/pkgconfig:/opt/homebrew/share/pkgconfig:/usr/local/opt/freetype/lib/pkgconfig:/opt/homebrew/opt/freetype/lib/pkgconfig:/usr/local/opt/glfw/lib/pkgconfig:/opt/homebrew/opt/glfw/lib/pkgconfig:/usr/local/opt/vulkan-loader/lib/pkgconfig:/opt/homebrew/opt/vulkan-loader/lib/pkgconfig:/usr/local/opt/ffmpeg/lib/pkgconfig:/opt/homebrew/opt/ffmpeg/lib/pkgconfig:/usr/local/opt/llvm/lib/pkgconfig:/opt/homebrew/opt/llvm/lib/pkgconfig"
+        "PKG_CONFIG_PATH": "$penv{PKG_CONFIG_PATH}:/usr/local/lib/pkgconfig:/usr/local/share/pkgconfig:/opt/homebrew/lib/pkgconfig:/opt/homebrew/share/pkgconfig:/usr/local/opt/freetype/lib/pkgconfig:/opt/homebrew/opt/freetype/lib/pkgconfig:/usr/local/opt/glfw/lib/pkgconfig:/opt/homebrew/opt/glfw/lib/pkgconfig:/usr/local/opt/vulkan-loader/lib/pkgconfig:/opt/homebrew/opt/vulkan-loader/lib/pkgconfig:/usr/local/opt/llvm/lib/pkgconfig:/opt/homebrew/opt/llvm/lib/pkgconfig"
       }
     },
     {
@@ -51,10 +51,10 @@
         "CMAKE_LINKER_TYPE":  "DEFAULT",
         "CMAKE_OSX_DEPLOYMENT_TARGET": "14.2",
         "CMAKE_OSX_ARCHITECTURES": "arm64",
-        "CMAKE_PREFIX_PATH":  "/opt/homebrew;/opt/homebrew/opt/llvm;/opt/homebrew/opt/molten-vk;/opt/homebrew/opt/vulkan-loader;/opt/homebrew/opt/vulkan-headers;/opt/homebrew/opt/ffmpeg;/opt/homebrew/opt/glfw;/opt/homebrew/opt/freetype;/opt/homebrew/opt/lz4"
+        "CMAKE_PREFIX_PATH":  "/opt/homebrew;/opt/homebrew/opt/llvm;/opt/homebrew/opt/molten-vk;/opt/homebrew/opt/vulkan-loader;/opt/homebrew/opt/vulkan-headers;/opt/homebrew/opt/glfw;/opt/homebrew/opt/freetype;/opt/homebrew/opt/lz4"
       },
       "environment": {
-        "PKG_CONFIG_PATH": "/opt/homebrew/lib/pkgconfig:/opt/homebrew/share/pkgconfig:/opt/homebrew/opt/freetype/lib/pkgconfig:/opt/homebrew/opt/glfw/lib/pkgconfig:/opt/homebrew/opt/vulkan-loader/lib/pkgconfig:/opt/homebrew/opt/ffmpeg/lib/pkgconfig:/opt/homebrew/opt/llvm/lib/pkgconfig"
+        "PKG_CONFIG_PATH": "$penv{PKG_CONFIG_PATH}:/opt/homebrew/lib/pkgconfig:/opt/homebrew/share/pkgconfig:/opt/homebrew/opt/freetype/lib/pkgconfig:/opt/homebrew/opt/glfw/lib/pkgconfig:/opt/homebrew/opt/vulkan-loader/lib/pkgconfig:/opt/homebrew/opt/llvm/lib/pkgconfig"
       }
     },
     {

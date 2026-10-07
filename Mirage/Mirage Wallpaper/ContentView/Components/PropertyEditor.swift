@@ -5,6 +5,7 @@
 //
 
 import SwiftUI
+import Observation
 import WebKit
 import UniformTypeIdentifiers
 
@@ -20,24 +21,16 @@ struct PropertyEditor: View {
     @StateObject private var conditions = ConditionStore()
 
     var body: some View {
-        @Bindable var wallpaperViewModel = wallpaperViewModel
         let model = wallpaperViewModel.propertyModel
-        Group {
+        let rows = model.rows.filter { conditions.isVisible($0.property.condition) }
+        LazyVStack(alignment: .leading, spacing: 12) {
             if model.rows.isEmpty {
-                HStack {
-                    Text("此壁纸没有可调节的属性。")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                }
+                PropertyEmptyState()
             } else {
-                LazyVStack(alignment: .leading, spacing: 12) {
-                    ForEach(model.rows.filter { conditions.isVisible($0.property.condition) }) { entry in
-                        PropertyRow(wallpaper: wallpaper, key: entry.id,
-                                    property: entry.property, valueState: entry.state,
-                                    displayKey: wallpaperViewModel.selectedDisplayKey, conditions: conditions)
-                            .environment(wallpaperViewModel)
-                    }
+                ForEach(rows) { entry in
+                    PropertyRow(wallpaper: wallpaper, key: entry.id,
+                                property: entry.property, valueState: entry.state,
+                                displayKey: wallpaperViewModel.selectedDisplayKey, conditions: conditions)
                 }
             }
         }
@@ -49,7 +42,18 @@ struct PropertyEditor: View {
     }
 }
 
-private struct PropertyConditionObserver: View {
+struct PropertyEmptyState: View {
+    var body: some View {
+        HStack {
+            Text("此壁纸没有可调节的属性。")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+    }
+}
+
+struct PropertyConditionObserver: View {
     let model: WallpaperPropertyModel
     let identity: String
     let conditions: ConditionStore
@@ -74,8 +78,15 @@ private struct PropertyConditionObserver: View {
 }
 
 final class ConditionStore: ObservableObject {
+    @Observable
+    fileprivate final class Visibility {
+        var value: Bool
+        init(_ value: Bool) { self.value = value }
+    }
+
     private let evaluator = WEConditionEvaluator()
-    @Published private(set) var verdicts: [String: Bool] = [:]
+    private(set) var verdicts: [String: Bool] = [:]
+    private var visibility: [String: Visibility] = [:]
     private var identity: String?
     private var lastProperties: [String: WEProjectProperty]?
     private var lastOverrides: [String: WEPropertyValue]?
@@ -88,7 +99,7 @@ final class ConditionStore: ObservableObject {
         }
         if self.identity != identity {
             evaluator.cancel()
-            verdicts = [:]
+            apply([:])
         }
         self.identity = identity
         if lastProperties != properties {
@@ -101,24 +112,36 @@ final class ConditionStore: ObservableObject {
                 }
             }
             expressions = unique.sorted()
+            visibility = visibility.filter { unique.contains($0.key) }
         }
         lastProperties = properties
         lastOverrides = overrides
         guard !expressions.isEmpty else {
             evaluator.cancel()
-            if !verdicts.isEmpty { verdicts = [:] }
+            if !verdicts.isEmpty { apply([:]) }
             return
         }
         evaluator.evaluate(identity: identity, conditions: expressions,
                            properties: properties, overrides: overrides) { [weak self] result in
             guard let self, self.identity == identity, self.verdicts != result else { return }
-            self.verdicts = result
+            self.apply(result)
         }
     }
 
     func isVisible(_ condition: String?) -> Bool {
         guard let condition else { return true }
-        return verdicts[condition] ?? true
+        if let state = visibility[condition] { return state.value }
+        let state = Visibility(verdicts[condition] ?? true)
+        visibility[condition] = state
+        return state.value
+    }
+
+    private func apply(_ verdicts: [String: Bool]) {
+        self.verdicts = verdicts
+        for (expression, state) in visibility {
+            let value = verdicts[expression] ?? true
+            if state.value != value { state.value = value }
+        }
     }
 
     func cancel() {
@@ -137,7 +160,7 @@ struct PropertyRow: View {
     let property: WEProjectProperty
     let valueState: WallpaperPropertyValue
     let displayKey: DisplayKey
-    @ObservedObject var conditions: ConditionStore
+    let conditions: ConditionStore
     @State private var pickerError: String?
 
     private var currentValue: WEPropertyValue {
@@ -214,7 +237,7 @@ struct PropertyRow: View {
                     get: { property.normalizedComboValue(currentValue) },
                     set: { setValue($0) })) {
                     ForEach(visibleOptions, id: \.value) { opt in
-                        Text(WELocalization.resolve(opt.label)).tag(opt.value)
+                        Text(WEHTML.plain(WELocalization.resolve(opt.label))).tag(opt.value)
                     }
                 }
                 .labelsHidden()

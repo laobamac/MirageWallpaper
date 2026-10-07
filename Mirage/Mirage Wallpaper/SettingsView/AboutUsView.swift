@@ -21,6 +21,13 @@ struct AboutUsView: View {
     @State private var enlargedQR: SponsorQRModel?
     @Namespace private var qrNamespace
 
+    private static let developers: [DeveloperCredit] = [
+        .init(name: "Xiaoci Wang", username: "laobamac", role: "项目作者 · 开发者"),
+        .init(name: "Jiale Yu", username: "dawalishi821", role: "开发者"),
+        .init(name: "Pikachu Ren", username: "PIKACHUIM", role: "开发者"),
+        .init(name: "Yinan Qin", username: "elysia-best", role: "开发者"),
+    ]
+
     private let afdianURL = URL(string: "https://www.ifdian.net/a/laobamac")!
     private let usdtAddress = "0xFc0a5C52e3A085FEc7b077FE3D2C413114Bf880D"
 
@@ -61,15 +68,13 @@ struct AboutUsView: View {
                     VStack(spacing: 14) {
                         Text("版本 \(version)（构建 \(build)）").foregroundStyle(.secondary)
                         Text("提交 \(commit)").font(.caption.monospaced()).foregroundStyle(.tertiary)
-                        HStack(spacing: 4) {
-                            Text("作者")
-                            Text("王孝慈 (laobamac)").bold()
-                        }
                         Link("github.com/laobamac/MirageWallpaper",
                              destination: URL(string: "https://github.com/laobamac/MirageWallpaper")!)
                             .font(.footnote)
                     }
                     .font(.callout)
+
+                    developersSection
 
                     sponsorSection
 
@@ -130,6 +135,49 @@ struct AboutUsView: View {
 
     private func dismissEnlarged() {
         withAnimation(zoomAnimation) { enlargedQR = nil }
+    }
+
+    private var developersSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Label("开发团队", systemImage: "person.3")
+                .font(.title3.bold())
+                .accessibilityAddTraits(.isHeader)
+
+            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 12) {
+                ForEach(Self.developers) { developer in
+                    GridRow {
+                        Text(verbatim: developer.name)
+                            .font(.callout.weight(.semibold))
+                            .fixedSize()
+                        Text(developer.role)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Link(destination: developer.profileURL) {
+                            HStack(spacing: 4) {
+                                Text(verbatim: "@\(developer.username)")
+                                Image(systemName: "arrow.up.right")
+                                    .font(.caption2)
+                                    .accessibilityHidden(true)
+                            }
+                        }
+                        .font(.callout)
+                        .fixedSize()
+                        .help(L("打开 %@ 的 GitHub 主页", developer.name))
+                        .accessibilityLabel(Text(L("打开 %@ 的 GitHub 主页", developer.name)))
+                        .gridColumnAlignment(.trailing)
+                    }
+                }
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.primary.opacity(0.08))
+        }
     }
 
     private var sponsorSection: some View {
@@ -208,6 +256,18 @@ struct AboutUsView: View {
             .buttonStyle(.bordered)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct DeveloperCredit: Identifiable {
+    let name: String
+    let username: String
+    let role: LocalizedStringKey
+
+    var id: String { username }
+
+    var profileURL: URL {
+        URL(string: "https://github.com/\(username)")!
     }
 }
 

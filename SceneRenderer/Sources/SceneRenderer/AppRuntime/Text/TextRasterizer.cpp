@@ -280,6 +280,7 @@ struct FontFace::Impl {
     // Set by FontCache::GetFace; consumed by the renderer's per-frame
     // atlas-commit hook to look the face's VkImage up by URL.
     std::string atlas_url;
+    std::shared_ptr<std::size_t> layout_users { std::make_shared<std::size_t>(0) };
 
     ~Impl() {
         if (face != nullptr) FT_Done_Face(face);
@@ -525,6 +526,7 @@ struct FontCache::Impl {
         }
     };
     std::unordered_map<Key, std::unique_ptr<FontFace>, KeyHash> faces;
+    std::vector<FontFace*>                                      face_views;
 };
 
 FontCache::FontCache(): m_impl(std::make_unique<Impl>()) {}
@@ -570,14 +572,26 @@ FontFace* FontCache::GetFace(std::shared_ptr<std::vector<std::byte>> blob, std::
 
     auto* raw          = face.get();
     m_impl->faces[key] = std::move(face);
+    m_impl->face_views.push_back(raw);
     return raw;
 }
 
-std::vector<FontFace*> FontCache::Faces() const {
-    std::vector<FontFace*> out;
-    out.reserve(m_impl->faces.size());
-    for (auto& [_k, f] : m_impl->faces) out.push_back(f.get());
-    return out;
+std::span<FontFace* const> FontCache::Faces() const { return m_impl->face_views; }
+
+void FontCache::TrimUnusedFaces(std::span<const std::string>                 material_textures,
+                                const std::function<void(std::string_view)>& before_remove) {
+    const std::unordered_set<std::string> retained(material_textures.begin(),
+                                                   material_textures.end());
+    for (auto it = m_impl->faces.begin(); it != m_impl->faces.end();) {
+        auto& face = *it->second;
+        if (*face.m_impl->layout_users == 0 && ! retained.contains(face.AtlasUrl())) {
+            before_remove(face.AtlasUrl());
+            auto& views = m_impl->face_views;
+            views.erase(std::remove(views.begin(), views.end(), &face), views.end());
+            it = m_impl->faces.erase(it);
+        } else
+            ++it;
+    }
 }
 
 FontCache& EnsureSceneFontCache(sr::Scene& scene) {
@@ -987,6 +1001,7 @@ std::array<float, 2> ResolveTextAnchorPosition(std::string_view horizontal,
 
 struct TextLayouter::Impl {
     FontFace*                       face { nullptr };
+    std::shared_ptr<std::size_t>    face_users;
     std::shared_ptr<sr::SceneMesh> mesh;
     TextLayoutStyle                 style;
     std::size_t                     peak_quads { 0 };
@@ -999,6 +1014,7 @@ struct TextLayouter::Impl {
     float       last_source_center_x { 0.0f };
     float       last_source_center_y { 0.0f };
     std::string current_text;
+    bool        layout_dirty { true };
     bool        missing_glyph_logged { false };
     bool        truncate_logged { false };
     float       layout_scale { 1.0f };
@@ -1008,7 +1024,6 @@ struct TextLayouter::Impl {
     std::vector<float>         positions;
     std::vector<float>         texcoords;
     std::vector<float>         colors;
-    std::vector<std::uint32_t> indices;
 
     Impl(FontFace* f, std::shared_ptr<sr::SceneMesh> m, TextLayoutStyle s, std::size_t pq)
         : face(f),
@@ -1019,7 +1034,17 @@ struct TextLayouter::Impl {
         positions.assign(pq * 4 * 3, 0.0f);
         texcoords.assign(pq * 4 * 2, 0.0f);
         colors.assign(pq * 4 * 4, 0.0f);
-        indices.assign(pq * 6, 0u);
+        std::vector<std::uint32_t> indices(pq * 6);
+        for (std::size_t q = 0; q < pq; ++q) {
+            const auto                         base = static_cast<std::uint32_t>(q * 4);
+            const std::array<std::uint32_t, 6> quad { base, base + 1, base + 2,
+                                                      base, base + 2, base + 3 };
+            std::copy(quad.begin(), quad.end(), indices.begin() + q * 6);
+        }
+        auto& index = mesh->GetIndexArray(0);
+        index.Assign(0, indices);
+        index.SetStaticTopology();
+        index.SetRenderDataCount(0);
         SeedEllipsis();
     }
 
@@ -1032,9 +1057,16 @@ struct TextLayouter::Impl {
 
 TextLayouter::TextLayouter(FontFace* face, std::shared_ptr<sr::SceneMesh> mesh,
                            TextLayoutStyle style, std::size_t peak_quads)
-    : m_impl(std::make_unique<Impl>(face, std::move(mesh), std::move(style), peak_quads)) {}
+    : m_impl(std::make_unique<Impl>(face, std::move(mesh), std::move(style), peak_quads)) {
+    m_impl->face_users = face->m_impl->layout_users;
+    ++*m_impl->face_users;
+}
 
-TextLayouter::~TextLayouter() = default;
+TextLayouter::~TextLayouter() {
+    // Scene member destruction may release the FontCache before script closures
+    // destroy their layouters. Keep a shared counter independent of face lifetime.
+    --*m_impl->face_users;
+}
 
 float             TextLayouter::TextWidth() const noexcept { return m_impl->last_text_w; }
 float             TextLayouter::TextHeight() const noexcept { return m_impl->last_text_h; }
@@ -1057,7 +1089,11 @@ TextLayoutMetrics TextLayouter::Metrics() const noexcept {
 void TextLayouter::SetFace(FontFace* face) {
     auto& im = *m_impl;
     if (face == nullptr || face == im.face) return;
+    --*im.face_users;
+    im.face_users = face->m_impl->layout_users;
+    ++*im.face_users;
     im.face                 = face;
+    im.layout_dirty         = true;
     im.metrics              = face->Metrics();
     im.missing_glyph_logged = false;
     im.truncate_logged      = false;
@@ -1070,6 +1106,7 @@ void TextLayouter::SetLayoutScale(float scale) {
     if (! std::isfinite(scale) || scale <= 0.0f) return;
     if (im.layout_scale == scale) return;
     im.layout_scale = scale;
+    im.layout_dirty = true;
     SetText(im.current_text);
 }
 
@@ -1077,6 +1114,7 @@ void TextLayouter::SetColor(float r, float g, float b) {
     auto& im = *m_impl;
     if (im.style.color[0] == r && im.style.color[1] == g && im.style.color[2] == b) return;
     im.style.color = { r, g, b };
+    im.layout_dirty = true;
     // Re-run the layout so every glyph quad picks up the new vertex color.
     SetText(im.current_text);
 }
@@ -1085,6 +1123,7 @@ void TextLayouter::SetAlpha(float alpha) {
     auto& im = *m_impl;
     if (im.style.alpha == alpha) return;
     im.style.alpha = alpha;
+    im.layout_dirty = true;
     SetText(im.current_text);
 }
 
@@ -1093,6 +1132,7 @@ void TextLayouter::SetMaxWidth(float max_width) {
     if (! std::isfinite(max_width) || max_width < 0.0f) return;
     if (im.style.max_width == max_width) return;
     im.style.max_width  = max_width;
+    im.layout_dirty      = true;
     im.style.limit_width = max_width > 0.0f;
     im.truncate_logged   = false;
     SetText(im.current_text);
@@ -1171,8 +1211,11 @@ TextGeometry ResolveTextGeometry(const TextGeometryPolicy& policy,
 void TextLayouter::SetText(std::string_view utf8) {
     auto& im = *m_impl;
 
+    if (! im.layout_dirty && im.current_text == utf8) return;
+    // utf8 may alias current_text when a style setter requests a relayout.
     std::string next_text(utf8);
     im.current_text = std::move(next_text);
+    im.layout_dirty = false;
     auto codepoints = DecodeUtf8(im.current_text);
 
     const float ls = im.layout_scale;
@@ -1309,12 +1352,8 @@ void TextLayouter::SetText(std::string_view utf8) {
     im.last_source_center_x = 0.0f;
     im.last_source_center_y = 0.0f;
 
-    // Zero the unused tail so stale data from the previous (longer) text
-    // doesn't show up. Cheaper than tracking exact quad count downstream.
-    std::fill(im.positions.begin(), im.positions.end(), 0.0f);
-    std::fill(im.texcoords.begin(), im.texcoords.end(), 0.0f);
-    std::fill(im.colors.begin(), im.colors.end(), 0.0f);
-    std::fill(im.indices.begin(), im.indices.end(), 0u);
+    // Every active quad is overwritten below. Draw and upload counts exclude
+    // the inactive tail, so shrinking text needs no capacity-sized clear.
 
     auto write_quad = [&](std::size_t                 q_idx,
                           float                       left,
@@ -1344,14 +1383,6 @@ void TextLayouter::SetText(std::string_view utf8) {
             std::memcpy(&im.texcoords[(v_off + k) * 2], uv[k], sizeof(uv[k]));
             std::memcpy(&im.colors[(v_off + k) * 4], rgba.data(), sizeof(float) * 4);
         }
-        std::size_t         i_off = q_idx * 6;
-        const std::uint32_t base  = static_cast<std::uint32_t>(v_off);
-        im.indices[i_off + 0]     = base + 0;
-        im.indices[i_off + 1]     = base + 1;
-        im.indices[i_off + 2]     = base + 2;
-        im.indices[i_off + 3]     = base + 0;
-        im.indices[i_off + 4]     = base + 2;
-        im.indices[i_off + 5]     = base + 3;
     };
 
     float text_top    = +text_h * 0.5f;
@@ -1472,14 +1503,12 @@ void TextLayouter::SetText(std::string_view utf8) {
     // Push into the mesh. Vertex array's stride is interleaved with padding
     // already laid out by SceneVertexArray; SetVertex scatters by name.
     auto& v = im.mesh->GetVertexArray(0);
-    v.SetVertex(WE_IN_POSITION, im.positions);
-    v.SetVertex(WE_IN_TEXCOORD, im.texcoords);
-    v.SetVertex(WE_IN_COLOR, im.colors);
+    v.SetVertex(WE_IN_POSITION, std::span<const float>(im.positions).first(q * 12));
+    v.SetVertex(WE_IN_TEXCOORD, std::span<const float>(im.texcoords).first(q * 8));
+    v.SetVertex(WE_IN_COLOR, std::span<const float>(im.colors).first(q * 16));
+    v.CommitDynamicVertexCount(q * 4);
 
     auto& idx = im.mesh->GetIndexArray(0);
-    idx.Assign(0, im.indices);
-    // Render only the indices we actually populated (rest are zeroed out
-    // and reference vertex 0, which is harmless but wastes draw calls).
     idx.SetRenderDataCount(q * 6);
 
     im.mesh->SetDirty();
@@ -1487,7 +1516,9 @@ void TextLayouter::SetText(std::string_view utf8) {
 
 void TextLayouter::SetHorizontalAlign(std::string_view align) {
     auto& im        = *m_impl;
+    if (im.style.halign == align) return;
     im.style.halign = std::string(align);
+    im.layout_dirty = true;
     SetText(im.current_text);
 }
 

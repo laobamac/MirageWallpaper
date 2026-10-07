@@ -54,9 +54,8 @@ struct DisplayTopologySnapshot: Equatable {
         self.screens = screens.sorted { $0.displayID < $1.displayID }
     }
 
-    static func capture() -> DisplayTopologySnapshot {
-        let mainDisplayID = CGMainDisplayID()
-        let screens = NSScreen.screens.compactMap { screen -> Screen? in
+    static func capture(screens: [NSScreen], mainDisplayID: CGDirectDisplayID) -> DisplayTopologySnapshot {
+        let screens = screens.compactMap { screen -> Screen? in
             guard let number = screen.deviceDescription[
                 NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { return nil }
             let displayID = number.uint32Value
@@ -76,23 +75,62 @@ final class DisplayRegistry {
 
     static let didChangeNotification = Notification.Name("MirageDisplayRegistryDidChange")
 
+    struct Snapshot {
+        let connected: [DisplayInfo]
+        let topology: DisplayTopologySnapshot
+    }
+
+    struct Change {
+        let connected: [DisplayInfo]
+        let topologyChanged: Bool
+
+        static func from(_ notification: Notification) -> Change? {
+            notification.userInfo?["change"] as? Change
+        }
+    }
+
     private let lock = NSLock()
+    private let notificationCenter: NotificationCenter
+    private let captureSnapshot: () -> Snapshot
+    private var lastSnapshot: Snapshot
     private var cachedInfos: [DisplayInfo] = []
     private var cacheValid = false
 
-    private init() {
-        NotificationCenter.default.addObserver(
+    init(notificationCenter: NotificationCenter = .default,
+         captureSnapshot: (() -> Snapshot)? = nil) {
+        self.notificationCenter = notificationCenter
+        let capture = captureSnapshot ?? Self.capture
+        self.captureSnapshot = capture
+        lastSnapshot = capture()
+        cachedInfos = lastSnapshot.connected
+        cacheValid = true
+        notificationCenter.addObserver(
             self, selector: #selector(screenParametersChanged),
             name: NSApplication.didChangeScreenParametersNotification, object: nil)
     }
 
     deinit {
-        NotificationCenter.default.removeObserver(self)
+        notificationCenter.removeObserver(self)
     }
 
     @objc private func screenParametersChanged() {
-        invalidate()
-        NotificationCenter.default.post(name: Self.didChangeNotification, object: self)
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in self?.screenParametersChanged() }
+            return
+        }
+        let snapshot = captureSnapshot()
+        let topologyChanged = snapshot.topology != lastSnapshot.topology
+        // Enumeration order and names still update clients without restarting playback.
+        let infoChanged = snapshot.connected != lastSnapshot.connected
+        lastSnapshot = snapshot
+        lock.lock()
+        cachedInfos = snapshot.connected
+        cacheValid = true
+        lock.unlock()
+        guard topologyChanged || infoChanged else { return }
+        let change = Change(connected: snapshot.connected, topologyChanged: topologyChanged)
+        notificationCenter.post(name: Self.didChangeNotification, object: self,
+                                userInfo: ["change": change])
     }
 
     func invalidate() {
@@ -111,7 +149,7 @@ final class DisplayRegistry {
         }
         lock.unlock()
 
-        let rebuilt = Self.buildInfos()
+        let rebuilt = captureSnapshot().connected
 
         lock.lock()
         cachedInfos = rebuilt
@@ -159,11 +197,17 @@ final class DisplayRegistry {
         info(for: key)?.name ?? L("未连接的显示器")
     }
 
-    private static func buildInfos() -> [DisplayInfo] {
+    private static func capture() -> Snapshot {
+        let screens = NSScreen.screens
         let main = CGMainDisplayID()
+        return Snapshot(connected: buildInfos(screens: screens, mainDisplayID: main),
+                        topology: .capture(screens: screens, mainDisplayID: main))
+    }
+
+    private static func buildInfos(screens: [NSScreen], mainDisplayID: CGDirectDisplayID) -> [DisplayInfo] {
         var seen = Set<DisplayKey>()
         var result: [DisplayInfo] = []
-        for (index, screen) in NSScreen.screens.enumerated() {
+        for (index, screen) in screens.enumerated() {
             guard let number = screen.deviceDescription[
                 NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { continue }
             let displayID = number.uint32Value
@@ -178,7 +222,7 @@ final class DisplayRegistry {
                 index: index,
                 name: screen.localizedName,
                 size: screen.frame.size,
-                isMain: displayID == main))
+                isMain: displayID == mainDisplayID))
         }
         return result
     }

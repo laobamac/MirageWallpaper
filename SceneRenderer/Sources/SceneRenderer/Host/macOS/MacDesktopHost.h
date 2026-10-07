@@ -20,6 +20,7 @@ struct SceneRendererMacDesktopCallbacks {
     void (*mouse_button)(int button, int down, void* userdata);
     void (*mouse_enter)(int entered, void* userdata);
     void (*closed)(void* userdata);
+    void (*redraw_requested)(void* userdata);
     // Fired once, from Metal's drawable-presented callback, after the first
     // real scene frame has reached the presentation path.
     void (*first_frame_presented)(void* userdata);
@@ -45,6 +46,7 @@ void  SceneRendererMacDesktopStop(void* handle);
 void  SceneRendererMacDesktopWake(void* handle);
 void  SceneRendererMacDesktopActivate(void* handle);
 void  SceneRendererMacDesktopDeactivate(void* handle);
+void  SceneRendererMacDesktopSetPaused(void* handle, bool paused);
 bool  SceneRendererMacDesktopPrepareMetalFX(void* handle);
 void  SceneRendererMacDesktopPresentMetalFrame(void* handle, void* texture,
                                                void* command_queue,

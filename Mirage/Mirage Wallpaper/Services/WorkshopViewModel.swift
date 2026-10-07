@@ -175,6 +175,8 @@ class WorkshopViewModel {
     // MARK: - Steam service state
 
     var steamSetupState: SteamSetupState = .checking
+    private(set) var directDownloadMode = false
+    var canUseSteamCommunity: Bool { !directDownloadMode && SteamServiceManager.shared.isLoggedIn }
     var steamServiceStatus = SteamServiceStatus()
     var logoutResultMessage: String?
     var isLoggingOut = false
@@ -255,6 +257,7 @@ class WorkshopViewModel {
     private let subscriptionSearchChanges = CurrentValueSubject<String, Never>("")
     private var serviceStateCancellables = Set<AnyCancellable>()
     private var cancelledDownloadIDs: Set<String> = []
+    private var isSwitchingDownloadMode = false
     private var pendingPresetApplication: (presetID: String, dependencyID: String, selectionGeneration: Int)?
     private var pendingCreatorPresetApplication: (presetID: String, dependencyID: String)?
     private var backgroundAutoApplyIDs: Set<String> = []
@@ -371,12 +374,50 @@ class WorkshopViewModel {
                 self?.refreshSubscriptionFilters()
             }
 
+        DirectWorkshopService.shared.$isEnabled
+            .receive(on: RunLoop.main)
+            .sink { [weak self] enabled in
+                guard let self, self.directDownloadMode != enabled else { return }
+                self.isSwitchingDownloadMode = true
+                self.directDownloadMode = enabled
+                let tasks = self.downloadQueue.filter {
+                    switch $0.state {
+                    case .queued, .resolving, .downloading, .validating: return true
+                    default: return false
+                    }
+                }
+                for task in tasks { self.cancelDownload(task.workshopItem) }
+                self.isSwitchingDownloadMode = false
+                self.commentGeneration += 1
+                self.subscriptionGeneration += 1
+                self.isLoadingSubscriptions = false
+                self.comments = []
+                self.commentsCanPost = false
+                self.commentsItemID = nil
+                self.subscriptionDownloadPlan = nil
+                if enabled {
+                    let wasFilteringFavorites = self.workshopShowOnly.contains(.myFavourites)
+                    self.workshopShowOnly.remove(.myFavourites)
+                    self.workshopFavoriteIDs = []
+                    if wasFilteringFavorites {
+                        self.currentPage = 1
+                        self.search()
+                    }
+                } else {
+                    self.workshopFavoriteIDs = SteamServiceManager.shared.workshopFavoriteIDs
+                    SteamServiceManager.shared.restoreSessionIfNeeded()
+                }
+                self.refreshSetupState()
+                if let item = self.selectedItem { self.prepareWorkshopInteractions(for: item) }
+            }
+            .store(in: &serviceStateCancellables)
+
         SteamServiceManager.shared.$isLoggedIn
             .receive(on: RunLoop.main)
             .sink { [weak self] isLoggedIn in
                 guard let self else { return }
                 self.refreshSetupState()
-                guard isLoggedIn else { return }
+                guard isLoggedIn, !self.directDownloadMode else { return }
                 self.processDownloadQueue()
                 if let item = self.selectedItem {
                     self.refreshSubscriptionStates(for: [item])
@@ -389,7 +430,7 @@ class WorkshopViewModel {
             .receive(on: RunLoop.main)
             .sink { [weak self] favoriteIDs in
                 guard let self else { return }
-                self.workshopFavoriteIDs = favoriteIDs
+                self.workshopFavoriteIDs = self.directDownloadMode ? [] : favoriteIDs
                 if self.workshopShowOnly.contains(.myFavourites) {
                     self.currentPage = 1
                     self.search()
@@ -600,6 +641,11 @@ class WorkshopViewModel {
     }
 
     private func refreshSetupState() {
+        if DirectWorkshopService.shared.isReady {
+            steamSetupState = .ready
+            steamServiceStatus.workshopDownload = .available(L("免登录下载已开启"))
+            return
+        }
         let manager = SteamServiceManager.shared
         steamSetupState = Self.resolveSteamSetupState(
             isAvailable: manager.isAvailable,
@@ -632,6 +678,7 @@ class WorkshopViewModel {
     }
 
     private func openSteamSetupIfActionable() {
+        guard !directDownloadMode else { return }
         if steamSetupState == .needsLogin || steamSetupState == .serviceUnavailable {
             AppDelegate.shared.openSteamSetup()
         }
@@ -658,7 +705,7 @@ class WorkshopViewModel {
         let requestMiscResolution = miscResolution
         let requestTrendPeriod = trendPeriod
         let requestPage = currentPage
-        if requestShowOnly.contains(.myFavourites), !SteamServiceManager.shared.isLoggedIn {
+        if requestShowOnly.contains(.myFavourites), !canUseSteamCommunity {
             items = []
             totalItems = 0
             isLoading = false
@@ -1241,6 +1288,7 @@ class WorkshopViewModel {
     }
 
     func setWorkshopShowOnly(_ option: FRShowOnly, isOn: Bool) {
+        if isOn && option == .myFavourites && directDownloadMode { return }
         if isOn {
             workshopShowOnly.insert(option)
         } else {
@@ -1283,7 +1331,7 @@ class WorkshopViewModel {
     }
 
     func refreshSubscriptions(startIndex: Int? = nil) {
-        guard SteamServiceManager.shared.isLoggedIn else {
+        guard canUseSteamCommunity else {
             subscriptionRecords = []
             subscriptionCatalogItems = []
             subscriptionItems = []
@@ -1477,8 +1525,8 @@ class WorkshopViewModel {
     }
 
     func downloadAllSubscriptions() {
-        guard SteamServiceManager.shared.isLoggedIn, !isPreparingSubscriptionDownloads else {
-            if !SteamServiceManager.shared.isLoggedIn { openSteamSetupIfActionable() }
+        guard canUseSteamCommunity, !isPreparingSubscriptionDownloads else {
+            if !canUseSteamCommunity { openSteamSetupIfActionable() }
             return
         }
         isPreparingSubscriptionDownloads = true
@@ -1507,6 +1555,7 @@ class WorkshopViewModel {
                     loaded = try await self.loadSubscriptionItems(for: allRecords)
                     subscriptionCount = total == Int.max ? allRecords.count : total
                 }
+                guard self.canUseSteamCommunity else { return }
                 let activeIDs = Set(self.downloadQueue.compactMap { task -> String? in
                     switch task.state {
                     case .queued, .resolving, .downloading, .validating:
@@ -1534,6 +1583,7 @@ class WorkshopViewModel {
     }
 
     func confirmSubscriptionDownloads() {
+        guard canUseSteamCommunity else { subscriptionDownloadPlan = nil; return }
         guard let plan = subscriptionDownloadPlan else { return }
         subscriptionDownloadPlan = nil
         for item in plan.items {
@@ -1571,6 +1621,7 @@ class WorkshopViewModel {
     }
 
     func toggleWorkshopFavorite(workshopId: String) {
+        guard !directDownloadMode else { return }
         guard steamSetupState == .ready else {
             openSteamSetupIfActionable()
             return
@@ -1598,7 +1649,7 @@ class WorkshopViewModel {
     }
 
     func refreshSubscriptionStates(for items: [WorkshopItem]) {
-        guard SteamServiceManager.shared.isLoggedIn else { return }
+        guard canUseSteamCommunity else { return }
         let ids = Set(items.map(\.publishedFileId)).filter {
             !$0.isEmpty && !checkingSubscriptionIDs.contains($0) && !changingSubscriptionIDs.contains($0)
         }
@@ -1611,6 +1662,7 @@ class WorkshopViewModel {
         SteamServiceManager.shared.fetchSubscriptionStates(workshopIds: Array(ids)) { [weak self] result in
             guard let self else { return }
             self.checkingSubscriptionIDs.subtract(ids)
+            guard self.canUseSteamCommunity else { return }
             switch result {
             case .success(let states):
                 for id in ids {
@@ -1629,6 +1681,7 @@ class WorkshopViewModel {
     }
 
     func subscribe(_ item: WorkshopItem) {
+        guard !directDownloadMode else { return }
         guard steamSetupState == .ready else {
             openSteamSetupIfActionable()
             return
@@ -1658,6 +1711,7 @@ class WorkshopViewModel {
     }
 
     func unsubscribe(_ item: WorkshopItem) {
+        guard !directDownloadMode else { return }
         let id = item.publishedFileId
         guard steamSetupState == .ready, !changingSubscriptionIDs.contains(id) else {
             if steamSetupState != .ready { openSteamSetupIfActionable() }
@@ -1691,6 +1745,7 @@ class WorkshopViewModel {
     }
 
     func prepareWorkshopInteractions(for item: WorkshopItem) {
+        guard !directDownloadMode else { return }
         refreshSubscriptionStates(for: [item])
         if commentsItemID != item.publishedFileId {
             loadComments(for: item, startIndex: 0)
@@ -1700,7 +1755,7 @@ class WorkshopViewModel {
     func loadComments(for item: WorkshopItem, startIndex: Int = 0) {
         commentAuthorTask?.cancel()
         commentGeneration += 1
-        guard SteamServiceManager.shared.isLoggedIn else {
+        guard canUseSteamCommunity else {
             comments = []
             commentsTotal = 0
             commentsStartIndex = 0
@@ -1811,6 +1866,7 @@ class WorkshopViewModel {
     }
 
     func postComment(for item: WorkshopItem) {
+        guard canUseSteamCommunity else { return }
         let text = commentDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, commentsCanPost, !isPostingComment else { return }
         isPostingComment = true
@@ -2016,7 +2072,7 @@ class WorkshopViewModel {
     }
 
     private func processDownloadQueue() {
-        guard steamSetupState == .ready else { return }
+        guard steamSetupState == .ready, !isSwitchingDownloadMode else { return }
         let maxConcurrent = 3
         var currentActive = downloadQueue.filter {
             if case .downloading = $0.state { return true }
@@ -2075,7 +2131,7 @@ class WorkshopViewModel {
                     )
                 } else if case .failed = state {
                     self.steamServiceStatus.workshopDownload = .unavailable(L("最近一次下载失败"))
-                    if SteamServiceManager.shared.isLoggedIn {
+                    if self.steamSetupState == .ready {
                         self.processDownloadQueue()
                     }
                 } else if case .resolving = state {

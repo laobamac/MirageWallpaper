@@ -347,6 +347,9 @@ private:
     // multi-pass nodes (e.g. puppet with mask pre-pass + clipped-main)
     // advancing animation N× per frame.
     double m_last_elapsed { -1.0 };
+    std::optional<double>        m_pose_time;
+    std::vector<Eigen::Affine3f> m_pose;
+    std::vector<float>           m_pose_alphas;
 
     AnimationHandle           m_next_animation_handle { 1 };
     std::vector<AnimationHandle> m_animation_order;

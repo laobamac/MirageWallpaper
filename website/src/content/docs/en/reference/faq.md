@@ -72,3 +72,7 @@ It automatically checks for and downloads updates through Sparkle. You can turn 
 ### Does the screen saver require Mirage to be running?
 
 No. The screen saver component is copied to `~/Library/Screen Savers` and runs independently. See [Screen Saver](/en/screensaver/overview/) for details.
+
+### Which systems support dynamic lock screen?
+
+Scheme A requires macOS 26 or later, and Scheme B requires macOS 14.2 or later. Both are experimental, support video and scene wallpapers only, and may stop working after a macOS update.

@@ -383,6 +383,7 @@ WPPuppet::Animation::getInterpolationInfo(double* cur_time) const {
 }
 
 void WPPuppetLayer::prepared(std::span<AnimationLayer> alayers) {
+    m_pose_time.reset();
     m_layers.clear();
     m_animation_order.clear();
     m_layers.reserve(alayers.size());
@@ -431,6 +432,8 @@ void WPPuppetLayer::prepared(std::span<AnimationLayer> alayers) {
 }
 
 WPPuppetLayer::Layer* WPPuppetLayer::findAnimation(AnimationHandle handle) noexcept {
+    // All animation mutation APIs resolve through this non-const overload.
+    m_pose_time.reset();
     auto it = std::find_if(m_layers.begin(), m_layers.end(), [handle](const auto& layer) {
         return layer.handle == handle;
     });
@@ -538,6 +541,7 @@ bool WPPuppetLayer::setAnimationVisible(AnimationHandle handle, bool visible) no
 }
 
 void WPPuppetLayer::applyUserProperty(std::string_view key, const sr::Json& property) noexcept {
+    m_pose_time.reset();
     const auto& value = UserPropertyPayload(property);
     for (auto& layer : m_layers) {
         auto& binding = layer.anim_layer;
@@ -608,13 +612,17 @@ bool WPPuppetLayer::stopAnimation(AnimationHandle handle) noexcept {
 }
 
 std::span<const Eigen::Affine3f> WPPuppetLayer::genFrame(double time) noexcept {
-    return m_puppet->genFrame(*this, time);
+    if (! m_puppet) return {};
+    if (m_pose_time && *m_pose_time == time) return m_pose;
+    const auto pose = m_puppet->genFrame(*this, time);
+    m_pose.assign(pose.begin(), pose.end());
+    const auto alphas = m_puppet->boneAlphas();
+    m_pose_alphas.assign(alphas.begin(), alphas.end());
+    m_pose_time = time;
+    return m_pose;
 }
 
-std::span<const float> WPPuppetLayer::boneAlphas() const noexcept {
-    if (! m_puppet) return {};
-    return m_puppet->boneAlphas();
-}
+std::span<const float> WPPuppetLayer::boneAlphas() const noexcept { return m_pose_alphas; }
 
 uint32_t WPPuppetLayer::boneIndex(std::string_view name) const noexcept {
     if (! m_puppet) return 0;
@@ -644,6 +652,7 @@ std::optional<Eigen::Affine3f> WPPuppetLayer::attachmentTransform(std::size_t in
 }
 
 void WPPuppetLayer::updateInterpolation(double elapsed) noexcept {
+    m_pose_time.reset();
     double delta   = (m_last_elapsed < 0.0) ? 0.0 : (elapsed - m_last_elapsed);
     bool   advance = (m_last_elapsed < 0.0) || (delta > 0.0);
     if (advance) m_last_elapsed = elapsed;

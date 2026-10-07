@@ -23,5 +23,7 @@ struct SpectrumSnapshot {
 void ingest(const float* src, std::uint32_t n_frames, std::uint32_t channels,
             std::uint32_t sample_rate);
 bool snapshot(SpectrumSnapshot& out);
+void subscribe();
+void unsubscribe();
 
 } // namespace wavsen::audio::loopback

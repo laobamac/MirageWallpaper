@@ -3,7 +3,7 @@ title: Performance and Playback Strategy
 description: Configure power-saving playback rules and scene render quality to balance visuals against power consumption.
 ---
 
-The "Performance" section has two parts: **playback rules** (automatically adjusting playback in specific situations) and **render quality**.
+The "Performance" section controls playback rules, render quality, preview animation, and video output.
 
 ![Mirage performance settings with playback rules and render quality controls](/images/docs/settings-performance.webp)
 
@@ -20,6 +20,7 @@ Mirage continuously monitors system state and automatically changes wallpaper pl
 | Another app plays audio | Keep running / Mute / Pause |
 | Display goes to sleep | Keep running / Pause / Stop (free memory) |
 | Laptop runs on battery | Keep running / Pause / Stop (free memory) |
+| A window covers more than the threshold | Pause when enabled; threshold 1%–100% |
 
 What the actions mean:
 
@@ -44,6 +45,13 @@ The quality options mainly affect **scene wallpapers** (SceneWallpaper).
 
 A row of preset buttons applies a whole set of quality parameters in one click: **Low / Medium / High / Ultra**. They simultaneously adjust anti-aliasing, post-processing, texture resolution, reflections, and frame rate. After choosing a preset you can still fine-tune the individual options below.
 
+### Other render controls
+
+- **Render resolution**: native, 75% automatic, or 50% high performance.
+- **MetalFX (scene wallpapers)**: enable MetalFX upscaling where supported.
+- **Wallpaper loading**: load from disk for lower memory use, or memory to reduce disk reads during playback.
+- **Animated previews**: play on hover or keep visible previews playing.
+
 ### Anti-aliasing
 
 - Off
@@ -64,9 +72,12 @@ For most live wallpapers, 30 FPS is smooth enough and more power-efficient.
 
 ### Audio spectrum
 
-"Enable audio spectrum (web wallpapers)" controls whether audio spectrum data is provided to web wallpapers for audio visualization.
+"Enable audio spectrum (scene and web wallpapers)" controls whether audio spectrum data is provided to those renderers for audio visualization.
+
+## Video
+
+**Enable HDR video** asks the video renderer to use HDR dynamic range when the source, display, and macOS support it.
 
 ## Related settings
 
 - Global volume and global mute are in [General and audio settings](/en/settings/general/).
-- More advanced options like process priority, pausing when VRAM is exhausted, and restarting after a crash are in the advanced options of Settings.

@@ -79,11 +79,18 @@ option(SCENERENDERER_BUILD_WALLPAPER_HOST "Build the native macOS desktop wallpa
 if(SCENERENDERER_BUILD_ENGINE AND APPLE AND SCENERENDERER_BUILD_WALLPAPER_HOST)
     add_subdirectory(Tools/SceneWallpaper)
     add_subdirectory(Tools/SceneScreenSaver)
+    add_subdirectory(Tools/SceneBaker)
 endif()
 
 option(SCENERENDERER_BUILD_TESTS "Build SceneRenderer regression tests" OFF)
 if(SCENERENDERER_BUILD_ENGINE AND SCENERENDERER_BUILD_TESTS)
     enable_testing()
+    add_executable(SceneRendererPerformanceTests Tests/PerformanceRegression.cpp
+        Tools/SceneWallpaper/ControlChannel.cpp)
+    target_link_libraries(SceneRendererPerformanceTests PRIVATE SceneRenderer::Engine)
+    set_property(TARGET SceneRendererPerformanceTests PROPERTY CXX_SCAN_FOR_MODULES ON)
+    add_test(NAME SceneRendererPerformance COMMAND SceneRendererPerformanceTests)
+    set_tests_properties(SceneRendererPerformance PROPERTIES TIMEOUT 30)
     add_executable(SceneRendererTextGeometryTests Tests/TextGeometryRegression.cpp)
     target_link_libraries(SceneRendererTextGeometryTests PRIVATE SceneRenderer::Import)
     set_property(TARGET SceneRendererTextGeometryTests PROPERTY CXX_SCAN_FOR_MODULES ON)

@@ -3,7 +3,7 @@ title: Wallpaper library
 description: Browse, search, sort, filter, and favorite your live wallpapers in the "Installed" tab.
 ---
 
-The "Installed" tab is your local wallpaper library, showing every wallpaper you've imported or downloaded.
+The "Installed" tab is your local wallpaper library, showing every wallpaper you've imported or downloaded. The "Subscribed" tab separately lists the Wallpaper Engine items associated with your Steam account.
 
 ![The Mirage wallpaper library](/images/docs/library-overview.webp)
 
@@ -52,5 +52,7 @@ The library brings together works from different sources:
 - [Content downloaded from the Steam Workshop](/en/workshop/download/)
 
 For where each source is actually stored, see [Data directories](/en/advanced/data-directories/).
+
+The **Subscribed** tab requires Steam sign-in. It can search the subscription list, filter downloaded status, and queue missing items; it does not replace the installed library until an item has been downloaded.
 
 Once you've picked a wallpaper, head to [Apply wallpaper](/en/wallpapers/apply/) to set it as your desktop wallpaper.

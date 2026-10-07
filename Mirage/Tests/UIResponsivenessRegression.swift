@@ -5,7 +5,9 @@
 //
 
 import AppKit
+import AVFoundation
 import Combine
+import CoreAudio
 import ImageIO
 import Observation
 import UniformTypeIdentifiers
@@ -19,10 +21,77 @@ private final class Locked<Value>: @unchecked Sendable {
     private let lock = NSLock()
     private var value: Value
     init(_ value: Value) { self.value = value }
-    func access<T>(_ body: (inout Value) -> T) -> T {
+    func access<T>(_ body: (inout Value) throws -> T) rethrows -> T {
         lock.lock()
         defer { lock.unlock() }
-        return body(&value)
+        return try body(&value)
+    }
+}
+
+private final class PlaybackAudioHardwareProbe {
+    typealias Monitor = PlaybackAudioMonitor
+    struct State {
+        var sources: [AudioObjectID: Monitor.ProcessActivity] = [:]
+        var failList = false
+        var failedProcesses: Set<AudioObjectID> = []
+        var failListeners = false
+        var listeners: [Monitor.Property: (DispatchQueue, AudioObjectPropertyListenerBlock)] = [:]
+        var registrations = 0
+        var queries = 0
+        var transitions: [Bool] = []
+        var logs: [String] = []
+        var excludedPIDs: Set<pid_t> = [100]
+    }
+    let state = Locked(State())
+
+    var backend: Monitor.Backend {
+        Monitor.Backend(
+            processIDs: { [self] in
+                try state.access {
+                    $0.queries += 1
+                    if $0.failList { throw RegressionFailure(description: "process-list-unavailable") }
+                    return Array($0.sources.keys)
+                }
+            },
+            activity: { [self] object in
+                try state.access {
+                    if $0.failedProcesses.contains(object) {
+                        throw RegressionFailure(description: "process-unavailable")
+                    }
+                    guard let source = $0.sources[object] else {
+                        throw RegressionFailure(description: "process-exited")
+                    }
+                    return source
+                }
+            },
+            addListener: { [self] property, queue, block in
+                state.access {
+                    if $0.failListeners { return kAudioHardwareUnspecifiedError }
+                    $0.listeners[property] = (queue, block)
+                    $0.registrations += 1
+                    return noErr
+                }
+            },
+            removeListener: { [self] property, _, _ in
+                state.access { $0.listeners[property] = nil }
+            })
+    }
+
+    func notify(_ object: AudioObjectID = AudioObjectID(kAudioObjectSystemObject),
+                selector: AudioObjectPropertySelector = kAudioHardwarePropertyProcessObjectList) {
+        let property = Monitor.Property(object: object, selector: selector)
+        guard let (queue, block) = state.access({ $0.listeners[property] }) else { return }
+        queue.async {
+            var address = property.address
+            withUnsafePointer(to: &address) { block(1, $0) }
+        }
+    }
+
+    func monitor(initiallyActive: Bool = false) -> Monitor {
+        Monitor(initiallyActive: initiallyActive, backend: backend,
+                excludedPIDs: { [self] in state.access { $0.excludedPIDs } },
+                log: { [self] message in state.access { $0.logs.append(message) } },
+                onChange: { [self] active in state.access { $0.transitions.append(active) } })
     }
 }
 
@@ -135,9 +204,26 @@ private struct UIResponsivenessRegression {
             NSApplication.shared.setActivationPolicy(.accessory)
             NSApplication.shared.finishLaunching()
             try testDisplayTopologySnapshots()
+            try testDisplayRegistryChanges()
+            if CommandLine.arguments.contains("--display-topology") {
+                print("DisplayTopologyRegression: all checks passed")
+                return
+            }
+            if CommandLine.arguments.contains("--wallpaper-runtime") {
+                ImageProtocol.imageData = try pngData(color: .green)
+                try await testConfiguration()
+                try await testLockScreenDeployment()
+                try testWallpaperRuntimeSnapshots()
+                print("WallpaperRuntimeRegression: all checks passed")
+                return
+            }
             if CommandLine.arguments.contains("--playback-policy") {
+                try testAudioActivityState()
+                try await testAudioMonitoring()
+                try await testNativeAudioMonitoring()
                 try testPlaybackPolicyEvaluation()
                 try testPlaybackPolicyInputs()
+                try testFullscreenPlaybackPolicy()
                 try await testPlaybackPolicySynchronization()
                 print("PlaybackPolicyRegression: all checks passed")
                 return
@@ -164,11 +250,16 @@ private struct UIResponsivenessRegression {
             try testObservation()
             try await testImages()
             try await testConfiguration()
+            try testWallpaperRuntimeSnapshots()
             try await testLockScreenDeployment()
             try await testRenderers()
             try await testLogs()
+            try testAudioActivityState()
+            try await testAudioMonitoring()
+            try await testNativeAudioMonitoring()
             try testPlaybackPolicyEvaluation()
             try testPlaybackPolicyInputs()
+            try testFullscreenPlaybackPolicy()
             try await testPlaybackPolicySynchronization()
             print("UIResponsivenessRegression: all checks passed")
         } catch {
@@ -207,6 +298,246 @@ private struct UIResponsivenessRegression {
                         "A meaningful display topology change was ignored")
         }
         print("PASS: unchanged display topology filtering and meaningful change detection")
+    }
+
+    static func testDisplayRegistryChanges() throws {
+        typealias Screen = DisplayTopologySnapshot.Screen
+        let main = Screen(displayID: 1, frame: CGRect(x: 0, y: 0, width: 1728, height: 1117),
+                          backingScaleFactor: 2, maximumFramesPerSecond: 60, isMain: true)
+        let secondary = Screen(displayID: 2, frame: CGRect(x: 1728, y: 0, width: 2560, height: 1440),
+                               backingScaleFactor: 1, maximumFramesPerSecond: 144, isMain: false)
+        func snapshot(_ screens: [Screen]) -> DisplayRegistry.Snapshot {
+            let infos = screens.enumerated().map { index, screen in
+                DisplayInfo(key: DisplayKey(rawValue: "test:\(screen.displayID)"),
+                            displayID: screen.displayID, index: index, name: "Test display",
+                            size: screen.frame.size, isMain: screen.isMain)
+            }
+            return .init(connected: infos, topology: .init(screens: screens))
+        }
+        var current = snapshot([main, secondary])
+        let center = NotificationCenter()
+        let registry = DisplayRegistry(notificationCenter: center, captureSnapshot: { current })
+        var changes: [DisplayRegistry.Change] = []
+        let observer = center.addObserver(forName: DisplayRegistry.didChangeNotification,
+                                          object: registry, queue: .main) { notification in
+            if let change = DisplayRegistry.Change.from(notification) { changes.append(change) }
+        }
+        defer { center.removeObserver(observer) }
+        func notify() {
+            center.post(name: NSApplication.didChangeScreenParametersNotification, object: nil)
+        }
+        for _ in 0..<100 { notify() }
+        try require(changes.isEmpty, "Unchanged screen notifications reached registry clients")
+
+        registry.invalidate()
+        current = snapshot([secondary, main])
+        notify()
+        try require(changes.count == 1 && !changes[0].topologyChanged,
+                    "An enumeration-only change forced playback recovery")
+        try require(changes[0].connected == registry.connected &&
+                    registry.key(forScreenIndex: 0) == DisplayKey(rawValue: "test:2"),
+                    "Clients received stale display index mappings")
+        notify()
+        try require(changes.count == 1, "Repeated mapping notifications were not coalesced")
+
+        let moved = Screen(displayID: 2, frame: CGRect(x: -2560, y: 0, width: 2560, height: 1440),
+                           backingScaleFactor: 1, maximumFramesPerSecond: 144, isMain: false)
+        let resized = Screen(displayID: 2, frame: CGRect(x: 1728, y: 0, width: 1920, height: 1080),
+                             backingScaleFactor: 1, maximumFramesPerSecond: 144, isMain: false)
+        let replaced = Screen(displayID: 3, frame: secondary.frame,
+                              backingScaleFactor: 1, maximumFramesPerSecond: 144, isMain: false)
+        for screens in [[main, moved], [main, resized], [main, replaced], [main], []] {
+            current = snapshot(screens)
+            notify()
+            try require(changes.last?.topologyChanged == true && changes.last?.connected == current.connected,
+                        "Hotplug, resolution or arrangement recovery lost the shared snapshot")
+        }
+        print("PASS: registry no-op filtering, enumeration mapping updates and shared hotplug snapshots")
+    }
+
+    static func testAudioActivityState() throws {
+        typealias Monitor = PlaybackAudioMonitor
+        var state = Monitor.ActivityState()
+        _ = state.update(false, at: 0)
+        _ = state.update(true, at: 1)
+        _ = state.update(false, at: 1.2)
+        try require(!state.isActive, "A brief system sound interrupted playback")
+        _ = state.update(true, at: 2)
+        _ = state.update(false, at: 2.3)
+        _ = state.update(true, at: 2.4)
+        _ = state.update(true, at: 2.8)
+        try require(!state.isActive, "Separate audio pulses accumulated into a playback interruption")
+        _ = state.update(true, at: 2.91)
+        try require(state.isActive, "Sustained external output did not activate the rule")
+        _ = state.update(false, at: 3)
+        _ = state.update(true, at: 4)
+        try require(state.isActive, "A short gap between tracks resumed the wallpaper")
+        _ = state.update(false, at: 5)
+        _ = state.update(false, at: 6.49)
+        try require(state.isActive, "The audio rule released before the recovery interval")
+        _ = state.update(false, at: 6.5)
+        try require(!state.isActive, "Stopped external audio left the wallpaper paused")
+
+        state = Monitor.ActivityState(isActive: true)
+        _ = state.update(nil, at: 10)
+        _ = state.update(nil, at: 14.99)
+        try require(state.isActive, "An unavailable audio sample immediately released the rule")
+        _ = state.update(true, at: 15)
+        _ = state.update(nil, at: 20)
+        try require(state.isActive, "A recovered read did not reset the error grace period")
+        _ = state.update(nil, at: 25)
+        try require(!state.isActive, "Persistent audio errors permanently paused the wallpaper")
+        _ = state.update(true, at: 26)
+        _ = state.update(true, at: 26.5)
+        try require(state.isActive, "Audio detection did not recover after a persistent read failure")
+        state = Monitor.ActivityState()
+        _ = state.update(true, at: 0)
+        _ = state.update(nil, at: 0.4)
+        _ = state.update(true, at: 0.6)
+        try require(!state.isActive, "Unknown samples were counted toward confirmed activity")
+
+        let speechPath = "/System/Library/PrivateFrameworks/CoreSpeech.framework/corespeechd"
+        let speech = Monitor.ProcessActivity(pid: 610, bundleID: "com.apple.CoreSpeech",
+                                             executablePath: speechPath, output: true, input: true)
+        try require(speech.exclusionReason(excludedPIDs: []) == "speech-listener",
+                    "The verified CoreSpeech listener was treated as external playback")
+        var restarted = speech
+        restarted.pid = 9123
+        restarted.bundleID = ""
+        try require(restarted.exclusionReason(excludedPIDs: []) == "speech-listener",
+                    "Speech filtering depended on a transient PID or bundle identifier")
+        var unrelated = speech
+        unrelated.executablePath = "/Applications/Player.app/Contents/MacOS/corespeechd"
+        try require(unrelated.exclusionReason(excludedPIDs: []) == nil,
+                    "A process basename or framework bundle ID was enough to exclude an application")
+        for path in ["/usr/sbin/systemsoundserverd", "/usr/libexec/audiomxd"] {
+            var sound = Monitor.ProcessActivity(pid: 700, executablePath: path, output: true)
+            try require(sound.exclusionReason(excludedPIDs: []) == "system-sound",
+                        "A system sound service was treated as application playback")
+            sound.pid = 9700
+            try require(sound.exclusionReason(excludedPIDs: []) == "system-sound",
+                        "System sound filtering stopped working after a process restart")
+            sound.executablePath = "/Applications/Player.app/Contents/MacOS/" + URL(fileURLWithPath: path).lastPathComponent
+            try require(sound.exclusionReason(excludedPIDs: []) == nil,
+                        "System sound filtering matched an unrelated executable with the same name")
+        }
+        let audioServer = Monitor.ProcessActivity(pid: 800, executablePath: "/usr/sbin/coreaudiod", output: true)
+        try require(audioServer.exclusionReason(excludedPIDs: []) == nil,
+                    "System sound filtering excluded the general CoreAudio server")
+        let call = Monitor.ProcessActivity(pid: 300, bundleID: "com.apple.avconferenced", output: true, input: true)
+        try require(call.exclusionReason(excludedPIDs: []) == nil,
+                    "A voice call was ignored because it also uses the microphone")
+        try require(call.exclusionReason(excludedPIDs: [300]) == "mirage", "A renderer PID was not excluded")
+        let web = Monitor.ProcessActivity(pid: 400, bundleID: "com.apple.WebKit.GPU", name: "WebWallpaper Graphics and Media", output: true)
+        try require(web.exclusionReason(excludedPIDs: []) == "web-wallpaper", "A web wallpaper counted its own audio")
+        var browser = web
+        browser.name = "Safari Graphics and Media"
+        try require(browser.exclusionReason(excludedPIDs: []) == nil, "Ordinary browser audio was ignored")
+        print("PASS: audio source identity, confirmation, recovery, input/output calls and bounded read failures")
+    }
+
+    static func testAudioMonitoring() async throws {
+        typealias Monitor = PlaybackAudioMonitor
+        let probe = PlaybackAudioHardwareProbe()
+        probe.state.access {
+            $0.sources = [
+                10: Monitor.ProcessActivity(pid: 100, output: true),
+                11: Monitor.ProcessActivity(pid: 610, bundleID: "com.apple.CoreSpeech",
+                    executablePath: "/System/Library/PrivateFrameworks/CoreSpeech.framework/corespeechd", output: true, input: true),
+                12: Monitor.ProcessActivity(pid: 300, bundleID: "org.example.recorder", input: true),
+                15: Monitor.ProcessActivity(pid: 700, executablePath: "/usr/sbin/systemsoundserverd", output: true),
+                16: Monitor.ProcessActivity(pid: 701, executablePath: "/usr/libexec/audiomxd", output: true)
+            ]
+        }
+        let monitor = probe.monitor()
+        monitor.start()
+        defer { monitor.stop() }
+        try await waitUntil("Audio listeners and initial sample") { probe.state.access { $0.listeners.count == 7 && !$0.logs.isEmpty } }
+        try await Task.sleep(for: .milliseconds(750))
+        try require(probe.state.access { $0.transitions.isEmpty }, "Speech, input-only or wallpaper audio triggered the rule")
+        try require(probe.state.access { $0.logs.contains { $0.contains("speech-listener") } }, "Filtered audio sources were not diagnosed")
+        try require(probe.state.access { $0.logs.contains { $0.contains("system-sound") } },
+                    "System sound output lasting beyond the confirmation window was not filtered")
+
+        probe.state.access { $0.sources[13] = Monitor.ProcessActivity(pid: 400, bundleID: "org.example.player", output: true) }
+        probe.notify()
+        try await waitUntil("External audio onset from process notification", timeout: 1.5) {
+            probe.state.access { $0.transitions == [true] }
+        }
+        probe.state.access { $0.failedProcesses = [13] }
+        probe.notify(13, selector: kAudioProcessPropertyIsRunningOutput)
+        try await waitUntil("Read error diagnostic") { probe.state.access { $0.logs.last?.contains("raw=unknown") == true } }
+        try require(probe.state.access { $0.transitions == [true] }, "A process read failure resumed the wallpaper")
+        probe.state.access { $0.failedProcesses = []; $0.sources[13]?.output = false }
+        probe.notify(13, selector: kAudioProcessPropertyIsRunningOutput)
+        try await waitUntil("Stopped audio recovery", timeout: 2) { probe.state.access { $0.transitions == [true, false] } }
+        let registrations = probe.state.access { $0.registrations }
+        probe.notify(selector: kAudioHardwarePropertyServiceRestarted)
+        try await waitUntil("Audio server restart listener recovery") { probe.state.access { $0.registrations > registrations + 2 } }
+        probe.state.access { $0.sources[13] = nil }
+        probe.notify()
+        try await waitUntil("Exited process listener removal") {
+            probe.state.access { !$0.listeners.keys.contains { $0.object == 13 } }
+        }
+        probe.state.access { $0.sources[14] = Monitor.ProcessActivity(pid: 500, output: true); $0.excludedPIDs.insert(500) }
+        probe.notify()
+        try await waitUntil("New renderer PID exclusion") { probe.state.access { $0.logs.last?.contains("pid=500") == true } }
+        try require(probe.state.access { $0.transitions == [true, false] }, "A new renderer triggered the audio rule")
+        monitor.stop()
+        try await waitUntil("Listener cleanup on stop") { probe.state.access { $0.listeners.isEmpty } }
+        let stoppedQueries = probe.state.access { $0.queries }
+        try await Task.sleep(for: .milliseconds(550))
+        try require(probe.state.access { $0.queries == stoppedQueries }, "Stopped monitoring retained scheduled samples")
+
+        let fallback = PlaybackAudioHardwareProbe()
+        fallback.state.access { $0.failListeners = true }
+        let fallbackMonitor = fallback.monitor()
+        fallbackMonitor.start()
+        defer { fallbackMonitor.stop() }
+        try await waitUntil("Initial polling sample") { fallback.state.access { $0.queries > 0 } }
+        fallback.state.access { $0.sources[20] = Monitor.ProcessActivity(pid: 600, output: true) }
+        try await waitUntil("Polling fallback after listener failure", timeout: 3.5) { fallback.state.access { $0.transitions == [true] } }
+        fallback.state.access { $0.failList = true }
+        try await waitUntil("Process list failure", timeout: 3) { fallback.state.access { $0.logs.last?.contains("raw=unknown") == true } }
+        try require(fallback.state.access { $0.transitions == [true] }, "A process-list failure was treated as no audio")
+        fallbackMonitor.stop()
+        print("PASS: event-driven audio monitoring, process churn, restart recovery, polling fallback and cleanup")
+    }
+
+    static func testNativeAudioMonitoring() async throws {
+        typealias Monitor = PlaybackAudioMonitor
+        let native = Monitor.Backend()
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+        let transitions = Locked([Bool]())
+        var backend = native
+        backend.activity = { object in
+            let activity = try native.activity(object)
+            return activity.pid == ownPID ? activity : Monitor.ProcessActivity()
+        }
+        let monitor = Monitor(backend: backend, excludedPIDs: { [] }, log: { _ in },
+                              onChange: { active in transitions.access { $0.append(active) } })
+        monitor.start()
+        defer { monitor.stop() }
+        let engine = AVAudioEngine()
+        let player = AVAudioPlayerNode()
+        let format = AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 2)!
+        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4096)!
+        buffer.frameLength = buffer.frameCapacity
+        for channel in 0..<Int(format.channelCount) {
+            buffer.floatChannelData![channel].update(repeating: 0, count: Int(buffer.frameLength))
+        }
+        engine.attach(player)
+        engine.connect(player, to: engine.mainMixerNode, format: format)
+        engine.mainMixerNode.outputVolume = 0
+        player.scheduleBuffer(buffer, at: nil, options: .loops, completionHandler: nil)
+        try engine.start()
+        defer { engine.stop() }
+        player.play()
+        try await waitUntil("Native CoreAudio output detection", timeout: 4) { transitions.access { $0 == [true] } }
+        player.stop()
+        engine.stop()
+        try await waitUntil("Native CoreAudio output release", timeout: 4) { transitions.access { $0 == [true, false] } }
+        print("PASS: native CoreAudio process enumeration, output transitions and listener callbacks")
     }
 
     static func testPlaybackPolicyEvaluation() throws {
@@ -260,7 +591,7 @@ private struct UIResponsivenessRegression {
         defer { settingsModel.settings = saved }
         var windowQueries = 0
         var probes = GlobalSettingsViewModel.PolicyProbes(
-            onBattery: { true }, otherAppPlayingAudio: { _, _ in true }, displayAsleep: { _ in true },
+            onBattery: { true }, displayAsleep: { _ in true },
             windows: { windowQueries += 1; return [] })
         for rule in 0..<3 {
             var settings = GlobalSettings()
@@ -271,7 +602,8 @@ private struct UIResponsivenessRegression {
             default: settings.otherApplicationPlayingAudio = .mute; expected = .mute
             }
             settingsModel.settings = settings
-            let inputs = settingsModel.collectPolicyInputs(for: model)
+            var inputs = settingsModel.collectPolicyInputs(for: model)
+            inputs.otherAudioPlaying = true
             try require(inputs.wallpaperDisplays[display.displayID] != nil,
                         "An independent battery, sleep or audio rule lost its display")
             let result = try GlobalSettingsViewModel.computePlaybackActions(inputs, probes: probes).get()
@@ -284,6 +616,7 @@ private struct UIResponsivenessRegression {
                                     1002: CGRect(x: 1920, y: 0, width: 1920, height: 1080)]
         inputs.onBattery = .pause
         inputs.onAudio = .mute
+        inputs.otherAudioPlaying = true
         inputs.onDisplayAsleep = .stop
         probes.displayAsleep = { $0 == 1001 }
         let battery = try GlobalSettingsViewModel.computePlaybackActions(inputs, probes: probes).get()
@@ -316,6 +649,155 @@ private struct UIResponsivenessRegression {
             throw RegressionFailure(description: "An unavailable display topology released playback rules")
         }
         print("PASS: independent battery, display sleep and audio rules, per-display priorities and failed system queries")
+    }
+
+    static func testFullscreenPlaybackPolicy() throws {
+        typealias Policy = GlobalSettingsViewModel
+        let display = CGRect(x: 0, y: 0, width: 1512, height: 982)
+        let safe = CGRect(x: 0, y: 37, width: 1512, height: 945)
+        let insets = NSEdgeInsets(top: 37, left: 0, bottom: 0, right: 0)
+        for origin in [CGPoint.zero, CGPoint(x: -1512, y: -982), CGPoint(x: 1920, y: 1080)] {
+            let bounds = display.offsetBy(dx: origin.x, dy: origin.y)
+            let screenFrame = CGRect(x: origin.x, y: 1080 - bounds.maxY, width: 1512, height: 982)
+            let area = Policy.fullscreenSafeArea(display: bounds, screenFrame: screenFrame, insets: insets)
+            try require(area == safe.offsetBy(dx: origin.x, dy: origin.y),
+                        "Safe area used the wrong display origin or inverted the top inset")
+        }
+        let scaled = Policy.fullscreenSafeArea(
+            display: CGRect(x: -3024, y: -1964, width: 3024, height: 1964), screenFrame: display,
+            insets: NSEdgeInsets(top: 37, left: 5, bottom: 4, right: 3))
+        try require(scaled == CGRect(x: -3014, y: -1890, width: 3008, height: 1882),
+                    "Safe area did not convert all four insets into display coordinates")
+        for invalid in [NSEdgeInsets(), NSEdgeInsets(top: -1, left: 0, bottom: 0, right: 0),
+                        NSEdgeInsets(top: .nan, left: 0, bottom: 0, right: 0),
+                        NSEdgeInsets(top: 982, left: 0, bottom: 0, right: 0),
+                        NSEdgeInsets(top: 37, left: 1512, bottom: 0, right: 0)] {
+            try require(Policy.fullscreenSafeArea(display: display, screenFrame: display, insets: invalid) == nil,
+                        "An absent or invalid safe area created a fullscreen fallback")
+        }
+        try require(Policy.fullscreenSafeArea(display: .zero, screenFrame: display, insets: insets) == nil,
+                    "An unavailable display produced a safe area")
+        try require(Policy.fullscreenSafeArea(display: display, screenFrame: .zero, insets: insets) == nil,
+                    "An unavailable AppKit frame produced a safe area")
+
+        var inputs = Policy.PolicyInputs()
+        inputs.onFullscreen = .pause
+        inputs.selfPID = 1
+        inputs.frontPID = 2
+        inputs.frontIsRegular = true
+        inputs.regularPIDs = [1, 2, 3, 4]
+        inputs.rendererPIDs = [4]
+        inputs.wallpaperDisplays = [1001: display]
+        inputs.fullscreenSafeAreas = [1001: safe]
+        var queries = 0
+        func evaluate(_ windows: [Policy.WindowEntry], _ sample: Policy.PolicyInputs) throws -> Policy.PolicyResult {
+            var probes = Policy.PolicyProbes(
+                onBattery: { true }, displayAsleep: { _ in false })
+            probes.windows = { queries += 1; return windows }
+            let before = queries
+            let result = try Policy.computePlaybackActions(sample, probes: probes).get()
+            try require(queries == before + 1, "Fullscreen evaluation queried windows more than once")
+            return result
+        }
+        func window(_ bounds: CGRect, pid: pid_t = 2, layer: Int = 0, alpha: Double = 1) -> Policy.WindowEntry {
+            Policy.WindowEntry(layer: layer, pid: pid, bounds: bounds, alpha: alpha)
+        }
+        for bounds in [display, safe, safe.insetBy(dx: 0.5, dy: 0.5)] {
+            for action in [GSPlayback.mute, .pause, .stop] {
+                inputs.onFullscreen = action
+                let result = try evaluate([window(bounds)], inputs)
+                try require(result.actions[1001] == action, "Fullscreen did not apply the configured action")
+                try require(result.fullscreenDiagnostics.isEmpty, "Fullscreen diagnostics ran outside developer mode")
+            }
+        }
+        inputs.onFullscreen = .pause
+        for bounds in [CGRect(x: 0, y: 37, width: 1512, height: 870),
+                       CGRect(x: 0, y: 37, width: 756, height: 945),
+                       CGRect(x: 0, y: 37, width: 1512, height: 933),
+                       CGRect(x: 100, y: 37, width: 1512, height: 945),
+                       CGRect(x: -1512, y: 0, width: 3024, height: 982)] {
+            let result = try evaluate([window(bounds)], inputs)
+            try require(result.actions[1001] == .keepRunning, "A partial or spanning window triggered fullscreen")
+        }
+        let tiled = try evaluate([window(CGRect(x: 0, y: 37, width: 756, height: 945)),
+                                  window(CGRect(x: 756, y: 37, width: 756, height: 945), pid: 3)], inputs)
+        try require(tiled.actions[1001] == .keepRunning, "Tiled windows were combined into a fullscreen window")
+        for excluded in [window(safe, pid: 1), window(safe, pid: 4), window(safe, pid: 5),
+                         window(safe, layer: 1), window(safe, layer: -1), window(safe, alpha: 0.05)] {
+            let result = try evaluate([excluded], inputs)
+            try require(result.actions[1001] == .keepRunning, "An excluded window triggered fullscreen")
+        }
+        var ordinaryDisplay = inputs
+        ordinaryDisplay.fullscreenSafeAreas = [:]
+        let noNotch = try evaluate([window(safe)], ordinaryDisplay)
+        try require(noNotch.actions[1001] == .keepRunning, "Safe area matching was enabled on an ordinary screen")
+        let uncut = try evaluate([window(display)], ordinaryDisplay)
+        try require(uncut.actions[1001] == .pause, "Ordinary fullscreen detection regressed")
+        ordinaryDisplay.wallpaperDisplays = [1001: safe]
+        let compatibility = try evaluate([window(safe)], ordinaryDisplay)
+        try require(compatibility.actions[1001] == .pause, "An adjusted active display area was inset twice")
+
+        let second = CGRect(x: -1920, y: -1080, width: 1920, height: 1080)
+        inputs.wallpaperDisplays[1002] = second
+        let secondWindow = window(second.insetBy(dx: 100, dy: 100), pid: 3)
+        for front in [pid_t(1), 2, 3, 5] {
+            inputs.frontPID = front
+            inputs.frontIsRegular = front != 5
+            let result = try evaluate([secondWindow, window(safe)], inputs)
+            try require(result.actions == [1001: .pause, 1002: .keepRunning],
+                        "Changing focus on another display released a visible fullscreen window")
+        }
+        inputs.frontPID = nil
+        let noFocus = try evaluate([window(safe)], inputs)
+        try require(noFocus.actions == [1001: .pause, 1002: .keepRunning],
+                    "Fullscreen detection depended on a frontmost application")
+        let both = try evaluate([window(safe), window(second, pid: 3)], inputs)
+        try require(both.actions == [1001: .pause, 1002: .pause], "Only one fullscreen display received its rule")
+        inputs.fullscreenSafeAreas[1002] = second.insetBy(dx: 0, dy: 37)
+        let independent = try evaluate([window(safe)], inputs)
+        try require(independent.actions[1002] == .keepRunning, "A safe area from another display triggered fullscreen")
+
+        inputs.frontPID = 3
+        inputs.frontIsRegular = true
+        inputs.onFocused = .stop
+        inputs.onFullscreen = .mute
+        let priority = try evaluate([secondWindow, window(safe)], inputs)
+        try require(priority.actions == [1001: .mute, 1002: .stop], "Fullscreen and focus priorities changed")
+        inputs.frontPID = 2
+        let sameAppPriority = try evaluate([window(safe)], inputs)
+        try require(sameAppPriority.actions[1001] == .mute, "The focus rule overrode the fullscreen rule")
+        inputs.pauseOnCoverage = true
+        let coverage = try evaluate([window(safe)], inputs)
+        try require(coverage.actions[1001] == .pause, "Fullscreen bypassed the independent coverage rule")
+        inputs.pauseOnCoverage = false
+        inputs.onBattery = .stop
+        let battery = try evaluate([window(safe)], inputs)
+        try require(battery.actions == [1001: .stop, 1002: .stop], "Fullscreen bypassed a stronger global rule")
+        inputs.onBattery = .keepRunning
+        inputs.onFocused = .keepRunning
+        inputs.onFullscreen = .pause
+        inputs.revealGraceDisplays = [1001]
+        let reveal = try evaluate([window(safe), window(second, pid: 3)], inputs)
+        try require(reveal.actions == [1001: .keepRunning, 1002: .pause], "Desktop reveal affected the wrong display")
+        inputs.revealGraceDisplays = []
+        let hidden = try evaluate([window(safe.offsetBy(dx: 10_000, dy: 0))], inputs)
+        try require(hidden.actions == [1001: .keepRunning, 1002: .keepRunning], "An off-screen window kept playback paused")
+        let exited = try evaluate([secondWindow], inputs)
+        try require(exited.actions == [1001: .keepRunning, 1002: .keepRunning], "Leaving fullscreen did not release its rule")
+        let empty = try evaluate([], inputs)
+        try require(empty.actions == exited.actions, "An exposed desktop kept the fullscreen rule active")
+        inputs.onFullscreen = .keepRunning
+        inputs.onFocused = .mute
+        let disabled = try evaluate([window(safe)], inputs)
+        try require(disabled.actions[1001] == .mute, "Disabling fullscreen suppressed the focus rule")
+
+        inputs.onFullscreen = .pause
+        inputs.diagnoseFullscreen = true
+        let diagnosed = try evaluate([window(safe)], inputs)
+        try require(diagnosed.fullscreenDiagnostics[1001]?.contains("match=2:") == true &&
+                    diagnosed.fullscreenDiagnostics[1001]?.contains("safe=0.0,37.0,1512.0,945.0") == true,
+                    "Fullscreen diagnostics omitted the matched window or safe area")
+        print("PASS: fullscreen safe areas, coordinate conversion, exclusions, per-display focus, priorities and desktop recovery")
     }
 
     static func testPlaybackPolicySynchronization() async throws {
@@ -388,6 +870,23 @@ private struct UIResponsivenessRegression {
             try await waitUntil("\(kind) command barrier") {
                 commands(pid: pid).contains { $0["cmd"] as? String == "fps" && $0["value"] as? Int == 119 }
             }
+            let beforeScreenNotification = playbackCommands().count
+            NotificationCenter.default.post(name: NSApplication.didChangeScreenParametersNotification, object: nil)
+            let remappedDisplay = DisplayInfo(key: display.key, displayID: display.displayID,
+                                             index: display.index + 7, name: display.name,
+                                             size: display.size, isMain: display.isMain)
+            NotificationCenter.default.post(
+                name: DisplayRegistry.didChangeNotification, object: DisplayRegistry.shared,
+                userInfo: ["change": DisplayRegistry.Change(connected: [remappedDisplay], topologyChanged: false)])
+            try require(model.currentByScreen[remappedDisplay.index]?.id == wallpaper.id &&
+                        model.currentByScreen[display.index] == nil,
+                        "Enumeration-only notification did not rebuild currentByScreen")
+            try await Task.sleep(for: .milliseconds(2200))
+            try require(playbackCommands().count == beforeScreenNotification,
+                        "Unchanged topology or index remapping forced playback commands")
+            NotificationCenter.default.post(
+                name: DisplayRegistry.didChangeNotification, object: DisplayRegistry.shared,
+                userInfo: ["change": DisplayRegistry.Change(connected: [display], topologyChanged: false)])
             let beforeWake = playbackCommands().count
             settingsModel.handlePlaybackLifecycleEvent(.systemSleep)
             settingsModel.handlePlaybackLifecycleEvent(.systemWake)
@@ -1054,6 +1553,124 @@ private struct UIResponsivenessRegression {
         try require(saved?["a"]?["x"] == 0.1 && saved?["b"]?["x"] == 0.9,
                     "Per-display positions were not preserved")
         print("PASS: screen saver snapshots, stale save rejection and independent display positions")
+    }
+
+    static func testWallpaperRuntimeSnapshots() throws {
+        let fm = FileManager.default
+        let directory = root.appending(path: "runtime-scene")
+        try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+        let asset = root.appending(path: "runtime-texture.png")
+        let image = try pngData(color: .green)
+        try image.write(to: asset)
+        let properties: [String: WEProjectProperty] = [
+            "enabled": .init(type: "bool", value: .bool(false)),
+            "amount": .init(type: "slider", value: .number(0.375)),
+            "number": .init(type: "combo", value: .number(1)),
+            "zero": .init(type: "combo", value: .number(0)),
+            "flag": .init(type: "combo", value: .bool(true)),
+            "word": .init(type: "combo", value: .string("1")),
+            "text": .init(type: "textinput", value: .string("文字 🌙\nsecond line")),
+            "color": .init(type: "color", value: .string("0.2 0.4 0.8")),
+            "texture": .init(type: "scenetexture", value: .string(asset.path))
+        ]
+        let descriptors = try JSONSerialization.jsonObject(with: JSONEncoder().encode(properties))
+        try JSONSerialization.data(withJSONObject: ["title": "Runtime", "type": "scene", "file": "scene.json",
+            "general": ["properties": descriptors]]).write(to: directory.appending(path: "project.json"))
+        try Data("{}".utf8).write(to: directory.appending(path: "scene.json"))
+        let wallpaper = WEWallpaper.load(from: directory)
+        var runtime = WallpaperRuntimeState()
+        runtime.speed = 1.75
+        runtime.fillMode = .contain
+        runtime.position = WallpaperPosition(x: 0.1, y: 0.2)
+        let a = WallpaperRenderSnapshot(runtime: runtime, properties: properties,
+                                        scriptStorage: ["origin": "[12,34]"])
+        let decoded = try JSONDecoder().decode(WallpaperRenderSnapshot.self, from: JSONEncoder().encode(a))
+        try require(decoded == a, "Runtime snapshot did not round-trip")
+        try require(a.rawProperties["number"] == .number(1) && a.rawProperties["zero"] == .number(0) &&
+                    a.rawProperties["flag"] == .bool(true) && a.rawProperties["word"] == .string("1"),
+                    "Combo primitive types were changed")
+        try require(a.properties(for: wallpaper)["text"]?.value == properties["text"]?.value,
+                    "Unicode preview property was changed")
+        var b = a
+        b.rawProperties["enabled"] = .bool(true)
+        b.position = WallpaperPosition(x: 0.9, y: 0.8)
+        b.speed = 0.5
+        b.scriptStorage = ["origin": "[56,78]"]
+        let manager = ScreenSaverManager(configurationDirectory: root.appending(path: "RuntimeConfiguration"))
+        var context = ScreenSaverManager.ConfigurationContext(positions: ["a": a.position, "b": b.position],
+            selectedPosition: a.position, fps: 45, enableHDRVideo: false, loadFromMemory: false, language: "en")
+        context.sourceDisplayKey = "a"
+        context.runtimeByDisplay = ["a": a, "b": b]
+        try manager.configure(with: wallpaper, runtime: runtime, properties: properties, fps: 45, context: context)
+        try manager.configure(with: wallpaper, runtime: runtime, properties: properties, fps: 45,
+                              forDynamicLockScreen: true, context: context)
+        let savedA = try Data(contentsOf: manager.configurationURL)
+        context.sourceDisplayKey = "b"
+        b.rawProperties["amount"] = .number(0.8)
+        context.runtimeByDisplay = ["b": b]
+        manager.updateRuntimeIfConfigured(wallpaper: wallpaper, runtime: runtime,
+                                           properties: b.properties(for: wallpaper), context: context)
+        for url in [manager.configurationURL, manager.dynamicLockScreenConfigurationURL] {
+            let object = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
+            let perDisplay = object["runtimeByDisplay"] as! [String: [String: Any]]
+            try require((object["speed"] as? NSNumber)?.floatValue == a.speed,
+                        "Editing another display replaced the fallback runtime")
+            try require(perDisplay["a"]?["scriptStorage"] as? [String: String] == a.scriptStorage &&
+                        perDisplay["b"]?["scriptStorage"] as? [String: String] == b.scriptStorage,
+                        "Saver script state crossed display boundaries")
+            let values = perDisplay["b"]?["rawProperties"] as? [String: Any]
+            try require(values?["amount"] as? Double == 0.8, "Saver did not synchronize changed properties")
+        }
+        let current = try Data(contentsOf: manager.configurationURL)
+        manager.updateRuntimeIfConfigured(wallpaper: wallpaper, runtime: runtime,
+                                           properties: b.properties(for: wallpaper), context: context)
+        let duplicate = try Data(contentsOf: manager.configurationURL)
+        try require(current == duplicate && current != savedA, "Saver updates were not stable or did not change")
+        context.capturedAt = 0
+        manager.updateRuntimeIfConfigured(wallpaper: wallpaper, runtime: runtime, properties: [:], context: context)
+        let afterStale = try Data(contentsOf: manager.configurationURL)
+        try require(afterStale == current, "A stale saver update replaced a newer configuration")
+
+        let container = root.appending(path: "RuntimeLockDeployment")
+        let configURL = container.appending(path: "dynamic-lock-screen.json")
+        let displays = [
+            DynamicLockScreenManager.DisplaySnapshot(displayID: 701, fallbackSource: nil,
+                systemFallbackSource: nil, position: a.position, displayKey: "a", runtime: a),
+            DynamicLockScreenManager.DisplaySnapshot(displayID: 702, fallbackSource: nil,
+                systemFallbackSource: nil, position: b.position, displayKey: "b", runtime: b)
+        ]
+        let prepared = try DynamicLockScreenManager.prepareConfiguration(wallpaper, runtime: runtime,
+            properties: properties, fps: 45, displays: displays, loadFromMemory: false, container: container)
+        try DynamicLockScreenManager.commitConfiguration(prepared, configurationURL: configURL)
+        let initialData = try Data(contentsOf: configURL)
+        let initial = try JSONDecoder().decode(DynamicLockScreenConfiguration.self, from: initialData)
+        try require(initial.displays["display-701"]?.speed == a.speed && initial.displays["display-702"]?.speed == b.speed,
+                    "Lock deployment lost per-display speed")
+        let unchanged = try DynamicLockScreenManager.updateRuntime(a, wallpaper: wallpaper,
+            displayKey: "a", displayID: 701, configurationURL: configURL)
+        try require(unchanged == nil, "Identical lock runtime triggered a rewrite")
+        var changed = b
+        changed.rawProperties["text"] = .string("updated")
+        changed.scriptStorage = [:]
+        let updated = try DynamicLockScreenManager.updateRuntime(changed, wallpaper: wallpaper,
+            displayKey: "b", displayID: 702, configurationURL: configURL)
+        try require(updated?.displays["display-702"]?.rawProperties["text"] == .string("updated") &&
+                    updated?.displays["display-702"]?.scriptStorage == [:], "Lock runtime/reset was not synchronized")
+        try require(updated?.displays["display-701"]?.runtimeRevision == initial.displays["display-701"]?.runtimeRevision,
+                    "Editing display B invalidated display A")
+        let stale = try DynamicLockScreenManager.updateRuntime(b, wallpaper: wallpaper,
+            displayKey: "b", displayID: 702, configurationURL: configURL, requestedAt: 0)
+        try require(stale == nil, "Stale lock runtime was accepted")
+        let sourceAfter = try Data(contentsOf: asset)
+        try require(sourceAfter == image, "Deployment changed the original texture")
+        guard case .object(let texture) = updated?.displays["display-702"]?.rawProperties["texture"],
+              case .string(let path) = texture["value"] else {
+            throw RegressionFailure(description: "Deployed texture descriptor is missing")
+        }
+        let deployedImage = try Data(contentsOf: URL(fileURLWithPath: path))
+        try require(path.hasPrefix(prepared.root.path) && deployedImage == image,
+                    "Updated lock texture is outside the deployment or damaged")
+        print("PASS: typed runtime snapshots, per-display saver/lock synchronization, state isolation, speed, deduplication and stale update rejection")
     }
 
     static func testLockScreenDeployment() async throws {

@@ -124,6 +124,7 @@ public:
 
 private:
     friend class FontCache;
+    friend class TextLayouter;
     struct Impl;
     std::unique_ptr<Impl> m_impl;
 };
@@ -144,7 +145,10 @@ public:
 
     // Iterate every face the cache currently owns (used by the renderer's
     // per-frame atlas-commit hook).
-    std::vector<FontFace*> Faces() const;
+    std::span<FontFace* const> Faces() const;
+    // Layouts and materials pin their faces; call after GPU resource retirement.
+    void TrimUnusedFaces(std::span<const std::string>                 material_textures,
+                         const std::function<void(std::string_view)>& before_remove);
 
     struct ResolvedBlob {
         std::shared_ptr<std::vector<std::byte>> bytes;
@@ -174,10 +178,9 @@ private:
 FontCache& EnsureSceneFontCache(sr::Scene& scene);
 FontCache* SceneFontCache(sr::Scene& scene) noexcept;
 
-// Snapshot the face's atlas pixels into a renderer-consumable Image (R8,
-// single slot, single mipmap, LINEAR/CLAMP_TO_EDGE sampler). The returned
-// Image owns its pixel buffer; the FontFace can subsequently mutate or be
-// destroyed without affecting the snapshot.
+// Alias the face's atlas pixels into a renderer-consumable Image (R8,
+// single slot, single mipmap, LINEAR/CLAMP_TO_EDGE sampler). The face must
+// outlive the Image; TrimUnusedFaces removes the Image before retiring it.
 std::shared_ptr<sr::Image> BuildAtlasImage(const FontFace& face, const std::string& key);
 
 // Lazily compiles the embedded text HLSL shader (one-time, process-wide
@@ -257,6 +260,7 @@ struct TextGeometry {
     float uv_source_height { 1.0f };
     float effect_frame_width { 1.0f };
     float effect_frame_height { 1.0f };
+    bool  operator==(const TextGeometry&) const = default;
 };
 
 TextGeometry ResolveTextGeometry(const TextGeometryPolicy& policy,
