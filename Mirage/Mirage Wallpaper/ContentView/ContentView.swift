@@ -237,20 +237,11 @@ struct ContentView: View {
         .confirmationDialog("删除壁纸",
                             isPresented: $viewModel.isUnsubscribeConfirming) {
             if let wallpaper = viewModel.hoveredWallpaper {
-                let url = wallpaper.wallpaperDirectory
                 Button("立即删除", role: .destructive) {
-                    WEWallpaper.invalidateSizeCache()
-                    try? WallpaperLibrary.shared.delete(wallpaper)
-                    wallpaperViewModel.removeWallpaper(at: url)
-                    viewModel.hoveredWallpaper = nil
-                    viewModel.refresh()
+                    removeWallpaper(wallpaper, using: WallpaperLibrary.shared.delete)
                 }
                 Button("移到废纸篓") {
-                    WEWallpaper.invalidateSizeCache()
-                    try? WallpaperLibrary.shared.trash(wallpaper)
-                    wallpaperViewModel.removeWallpaper(at: url)
-                    viewModel.hoveredWallpaper = nil
-                    viewModel.refresh()
+                    removeWallpaper(wallpaper, using: WallpaperLibrary.shared.trash)
                 }
             }
             Button("取消", role: .cancel) {
@@ -386,6 +377,19 @@ struct ContentView: View {
             guard viewModel.isStaging else { return }
             hasPresentedUI = true
             loadedSections.insert(navigationModel.selection)
+        }
+    }
+    private func removeWallpaper(_ wallpaper: WEWallpaper,
+                                 using operation: (WEWallpaper) throws -> Void) {
+        do {
+            try wallpaperViewModel.removeWallpaper(wallpaper, using: operation)
+            WEWallpaper.invalidateSizeCache()
+            viewModel.hoveredWallpaper = nil
+            viewModel.refresh()
+        } catch {
+            viewModel.screenSaverFeedback = ScreenSaverFeedback(
+                title: L("删除壁纸"), message: error.localizedDescription)
+            NSLog("[Mirage] 删除壁纸失败: %@", error.localizedDescription)
         }
     }
 }

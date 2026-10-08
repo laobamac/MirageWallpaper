@@ -774,6 +774,13 @@ class WallpaperViewModel: PlaylistPlayback {
         syncStatusItems()
     }
 
+    /// Keep playback and persisted assignments intact if the file operation fails.
+    func removeWallpaper(_ wallpaper: WEWallpaper,
+                         using operation: (WEWallpaper) throws -> Void) throws {
+        try operation(wallpaper)
+        removeWallpaper(at: wallpaper.wallpaperDirectory)
+    }
+
     func removeWallpaper(at directory: URL) {
         let identifier = directory.path(percentEncoded: false)
         let targets = displayStates.filter { $0.value.wallpaper.id == identifier }.map(\.key)
