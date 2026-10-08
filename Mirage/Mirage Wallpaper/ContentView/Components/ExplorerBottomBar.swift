@@ -14,7 +14,11 @@ struct ExplorerBottomBar: View {
 
     @AppStorage("PlaylistCollapsed") private var isCollapsed = false
 
-    @State private var targetScreen = 0
+    @State private var targetDisplay: DisplayKey?
+    @State private var pendingLegacyKey: String?
+    private var targetScreen: Int {
+        displays.first(where: { $0.key == targetDisplay })?.index ?? displays.first?.index ?? 0
+    }
     @State private var selectedItemID: String?
     @State private var isOpenPresented = false
     @State private var isSavePresented = false
@@ -32,7 +36,22 @@ struct ExplorerBottomBar: View {
     var body: some View {
         VStack(spacing: 8) {
             header
-            if !isCollapsed {
+            if manager.unidentifiedScreens.contains(targetScreen) {
+                Text(L("此显示器没有可识别的稳定身份，暂不能保存播放列表。"))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if let error = manager.storageError {
+                Text(L("播放列表无法保存：%@", error)).font(.caption).foregroundStyle(.red)
+            }
+            if !manager.legacyCurrents.isEmpty {
+                Menu(L("旧播放列表：选择要归属到此显示器的列表")) {
+                    ForEach(manager.legacyCurrents.keys.sorted(), id: \.self) { key in
+                        Button(Int(key).map { L("原显示器 %d", $0 + 1) } ?? L("未识别的显示器")) { pendingLegacyKey = key }
+                    }
+                }
+                .disabled(manager.unidentifiedScreens.contains(targetScreen))
+            }
+            if !isCollapsed && !manager.unidentifiedScreens.contains(targetScreen) {
                 PlaylistStrip(manager: manager,
                               wallpaperViewModel: wallpaperViewModel,
                               contentViewModel: contentViewModel,
@@ -43,10 +62,21 @@ struct ExplorerBottomBar: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: isCollapsed)
-        .onAppear { manager.ensureScreen(targetScreen) }
+        .onAppear { targetDisplay = displays.first?.key; manager.ensureScreen(targetScreen) }
         .onChange(of: targetScreen) { _ in
             manager.ensureScreen(targetScreen)
             selectedItemID = nil
+        }
+        .confirmationDialog(L("将旧播放列表归属到此显示器？"), isPresented: Binding(
+            get: { pendingLegacyKey != nil }, set: { if !$0 { pendingLegacyKey = nil } }
+        )) {
+            Button(L("使用旧播放列表")) {
+                if let key = pendingLegacyKey { manager.bindLegacy(key, to: targetScreen) }
+                pendingLegacyKey = nil
+            }
+            Button(L("取消"), role: .cancel) { pendingLegacyKey = nil }
+        } message: {
+            Text(L("此显示器当前的播放列表将被替换。原配置文件已保留备份。"))
         }
         .sheet(isPresented: $isOpenPresented) {
             PlaylistOpenSheet(manager: manager, screen: targetScreen, isPresented: $isOpenPresented)
@@ -87,9 +117,12 @@ struct ExplorerBottomBar: View {
                 .lineLimit(1)
 
             if displays.count > 1 {
-                Picker("", selection: $targetScreen) {
+                Picker("", selection: Binding(
+                    get: { targetDisplay ?? displays.first?.key },
+                    set: { targetDisplay = $0 }
+                )) {
                     ForEach(displays) { info in
-                        Text(L("显示器 %d", info.index + 1) + " · " + info.name).tag(info.index)
+                        Text(L("显示器 %d", info.index + 1) + " · " + info.name).tag(Optional(info.key))
                     }
                 }
                 .labelsHidden()
