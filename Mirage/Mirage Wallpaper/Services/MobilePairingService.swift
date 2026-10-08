@@ -69,6 +69,9 @@ final class MobilePairingService: @unchecked Sendable {
     private var listenerSource: DispatchSourceRead?
     private var discoveryTimer: DispatchSourceTimer?
     private var clientSockets = Set<Int32>()
+    private var handshakes: [Int32: UUID] = [:]
+    private var admission = MobilePairingAdmission()
+    private var lastLimitNotice: TimeInterval = -.infinity
     private var activeDeviceSockets: [String: Int32] = [:]
     private var transferSessions: [String: TransferSession] = [:]
     private var transferringDevices = Set<String>()
@@ -312,6 +315,7 @@ final class MobilePairingService: @unchecked Sendable {
 
         let sockets = clientSockets
         clientSockets.removeAll()
+        handshakes.removeAll()
         activeDeviceSockets.removeAll()
         transferSessions.removeAll()
         transferringDevices.removeAll()
@@ -410,6 +414,26 @@ final class MobilePairingService: @unchecked Sendable {
                 return
             }
 
+            let peer = withUnsafePointer(to: &address.sin_addr) {
+                $0.withMemoryRebound(to: UInt8.self, capacity: 4) {
+                    bytes in (0..<4).map { String(bytes[$0]) }.joined(separator: ".")
+                }
+            }
+            guard admission.admit(peer, pending: handshakes.count, total: clientSockets.count,
+                                  now: ProcessInfo.processInfo.systemUptime) else {
+                notifyLimitOnQueue(L("配对尝试过多或连接数量已满，请一分钟后重试。"))
+                Darwin.close(client)
+                continue
+            }
+            let token = UUID()
+            let deadline = ProcessInfo.processInfo.systemUptime + 15
+            handshakes[client] = token
+            queue.asyncAfter(deadline: .now() + 15) { [weak self] in
+                guard self?.handshakes[client] == token else { return }
+                self?.notifyLimitOnQueue(L("手机配对等待超时，请重新连接。"))
+                // The worker owns close(); shutdown only wakes its blocking I/O.
+                Darwin.shutdown(client, SHUT_RDWR)
+            }
             var yes: Int32 = 1
             _ = setsockopt(
                 client,
@@ -429,19 +453,23 @@ final class MobilePairingService: @unchecked Sendable {
             }
             clientSockets.insert(client)
             clientQueue.async { [weak self] in
-                self?.handleClient(client, identity: identity)
+                guard let self else { Darwin.close(client); return }
+                self.handleClient(client, identity: identity, peer: peer, token: token, deadline: deadline)
             }
         }
     }
 
-    private func handleClient(_ socket: Int32, identity: Identity) {
+    private func handleClient(_ socket: Int32, identity: Identity, peer: String,
+                              token: UUID, deadline: TimeInterval) {
         var pairedIdentifier: String?
         defer {
-            Darwin.shutdown(socket, SHUT_RDWR)
-            Darwin.close(socket)
             let wasActive = queue.sync { [weak self] () -> Bool in
                 guard let self else { return false }
+                self.handshakes[socket] = nil
                 self.clientSockets.remove(socket)
+                // Serialize close with timeout shutdown so recycled descriptors are safe.
+                Darwin.shutdown(socket, SHUT_RDWR)
+                Darwin.close(socket)
                 guard let pairedIdentifier,
                       self.activeDeviceSockets[pairedIdentifier] == socket else { return false }
                 self.activeDeviceSockets.removeValue(forKey: pairedIdentifier)
@@ -458,9 +486,9 @@ final class MobilePairingService: @unchecked Sendable {
 
         do {
             try writeAll(publicKeyWireBytes(identity.privateKey), to: socket)
-            let identifierData = try rsaDecrypt(try readFrame(socket, maximum: Constants.maximumCommandSize), key: identity.privateKey)
-            let iv = try rsaDecrypt(try readFrame(socket, maximum: Constants.maximumCommandSize), key: identity.privateKey)
-            let aesKey = try rsaDecrypt(try readFrame(socket, maximum: Constants.maximumCommandSize), key: identity.privateKey)
+            let identifierData = try rsaDecrypt(try readFrame(socket, maximum: Constants.maximumCommandSize, deadline: deadline), key: identity.privateKey)
+            let iv = try rsaDecrypt(try readFrame(socket, maximum: Constants.maximumCommandSize, deadline: deadline), key: identity.privateKey)
+            let aesKey = try rsaDecrypt(try readFrame(socket, maximum: Constants.maximumCommandSize, deadline: deadline), key: identity.privateKey)
 
             guard let identifier = String(data: identifierData, encoding: .utf8), !identifier.isEmpty else {
                 throw MobilePairingError.invalidClientData
@@ -470,23 +498,30 @@ final class MobilePairingService: @unchecked Sendable {
             }
 
             while true {
-                let request = try readEncryptedJSON(socket, key: aesKey, iv: iv)
+                guard queue.sync(execute: {
+                    if admission.canAttempt(peer, now: ProcessInfo.processInfo.systemUptime) { return true }
+                    notifyLimitOnQueue(L("配对尝试过多，请一分钟后重试。"))
+                    return false
+                }) else { return }
+                let request = try readEncryptedJSON(socket, key: aesKey, iv: iv, deadline: deadline)
                 let version = request["version"] as? Int
                 let submittedPIN = String(describing: request["pin"] ?? "")
-                let acceptedPIN = queue.sync { [weak self] in
-                    guard let self else { return false }
-                    let isCurrentPairingPIN = self.pairingSessionActive
-                        && submittedPIN == self.identity?.pin
-                    let isSavedDevicePIN = self.pairedPins[identifier] == submittedPIN
-                    if isCurrentPairingPIN {
-                        // A pairing screen represents one new-device pairing
-                        // session. Existing devices continue using their own
-                        // saved PINs after this session has been consumed.
-                        self.pairingSessionActive = false
+                let accepted = queue.sync { [weak self] in
+                    guard let self, self.handshakes[socket] == token,
+                          ProcessInfo.processInfo.systemUptime < deadline else { return false }
+                    let accepted = MobilePairingAdmission.accepts(
+                        version: version, submittedPIN: submittedPIN, currentPIN: self.identity?.pin,
+                        pairingActive: self.pairingSessionActive, savedPIN: self.pairedPins[identifier])
+                    if accepted {
+                        if self.pairingSessionActive && submittedPIN == self.identity?.pin {
+                            self.pairingSessionActive = false
+                        }
+                        self.handshakes[socket] = nil
+                    } else {
+                        self.admission.failed(peer, now: ProcessInfo.processInfo.systemUptime)
                     }
-                    return isCurrentPairingPIN || isSavedDevicePIN
+                    return accepted
                 }
-                let accepted = version == Constants.protocolVersion && acceptedPIN
                 let status: String
                 if version != Constants.protocolVersion {
                     status = "AuthFailedVersion"
@@ -507,8 +542,8 @@ final class MobilePairingService: @unchecked Sendable {
                     ?? nonEmptyString(request["model"])
                     ?? "Android"
                 pairedIdentifier = identifier
-                let previousSocket = queue.sync { [weak self] () -> Int32? in
-                    guard let self else { return nil }
+                queue.sync { [weak self] in
+                    guard let self else { return }
                     let previous = self.activeDeviceSockets.updateValue(socket, forKey: identifier)
                     self.transferSessions[identifier] = TransferSession(
                         socket: socket,
@@ -517,10 +552,7 @@ final class MobilePairingService: @unchecked Sendable {
                     )
                     self.pairedPins[identifier] = submittedPIN
                     self.persistMetadataOnQueue()
-                    return previous == socket ? nil : previous
-                }
-                if let previousSocket {
-                    Darwin.shutdown(previousSocket, SHUT_RDWR)
+                    if let previous, previous != socket { Darwin.shutdown(previous, SHUT_RDWR) }
                 }
                 let device = MobileDevice(
                     id: identifier,
@@ -544,7 +576,10 @@ final class MobilePairingService: @unchecked Sendable {
             // Closing the sheet, cancelling pairing, and a phone leaving the
             // network all end the TCP stream normally. They should update the
             // connection state without presenting an error alert.
-        } catch is POSIXError {
+        } catch let error as POSIXError {
+            if error.code == .ETIMEDOUT {
+                queue.async { [weak self] in self?.notifyLimitOnQueue(L("手机配对等待超时，请重新连接。")) }
+            }
             // Socket-level disconnects are expected on a local mobile
             // connection. Protocol and cryptography failures still surface to
             // the user through the general catch below.
@@ -767,8 +802,8 @@ final class MobilePairingService: @unchecked Sendable {
         return decrypted
     }
 
-    private func readEncryptedJSON(_ socket: Int32, key: Data, iv: Data) throws -> [String: Any] {
-        let encrypted = try readFrame(socket, maximum: Constants.maximumCommandSize)
+    private func readEncryptedJSON(_ socket: Int32, key: Data, iv: Data, deadline: TimeInterval? = nil) throws -> [String: Any] {
+        let encrypted = try readFrame(socket, maximum: Constants.maximumCommandSize, deadline: deadline)
         let plaintext = try crypt(encrypted, key: key, iv: iv, operation: CCOperation(kCCDecrypt))
         guard let value = try JSONSerialization.jsonObject(with: plaintext) as? [String: Any] else {
             throw MobilePairingError.invalidClientData
@@ -898,11 +933,11 @@ final class MobilePairingService: @unchecked Sendable {
         return output
     }
 
-    private func readFrame(_ socket: Int32, maximum: Int) throws -> Data {
-        let header = try readExact(socket, count: 4)
+    private func readFrame(_ socket: Int32, maximum: Int, deadline: TimeInterval? = nil) throws -> Data {
+        let header = try MobileSocketIO.readExact(socket, count: 4, deadline: deadline)
         let length = Int(header.littleEndianUInt32)
         guard length > 0, length <= maximum else { throw MobilePairingError.invalidFrame }
-        return try readExact(socket, count: length)
+        return try MobileSocketIO.readExact(socket, count: length, deadline: deadline)
     }
 
     private func writeFrame(_ payload: Data, to socket: Int32) throws {
@@ -912,24 +947,6 @@ final class MobilePairingService: @unchecked Sendable {
         try writeAll(frame, to: socket)
     }
 
-    private func readExact(_ socket: Int32, count: Int) throws -> Data {
-        var result = Data(count: count)
-        var received = 0
-        try result.withUnsafeMutableBytes { bytes in
-            guard let base = bytes.baseAddress else { return }
-            while received < count {
-                let amount = Darwin.recv(socket, base.advanced(by: received), count - received, 0)
-                if amount == 0 { throw MobilePairingError.connectionClosed }
-                if amount < 0 {
-                    if errno == EINTR { continue }
-                    throw POSIXError(.init(rawValue: errno) ?? .EIO)
-                }
-                received += amount
-            }
-        }
-        return result
-    }
-
     private func writeAll(_ data: Data, to socket: Int32) throws {
         try MobileSocketIO.writeAll(data, to: socket)
     }
@@ -937,6 +954,14 @@ final class MobilePairingService: @unchecked Sendable {
     private func nonEmptyString(_ value: Any?) -> String? {
         guard let string = value as? String, !string.isEmpty else { return nil }
         return string
+    }
+
+    private func notifyLimitOnQueue(_ message: String) {
+        let now = ProcessInfo.processInfo.systemUptime
+        guard now - lastLimitNotice >= 60 else { return }
+        lastLimitNotice = now
+        NSLog("[MobilePairing] %@", message)
+        notifyFailure(message)
     }
 
     private func notifyFailure(_ message: String) {
