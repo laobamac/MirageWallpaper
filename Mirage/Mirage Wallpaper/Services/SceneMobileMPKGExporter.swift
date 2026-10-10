@@ -7,6 +7,7 @@
 //  Native conversion of desktop scene packages for Wallpaper Engine Android.
 //
 
+import AVFoundation
 import Accelerate
 import Compression
 import Foundation
@@ -86,10 +87,17 @@ enum SceneMobileMPKGExporter {
         _ wallpaper: WEWallpaper,
         to outputURL: URL,
         options: SceneMobileExportOptions = .init(),
+        snapshot: WallpaperRenderSnapshot? = nil,
         progress: ((Double) -> Void)? = nil
     ) throws {
         guard wallpaper.isValid, wallpaper.kind == .scene else {
             throw SceneMobileExportError.unsupportedWallpaperType(wallpaper.kind)
+        }
+        if let preRendered = options.preRendered {
+            guard let snapshot else { throw SceneMobileExportError.invalidProject }
+            try WallpaperBakeService.exportMobile(wallpaper, to: outputURL, options: preRendered,
+                                                  snapshot: snapshot, progress: progress)
+            return
         }
         guard wallpaper.wallpaperDirectory.standardizedFileURL
             == wallpaper.renderDirectory.standardizedFileURL else {
@@ -242,6 +250,124 @@ enum SceneMobileMPKGExporter {
             progress?(0.9 + fraction * 0.1)
         }
         progress?(1)
+    }
+
+    static func sourceResolution(_ wallpaper: WEWallpaper) throws -> MobileScreenResolution {
+        let source = wallpaper.resolvedEntryURL
+        let data: Data
+        if source.pathExtension.lowercased() == "pkg" {
+            let package = try readPackage(at: source)
+            guard let entry = package.entries.first(where: {
+                $0.name.caseInsensitiveCompare(wallpaper.project.file) == .orderedSame
+            }), entry.size <= 8 * 1024 * 1024 else { throw SceneMobileExportError.invalidProject }
+            data = try readPackageEntry(entry, from: source)
+        } else {
+            guard let size = try source.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+                  size <= 8 * 1024 * 1024 else { throw SceneMobileExportError.invalidProject }
+            data = try Data(contentsOf: source)
+        }
+        guard let scene = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let general = scene["general"] as? [String: Any],
+              let projection = general["orthogonalprojection"] as? [String: Any],
+              let width = projection["width"] as? Int, let height = projection["height"] as? Int else {
+            throw SceneMobileExportError.invalidProject
+        }
+        let result = MobileScreenResolution(width: width, height: height)
+        guard result.isValid else { throw SceneMobileExportError.invalidProject }
+        return result
+    }
+
+    static func automaticDuration(_ wallpaper: WEWallpaper, fps: Int, speed: Double) throws -> Double {
+        let fileManager = FileManager.default
+        let source = wallpaper.resolvedEntryURL
+        let package = source.pathExtension.lowercased() == "pkg" ? try readPackage(at: source).entries : []
+        let entries = Dictionary(uniqueKeysWithValues: package.map { ($0.name.lowercased(), $0) })
+        let projectRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let bundledAssets = Bundle.main.resourceURL?.appending(path: "assets")
+        let assets = bundledAssets.flatMap { fileManager.fileExists(atPath: $0.path) ? $0 : nil }
+            ?? projectRoot.appending(path: "assets")
+        let roots = wallpaper.assetOverlayDirectories + [wallpaper.renderDirectory, assets]
+        let staging = fileManager.temporaryDirectory.appending(path: "Mirage-Mobile-Timing-\(UUID().uuidString)")
+        try fileManager.createDirectory(at: staging, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: staging) }
+
+        func resolve(_ name: String) -> SceneMobileTiming.TextureSource? {
+            guard isSafeEntryName(name) else { return nil }
+            let suffix = (name as NSString).pathExtension.lowercased()
+            let candidates: [String]
+            if suffix == "tex" {
+                candidates = name.hasPrefix("materials/") ? [name] : [name, "materials/\(name)"]
+            } else if ["json", "mp4", "mov", "m4v"].contains(suffix) { candidates = [name] }
+            else { candidates = ["materials/\(name).tex"] }
+            for candidate in candidates {
+                if let entry = entries[candidate.lowercased()] {
+                    return .init(url: source, offset: entry.absoluteOffset, size: entry.size)
+                }
+                for root in roots {
+                    if let file = containedFile(candidate, in: root),
+                       let values = try? file.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey]),
+                       values.isRegularFile == true, let size = values.fileSize, size >= 0 {
+                        return .init(url: file, offset: 0, size: UInt64(size))
+                    }
+                }
+            }
+            return nil
+        }
+        func copy(_ asset: SceneMobileTiming.TextureSource, suffix: String) throws -> URL {
+            let input = try FileHandle(forReadingFrom: asset.url)
+            defer { try? input.close() }
+            try input.seek(toOffset: asset.offset)
+            let destination = staging.appendingPathComponent(UUID().uuidString + "." + suffix)
+            fileManager.createFile(atPath: destination.path, contents: nil)
+            let output = try FileHandle(forWritingTo: destination)
+            defer { try? output.close() }
+            var remaining = asset.size
+            while remaining > 0 {
+                let count = Int(min(remaining, 1_048_576))
+                let data = try readExactly(count, from: input)
+                try output.write(contentsOf: data)
+                remaining -= UInt64(count)
+            }
+            return destination
+        }
+        var loops: [Double] = [], oneShots: [Double] = []
+        var cameraDuration = 0.0
+        func inspectVideo(_ url: URL) {
+            let duration = CMTimeGetSeconds(AVURLAsset(url: url).duration)
+            if duration.isFinite, duration > 0 { loops.append(duration) }
+        }
+        var pending = [wallpaper.project.file], visited = Set<String>()
+        var inspected = Set<SceneMobileTiming.TextureSource>()
+        while !pending.isEmpty, visited.count < 2048 {
+            let name = pending.removeLast()
+            guard visited.insert(name.lowercased()).inserted, let asset = resolve(name),
+                  asset.size <= 512 * 1024 * 1024, inspected.insert(asset).inserted else { continue }
+            let suffix = (name as NSString).pathExtension.lowercased()
+            if suffix == "json", asset.size <= 8 * 1024 * 1024 {
+                let handle = try FileHandle(forReadingFrom: asset.url)
+                defer { try? handle.close() }
+                try handle.seek(toOffset: asset.offset)
+                let data = try readExactly(Int(asset.size), from: handle)
+                guard let json = try? JSONSerialization.jsonObject(with: data) else { continue }
+                let summary = SceneMobileTiming.summary(of: json)
+                loops += summary.loops; oneShots += summary.oneShots
+                cameraDuration += summary.cameraDuration
+                pending += summary.references.sorted()
+            } else if ["mp4", "mov", "m4v"].contains(suffix) {
+                let url = asset.offset == 0 && asset.url != source ? asset.url : try copy(asset, suffix: suffix)
+                inspectVideo(url)
+                if url != asset.url { try? fileManager.removeItem(at: url) }
+            } else if let timing = try? SceneMobileTiming.textureTiming(asset, in: staging) {
+                if let duration = timing.period { loops.append(duration) }
+                if let video = timing.video {
+                    inspectVideo(video)
+                    try? fileManager.removeItem(at: video)
+                }
+            }
+        }
+        if cameraDuration > 0 { loops.append(cameraDuration) }
+        return SceneMobileTiming.duration(loops: loops, oneShots: oneShots, fps: fps, speed: speed)
     }
 
     private static func readPackage(at url: URL) throws -> (version: String, entries: [PackageEntry]) {

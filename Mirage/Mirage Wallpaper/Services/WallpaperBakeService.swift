@@ -90,6 +90,7 @@ final class WallpaperBakeCancellation: @unchecked Sendable {
 @MainActor
 final class WallpaperBakeService: ObservableObject {
     static let shared = WallpaperBakeService()
+    nonisolated static let renderQueue = DispatchQueue(label: "cn.laobamac.Mirage.baking", qos: .userInitiated)
 
     struct Job: Identifiable {
         let id: UUID
@@ -113,6 +114,7 @@ final class WallpaperBakeService: ObservableObject {
         let volume: Float
         let destination: URL
         let cancellation: WallpaperBakeCancellation
+        var renderDuration: Double? = nil
     }
 
     @Published var presentedWallpaper: WEWallpaper?
@@ -120,6 +122,46 @@ final class WallpaperBakeService: ObservableObject {
     @Published private(set) var jobs: [Job] = []
     private var pending: [Request] = []
     private var running = false
+
+    static func mobileSnapshot(for wallpaper: WEWallpaper) async -> WallpaperRenderSnapshot {
+        let model = AppDelegate.shared.wallpaperViewModel
+        await model.refreshScriptStorage(for: wallpaper)
+        let runtime = model.loadRuntime(for: wallpaper)
+        return model.renderSnapshots(for: wallpaper.id)[model.selectedDisplayKey.rawValue] ??
+            WallpaperRenderSnapshot(runtime: runtime,
+                properties: model.effectiveProperties(for: wallpaper, runtime: runtime),
+                scriptStorage: WallpaperRenderSnapshot.storedScriptStorage(for: wallpaper))
+    }
+
+    nonisolated static func exportMobile(_ wallpaper: WEWallpaper, to output: URL,
+        options: SceneMobileExportOptions.PreRendered, snapshot: WallpaperRenderSnapshot,
+        progress: ((Double) -> Void)?) throws {
+        let resolution = try options.outputResolution(source: SceneMobileMPKGExporter.sourceResolution(wallpaper))
+        var settings = WallpaperBakeSettings()
+        settings.width = resolution.width; settings.height = resolution.height
+        let duration = try options.duration.map(Double.init) ??
+            SceneMobileMPKGExporter.automaticDuration(wallpaper, fps: options.fps, speed: Double(snapshot.speed))
+        settings.fps = options.fps; settings.duration = Int(duration.rounded(.up))
+        settings.highQuality = true
+        var snapshot = snapshot
+        snapshot.fillMode = "cover"
+        snapshot.position = WallpaperPosition(x: options.alignment, y: options.alignment)
+        let root = FileManager.default.temporaryDirectory.appending(path: "Mirage-Mobile-Bake-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let request = Request(id: UUID(), title: wallpaper.project.title, wallpaper: wallpaper,
+            settings: settings, snapshot: snapshot, volume: 0, destination: root,
+            cancellation: WallpaperBakeCancellation(), renderDuration: duration)
+        progress?(0)
+        let baked = try run(request) { state, value, _ in
+            if state == "progress", let fraction = value?.fraction { progress?(fraction * 0.9) }
+        }
+        let project = try JSONDecoder().decode(WEProject.self, from: Data(contentsOf: baked.appending(path: "project.json")))
+        try MobileMPKGExporter.export(WEWallpaper(using: project, where: baked), to: output) { done, total in
+            if total > 0 { progress?(0.9 + Double(done) / Double(total) * 0.1) }
+        }
+        progress?(1)
+    }
 
     func enqueue(_ wallpaper: WEWallpaper, settings: WallpaperBakeSettings) async {
         guard settings.isValid, wallpaper.presentationIsValid else { return }
@@ -158,7 +200,7 @@ final class WallpaperBakeService: ObservableObject {
         let request = pending.removeFirst()
         Task {
             let result: Result<URL, Error> = await withCheckedContinuation { continuation in
-                DispatchQueue.global(qos: .utility).async {
+                Self.renderQueue.async {
                     let result = Result { try Self.run(request) { event, progress, log in
                         DispatchQueue.main.sync {
                             MainActor.assumeIsolated {
@@ -206,7 +248,9 @@ final class WallpaperBakeService: ObservableObject {
         let available = try job.destination.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]).volumeAvailableCapacityForImportantUsage ?? 0
         guard available > job.settings.estimatedBytes * 2 + 512 * 1024 * 1024 else { throw WallpaperBakeError.code("disk_space") }
         try job.cancellation.check()
-        guard job.settings.isValid, job.snapshot.speed.isFinite, (0.1...4).contains(job.snapshot.speed) else {
+        let renderDuration = job.renderDuration ?? Double(job.settings.duration)
+        guard renderDuration.isFinite, (1...600).contains(renderDuration),
+              job.settings.isValid, job.snapshot.speed.isFinite, (0.1...4).contains(job.snapshot.speed) else {
             throw WallpaperBakeError.code("invalid_request")
         }
         let source = job.wallpaper.resolvedEntryURL
@@ -245,7 +289,7 @@ final class WallpaperBakeService: ObservableObject {
             "overlays": job.wallpaper.assetOverlayDirectories.map(\.path), "assets": assets.path,
             "cache": cache.path, "output": output.path, "properties": properties,
             "storage": job.snapshot.scriptStorage ?? [:], "width": job.settings.width, "height": job.settings.height,
-            "fps": job.settings.fps, "duration": job.settings.duration, "warmup": job.settings.warmup,
+            "fps": job.settings.fps, "duration": renderDuration, "warmup": job.settings.warmup,
             "audio": job.settings.audio && job.wallpaper.kind != .web, "volume": job.volume,
             "speed": job.wallpaper.kind == .web ? 1.0 : Double(job.snapshot.speed), "seed": job.settings.seed,
             "fillMode": job.snapshot.fillMode, "positionX": job.snapshot.position.x, "positionY": job.snapshot.position.y,

@@ -5,9 +5,74 @@
 //
 
 import Foundation
+import CoreFoundation
+
+struct MobileScreenResolution: Codable, Equatable, Sendable {
+    let width: Int
+    let height: Int
+
+    var isValid: Bool { (128...16384).contains(width) && (128...16384).contains(height) }
+    var aspectRatio: Double { Double(width) / Double(height) }
+
+    init(width: Int, height: Int) { self.width = width; self.height = height }
+
+    init?(pairingRequest: [String: Any]) {
+        // Wallpaper Engine Android's EncAuthRequest supplies physical display pixels.
+        guard let width = pairingRequest["displayWidth"] as? NSNumber,
+              let height = pairingRequest["displayHeight"] as? NSNumber,
+              CFGetTypeID(width) != CFBooleanGetTypeID(), CFGetTypeID(height) != CFBooleanGetTypeID(),
+              width.doubleValue.isFinite, height.doubleValue.isFinite,
+              (128...16384).contains(width.doubleValue), (128...16384).contains(height.doubleValue),
+              width.doubleValue.rounded() == width.doubleValue,
+              height.doubleValue.rounded() == height.doubleValue else { return nil }
+        self.init(width: width.intValue, height: height.intValue)
+    }
+}
 
 /// Value copied into each export job so changing the sheet cannot affect a running conversion.
 struct SceneMobileExportOptions: Equatable, Sendable {
+    enum VideoPreset: String, CaseIterable, Identifiable, Sendable {
+        case automatic, fullHD, ultraHD
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .automatic: return L("自动")
+            case .fullHD: return L("全高清")
+            case .ultraHD: return "4K UHD"
+            }
+        }
+    }
+
+    struct PreRendered: Equatable, Sendable {
+        var fitPhone = true
+        var screenResolution: MobileScreenResolution?
+        var preset: VideoPreset = .fullHD
+        var fps = 60
+        var alignment = 0.5
+        var duration: Int? = nil
+
+        func outputResolution(source: MobileScreenResolution) throws -> MobileScreenResolution {
+            guard source.isValid, [24, 30, 60].contains(fps), alignment.isFinite,
+                  (0...1).contains(alignment), duration.map({ (1...600).contains($0) }) ?? true else {
+                throw WallpaperBakeError.code("invalid_request")
+            }
+            let target: MobileScreenResolution
+            if fitPhone {
+                guard let screenResolution, screenResolution.isValid else {
+                    throw MobilePreRenderError.screenResolutionMissing
+                }
+                target = screenResolution
+            } else { target = source }
+            let limit = preset == .fullHD ? 1920 : preset == .ultraHD ? 3840 : 4096
+            let scale = min(1, Double(limit) / Double(max(target.width, target.height)))
+            // H.264 requires even dimensions; never change the selected aspect ratio by clamping each axis.
+            let result = MobileScreenResolution(width: Int(Double(target.width) * scale) / 2 * 2,
+                                                height: Int(Double(target.height) * scale) / 2 * 2)
+            guard result.isValid else { throw WallpaperBakeError.code("invalid_request") }
+            return result
+        }
+    }
+
     enum TextureReduction: Int, CaseIterable, Identifiable, Sendable {
         case original = 1
         case half = 2
@@ -25,6 +90,7 @@ struct SceneMobileExportOptions: Equatable, Sendable {
 
     var textureReduction: TextureReduction = .original
     var pixelArtOptimization = false
+    var preRendered: PreRendered?
 
     // The supplied mobile exports use half resolution for High Quality and
     // quarter resolution for Balanced; original resolution remains an advanced option.
@@ -48,5 +114,12 @@ struct SceneMobileExportOptions: Equatable, Sendable {
         }
         scene["general"] = general
         return try JSONSerialization.data(withJSONObject: scene, options: [.sortedKeys, .withoutEscapingSlashes])
+    }
+}
+
+enum MobilePreRenderError: LocalizedError {
+    case screenResolutionMissing
+    var errorDescription: String? {
+        L("尚未获取手机屏幕分辨率，请重新连接手机，或选择保持原始宽高比。")
     }
 }

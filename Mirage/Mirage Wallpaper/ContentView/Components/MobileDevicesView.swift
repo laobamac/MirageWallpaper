@@ -15,12 +15,15 @@ struct MobileDevice: Identifiable, Codable, Equatable {
     let name: String
     let model: String
     var isConnected: Bool
+    var screenResolution: MobileScreenResolution?
 
-    init(id: String = UUID().uuidString, name: String, model: String, isConnected: Bool = true) {
+    init(id: String = UUID().uuidString, name: String, model: String, isConnected: Bool = true,
+         screenResolution: MobileScreenResolution? = nil) {
         self.id = id
         self.name = name
         self.model = model
         self.isConnected = isConnected
+        self.screenResolution = screenResolution?.isValid == true ? screenResolution : nil
     }
 
     // Used by previews to make the connected-device state easy to inspect.
@@ -66,7 +69,8 @@ final class MobileDevicesViewModel: ObservableObject, MobilePairingServiceDelega
                     id: $0.id,
                     name: $0.model,
                     model: $0.name,
-                    isConnected: $0.isConnected
+                    isConnected: $0.isConnected,
+                    screenResolution: $0.screenResolution
                 )
             }
             if let data = try? JSONEncoder().encode(normalizedDevices) {
@@ -77,7 +81,8 @@ final class MobileDevicesViewModel: ObservableObject, MobilePairingServiceDelega
             normalizedDevices = restoredDevices
         }
         self.devices = normalizedDevices.map {
-            MobileDevice(id: $0.id, name: $0.name, model: $0.model, isConnected: false)
+            MobileDevice(id: $0.id, name: $0.name, model: $0.model, isConnected: false,
+                         screenResolution: $0.screenResolution)
         }
         self.screen = screen == .welcome && !normalizedDevices.isEmpty ? .devices : screen
         pairingService.delegate = self
@@ -142,54 +147,30 @@ final class MobileDevicesViewModel: ObservableObject, MobilePairingServiceDelega
             .appending(path: UUID().uuidString, directoryHint: .isDirectory)
         let output = directory.appending(path: MobileMPKGExporter.suggestedFilename(for: wallpaper))
 
-        DispatchQueue.global(qos: .userInitiated).async { [pairingService] in
+        Task { @MainActor [pairingService] in
             do {
-                try FileManager.default.createDirectory(
-                    at: directory,
-                    withIntermediateDirectories: true
-                )
-                switch wallpaper.kind {
-                case .video:
-                    try MobileMPKGExporter.export(wallpaper, to: output) { completed, total in
-                        progressModel.updatePreparation(
-                            id: progressID,
-                            completedBytes: completed,
-                            totalBytes: total
-                        )
-                    }
-                case .scene:
-                    try SceneMobileMPKGExporter.export(wallpaper, to: output, options: sceneOptions) { fraction in
-                        progressModel.updateConversion(id: progressID, fraction: fraction)
-                    }
-                case .web, .unsupported:
-                    throw MobileMPKGExportError.unsupportedWallpaperType(wallpaper.kind)
-                }
+                try await MobileWallpaperExportService.export(wallpaper, to: output,
+                    options: sceneOptions, progressID: progressID)
                 progressModel.waitForDevice(id: progressID)
                 pairingService.sendMPKG(
                     at: output,
                     title: wallpaper.project.title,
                     to: device.id,
                     progress: { completed, total in
-                        progressModel.updateUpload(
-                            id: progressID,
-                            completedBytes: completed,
-                            totalBytes: total
-                        )
+                        progressModel.updateUpload(id: progressID, completedBytes: completed, totalBytes: total)
                     }
                 ) { result in
                     try? FileManager.default.removeItem(at: directory)
                     switch result {
-                    case .success:
-                        progressModel.complete(id: progressID)
-                    case .failure(let error):
-                        progressModel.fail(id: progressID, message: error.localizedDescription)
+                    case .success: progressModel.complete(id: progressID)
+                    case .failure(let error): progressModel.fail(id: progressID, message: error.localizedDescription)
                     }
                     completion(result)
                 }
             } catch {
                 try? FileManager.default.removeItem(at: directory)
                 progressModel.fail(id: progressID, message: error.localizedDescription)
-                DispatchQueue.main.async { completion(.failure(error)) }
+                completion(.failure(error))
             }
         }
     }
@@ -208,7 +189,8 @@ final class MobileDevicesViewModel: ObservableObject, MobilePairingServiceDelega
         pairingService.stop()
         isStartingPairing = false
         devices = devices.map {
-            MobileDevice(id: $0.id, name: $0.name, model: $0.model, isConnected: false)
+            MobileDevice(id: $0.id, name: $0.name, model: $0.model, isConnected: false,
+                         screenResolution: $0.screenResolution)
         }
     }
 
@@ -220,7 +202,9 @@ final class MobileDevicesViewModel: ObservableObject, MobilePairingServiceDelega
     func mobilePairingService(_ service: MobilePairingService, didPair device: MobileDevice) {
         isStartingPairing = false
         if let index = devices.firstIndex(where: { $0.id == device.id }) {
-            devices[index] = device
+            var updated = device
+            updated.screenResolution = device.screenResolution ?? devices[index].screenResolution
+            devices[index] = updated
         } else {
             devices.append(device)
         }
@@ -238,7 +222,8 @@ final class MobileDevicesViewModel: ObservableObject, MobilePairingServiceDelega
             id: device.id,
             name: device.name,
             model: device.model,
-            isConnected: false
+            isConnected: false,
+            screenResolution: device.screenResolution
         )
     }
 
@@ -253,7 +238,8 @@ final class MobileDevicesViewModel: ObservableObject, MobilePairingServiceDelega
 
     private func saveDevices() {
         let persistent = devices.map {
-            MobileDevice(id: $0.id, name: $0.name, model: $0.model, isConnected: false)
+            MobileDevice(id: $0.id, name: $0.name, model: $0.model, isConnected: false,
+                         screenResolution: $0.screenResolution)
         }
         guard let data = try? JSONEncoder().encode(persistent) else { return }
         UserDefaults.standard.set(data, forKey: savedDevicesKey)

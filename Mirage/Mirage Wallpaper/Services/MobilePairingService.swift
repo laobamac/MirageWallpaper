@@ -526,7 +526,8 @@ final class MobilePairingService: @unchecked Sendable {
                     id: identifier,
                     name: name,
                     model: model,
-                    isConnected: true
+                    isConnected: true,
+                    screenResolution: MobileScreenResolution(pairingRequest: request)
                 )
                 notifyOnMain { $0.mobilePairingService(self, didPair: device) }
                 queue.async { [weak self] in

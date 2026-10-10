@@ -1315,3 +1315,35 @@
 "macOS 26 不会自动清理壁纸缓存。Mirage 需要你授权后，才能删除自己产生且已不再使用的缓存。" = "macOS 26 does not automatically clear its wallpaper cache. Grant access so Mirage can remove only the unused cache files it created.";
 "授权访问" = "Grant Access";
 "关闭自动清理" = "Turn Off Automatic Cleaning";
+
+"自动" = "Automatic";
+
+
+
+"视频裁剪" = "Video cropping";
+
+"适应手机屏幕" = "Fit phone screen";
+
+"保持原始宽高比" = "Keep original aspect ratio";
+
+"手机屏幕：%d × %d" = "Phone screen: %d × %d";
+
+"尚未获取手机屏幕分辨率，请重新连接手机，或选择保持原始宽高比。" = "Phone screen resolution is unavailable. Reconnect your phone or keep the original aspect ratio.";
+
+"视频预设" = "Video preset";
+
+"全高清" = "Full HD";
+
+"视频时长（秒）" = "Video duration (seconds)";
+
+"导出分辨率：%d × %d" = "Export resolution: %d × %d";
+
+"对齐" = "Alignment";
+
+"视频裁剪预览" = "Video crop preview";
+
+"预渲染场景壁纸可大幅提高性能，但时钟等动态元素或互动式触摸事件将无法正常工作。" = "Pre-rendered scene wallpapers improve performance, but clocks and interactive touch events will no longer update live.";
+
+"自适应" = "Adaptive";
+
+"优先使用动画或视频周期；无法识别周期时使用 30 秒。" = "Use the animation or video cycle when available; otherwise use 30 seconds.";

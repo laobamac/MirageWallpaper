@@ -205,33 +205,15 @@ class ContentViewModel: DropDelegate {
             wallpaperTitle: wallpaper.project.title,
             initialPhase: wallpaper.kind == .scene ? .converting : .preparing
         )
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        Task { @MainActor [weak self] in
             do {
-                switch wallpaper.kind {
-                case .video:
-                    try MobileMPKGExporter.export(wallpaper, to: outputURL) { completed, total in
-                        progressModel.updatePreparation(
-                            id: progressID,
-                            completedBytes: completed,
-                            totalBytes: total
-                        )
-                    }
-                case .scene:
-                    try SceneMobileMPKGExporter.export(wallpaper, to: outputURL, options: sceneOptions) { fraction in
-                        progressModel.updateConversion(id: progressID, fraction: fraction)
-                    }
-                case .web, .unsupported:
-                    throw MobileMPKGExportError.unsupportedWallpaperType(wallpaper.kind)
-                }
+                try await MobileWallpaperExportService.export(wallpaper, to: outputURL,
+                    options: sceneOptions, progressID: progressID)
                 progressModel.complete(id: progressID)
             } catch {
                 progressModel.fail(id: progressID, message: error.localizedDescription)
-                DispatchQueue.main.async {
-                    self?.screenSaverFeedback = ScreenSaverFeedback(
-                        title: L("导出 .mpkg 失败"),
-                        message: error.localizedDescription
-                    )
-                }
+                self?.screenSaverFeedback = ScreenSaverFeedback(
+                    title: L("导出 .mpkg 失败"), message: error.localizedDescription)
             }
         }
     }

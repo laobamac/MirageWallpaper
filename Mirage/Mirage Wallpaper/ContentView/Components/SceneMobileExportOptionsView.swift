@@ -5,9 +5,10 @@
 //
 
 import SwiftUI
+import ImageIO
 
 struct SceneMobileExportOptionsView: View {
-    private enum Quality: Equatable { case highQuality, balanced }
+    private enum Quality: Equatable { case highQuality, balanced, preRendered }
 
     let request: SceneMobileExportRequest
     let confirm: (SceneMobileExportOptions) -> Void
@@ -21,19 +22,51 @@ struct SceneMobileExportOptionsView: View {
     @State private var hasSelectedQuality = false
     @State private var showsAdvanced = false
     @State private var showsTextureChoices = false
+    @State private var showsVideoAdvanced = false
+    @ObservedObject private var mobileDevices = AppDelegate.shared.mobileDevicesViewModel
+    @State private var fitPhone = true
+    @State private var videoPreset = SceneMobileExportOptions.VideoPreset.fullHD
+    @State private var videoFPS = 60
+    @State private var videoAlignment = 0.5
+    @State private var videoDuration: Int? = nil
+    @State private var sourceResolution: MobileScreenResolution?
+    @State private var sourceError: String?
+    @State private var previewImage: NSImage?
+
+    private var isPreRendered: Bool { selectedQuality == .preRendered }
+    private var phoneResolution: MobileScreenResolution? {
+        switch request.destination {
+        case .device(let device):
+            return mobileDevices.devices.first(where: { $0.id == device.id })?.screenResolution ?? device.screenResolution
+        case .file:
+            let connected = mobileDevices.devices.first { $0.isConnected && $0.screenResolution?.isValid == true }
+            return connected?.screenResolution ?? mobileDevices.devices.first { $0.screenResolution?.isValid == true }?.screenResolution
+        }
+    }
+    private var videoOptions: SceneMobileExportOptions.PreRendered {
+        .init(fitPhone: fitPhone, screenResolution: phoneResolution, preset: videoPreset,
+              fps: videoFPS, alignment: videoAlignment, duration: videoDuration)
+    }
+    private var canConfirm: Bool {
+        guard hasSelectedQuality else { return false }
+        guard isPreRendered else { return true }
+        guard let sourceResolution else { return false }
+        return (try? videoOptions.outputResolution(source: sourceResolution)) != nil
+    }
 
     private var exportOptions: SceneMobileExportOptions {
         SceneMobileExportOptions(
             textureReduction: textureReduction,
-            pixelArtOptimization: pixelArtOptimization
+            pixelArtOptimization: pixelArtOptimization,
+            preRendered: isPreRendered ? videoOptions : nil
         )
     }
 
-    private var background: Color { Color(nsColor: .windowBackgroundColor) }
+    private var background: Color { colorScheme == .dark ? Color(white: 34 / 255) : Color(nsColor: .windowBackgroundColor) }
     private var primaryText: Color { Color(nsColor: .labelColor) }
     private let accent = Color(red: 0.24, green: 0.49, blue: 0.97)
-    private var cardBackground: Color { Color(nsColor: .controlBackgroundColor) }
-    private var subtleBorder: Color { Color(nsColor: .separatorColor) }
+    private var cardBackground: Color { colorScheme == .dark ? Color(white: 61 / 255) : Color(white: 0.95) }
+    private var subtleBorder: Color { colorScheme == .dark ? Color(white: 72 / 255) : Color(nsColor: .separatorColor) }
     private var noticeBackground: Color {
         colorScheme == .dark
             ? Color(red: 0.14, green: 0.22, blue: 0.26)
@@ -48,13 +81,30 @@ struct SceneMobileExportOptionsView: View {
     private var cardWidth: CGFloat { min(150, (sheetWidth - 180) / 3) }
     private var textureMenuWidth: CGFloat { max(200, sheetWidth - 36 - 28 - 210 - 8) }
     private var bodyHeight: CGFloat {
-        let desired: CGFloat = showsAdvanced ? 460 : (hasSelectedQuality ? 355 : 320)
+        let desired: CGFloat = isPreRendered ? 680 : showsAdvanced ? 460 : (hasSelectedQuality ? 355 : 320)
         return min(desired, max(220, (NSScreen.main?.visibleFrame.height ?? 900) - 190))
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            Text(heading)
+            HStack(spacing: 12) {
+                Text(heading)
+                Spacer(minLength: 0)
+                if isPreRendered {
+                    Button { showsVideoAdvanced.toggle() } label: {
+                        Image(systemName: "slider.horizontal.3")
+                            .font(.system(size: 16))
+                            .frame(width: 28, height: 28)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(L("显示高级设置"))
+                    .help(L("显示高级设置"))
+                    .popover(isPresented: $showsVideoAdvanced, arrowEdge: .top) {
+                        videoAdvancedSettings
+                    }
+                }
+            }
                 .font(.system(size: 20, weight: .regular))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
@@ -86,18 +136,19 @@ struct SceneMobileExportOptionsView: View {
                             }
                         }
                         optionGroup(title: "预渲染") {
-                            qualityCard(title: "高性能", quality: nil, preset: nil, icon: .film)
-                                .help(L("预渲染视频导出暂不可用"))
+                            qualityCard(title: "高性能", quality: .preRendered, preset: .init(), icon: .film)
                         }
                     }
                     .padding(.top, 3)
                     .frame(maxWidth: .infinity)
 
-                    if hasSelectedQuality {
+                    if isPreRendered {
+                        videoSettings
+                    } else if hasSelectedQuality {
                         advancedSettingsControl
                     }
 
-                    if showsAdvanced {
+                    if showsAdvanced && !isPreRendered {
                         VStack(alignment: .leading, spacing: 20) {
                             pixelOptimizationControl
                             HStack(spacing: 0) {
@@ -176,9 +227,10 @@ struct SceneMobileExportOptionsView: View {
                     dismiss()
                 } label: {
                     footerLabel("确认", fill: accent)
-                        .opacity(hasSelectedQuality ? 1 : 0.55)
+                        .foregroundStyle(.white)
+                        .opacity(canConfirm ? 1 : 0.55)
                 }
-                .disabled(!hasSelectedQuality)
+                .disabled(!canConfirm)
                 .keyboardShortcut(.defaultAction)
                 Button { dismiss() } label: {
                     footerLabel("取消", fill: cardBackground)
@@ -192,6 +244,132 @@ struct SceneMobileExportOptionsView: View {
         .background(background)
         .foregroundStyle(primaryText)
         .environment(\.locale, localization.locale)
+        .task {
+            let wallpaper = request.wallpaper
+            let (result, image) = await Task.detached(priority: .userInitiated) {
+                let result = Result { try SceneMobileMPKGExporter.sourceResolution(wallpaper) }
+                let imageSource = CGImageSourceCreateWithURL(wallpaper.previewURL as CFURL, nil)
+                let options: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceThumbnailMaxPixelSize: 512, kCGImageSourceCreateThumbnailWithTransform: true,
+                    kCGImageSourceShouldCacheImmediately: true]
+                let image = imageSource.flatMap { CGImageSourceCreateThumbnailAtIndex($0, 0, options as CFDictionary) }
+                return (result, image)
+            }.value
+            switch result {
+            case .success(let resolution): sourceResolution = resolution
+            case .failure(let error): sourceError = error.localizedDescription
+            }
+            previewImage = image.map { NSImage(cgImage: $0, size: .zero) }
+
+        }
+    }
+
+    private var videoSettings: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            Text(L("预渲染场景壁纸可大幅提高性能，但时钟等动态元素或互动式触摸事件将无法正常工作。"))
+                .font(.system(size: 15))
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.bottom, 2)
+
+            VStack(alignment: .leading, spacing: 20) {
+                videoSettingRow("视频裁剪") {
+                    exportDropdown("视频裁剪", selection: $fitPhone, choices: [
+                        (true, L("适应手机屏幕"), phoneResolution != nil),
+                        (false, L("保持原始宽高比"), true)
+                    ])
+                    .help(phoneResolution.map { L("手机屏幕：%d × %d", $0.width, $0.height) }
+                          ?? L("尚未获取手机屏幕分辨率，请重新连接手机，或选择保持原始宽高比。"))
+                }
+                if phoneResolution == nil {
+                    videoSettingRow("") {
+                        Text(L("尚未获取手机屏幕分辨率，请重新连接手机，或选择保持原始宽高比。"))
+                            .font(.system(size: 12)).foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                videoSettingRow("视频预设") {
+                    exportDropdown("视频预设", selection: $videoPreset,
+                        choices: SceneMobileExportOptions.VideoPreset.allCases.map { ($0, $0.title, true) })
+                }
+                videoSettingRow("帧率") {
+                    exportDropdown("帧率", selection: $videoFPS,
+                        choices: [24, 30, 60].map { ($0, String($0), true) })
+                }
+                if let source = sourceResolution, let output = try? videoOptions.outputResolution(source: source) {
+                    videoSettingRow("") {
+                        cropPreview(source: source, output: output)
+                            .help(L("导出分辨率：%d × %d", output.width, output.height))
+                    }
+                    .padding(.bottom, 4)
+                    if fitPhone {
+                        videoSettingRow("对齐") {
+                            MobileExportAlignmentSlider(value: $videoAlignment, accent: accent,
+                                track: colorScheme == .dark ? cardBackground : Color(white: 0.82))
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 14)
+            if let sourceError { Text(sourceError).foregroundStyle(.red).font(.system(size: 12)) }
+        }
+    }
+
+    private var videoAdvancedSettings: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(L("视频时长（秒）")).font(.system(size: 14, weight: .bold))
+            exportDropdown("视频时长（秒）", selection: $videoDuration,
+                choices: [(nil as Int?, L("自适应"), true)] +
+                    [10, 15, 30, 60].map { (Optional($0), String($0), true) })
+                .help(L("优先使用动画或视频周期；无法识别周期时使用 30 秒。"))
+            if let resolution = phoneResolution {
+                Text(L("手机屏幕：%d × %d", resolution.width, resolution.height))
+            }
+            if let source = sourceResolution, let output = try? videoOptions.outputResolution(source: source) {
+                Text(L("导出分辨率：%d × %d", output.width, output.height))
+            }
+        }
+        .font(.system(size: 12))
+        .padding(16)
+        .frame(width: 280)
+        .background(background)
+    }
+
+    private func exportDropdown<Value: Hashable>(_ title: String, selection: Binding<Value>,
+        choices: [(Value, String, Bool)]) -> some View {
+        MobileExportDropdown(title: L(title), selection: selection, choices: choices,
+                             background: title == "视频裁剪" && colorScheme == .dark ? background : cardBackground,
+                             border: subtleBorder, accent: accent)
+    }
+
+    private func videoSettingRow<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        HStack(spacing: 8) {
+            settingLabel(title)
+            content().frame(maxWidth: .infinity)
+        }
+    }
+
+    private func cropPreview(source: MobileScreenResolution, output: MobileScreenResolution) -> some View {
+        let width: CGFloat = 176
+        let height = min(148, width / source.aspectRatio)
+        let viewWidth = height * source.aspectRatio
+        let cropWidth = min(viewWidth, height * output.aspectRatio)
+        let cropHeight = min(height, viewWidth / output.aspectRatio)
+        let x = (viewWidth - cropWidth) * videoAlignment
+        let y = (height - cropHeight) * (1 - videoAlignment)
+        return ZStack(alignment: .topLeading) {
+            if let previewImage {
+                Image(nsImage: previewImage).resizable().scaledToFill()
+                    .frame(width: viewWidth, height: height).clipped()
+            } else { Rectangle().fill(cardBackground) }
+            Path { path in
+                path.addRect(CGRect(x: 0, y: 0, width: viewWidth, height: height))
+                path.addRect(CGRect(x: x, y: y, width: cropWidth, height: cropHeight))
+            }.fill(accent.opacity(0.38), style: FillStyle(eoFill: true))
+        }
+        .frame(width: viewWidth, height: height)
+        .overlay(Rectangle().strokeBorder(accent, lineWidth: 1))
+        .frame(maxWidth: .infinity)
+        .accessibilityLabel(L("视频裁剪预览"))
     }
 
     private var divider: some View { Rectangle().fill(subtleBorder).frame(height: 1) }
@@ -282,34 +460,135 @@ struct SceneMobileExportOptionsView: View {
             }
     }
 
-    private func qualityCard(title: String, quality: Quality?, preset: SceneMobileExportOptions?, icon: MobileExportQualityIcon.Kind) -> some View {
-        let selected = quality != nil && selectedQuality == quality
+    private func qualityCard(title: String, quality: Quality, preset: SceneMobileExportOptions, icon: MobileExportQualityIcon.Kind) -> some View {
+        let selected = selectedQuality == quality
         let fill = selected ? accent : cardBackground
+        let face = selected ? Color.white : primaryText
         return Button {
-            guard let quality, let preset else { return }
             textureReduction = preset.textureReduction
             pixelArtOptimization = preset.pixelArtOptimization
             selectedQuality = quality
+            if quality == .preRendered { fitPhone = phoneResolution != nil }
             hasSelectedQuality = true
         } label: {
             VStack(spacing: 12) {
                 Text(L(title))
                     .font(.system(size: 16))
-                    .foregroundStyle(primaryText)
-                MobileExportQualityIcon(kind: icon, face: primaryText, cutout: fill)
+                    .foregroundStyle(face)
+                MobileExportQualityIcon(kind: icon, face: face, cutout: fill)
                     .frame(width: 52, height: 52)
                     .accessibilityHidden(true)
             }
             .frame(width: cardWidth, height: 114)
             .background(fill, in: RoundedRectangle(cornerRadius: 3))
-            .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(subtleBorder))
+            .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(selected ? accent : subtleBorder))
         }
         .buttonStyle(.plain)
-        .disabled(preset == nil)
-        .opacity(preset == nil ? 0.65 : 1)
         .accessibilityLabel(L(title))
-        .accessibilityHint(preset == nil ? L("预渲染视频导出暂不可用") : "")
         .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+private struct MobileExportDropdown<Value: Hashable>: View {
+    let title: String
+    @Binding var selection: Value
+    let choices: [(Value, String, Bool)]
+    let background: Color
+    let border: Color
+    let accent: Color
+    @State private var isPresented = false
+
+    private var selectedTitle: String { choices.first(where: { $0.0 == selection })?.1 ?? "" }
+
+    var body: some View {
+        GeometryReader { geometry in
+            Button { isPresented.toggle() } label: {
+                HStack(spacing: 10) {
+                    Text(selectedTitle).lineLimit(1)
+                    Spacer(minLength: 0)
+                    Image(systemName: "triangle.fill")
+                        .font(.system(size: 7))
+                        .rotationEffect(.degrees(isPresented ? 180 : 0))
+                }
+                .font(.system(size: 15))
+                .padding(.horizontal, 20)
+                .frame(maxWidth: .infinity, minHeight: 26, maxHeight: 26)
+                .background(background, in: RoundedRectangle(cornerRadius: 3))
+                .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(border, lineWidth: 1))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(title)
+            .accessibilityValue(selectedTitle)
+            .popover(isPresented: $isPresented, arrowEdge: .top) {
+                VStack(spacing: 2) {
+                    ForEach(choices.indices, id: \.self) { index in
+                        let choice = choices[index]
+                        Button {
+                            selection = choice.0
+                            isPresented = false
+                        } label: {
+                            HStack(spacing: 12) {
+                                Text(choice.1)
+                                Spacer(minLength: 8)
+                                if selection == choice.0 {
+                                    Image(systemName: "checkmark").foregroundStyle(accent)
+                                }
+                            }
+                            .font(.system(size: 14))
+                            .padding(.horizontal, 14)
+                            .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!choice.2)
+                        .opacity(choice.2 ? 1 : 0.45)
+                        .accessibilityAddTraits(selection == choice.0 ? .isSelected : [])
+                    }
+                }
+                .padding(6)
+                .frame(width: max(200, geometry.size.width))
+                .background(background)
+            }
+        }
+        .frame(height: 26)
+    }
+}
+
+private struct MobileExportAlignmentSlider: View {
+    @Binding var value: Double
+    let accent: Color
+    let track: Color
+
+    var body: some View {
+        GeometryReader { geometry in
+            let travel = max(1, geometry.size.width - 8)
+            ZStack(alignment: .leading) {
+                Rectangle().fill(track).frame(height: 4)
+                Rectangle().fill(accent)
+                    .frame(width: 8, height: 24)
+                    .offset(x: travel * value)
+            }
+            .frame(height: 26)
+            .contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 0).onChanged { event in
+                value = min(1, max(0, (event.location.x - 4) / travel))
+            })
+        }
+        .frame(height: 26)
+        .focusable()
+        .onKeyPress(.leftArrow) { value = max(0, value - 0.02); return .handled }
+        .onKeyPress(.rightArrow) { value = min(1, value + 0.02); return .handled }
+        .accessibilityElement()
+        .accessibilityLabel(L("对齐"))
+        .accessibilityValue("\(Int(value * 100))%")
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .increment: value = min(1, value + 0.05)
+            case .decrement: value = max(0, value - 0.05)
+            @unknown default: break
+            }
+        }
     }
 }
 
