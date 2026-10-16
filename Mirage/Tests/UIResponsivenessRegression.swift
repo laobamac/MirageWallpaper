@@ -214,7 +214,9 @@ private struct UIResponsivenessRegression {
             if CommandLine.arguments.contains("--playback-policy") {
                 try testAudioActivityState()
                 try await testAudioMonitoring()
-                try await testNativeAudioMonitoring()
+                if CommandLine.arguments.contains("--headless") {
+                    print("SKIP: native CoreAudio device integration requires audio hardware")
+                } else { try await testNativeAudioMonitoring() }
                 try testPlaybackPolicyEvaluation()
                 try testPlaybackPolicyInputs()
                 try testFullscreenPlaybackPolicy()
@@ -250,7 +252,9 @@ private struct UIResponsivenessRegression {
             try await testLogs()
             try testAudioActivityState()
             try await testAudioMonitoring()
-            try await testNativeAudioMonitoring()
+            if CommandLine.arguments.contains("--headless") {
+                print("SKIP: native CoreAudio device integration requires audio hardware")
+            } else { try await testNativeAudioMonitoring() }
             try testPlaybackPolicyEvaluation()
             try testPlaybackPolicyInputs()
             try testFullscreenPlaybackPolicy()

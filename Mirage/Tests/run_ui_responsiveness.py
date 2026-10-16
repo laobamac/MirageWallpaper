@@ -17,6 +17,7 @@ def main():
     parser.add_argument("--derived-data", type=Path,
                         default=Path(tempfile.gettempdir()) / "MirageUIRegressionBuild")
     parser.add_argument("--skip-build", action="store_true")
+    parser.add_argument("--headless", action="store_true", help="Skip native audio-device integration on hosted CI")
     parser.add_argument("--startup-playlist", action="store_true")
     parser.add_argument("--wallpaper-runtime", action="store_true")
     parser.add_argument("--playback-policy", action="store_true")
@@ -72,6 +73,8 @@ def main():
     ], check=True, env=env)
     with (artifacts / "renderer.log").open("w") as log:
         command = [str(executable)]
+        if args.headless:
+            command.append("--headless")
         if args.startup_playlist:
             command.append("--startup-playlist")
         if args.wallpaper_runtime:
