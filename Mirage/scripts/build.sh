@@ -96,7 +96,7 @@ if ! xcodebuild "${XCCONFIG_ARGS[@]}" -project "$PROJECT" -scheme "$SCHEME" -con
     -derivedDataPath "$BUILD_DIR/DD" \
     ARCHS="$TARGET_ARCH" ONLY_ACTIVE_ARCH=YES \
     CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=YES \
-    "${RELEASE_FLAGS[@]}" \
+    ${RELEASE_FLAGS[@]+"${RELEASE_FLAGS[@]}"} \
     build > "$BUILD_LOG" 2>&1; then
     echo "[build] 编译失败，错误摘要:" >&2
     { grep -nE "error:|error extracting|not signed at all|In subcomponent:|failed with a nonzero|The following build commands failed" \
