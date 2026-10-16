@@ -82,6 +82,7 @@ struct ContentView: View {
     @StateObject private var steamSetupViewModel = SteamSetupViewModel()
     @State private var loadedSections: Set<MainSection>
     @State private var hasPresentedUI = false
+    @State private var isDetailPresented = false
     @State private var pendingSceneFileExport: (wallpaper: WEWallpaper, options: SceneMobileExportOptions)?
 
     init(
@@ -97,15 +98,67 @@ struct ContentView: View {
         _loadedSections = State(initialValue: [navigationModel.selection])
     }
 
+    private func detailPane(interfaceActive: Bool) -> some View {
+        ZStack {
+            WallpaperPreview(contentViewModel: viewModel,
+                            wallpaperViewModel: wallpaperViewModel,
+                            workshopViewModel: workshopViewModel,
+                            isActive: interfaceActive && !workshopViewModel.showCreatorProfile &&
+                                (navigationModel.selection == .installed || workshopViewModel.showCustomization))
+                .frame(maxWidth: 320)
+                .sectionVisibility(
+                    workshopViewModel.showCreatorProfile == false &&
+                        (navigationModel.selection == .installed || workshopViewModel.showCustomization)
+                )
+
+            WorkshopItemDetail(
+                item: workshopViewModel.selectedItem,
+                workshopViewModel: workshopViewModel,
+                isActive: interfaceActive && !workshopViewModel.showCreatorProfile &&
+                    navigationModel.selection != .installed && workshopViewModel.showCustomization == false
+            )
+                .frame(maxWidth: 320)
+                .sectionVisibility(
+                    workshopViewModel.showCreatorProfile == false &&
+                        navigationModel.selection != .installed &&
+                        workshopViewModel.showCustomization == false
+                )
+
+            if workshopViewModel.showCreatorProfile,
+               let creator = workshopViewModel.selectedCreator {
+                CreatorProfileView(
+                    creator: creator,
+                    workshopViewModel: workshopViewModel,
+                    animatedPreviewMode: globalSettingsViewModel.animatedPreviewPlaybackMode
+                )
+                .frame(maxWidth: 420)
+            }
+        }
+        .frame(
+            minWidth: workshopViewModel.showCreatorProfile ? 360 : 320,
+            idealWidth: workshopViewModel.showCreatorProfile ? 420 : 320,
+            maxWidth: workshopViewModel.showCreatorProfile ? 420 : 360
+        )
+        .layoutPriority(1)
+    }
+
     var body: some View {
         @Bindable var globalSettingsViewModel = globalSettingsViewModel
         let interfaceActive = viewModel.isStaging && viewModel.isWindowVisible
+        GeometryReader { geometry in
         ZStack {
             HSplitView {
                 if hasPresentedUI || viewModel.isStaging {
                     VStack(spacing: 5) {
                         TopTabBar(navigationModel: navigationModel,
                                   wallpaperViewModel: wallpaperViewModel)
+                        DisplayPlaybackStatusView(wallpaperViewModel: wallpaperViewModel, isActive: interfaceActive)
+                        if geometry.size.width < 1100 {
+                            HStack {
+                                Spacer()
+                                Button(L("壁纸详情与设置…")) { isDetailPresented = true }
+                            }
+                        }
                         ProjectFeedbackBanner()
                         ZStack {
                             if loadedSections.contains(.installed) {
@@ -181,47 +234,9 @@ struct ContentView: View {
                     .padding()
                     .frame(minWidth: 640)
 
-                    ZStack {
-                        WallpaperPreview(contentViewModel: viewModel,
-                                        wallpaperViewModel: wallpaperViewModel,
-                                        workshopViewModel: workshopViewModel,
-                                        isActive: interfaceActive && !workshopViewModel.showCreatorProfile &&
-                                            (navigationModel.selection == .installed || workshopViewModel.showCustomization))
-                            .frame(maxWidth: 320)
-                            .sectionVisibility(
-                                workshopViewModel.showCreatorProfile == false &&
-                                    (navigationModel.selection == .installed || workshopViewModel.showCustomization)
-                            )
-
-                        WorkshopItemDetail(
-                            item: workshopViewModel.selectedItem,
-                            workshopViewModel: workshopViewModel,
-                            isActive: interfaceActive && !workshopViewModel.showCreatorProfile &&
-                                navigationModel.selection != .installed && workshopViewModel.showCustomization == false
-                        )
-                            .frame(maxWidth: 320)
-                            .sectionVisibility(
-                                workshopViewModel.showCreatorProfile == false &&
-                                    navigationModel.selection != .installed &&
-                                    workshopViewModel.showCustomization == false
-                            )
-
-                        if workshopViewModel.showCreatorProfile,
-                           let creator = workshopViewModel.selectedCreator {
-                            CreatorProfileView(
-                                creator: creator,
-                                workshopViewModel: workshopViewModel,
-                                animatedPreviewMode: globalSettingsViewModel.animatedPreviewPlaybackMode
-                            )
-                            .frame(maxWidth: 420)
-                        }
+                    if geometry.size.width >= 1100 {
+                        detailPane(interfaceActive: interfaceActive)
                     }
-                    .frame(
-                        minWidth: workshopViewModel.showCreatorProfile ? 360 : 320,
-                        idealWidth: workshopViewModel.showCreatorProfile ? 420 : 320,
-                        maxWidth: workshopViewModel.showCreatorProfile ? 420 : 360
-                    )
-                    .layoutPriority(1)
                 }
             }
             .opacity(viewModel.isStaging ? 1 : 0)
@@ -233,6 +248,15 @@ struct ContentView: View {
                         .font(.largeTitle)
                 }
             }
+        }
+        }
+        .sheet(isPresented: $isDetailPresented) {
+            VStack(spacing: 0) {
+                detailPane(interfaceActive: interfaceActive)
+                Button(L("关闭详情")) { isDetailPresented = false }.padding()
+            }
+            .frame(width: 440, height: 620)
+            .environment(globalSettingsViewModel)
         }
         .confirmationDialog("删除壁纸",
                             isPresented: $viewModel.isUnsubscribeConfirming) {
@@ -378,7 +402,7 @@ struct ContentView: View {
         }
         .environment(\.locale, localization.locale)
         .environment(\.mirageContentActive, interfaceActive)
-        .frame(minWidth: 1100, minHeight: 640)
+        .frame(minWidth: 800, minHeight: 640)
         .onChange(of: navigationModel.selection) { _, section in
             if viewModel.isStaging { loadedSections.insert(section) }
         }

@@ -31,7 +31,7 @@ struct ExplorerBottomBar: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            header
+            ScrollView(.horizontal) { header.fixedSize(horizontal: true, vertical: false) }
             if !isCollapsed {
                 PlaylistStrip(manager: manager,
                               wallpaperViewModel: wallpaperViewModel,

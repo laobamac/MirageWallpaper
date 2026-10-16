@@ -251,6 +251,20 @@ class WallpaperViewModel: PlaylistPlayback {
         DisplayRegistry.shared.info(for: selectedDisplayKey)
     }
 
+    func playbackSummary(for display: DisplayInfo) -> DisplayPlaybackSummary {
+        let running = renderer.isRendering(onDisplay: display.displayID)
+        return .resolve(
+            id: display.key, name: display.name,
+            activeTitle: running ? renderer.currentWallpaper(onDisplay: display.displayID)?.project.title : nil,
+            assignedTitle: state(for: display.key)?.wallpaper.project.title,
+            pending: pendingPreparations[display.key] != nil || hasPendingAssignment(on: display.displayID, for: display.key),
+            running: running, policy: currentPlaybackPolicy(for: display.key),
+            sessionPaused: sessionPaused,
+            lockPaused: dynamicLockScreenPaused || externalLockScreenSuspended,
+            muted: isMuted(runtime(for: display.key), action: currentPlaybackPolicy(for: display.key)),
+            runtime: runtime(for: display.key))
+    }
+
     var selectedDisplayName: String {
         DisplayRegistry.shared.displayName(for: selectedDisplayKey)
     }

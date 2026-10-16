@@ -17,6 +17,7 @@ def main():
     parser.add_argument("--derived-data", type=Path,
                         default=Path(tempfile.gettempdir()) / "MirageUIRegressionBuild")
     parser.add_argument("--skip-build", action="store_true")
+    parser.add_argument("--test-source", choices=["PlaylistIdentityRegression", "PlaybackUIRegression"])
     parser.add_argument("--startup-playlist", action="store_true")
     parser.add_argument("--wallpaper-runtime", action="store_true")
     parser.add_argument("--playback-policy", action="store_true")
@@ -28,6 +29,10 @@ def main():
     artifacts = Path(tempfile.mkdtemp(prefix="mirage-ui-regression-"))
     print(f"Artifacts: {artifacts}", flush=True)
     env = dict(os.environ)
+    if args.test_source:
+        isolated_home = artifacts / "home"
+        isolated_home.mkdir()
+        env["CFFIXED_USER_HOME"] = str(isolated_home)
     env["LLVM_PROFILE_FILE"] = str(artifacts / "coverage-%p.profraw")
     if not args.skip_build:
         with (artifacts / "build.log").open("w") as log:
@@ -56,7 +61,7 @@ def main():
             *objects.read_text().splitlines(),
             "-o", str(library)
         ], check=True, env=env)
-    name = "UIInteractionBenchmark" if args.benchmark else "UIResponsivenessRegression"
+    name = args.test_source or ("UIInteractionBenchmark" if args.benchmark else "UIResponsivenessRegression")
     executable = artifacts / name
     subprocess.run([
         "xcrun", "swiftc", "-parse-as-library", "-target",
