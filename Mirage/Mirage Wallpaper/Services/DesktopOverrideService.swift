@@ -61,6 +61,25 @@ final class DesktopOverrideService {
     private var pendingCapture: [CGDirectDisplayID: DispatchWorkItem] = [:]
     private var captureRequests: [CGDirectDisplayID: CaptureRequest] = [:]
     private var installedByScreen: [CGDirectDisplayID: URL] = [:]
+    private var externallyChanged = Set<CGDirectDisplayID>()
+    /// Read-only detection; a different desktop image does not identify which app changed it.
+    func externallyChangedDisplays() -> Set<CGDirectDisplayID> {
+        for screen in NSScreen.screens {
+            guard let displayID = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value,
+                  let installed = installedByScreen[displayID],
+                  let current = NSWorkspace.shared.desktopImageURL(for: screen)?.resolvingSymlinksInPath() else { continue }
+            let recent = recentInstalls[displayID]
+            if !DesktopRestoreOwnership.shouldRestore(
+                current: current, installed: installed, previous: recent?.previous,
+                recentWriteAge: recent.map { ProcessInfo.processInfo.systemUptime - $0.uptime },
+                recorded: true, isCurrentGenerated: isMirageGenerated(current)) {
+                externallyChanged.insert(displayID)
+            }
+        }
+        return externallyChanged
+    }
+
+    private var recentInstalls: [CGDirectDisplayID: (previous: URL?, uptime: TimeInterval)] = [:]
     private static let captureRetryDelays: [TimeInterval] = [1.0, 2.0, 4.0, 6.0, 8.0, 10.0]
     private var pendingTargets: Set<URL> = []
     private var pendingPrune: DispatchWorkItem?
@@ -396,6 +415,7 @@ final class DesktopOverrideService {
         let previousInstalled = installedOverrides[key]
         installedOverrides[key] = url
         saveInstalledOverrides(installedOverrides)
+        let previousPicture = NSWorkspace.shared.desktopImageURL(for: screen)
         guard setDesktopImage(url, for: screen) else {
             displayKeys.remove(key)
             saveOverrideDisplayKeys(displayKeys)
@@ -421,6 +441,8 @@ final class DesktopOverrideService {
         }
         pendingTargets.remove(url)
         installedByScreen[displayID] = url
+        externallyChanged.remove(displayID)
+        recentInstalls[displayID] = (previousPicture, ProcessInfo.processInfo.systemUptime)
         captureRequests[displayID] = nil
         schedulePrune()
         cleanSystemCacheIfEnabled()
@@ -492,30 +514,32 @@ final class DesktopOverrideService {
             // Only touch screens Mirage actually took over; a screen showing
             // something else is the user's business.
             //
-            // `installedByScreen` is checked FIRST and is authoritative for this
-            // process. `desktopImageURL(for:)` on macOS 26 is only eventually
-            // consistent — right after a write it still reports the previous
-            // picture — so trusting it alone would skip the restore for an
-            // override installed moments before the user quit. The read-back is
-            // still needed for the crash-recovery case, where a previous process
-            // installed the override and this one has no record of it (by then
-            // the store has long settled).
+            // Keep only a short allowance for a just-written picture that has
+            // not appeared in the system's eventually consistent readback.
+            // Later external choices belong to the user, even in this process.
             let key = backupKey(for: displayID)
-            let installed = installedByScreen[displayID] != nil
+            let installed = installedByScreen[displayID]
             let current = NSWorkspace.shared.desktopImageURL(for: screen)
             let recorded = outstanding.contains(key)
-            if !installed, let current, !isMirageGenerated(current) {
+            let recent = recentInstalls[displayID]
+            guard DesktopRestoreOwnership.shouldRestore(
+                current: current, installed: installed, previous: recent?.previous,
+                recentWriteAge: recent.map { ProcessInfo.processInfo.systemUptime - $0.uptime },
+                recorded: recorded, isCurrentGenerated: current.map(isMirageGenerated) == true
+            ) else {
                 outstanding.remove(key)
                 backups.removeValue(forKey: key)
                 installedOverrides.removeValue(forKey: key)
+                installedByScreen.removeValue(forKey: displayID)
+                recentInstalls.removeValue(forKey: displayID)
                 continue
             }
-            guard installed || recorded || current.map(isMirageGenerated) == true else { continue }
             outstanding.insert(key)
             if setDesktopImage(backups[key] ?? Self.systemFallbackPicture(), for: screen) {
                 outstanding.remove(key)
                 backups.removeValue(forKey: key)
                 installedByScreen.removeValue(forKey: displayID)
+                recentInstalls.removeValue(forKey: displayID)
                 installedOverrides.removeValue(forKey: key)
             }
         }
@@ -526,6 +550,7 @@ final class DesktopOverrideService {
         if outstanding.isEmpty {
             mode = .none
             installedByScreen.removeAll()
+            recentInstalls.removeAll()
             ioQueue.sync {}
         } else {
             mode = .transient
@@ -1099,9 +1124,22 @@ final class DesktopOverrideService {
             guard let self, self.installedByScreen[displayID] == url else { return }
             let current = NSWorkspace.shared.desktopImageURL(for: screen)?.resolvingSymlinksInPath()
             if current == url.resolvingSymlinksInPath() {
+                self.recentInstalls.removeValue(forKey: displayID)
                 self.pruneAllExcept(Set(self.installedByScreen.values.map {
                     $0.resolvingSymlinksInPath()
                 }))
+                return
+            }
+            let recent = self.recentInstalls[displayID]
+            guard DesktopRestoreOwnership.shouldRestore(
+                current: current, installed: url, previous: recent?.previous,
+                recentWriteAge: recent.map { ProcessInfo.processInfo.systemUptime - $0.uptime },
+                recorded: true, isCurrentGenerated: current.map(self.isMirageGenerated) == true
+            ) else {
+                self.externallyChanged.insert(displayID)
+                self.installedByScreen.removeValue(forKey: displayID)
+                self.recentInstalls.removeValue(forKey: displayID)
+                NSLog("[DesktopOverride] External desktop change on display %u; stopped retrying", displayID)
                 return
             }
             self.setDesktopImage(url, for: screen)
