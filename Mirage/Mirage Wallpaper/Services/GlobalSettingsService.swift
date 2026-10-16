@@ -403,8 +403,8 @@ class GlobalSettingsViewModel {
             playbackLifecycleObservers.append(observer)
         }
         NotificationCenter.default.addObserver(
-            self, selector: #selector(playbackDisplaysDidChange),
-            name: NSApplication.didChangeScreenParametersNotification, object: nil)
+            self, selector: #selector(playbackDisplaysDidChange(_:)),
+            name: DisplayRegistry.didChangeNotification, object: DisplayRegistry.shared)
 
         // Low Power Mode and thermal pressure are global signals: the user has
         // either asked the machine to conserve, or the machine is already
@@ -700,7 +700,8 @@ class GlobalSettingsViewModel {
         scheduleSettlingEvaluations()
     }
 
-    @objc private func playbackDisplaysDidChange() {
+    @objc private func playbackDisplaysDidChange(_ notification: Notification) {
+        guard DisplayRegistry.Change.from(notification)?.topologyChanged == true else { return }
         handlePlaybackLifecycleEvent(.displaysChanged)
     }
 
@@ -724,7 +725,6 @@ class GlobalSettingsViewModel {
             playbackEvaluation.invalidate(force: true)
         case .displaysChanged:
             playbackEvaluation.invalidate(force: true)
-            DisplayRegistry.shared.invalidate()
         }
         playbackEvalTimer?.invalidate()
         playbackEvalTimer = nil

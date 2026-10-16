@@ -203,6 +203,12 @@ private struct UIResponsivenessRegression {
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             NSApplication.shared.setActivationPolicy(.accessory)
             NSApplication.shared.finishLaunching()
+            try testDisplayTopologySnapshots()
+            try testDisplayRegistryChanges()
+            if CommandLine.arguments.contains("--display-topology") {
+                print("DisplayTopologyRegression: all checks passed")
+                return
+            }
             if CommandLine.arguments.contains("--wallpaper-runtime") {
                 ImageProtocol.imageData = try pngData(color: .green)
                 try await testConfiguration()
@@ -260,6 +266,93 @@ private struct UIResponsivenessRegression {
             fputs("UIResponsivenessRegression: \(error)\n", stderr)
             exit(1)
         }
+    }
+
+    static func testDisplayTopologySnapshots() throws {
+        let main = DisplayTopologySnapshot.Screen(
+            displayID: 1, frame: CGRect(x: 0, y: 0, width: 1728, height: 1117),
+            backingScaleFactor: 2, maximumFramesPerSecond: 60, isMain: true)
+        let secondary = DisplayTopologySnapshot.Screen(
+            displayID: 2, frame: CGRect(x: 1728, y: 0, width: 2560, height: 1440),
+            backingScaleFactor: 1, maximumFramesPerSecond: 144, isMain: false)
+        let baseline = DisplayTopologySnapshot(screens: [main, secondary])
+        try require(baseline == DisplayTopologySnapshot(screens: [secondary, main]),
+                    "Display enumeration order was treated as a topology change")
+
+        let changes = [
+            DisplayTopologySnapshot.Screen(
+                displayID: 2, frame: CGRect(x: -2560, y: 0, width: 2560, height: 1440),
+                backingScaleFactor: 1, maximumFramesPerSecond: 144, isMain: false),
+            DisplayTopologySnapshot.Screen(
+                displayID: 2, frame: secondary.frame,
+                backingScaleFactor: 2, maximumFramesPerSecond: 144, isMain: false),
+            DisplayTopologySnapshot.Screen(
+                displayID: 2, frame: secondary.frame,
+                backingScaleFactor: 1, maximumFramesPerSecond: 60, isMain: false),
+            DisplayTopologySnapshot.Screen(
+                displayID: 2, frame: secondary.frame,
+                backingScaleFactor: 1, maximumFramesPerSecond: 144, isMain: true)
+        ]
+        for changed in changes {
+            try require(baseline != DisplayTopologySnapshot(screens: [main, changed]),
+                        "A meaningful display topology change was ignored")
+        }
+        print("PASS: unchanged display topology filtering and meaningful change detection")
+    }
+
+    static func testDisplayRegistryChanges() throws {
+        typealias Screen = DisplayTopologySnapshot.Screen
+        let main = Screen(displayID: 1, frame: CGRect(x: 0, y: 0, width: 1728, height: 1117),
+                          backingScaleFactor: 2, maximumFramesPerSecond: 60, isMain: true)
+        let secondary = Screen(displayID: 2, frame: CGRect(x: 1728, y: 0, width: 2560, height: 1440),
+                               backingScaleFactor: 1, maximumFramesPerSecond: 144, isMain: false)
+        func snapshot(_ screens: [Screen]) -> DisplayRegistry.Snapshot {
+            let infos = screens.enumerated().map { index, screen in
+                DisplayInfo(key: DisplayKey(rawValue: "test:\(screen.displayID)"),
+                            displayID: screen.displayID, index: index, name: "Test display",
+                            size: screen.frame.size, isMain: screen.isMain)
+            }
+            return .init(connected: infos, topology: .init(screens: screens))
+        }
+        var current = snapshot([main, secondary])
+        let center = NotificationCenter()
+        let registry = DisplayRegistry(notificationCenter: center, captureSnapshot: { current })
+        var changes: [DisplayRegistry.Change] = []
+        let observer = center.addObserver(forName: DisplayRegistry.didChangeNotification,
+                                          object: registry, queue: .main) { notification in
+            if let change = DisplayRegistry.Change.from(notification) { changes.append(change) }
+        }
+        defer { center.removeObserver(observer) }
+        func notify() {
+            center.post(name: NSApplication.didChangeScreenParametersNotification, object: nil)
+        }
+        for _ in 0..<100 { notify() }
+        try require(changes.isEmpty, "Unchanged screen notifications reached registry clients")
+
+        registry.invalidate()
+        current = snapshot([secondary, main])
+        notify()
+        try require(changes.count == 1 && !changes[0].topologyChanged,
+                    "An enumeration-only change forced playback recovery")
+        try require(changes[0].connected == registry.connected &&
+                    registry.key(forScreenIndex: 0) == DisplayKey(rawValue: "test:2"),
+                    "Clients received stale display index mappings")
+        notify()
+        try require(changes.count == 1, "Repeated mapping notifications were not coalesced")
+
+        let moved = Screen(displayID: 2, frame: CGRect(x: -2560, y: 0, width: 2560, height: 1440),
+                           backingScaleFactor: 1, maximumFramesPerSecond: 144, isMain: false)
+        let resized = Screen(displayID: 2, frame: CGRect(x: 1728, y: 0, width: 1920, height: 1080),
+                             backingScaleFactor: 1, maximumFramesPerSecond: 144, isMain: false)
+        let replaced = Screen(displayID: 3, frame: secondary.frame,
+                              backingScaleFactor: 1, maximumFramesPerSecond: 144, isMain: false)
+        for screens in [[main, moved], [main, resized], [main, replaced], [main], []] {
+            current = snapshot(screens)
+            notify()
+            try require(changes.last?.topologyChanged == true && changes.last?.connected == current.connected,
+                        "Hotplug, resolution or arrangement recovery lost the shared snapshot")
+        }
+        print("PASS: registry no-op filtering, enumeration mapping updates and shared hotplug snapshots")
     }
 
     static func testAudioActivityState() throws {
@@ -777,6 +870,23 @@ private struct UIResponsivenessRegression {
             try await waitUntil("\(kind) command barrier") {
                 commands(pid: pid).contains { $0["cmd"] as? String == "fps" && $0["value"] as? Int == 119 }
             }
+            let beforeScreenNotification = playbackCommands().count
+            NotificationCenter.default.post(name: NSApplication.didChangeScreenParametersNotification, object: nil)
+            let remappedDisplay = DisplayInfo(key: display.key, displayID: display.displayID,
+                                             index: display.index + 7, name: display.name,
+                                             size: display.size, isMain: display.isMain)
+            NotificationCenter.default.post(
+                name: DisplayRegistry.didChangeNotification, object: DisplayRegistry.shared,
+                userInfo: ["change": DisplayRegistry.Change(connected: [remappedDisplay], topologyChanged: false)])
+            try require(model.currentByScreen[remappedDisplay.index]?.id == wallpaper.id &&
+                        model.currentByScreen[display.index] == nil,
+                        "Enumeration-only notification did not rebuild currentByScreen")
+            try await Task.sleep(for: .milliseconds(2200))
+            try require(playbackCommands().count == beforeScreenNotification,
+                        "Unchanged topology or index remapping forced playback commands")
+            NotificationCenter.default.post(
+                name: DisplayRegistry.didChangeNotification, object: DisplayRegistry.shared,
+                userInfo: ["change": DisplayRegistry.Change(connected: [display], topologyChanged: false)])
             let beforeWake = playbackCommands().count
             settingsModel.handlePlaybackLifecycleEvent(.systemSleep)
             settingsModel.handlePlaybackLifecycleEvent(.systemWake)
