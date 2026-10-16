@@ -20,6 +20,11 @@ final class PlaylistManager: ObservableObject {
     @Published private(set) var currents: [Int: Playlist] = [:]
     @Published private(set) var saved: [Playlist] = []
 
+    @Published private(set) var legacyCurrents: [String: Playlist] = [:]
+    @Published private(set) var unidentifiedScreens = Set<Int>()
+    @Published private(set) var storageError: String?
+    private var currentsByDisplay: [DisplayKey: Playlist] = [:]
+    private let displayKeys: () -> [Int: DisplayKey]
     private let storageURL: URL
     private let ioQueue = DispatchQueue(label: "cn.laobamac.Mirage.playlist.io", qos: .utility)
     private var writeWorkItem: DispatchWorkItem?
@@ -30,6 +35,7 @@ final class PlaylistManager: ObservableObject {
     private struct Persisted: Codable {
         var currents: [String: Playlist]
         var saved: [Playlist]
+        var legacyCurrents: [String: Playlist]?
     }
 
     private convenience init() {
@@ -39,9 +45,20 @@ final class PlaylistManager: ObservableObject {
         self.init(storageURL: base.appending(path: "playlists.json"))
     }
 
-    init(storageURL: URL) {
+    init(storageURL: URL, displayKeys: @escaping () -> [Int: DisplayKey] = {
+        Dictionary(uniqueKeysWithValues: DisplayRegistry.shared.connected.map { ($0.index, $0.key) })
+    }) {
         self.storageURL = storageURL
+        self.displayKeys = displayKeys
         load()
+        synchronizeDisplays()
+        displayObserver = NotificationCenter.default.addObserver(
+            forName: DisplayRegistry.didChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in self?.synchronizeDisplays() }
+    }
+
+    deinit {
+        if let displayObserver { NotificationCenter.default.removeObserver(displayObserver) }
     }
 
     static func remapPersistedWallpaperIDs(_ mappings: [String: String]) {
@@ -59,6 +76,15 @@ final class PlaylistManager: ObservableObject {
             }
             persisted.currents[key] = playlist
         }
+        if let legacy = persisted.legacyCurrents {
+            persisted.legacyCurrents = legacy.mapValues { source in
+                var playlist = source
+                playlist.items = playlist.items.map {
+                    PlaylistItem(wallpaperID: remapper.path($0.wallpaperID), addedAt: $0.addedAt)
+                }
+                return playlist
+            }
+        }
         persisted.saved = persisted.saved.map { source in
             var playlist = source
             playlist.items = playlist.items.map {
@@ -72,31 +98,76 @@ final class PlaylistManager: ObservableObject {
 
     // MARK: Load / persist
 
+    private static func isStable(_ key: DisplayKey) -> Bool {
+        (key.rawValue.hasPrefix("uuid:") || key.rawValue.hasPrefix("vms:")) && !key.rawValue.contains("#")
+    }
+
+    private func stableDisplayKeys() -> [Int: DisplayKey] {
+        displayKeys().filter { Self.isStable($0.value) }
+    }
+
     private func load() {
-        guard let data = try? Data(contentsOf: storageURL),
-              let obj = try? JSONDecoder().decode(Persisted.self, from: data) else {
-            currents = [0: Playlist(name: L("默认播放列表"))]
-            return
+        guard FileManager.default.fileExists(atPath: storageURL.path) else { return }
+        do {
+            let obj = try JSONDecoder().decode(Persisted.self, from: Data(contentsOf: storageURL))
+            legacyCurrents = obj.legacyCurrents ?? [:]
+            for (key, value) in obj.currents {
+                if Int(key) != nil || !Self.isStable(DisplayKey(rawValue: key)) { legacyCurrents[key] = value }
+                else { currentsByDisplay[DisplayKey(rawValue: key)] = value }
+            }
+            saved = obj.saved
+            if obj.currents.keys.contains(where: { Int($0) != nil }) {
+                // Index-only files cannot tell us which physical display was used.
+                // Keep the original before the user explicitly chooses a destination.
+                let backup = storageURL.appendingPathExtension("legacy-backup")
+                if !FileManager.default.fileExists(atPath: backup.path) {
+                    try FileManager.default.copyItem(at: storageURL, to: backup)
+                }
+            }
+        } catch {
+            storageError = error.localizedDescription
+            NSLog("[Playlist] Could not load or back up playlists: %@", error.localizedDescription)
         }
-        var mapped: [Int: Playlist] = [:]
-        for (key, value) in obj.currents {
-            if let idx = Int(key) { mapped[idx] = value }
+    }
+
+    func synchronizeDisplays() {
+        let allKeys = displayKeys()
+        unidentifiedScreens = Set(allKeys.filter { !Self.isStable($0.value) }.keys)
+        let keys = stableDisplayKeys()
+        for key in keys.values where currentsByDisplay[key] == nil {
+            currentsByDisplay[key] = Playlist(name: L("默认播放列表"))
         }
-        if mapped[0] == nil { mapped[0] = Playlist(name: L("默认播放列表")) }
-        self.currents = mapped
-        self.saved = obj.saved
+        currents = Dictionary(uniqueKeysWithValues: keys.map { ($0.key, currentsByDisplay[$0.value]!) })
+        synchronizeRotators()
+    }
+
+    /// Migration is explicit: do not infer ownership from today's screen order.
+    func bindLegacy(_ legacyKey: String, to screen: Int) {
+        guard storageError == nil, let key = stableDisplayKeys()[screen],
+              let playlist = legacyCurrents[legacyKey] else { return }
+        currentsByDisplay[key] = playlist
+        legacyCurrents[legacyKey] = nil
+        synchronizeDisplays()
+        scheduleSave()
+        NotificationCenter.default.post(name: .playlistCurrentDidChange, object: nil, userInfo: ["screen": screen])
+        rotator(on: screen)?.rebuild(reason: .listChanged)
     }
 
     private func scheduleSave() {
+        guard storageError == nil else { return }
         writeWorkItem?.cancel()
         let snapshot = Persisted(
-            currents: Dictionary(uniqueKeysWithValues: currents.map { (String($0.key), $0.value) }),
-            saved: saved
+            currents: Dictionary(uniqueKeysWithValues: currentsByDisplay.map { ($0.key.rawValue, $0.value) }),
+            saved: saved, legacyCurrents: legacyCurrents
         )
         let url = storageURL
         let work = DispatchWorkItem {
             guard let data = try? JSONEncoder().encode(snapshot) else { return }
-            try? data.write(to: url, options: .atomic)
+            do { try data.write(to: url, options: .atomic) }
+            catch {
+                NSLog("[Playlist] Could not save playlists: %@", error.localizedDescription)
+                DispatchQueue.main.async { [weak self] in self?.storageError = error.localizedDescription }
+            }
         }
         writeWorkItem = work
         ioQueue.asyncAfter(deadline: .now() + 0.4, execute: work)
@@ -110,9 +181,7 @@ final class PlaylistManager: ObservableObject {
         for screen in currents.keys {
             _ = rotator(on: screen, startingWith: .appLaunch)
         }
-        displayObserver = NotificationCenter.default.addObserver(
-            forName: DisplayRegistry.didChangeNotification, object: nil, queue: .main
-        ) { [weak self] _ in self?.synchronizeRotators() }
+
     }
 
     func kickRotator(on screen: Int) {
@@ -127,10 +196,7 @@ final class PlaylistManager: ObservableObject {
         rotators.values.forEach { $0.stop() }
         rotators.removeAll()
         wallpaperViewModel = nil
-        if let displayObserver {
-            NotificationCenter.default.removeObserver(displayObserver)
-            self.displayObserver = nil
-        }
+
     }
 
     private func rotator(on screen: Int,
@@ -172,9 +238,11 @@ final class PlaylistManager: ObservableObject {
     // MARK: Current-playlist mutations
 
     private func mutateCurrent(_ screen: Int, _ transform: (inout Playlist) -> Void) {
-        var playlist = currents[screen] ?? Playlist(name: L("默认播放列表"))
+        guard storageError == nil, let key = stableDisplayKeys()[screen] else { return }
+        var playlist = currentsByDisplay[key] ?? Playlist(name: L("默认播放列表"))
         transform(&playlist)
         playlist.touch()
+        currentsByDisplay[key] = playlist
         currents[screen] = playlist
         scheduleSave()
         NotificationCenter.default.post(name: .playlistCurrentDidChange, object: nil, userInfo: ["screen": screen])
@@ -248,8 +316,10 @@ final class PlaylistManager: ObservableObject {
     }
 
     func load(saved playlist: Playlist, into screen: Int) {
+        guard storageError == nil, let key = stableDisplayKeys()[screen] else { return }
         var target = playlist
         target.updatedAt = Date()
+        currentsByDisplay[key] = target
         currents[screen] = target
         scheduleSave()
         NotificationCenter.default.post(name: .playlistCurrentDidChange, object: nil, userInfo: ["screen": screen])
@@ -265,12 +335,15 @@ final class PlaylistManager: ObservableObject {
     // MARK: Queries
 
     func current(on screen: Int) -> Playlist {
-        currents[screen] ?? Playlist(name: L("默认播放列表"))
+        stableDisplayKeys()[screen].flatMap { currentsByDisplay[$0] } ?? Playlist(name: L("默认播放列表"))
     }
 
     func ensureScreen(_ screen: Int) {
-        if currents[screen] == nil {
-            currents[screen] = Playlist(name: L("默认播放列表"))
+        guard let key = stableDisplayKeys()[screen] else { return }
+        if currentsByDisplay[key] == nil {
+            let playlist = Playlist(name: L("默认播放列表"))
+            currentsByDisplay[key] = playlist
+            currents[screen] = playlist
             scheduleSave()
         }
         _ = rotator(on: screen)
