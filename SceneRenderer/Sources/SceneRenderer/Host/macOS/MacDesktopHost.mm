@@ -53,6 +53,8 @@ namespace
 struct MacDesktopHost {
     SceneRendererMacDesktopCallbacks callbacks {};
     NSWindow*                        window { nil };
+    NSView*                          render_view { nil };
+    bool                             notch_optimization { false };
     CGDirectDisplayID                display_id { 0 };
     NSTimer*                         input_timer { nil };
     id                               geometry_observer { nil };
@@ -423,6 +425,23 @@ bool WindowServerState(NSWindow* window, CGRect& bounds, bool& onscreen, double&
     return has_bounds;
 }
 
+// Wallpaper viewport inside the full-screen window. Notch optimization
+// reserves the display's top safe-area strip: the viewport (and therefore the
+// Vulkan drawable) starts below it and the strip keeps the window's black
+// background instead of being covered by the scene. A half-point (one pixel
+// on Retina) hides the hairline where the menu-bar material samples the
+// wallpaper below the notch.
+constexpr CGFloat kNotchStripExtraPoints = 0.5;
+
+NSRect DesktopRenderFrame(NSScreen* screen, bool notch_optimization) {
+    const CGFloat safe_top = notch_optimization
+        ? screen.safeAreaInsets.top + kNotchStripExtraPoints
+        : 0.0;
+    return NSMakeRect(0.0, 0.0,
+                      NSWidth(screen.frame),
+                      MAX(1.0, NSHeight(screen.frame) - safe_top));
+}
+
 bool NormalizeGeometry(MacDesktopHost* host) {
     if (host == nullptr || host->window == nil || host->surface_layer == nil) return false;
     NSScreen* screen = ResolveScreen(host->display_id);
@@ -436,15 +455,19 @@ bool NormalizeGeometry(MacDesktopHost* host) {
     if (! AppKitRectMatches(host->window.frame, frame)) {
         [host->window setFrame:frame display:YES];
     }
-    NSView* content_view = host->window.contentView;
-    if (content_view == nil) return false;
-    [content_view layoutSubtreeIfNeeded];
-    const NSRect bounds = content_view.bounds;
+    NSView* render_view = host->render_view;
+    if (render_view == nil) return false;
+    const NSRect render_frame = DesktopRenderFrame(screen, host->notch_optimization);
+    if (! AppKitRectMatches(render_view.frame, render_frame)) {
+        render_view.frame = render_frame;
+    }
+    [render_view layoutSubtreeIfNeeded];
+    const NSRect bounds = render_view.bounds;
     host->surface_layer.frame = bounds;
     host->surface_layer.contentsScale = screen.backingScaleFactor;
-    host->surface_layer.drawableSize = [content_view convertRectToBacking:bounds].size;
+    host->surface_layer.drawableSize = [render_view convertRectToBacking:bounds].size;
     [host->window displayIfNeeded];
-    [content_view displayIfNeeded];
+    [render_view displayIfNeeded];
     [CATransaction flush];
     return true;
 }
@@ -454,17 +477,16 @@ bool ValidateGeometry(MacDesktopHost* host, bool activated) {
     NSScreen* screen = ResolveScreen(host->display_id);
     if (screen == nil || ScreenDisplayID(screen) != host->display_id) return false;
     if (! AppKitRectMatches(host->window.frame, screen.frame)) return false;
-    NSView* content_view = host->window.contentView;
-    if (content_view == nil) return false;
-    const NSRect expected_bounds = NSMakeRect(
-        0.0, 0.0, NSWidth(screen.frame), NSHeight(screen.frame));
-    if (! AppKitRectMatches(content_view.bounds, expected_bounds) ||
-        ! AppKitRectMatches(host->surface_layer.frame, content_view.bounds) ||
+    NSView* render_view = host->render_view;
+    if (render_view == nil) return false;
+    const NSRect expected_bounds = DesktopRenderFrame(screen, host->notch_optimization);
+    if (! AppKitRectMatches(render_view.frame, expected_bounds) ||
+        ! AppKitRectMatches(host->surface_layer.frame, render_view.bounds) ||
         ! NearlyEqual(host->surface_layer.contentsScale, screen.backingScaleFactor)) {
         return false;
     }
     const CGSize expected_drawable =
-        [content_view convertRectToBacking:content_view.bounds].size;
+        [render_view convertRectToBacking:render_view.bounds].size;
     if (! SizeMatches(host->surface_layer.drawableSize, expected_drawable)) return false;
     CGRect window_bounds = CGRectZero;
     bool onscreen = false;
@@ -620,8 +642,13 @@ void PollInput(MacDesktopHost* host) {
         return;
     }
 
-    const NSRect frame = screen.frame;
     NormalizeGeometry(host);
+
+    // Mouse input maps onto the wallpaper viewport (the window minus a
+    // reserved notch strip), not the full display.
+    NSView* render_view = host->render_view;
+    if (render_view == nil) return;
+    const NSRect frame = [host->window convertRectToScreen:render_view.frame];
 
     const NSPoint mouse = NSEvent.mouseLocation;
     const bool    inside =
@@ -724,15 +751,21 @@ extern "C" void* SceneRendererMacDesktopCreate(const SceneRendererMacDesktopConf
 
         NSView* content_view = window.contentView;
         content_view.wantsLayer = YES;
+        const bool notch_optimization = config != nullptr && config->notch_optimization;
+        NSView* render_view = [[NSView alloc] initWithFrame:DesktopRenderFrame(screen, notch_optimization)];
+        render_view.wantsLayer = YES;
+        [content_view addSubview:render_view];
         CAMetalLayer* surface_layer = [CAMetalLayer layer];
         surface_layer.device = MTLCreateSystemDefaultDevice();
         surface_layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
         surface_layer.framebufferOnly = YES;
         surface_layer.opaque = deferred_show ? NO : YES;
         surface_layer.contentsScale = screen.backingScaleFactor;
-        surface_layer.frame = content_view.bounds;
-        surface_layer.drawableSize = [content_view convertRectToBacking:content_view.bounds].size;
-        content_view.layer = surface_layer;
+        surface_layer.frame = render_view.bounds;
+        surface_layer.drawableSize = [render_view convertRectToBacking:render_view.bounds].size;
+        render_view.layer = surface_layer;
+        host->render_view = render_view;
+        host->notch_optimization = notch_optimization;
         host->surface_layer = surface_layer;
         if (surface_layer.device == nil) {
             [window orderOut:nil];
@@ -1029,16 +1062,16 @@ extern "C" void* SceneRendererMacDesktopMetalLayer(void* handle) {
 
 extern "C" std::uint32_t SceneRendererMacDesktopPixelWidth(void* handle) {
     auto* host = static_cast<MacDesktopHost*>(handle);
-    if (host == nullptr || host->window == nil) return 0;
-    NSView* view = host->window.contentView;
+    if (host == nullptr || host->render_view == nil) return 0;
+    NSView* view = host->render_view;
     const NSSize backing = [view convertRectToBacking:view.bounds].size;
     return static_cast<std::uint32_t>(std::lround(backing.width));
 }
 
 extern "C" std::uint32_t SceneRendererMacDesktopPixelHeight(void* handle) {
     auto* host = static_cast<MacDesktopHost*>(handle);
-    if (host == nullptr || host->window == nil) return 0;
-    NSView* view = host->window.contentView;
+    if (host == nullptr || host->render_view == nil) return 0;
+    NSView* view = host->render_view;
     const NSSize backing = [view convertRectToBacking:view.bounds].size;
     return static_cast<std::uint32_t>(std::lround(backing.height));
 }

@@ -157,6 +157,7 @@ struct Options {
     bool                      external_spectrum { false };
     bool                      load_from_memory { false };
     bool                      metalfx { false };
+    bool                      notch_optimization { false };
 };
 
 struct AppState {
@@ -351,6 +352,8 @@ bool ParseArgs(int argc, char** argv, Options& out) {
             out.load_from_memory = true;
         } else if (arg == "--metalfx") {
             out.metalfx = true;
+        } else if (arg == "--notch-optimization") {
+            out.notch_optimization = true;
         } else if (arg == "--screen") {
             const char* value = require_value(i, arg);
             if (value == nullptr || ! ParseUInt(value, out.screen)) return false;
@@ -525,6 +528,7 @@ int main(int argc, char** argv) {
         .screen_index = options.screen,
         .display_id   = options.display_id,
         .deferred_show = options.deferred_show,
+        .notch_optimization = options.notch_optimization,
     };
     SceneRendererMacDesktopCallbacks callbacks {
         .mouse_move   = MouseMoveCallback,

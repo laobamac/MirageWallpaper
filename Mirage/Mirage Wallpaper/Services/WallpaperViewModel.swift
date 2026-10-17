@@ -814,6 +814,12 @@ class WallpaperViewModel: PlaylistPlayback {
         reapply(for: selectedDisplayKey)
     }
 
+    func reapplyAllDisplays() {
+        for key in displayStates.keys {
+            reapply(for: key)
+        }
+    }
+
     private func apply(_ state: DisplayWallpaperState, to displayID: CGDirectDisplayID,
                        key: DisplayKey, reuseActive: Bool,
                        assignmentID: UUID,
@@ -1002,6 +1008,7 @@ class WallpaperViewModel: PlaylistPlayback {
         opts.loadFromMemory = (settings.wallpaperLoadSource ?? .disk) == .memory
         opts.enableHDRVideo = settings.shouldEnableHDRVideo
         opts.enableMetalFX = settings.shouldEnableMetalFX
+        opts.notchOptimization = settings.shouldOptimizeNotch
         switch settings.textureResolution {
         case .highQuality: opts.renderScale = 1.0
         case .automatic: opts.renderScale = 0.75

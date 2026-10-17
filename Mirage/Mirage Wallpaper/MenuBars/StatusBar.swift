@@ -51,6 +51,11 @@ extension AppDelegate: NSMenuDelegate, NSMenuItemValidation {
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         guard menu === statusItem?.menu else { return }
+        if let item = menu.items.first(where: {
+            $0.identifier == NSUserInterfaceItemIdentifier("Mirage.NotchOptimization")
+        }) {
+            item.state = globalSettingsViewModel.settings.shouldOptimizeNotch ? .on : .off
+        }
         let displays = wallpaperViewModel.connectedDisplays
         for direction in [PlaylistDirection.previous, .next] {
             let identifier = NSUserInterfaceItemIdentifier(
@@ -84,6 +89,19 @@ extension AppDelegate: NSMenuDelegate, NSMenuItemValidation {
 
     @objc func coverAllScreens() {
         wallpaperViewModel.applyToAllScreens()
+    }
+
+    @objc func toggleNotchOptimization() {
+        let viewModel = globalSettingsViewModel
+        viewModel.settings.notchOptimization = !viewModel.settings.shouldOptimizeNotch
+        viewModel.save()
+    }
+
+    /// Restarts wallpapers with the new viewport and re-captures the stills so
+    /// the desktop picture and the live layer keep agreeing on the notch strip.
+    func applyNotchOptimization() {
+        wallpaperViewModel.reapplyAllDisplays()
+        DesktopOverrideService.shared.scheduleCaptureForAllScreens()
     }
 
     @objc func stopWallpaperMenu() {
@@ -138,6 +156,9 @@ extension AppDelegate: NSMenuDelegate, NSMenuItemValidation {
             .init(title: L("覆盖到所有显示器"), systemImage: "rectangle.on.rectangle",
                   action: #selector(coverAllScreens), keyEquivalent: ""),
 
+            .init(title: L("刘海屏优化"), systemImage: "menubar.rectangle",
+                  action: #selector(toggleNotchOptimization), keyEquivalent: ""),
+
             .init(title: L("停止壁纸"), systemImage: "stop.fill",
                   action: #selector(stopWallpaperMenu), keyEquivalent: ""),
 
@@ -151,6 +172,8 @@ extension AppDelegate: NSMenuDelegate, NSMenuItemValidation {
                 item.identifier = NSUserInterfaceItemIdentifier("Mirage.Playlist.previous")
             } else if item.action == #selector(nextWallpaper(_:)) {
                 item.identifier = NSUserInterfaceItemIdentifier("Mirage.Playlist.next")
+            } else if item.action == #selector(toggleNotchOptimization) {
+                item.identifier = NSUserInterfaceItemIdentifier("Mirage.NotchOptimization")
             }
         }
         // A status-item menu has no reliable first-responder chain. Explicitly

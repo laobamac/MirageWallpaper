@@ -13,6 +13,10 @@ struct SceneRendererMacDesktopConfig {
     // SceneRendererMacDesktopActivate(). This allows CAMetalLayer to produce
     // drawables while the previous wallpaper remains visible.
     bool deferred_show;
+    // Reserve the top safe-area strip (notch/menu bar) on displays that
+    // report one. The scene viewport starts below it; the strip stays black
+    // and the wallpaper is never laid out underneath it.
+    bool notch_optimization;
 };
 
 struct SceneRendererMacDesktopCallbacks {

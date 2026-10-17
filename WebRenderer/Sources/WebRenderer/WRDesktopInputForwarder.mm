@@ -22,6 +22,10 @@
     int _pendingMoveButtons;
 }
 
+- (void)setTopInset:(CGFloat)topInset {
+    _topInset = MAX(0.0, topInset);
+}
+
 - (instancetype)initWithWebView:(WKWebView *)webView screen:(NSScreen *)screen {
     self = [super init];
     if (self) {
@@ -139,9 +143,13 @@
 
 - (void)dispatchMouseType:(NSString *)type atPoint:(NSPoint)p buttons:(int)buttons {
     NSRect sf = _screen.frame;
-    if (NSWidth(sf) <= 0 || NSHeight(sf) <= 0) return;
+    // The page occupies the bottom of the display; the reserved strip above it
+    // is not part of the wallpaper, so coordinates normalize against the page
+    // area and clamp at its top edge.
+    const CGFloat height = NSHeight(sf) - _topInset;
+    if (NSWidth(sf) <= 0 || height <= 0) return;
     double nx = (p.x - sf.origin.x) / NSWidth(sf);
-    double ny = 1.0 - (p.y - sf.origin.y) / NSHeight(sf);
+    double ny = 1.0 - (p.y - sf.origin.y) / height;
     if (nx < 0) nx = 0; if (nx > 1) nx = 1;
     if (ny < 0) ny = 0; if (ny > 1) ny = 1;
     // Constant body, structured arguments. This runs on every mouse move (up to

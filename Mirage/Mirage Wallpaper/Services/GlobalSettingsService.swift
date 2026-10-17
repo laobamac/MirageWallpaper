@@ -162,9 +162,16 @@ struct GlobalSettings: Codable, Equatable {
     // before the desktop-override section existed.
     var overrideWallpaper: Bool? = false
     var automaticWallpaperCacheCleaning: Bool? = true
+    // Optional solely for backwards-compatible decoding of settings written
+    // before the notch-optimization option existed.
+    var notchOptimization: Bool? = false
 
     var shouldOverrideWallpaper: Bool {
         overrideWallpaper ?? false
+    }
+
+    var shouldOptimizeNotch: Bool {
+        notchOptimization ?? false
     }
 
     var shouldAutomaticallyCleanWallpaperCache: Bool {
@@ -271,6 +278,7 @@ class GlobalSettingsViewModel {
     var didChangeDeveloperModeCancellable: Cancellable?
     var didChangeOverrideWallpaperCancellable: Cancellable?
     var didChangeWallpaperCacheCleaningCancellable: Cancellable?
+    var didChangeNotchOptimizationCancellable: Cancellable?
     var playbackPolicySettingsCancellable: Cancellable?
     
     // In-memory snapshot of what is persisted, so the settings UI can tell
@@ -389,6 +397,13 @@ class GlobalSettingsViewModel {
             }
             .map { $0.shouldAutomaticallyCleanWallpaperCache }
             .sink { DesktopOverrideService.shared.didChangeCacheCleaningEnabled($0) }
+
+        self.didChangeNotchOptimizationCancellable =
+        self.settingsChanges
+            .removeDuplicates { $0.shouldOptimizeNotch == $1.shouldOptimizeNotch }
+            .map { $0.shouldOptimizeNotch }
+            .dropFirst()
+            .sink { _ in AppDelegate.shared.applyNotchOptimization() }
 
         let lifecycleNotifications: [(Notification.Name, PlaybackLifecycleEvent)] = [
             (NSWorkspace.willSleepNotification, .systemSleep),

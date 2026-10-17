@@ -36,6 +36,7 @@ struct WallpaperArgs {
     BOOL deferredShow = NO;
     BOOL loadFromMemory = NO;
     BOOL hdrEnabled = NO;
+    BOOL notchOptimization = NO;
 };
 
 // Orphan guard: if Mirage.app crashes or is force-quit, a renderer left behind
@@ -172,6 +173,7 @@ static void PrintUsage(const char *argv0) {
         "  --deferred-show        keep the window hidden until an activate command\n"
         "  --load-from-memory     keep the video bytes in memory\n"
         "  --hdr                  enable HDR output on EDR-capable displays\n"
+        "  --notch-optimization   inset the wallpaper below the notch safe area\n"
         "  --run-seconds N        exit after N seconds (test helper)\n"
         "  -h, --help             show this help\n",
         argv0);
@@ -236,6 +238,8 @@ static BOOL ParseArgs(int argc, char **argv, WallpaperArgs &out) {
             out.loadFromMemory = YES;
         } else if (strcmp(arg, "--hdr") == 0) {
             out.hdrEnabled = YES;
+        } else if (strcmp(arg, "--notch-optimization") == 0) {
+            out.notchOptimization = YES;
         } else if (arg[0] == '-') {
             fprintf(stderr, "unknown option: %s\n", arg);
             return NO;
@@ -273,6 +277,7 @@ static BOOL ParseArgs(int argc, char **argv, WallpaperArgs &out) {
 @property (nonatomic, strong) MirageControlChannel *control;
 @property (nonatomic, assign) CGDirectDisplayID displayID;
 @property (nonatomic, assign) BOOL deferredShow;
+@property (nonatomic, assign) BOOL notchOptimization;
 @property (nonatomic, assign) BOOL prepared;
 @property (nonatomic, assign) NSUInteger visibilityEpoch;
 - (void)observeScreenParameterChanges;
@@ -347,13 +352,20 @@ static BOOL MirageWindowServerState(NSWindow *window, CGRect *bounds,
     }
     NSView *content = self.window.contentView;
     if (content == nil) return NO;
-    content.frame = NSMakeRect(0, 0, NSWidth(screen.frame), NSHeight(screen.frame));
+    // A half-point (one pixel on Retina) hides the hairline where the menu-bar
+    // material samples the wallpaper below the notch.
+    const CGFloat safeTop = self.notchOptimization ? screen.safeAreaInsets.top + 0.5 : 0.0;
+    NSRect contentFrame = NSMakeRect(0, 0, NSWidth(screen.frame),
+                                     MAX(1.0, NSHeight(screen.frame) - safeTop));
+    if (!MirageNSRectMatches(content.frame, contentFrame)) {
+        content.frame = contentFrame;
+    }
     [content layoutSubtreeIfNeeded];
     CGRect bounds = CGRectZero;
     BOOL onscreen = NO;
     double alpha = 0.0;
     return MirageNSRectMatches(self.window.frame, screen.frame) &&
-           MirageSizeMatches(content.bounds.size, screen.frame.size) &&
+           MirageSizeMatches(content.bounds.size, contentFrame.size) &&
            MirageWindowServerState(self.window, &bounds, &onscreen, &alpha) &&
            MirageRectMatches(bounds, CGDisplayBounds(self.displayID));
 }
@@ -486,6 +498,7 @@ static BOOL MirageWindowServerState(NSWindow *window, CGRect *bounds,
     fprintf(stderr, "VideoWallpaper: screen parameters changed; resizing to %.0fx%.0f at (%.0f,%.0f)\n",
             NSWidth(frame), NSHeight(frame), NSMinX(frame), NSMinY(frame));
     [self.window setFrame:frame display:YES];
+    [self normalizeGeometry];
 }
 
 - (void)dealloc {
@@ -542,7 +555,9 @@ int main(int argc, char *argv[]) {
         config.hdrEnabled = args.hdrEnabled;
 
         NSRect screenFrame = screen.frame;
-        NSRect contentFrame = NSMakeRect(0, 0, NSWidth(screenFrame), NSHeight(screenFrame));
+        const CGFloat safeTop = args.notchOptimization ? screen.safeAreaInsets.top + 0.5 : 0.0;
+        NSRect contentFrame = NSMakeRect(0, 0, NSWidth(screenFrame),
+                                         MAX(1.0, NSHeight(screenFrame) - safeTop));
         VRVideoRendererEngine *engine = [[VRVideoRendererEngine alloc] initWithFrame:contentFrame
                                                                               config:config];
         // Queueing succeeds for undecodable files, so failures are reported
@@ -565,6 +580,7 @@ int main(int argc, char *argv[]) {
         delegate.engine = engine;
         delegate.displayID = displayID;
         delegate.deferredShow = args.deferredShow;
+        delegate.notchOptimization = args.notchOptimization;
         __weak VideoWallpaperAppDelegate *weakDelegate = delegate;
         engine.firstFrameReadyBlock = ^{
             [weakDelegate contentDidBecomeReady];

@@ -33,6 +33,10 @@ NS_ASSUME_NONNULL_BEGIN
 // has to be re-resolved whenever the display configuration changes.
 - (void)updateScreen:(NSScreen *)screen;
 
+// Height of the strip reserved above the wallpaper (notch optimization).
+// Forwarded coordinates normalize against the wallpaper area below it.
+@property (nonatomic, assign) CGFloat topInset;
+
 @end
 
 NS_ASSUME_NONNULL_END

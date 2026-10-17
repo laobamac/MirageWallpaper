@@ -1348,3 +1348,5 @@
 "自适应" = "Adaptive";
 
 "优先使用动画或视频周期；无法识别周期时使用 30 秒。" = "Use the animation or video cycle when available; otherwise use 30 seconds.";
+"刘海屏优化" = "Notch Optimization";
+"在带刘海的屏幕上，顶部菜单栏保持纯黑，壁纸只铺在下方区域，此功能对不带刘海的显示器没有影响。" = "On displays with a notch, the top menu bar stays pure black and the wallpaper only fills the area below. Displays without a notch are unaffected.";

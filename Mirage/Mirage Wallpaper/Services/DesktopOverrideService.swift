@@ -6,6 +6,8 @@
 
 import Cocoa
 import CryptoKit
+import ImageIO
+import UniformTypeIdentifiers
 
 /// Replaces the macOS desktop picture with a still frame of the live wallpaper,
 /// so the menu bar, Dock and every other surface that samples the desktop for
@@ -289,6 +291,7 @@ final class DesktopOverrideService {
                 }
                 if ok, FileManager.default.fileExists(atPath: target.path) {
                     NSLog("[Mirage] 已捕获壁纸实时画面 (显示器=\(displayID))")
+                    self.reserveNotchStripIfNeeded(at: target, screen: screen)
                     if self.preserveForDynamicLockScreen {
                         self.installDynamicLockScreenFallback(
                             target, forDisplay: displayID, request: request)
@@ -319,6 +322,42 @@ final class DesktopOverrideService {
                         request: request, attempt: attempt + 1)
                 }
             }
+        }
+    }
+
+    /// Notch optimization renders the wallpaper below the display's top
+    /// safe-area strip, so every captured still must reserve the same strip:
+    /// wallpaper at the bottom, pure black above it. The dynamic layer and the
+    /// static desktop picture then agree, including on the lock screen.
+    private func reserveNotchStripIfNeeded(at url: URL, screen: NSScreen) {
+        guard AppDelegate.shared.globalSettingsViewModel.settings.shouldOptimizeNotch else { return }
+        let safeTop = screen.safeAreaInsets.top
+        guard safeTop > 0.5,
+              let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return }
+        // Matches the renderers' hairline margin below the notch.
+        let topInset = safeTop + 0.5
+        let scale = CGFloat(image.width) / max(1, screen.frame.width)
+        let insetPixels = Int((topInset * scale).rounded())
+        let fullHeight = Int((screen.frame.height * scale).rounded())
+        guard insetPixels > 0, fullHeight > image.height else { return }
+        guard let space = image.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(data: nil,
+                                      width: image.width,
+                                      height: fullHeight,
+                                      bitsPerComponent: 8,
+                                      bytesPerRow: 0,
+                                      space: space,
+                                      bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return }
+        context.setFillColor(CGColor(gray: 0, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: image.width, height: fullHeight))
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        guard let composited = context.makeImage() else { return }
+        let type = CGImageSourceGetType(source) ?? (UTType.heic.identifier as CFString)
+        guard let destination = CGImageDestinationCreateWithURL(url as CFURL, type, 1, nil) else { return }
+        CGImageDestinationAddImage(destination, composited, nil)
+        if !CGImageDestinationFinalize(destination) {
+            NSLog("[Mirage] 刘海优化底图合成写入失败 (\(screen.localizedName))")
         }
     }
 

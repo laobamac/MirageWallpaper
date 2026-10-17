@@ -502,6 +502,7 @@ struct RenderOptions: Equatable {
     var msaaSamples: Int = 1
     var loadFromMemory: Bool = false
     var enableHDRVideo: Bool = false
+    var notchOptimization: Bool = false
     var userProperties: [String: WEProjectProperty] = [:]
     var scriptStorage: [String: String]? = nil
     var powerState: MiragePowerState = .run
@@ -1310,6 +1311,7 @@ final class RendererController {
             if options.enableMetalFX { args += ["--metalfx"] }
             args += ["--msaa", String(options.msaaSamples)]
             if options.loadFromMemory { args += ["--load-from-memory"] }
+            if options.notchOptimization { args += ["--notch-optimization"] }
             args += ["--display-id", String(displayID)]
             // Candidates stay transparent and silent until Metal confirms a
             // presented frame and Mirage explicitly activates them.
@@ -1336,6 +1338,7 @@ final class RendererController {
             }
             args += ["--fps", String(options.fps)]
             if options.loadFromMemory { args += ["--load-from-memory"] }
+            if options.notchOptimization { args += ["--notch-optimization"] }
             args += ["--volume", String(format: "%.3f", options.volume)]
             args += ["--display-id", String(displayID)]
             if options.enableSpectrum {
@@ -1352,6 +1355,7 @@ final class RendererController {
             args += ["--fill", options.fillMode.rawValue]
             if options.enableHDRVideo { args += ["--hdr"] }
             if options.loadFromMemory { args += ["--load-from-memory"] }
+            if options.notchOptimization { args += ["--notch-optimization"] }
             // The candidate must decode its first frame, but it cannot become
             // visible or audible before the parent completes the handoff.
             args += ["--control-stdin", "--deferred-show", "--muted"]
@@ -1498,6 +1502,7 @@ final class RendererController {
             launched.enableMetalFX == options.enableMetalFX &&
             launched.msaaSamples == options.msaaSamples &&
             launched.loadFromMemory == options.loadFromMemory &&
+            launched.notchOptimization == options.notchOptimization &&
             candidate.desiredUserProperties == options.userProperties
     }
 

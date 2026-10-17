@@ -218,6 +218,14 @@ struct GeneralPage: SettingsPage {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
+                Toggle("刘海屏优化", isOn: Binding(
+                    get: { viewModel.settings.shouldOptimizeNotch },
+                    set: { viewModel.settings.notchOptimization = $0 }
+                ))
+                Text("在带刘海的屏幕上，顶部菜单栏保持纯黑，壁纸只铺在下方区域，此功能对不带刘海的显示器没有影响。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
                 if #available(macOS 26, *) {
                     Toggle("自动清理 macOS 壁纸缓存", isOn: Binding(
                         get: { viewModel.settings.shouldAutomaticallyCleanWallpaperCache },

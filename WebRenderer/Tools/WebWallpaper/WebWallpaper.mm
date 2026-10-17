@@ -56,6 +56,7 @@ struct WallpaperArgs {
     BOOL  deferredShow = NO;
     BOOL  loadFromMemory = NO;
     WRNetworkPolicy networkPolicy = WRNetworkPolicyObserve;
+    BOOL  notchOptimization = NO;
     std::vector<std::string> assetOverlays;
 };
 
@@ -203,6 +204,7 @@ static void PrintUsage(const char *argv0) {
         "  --control-stdin        accept live JSON control commands on stdin\n"
         "  --deferred-show        keep the window hidden until an activate command\n"
         "  --load-from-memory     cache wallpaper resources in memory\n"
+        "  --notch-optimization   inset the wallpaper below the notch safe area\n"
         "  --run-seconds N        exit after N seconds (test helper)\n"
         "  --diag                 test the click-forward path (synthetic click)\n"
         "  -h, --help             show this help\n",
@@ -251,6 +253,8 @@ static BOOL ParseArgs(int argc, char **argv, WallpaperArgs &out) {
             out.deferredShow = YES;
         } else if (strcmp(arg, "--load-from-memory") == 0) {
             out.loadFromMemory = YES;
+        } else if (strcmp(arg, "--notch-optimization") == 0) {
+            out.notchOptimization = YES;
         } else if (arg[0] == '-') {
             fprintf(stderr, "unknown option: %s\n", arg); return false;
         } else {
@@ -282,6 +286,7 @@ static BOOL ParseArgs(int argc, char **argv, WallpaperArgs &out) {
 @property (nonatomic, strong) MirageControlChannel *control;
 @property (nonatomic, assign) CGDirectDisplayID displayID;
 @property (nonatomic, assign) BOOL deferredShow;
+@property (nonatomic, assign) BOOL notchOptimization;
 @property (nonatomic, assign) BOOL prepared;
 @property (nonatomic, assign) BOOL windowActivated;
 @property (nonatomic, assign) float playbackVolume;
@@ -355,9 +360,18 @@ static BOOL MirageWindowServerState(NSWindow *window, CGRect *bounds,
     }
     NSView *content = self.window.contentView;
     if (content == nil) return NO;
-    content.frame = NSMakeRect(0, 0, NSWidth(screen.frame), NSHeight(screen.frame));
     [content layoutSubtreeIfNeeded];
+    // A half-point (one pixel on Retina) hides the hairline where the menu-bar
+    // material samples the wallpaper below the notch.
+    const CGFloat safeTop = self.notchOptimization ? screen.safeAreaInsets.top + 0.5 : 0.0;
+    NSRect webFrame = NSMakeRect(0, 0, NSWidth(content.bounds),
+                                 MAX(1.0, NSHeight(content.bounds) - safeTop));
+    if (!MirageNSRectMatches(self.engine.webView.frame, webFrame)) {
+        self.engine.webView.frame = webFrame;
+        [self.engine.webView layoutSubtreeIfNeeded];
+    }
     [self.inputForwarder updateScreen:screen];
+    self.inputForwarder.topInset = safeTop;
     CGRect bounds = CGRectZero;
     BOOL onscreen = NO;
     double alpha = 0.0;
@@ -542,7 +556,7 @@ static BOOL MirageWindowServerState(NSWindow *window, CGRect *bounds,
                 NSWidth(frame), NSHeight(frame), NSMinX(frame), NSMinY(frame));
         [self.window setFrame:frame display:YES];
     }
-    [self.inputForwarder updateScreen:screen];
+    [self normalizeGeometry];
 }
 
 - (void)dealloc {
@@ -597,11 +611,14 @@ int main(int argc, char *argv[]) {
         }
         cfg.assetOverlayDirectories = assetOverlays;
 
-        NSRect contentFrame = NSMakeRect(0, 0, NSWidth(screenFrame), NSHeight(screenFrame));
+        const CGFloat safeTop = args.notchOptimization ? screen.safeAreaInsets.top + 0.5 : 0.0;
+        NSRect contentFrame = NSMakeRect(0, 0, NSWidth(screenFrame),
+                                         MAX(1.0, NSHeight(screenFrame) - safeTop));
         WebRendererEngine *engine = [[WebRendererEngine alloc] initWithFrame:contentFrame config:cfg];
         delegate.engine = engine;
         delegate.displayID = displayID;
         delegate.deferredShow = args.deferredShow;
+        delegate.notchOptimization = args.notchOptimization;
         delegate.windowActivated = !args.deferredShow;
         delegate.playbackVolume = args.volume;
         delegate.playbackMuted = NO;
@@ -639,8 +656,16 @@ int main(int argc, char *argv[]) {
         window.releasedWhenClosed = NO;
         window.canHide = NO;
 
-        window.contentView = engine.webView;
-        engine.webView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+        // Keep the page permanently inset below the reserved strip. The
+        // container is the window's default content view (full screen) and
+        // stays black, so the notch area is genuinely empty rather than being
+        // covered by the wallpaper.
+        NSView *container = window.contentView;
+        container.wantsLayer = YES;
+        container.layer.backgroundColor = NSColor.blackColor.CGColor;
+        engine.webView.frame = contentFrame;
+        engine.webView.autoresizingMask = NSViewWidthSizable;
+        [container addSubview:engine.webView];
 
         delegate.window = window;
         [window orderFrontRegardless];
