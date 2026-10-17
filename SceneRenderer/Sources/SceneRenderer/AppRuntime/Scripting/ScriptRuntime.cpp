@@ -4,6 +4,7 @@ module;
 #include <rstd/enum.hpp>
 #include "quickjs.h"
 #include <filesystem>
+#include <limits>
 
 module sr.script;
 import eigen;
@@ -2757,7 +2758,11 @@ JSValue NodeSetVolume(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
     auto* n = GetLayerNode(this_val);
     if (! n) return JS_UNDEFINED;
     double volume { 1.0 };
-    if (JS_ToFloat64(ctx, &volume, val) == 0) n->SetVolume(static_cast<float>(volume));
+    // An unset shared.volume converts successfully to NaN in QuickJS.
+    // Preserve the current gain rather than sending an invalid value to audio.
+    if (JS_ToFloat64(ctx, &volume, val) == 0 && std::isfinite(volume) &&
+        std::abs(volume) <= std::numeric_limits<float>::max())
+        n->SetVolume(static_cast<float>(volume));
     return JS_UNDEFINED;
 }
 

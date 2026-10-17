@@ -1586,6 +1586,7 @@ public:
     std::shared_ptr<VideoPlaybackState> VideoControlHandle() const { return m_video_control; }
     float Volume() const { return m_volume; }
     void SetVolume(float volume) {
+        if (! std::isfinite(volume)) return;
         m_volume = std::clamp(volume, 0.0f, 1.0f);
         if (m_sound_control) m_sound_control->SetVolume(m_volume);
     }

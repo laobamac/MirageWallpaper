@@ -1,6 +1,7 @@
 module;
 
 #include <sys/types.h>
+#include <cmath>
 module sr.pkg.parse;
 import sr.core;
 import sr.scene;
@@ -90,6 +91,7 @@ public:
     void Pause() override { m_state->playing.store(false, std::memory_order_release); }
     bool IsPlaying() const override { return m_state->playing.load(std::memory_order_acquire); }
     void SetVolume(float volume) override {
+        if (! std::isfinite(volume)) return;
         m_state->volume.store(std::clamp(volume, 0.0f, 1.0f), std::memory_order_release);
     }
 

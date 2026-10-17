@@ -571,6 +571,18 @@ void TestSoundVisibilityAndVolume() {
     node.SetVolume(-1.0f);
     Check(Near(node.Volume(), 0.0f) && Near(sound->volume, 0.0f),
           "sound volume actuator clamps and stores the lower bound");
+
+    node.SetVolume(0.6f);
+    for (float invalid : { std::numeric_limits<float>::quiet_NaN(),
+                           std::numeric_limits<float>::infinity(),
+                           -std::numeric_limits<float>::infinity() }) {
+        node.SetVolume(invalid);
+        Check(Near(node.Volume(), 0.6f) && Near(sound->volume, 0.6f),
+              "invalid volume preserves the node and attached sound gain");
+    }
+    node.SetVolume(0.001f);
+    Check(Near(node.Volume(), 0.001f) && Near(sound->volume, 0.001f),
+          "valid volume remains adjustable after invalid writes");
 }
 
 void TestCameraTransformControls() {

@@ -223,7 +223,8 @@ private:
             const float gain = volume * volume_scale_.load(std::memory_order_relaxed);
             const auto total_samples = static_cast<std::size_t>(n_frames) * channels;
             for (std::size_t i = 0; i < total_samples; ++i) {
-                out_f[i] *= gain;
+                const float sample = gain == 0.0f ? 0.0f : out_f[i] * gain;
+                out_f[i] = std::isfinite(sample) ? sample : 0.0f;
             }
             return;
         }
@@ -236,7 +237,8 @@ private:
             const float gain = volume * scale;
             const auto base = static_cast<std::size_t>(frame) * channels;
             for (std::uint32_t ch = 0; ch < channels; ++ch) {
-                out_f[base + ch] *= gain;
+                const float sample = gain == 0.0f ? 0.0f : out_f[base + ch] * gain;
+                out_f[base + ch] = std::isfinite(sample) ? sample : 0.0f;
             }
             if (left > 0) {
                 --left;
@@ -279,7 +281,11 @@ private:
                         std::min<std::size_t>(static_cast<std::size_t>(produced) * channels,
                                               total_samples);
                     for (std::size_t i = 0; i < produced_samples; ++i) {
-                        out_f[i] += scratch[i];
+                        // Reject a bad stream before mixing so it cannot erase
+                        // another stream's valid samples. Also contain overflow.
+                        if (! std::isfinite(scratch[i])) continue;
+                        const float mixed = out_f[i] + scratch[i];
+                        if (std::isfinite(mixed)) out_f[i] = mixed;
                     }
                 }
             }

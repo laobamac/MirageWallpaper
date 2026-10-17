@@ -1751,7 +1751,43 @@ void TestInitReturnAppliesToProperty() {
     Check(kept && kept->v, "non-boolean init return leaves a bool property untouched");
 }
 
+void TestInvalidSoundVolumeWrites() {
+    sr::script::JsRuntime runtime;
+    sr::SceneNode node;
+    node.SetVolume(0.6f);
+    auto* script = runtime.MakeFieldScript(
+        R"JS(
+            export function update() {
+                const initial = thisLayer.volume;
+                // Mirrors a music-player script reading an unset shared value.
+                thisLayer.volume = shared.volume;
+                if (thisLayer.volume !== initial) return -1;
+                for (const invalid of [NaN, Infinity, -Infinity, Number.MAX_VALUE, -Number.MAX_VALUE]) {
+                    thisLayer.volume = invalid;
+                    if (thisLayer.volume !== initial) return -2;
+                }
+                for (const valid of [0, 0.001, 0.6, 1]) {
+                    thisLayer.volume = valid;
+                    if (Math.abs(thisLayer.volume - valid) > 0.000001) return -3;
+                }
+                thisLayer.volume = 2;
+                if (thisLayer.volume !== 1) return -4;
+                thisLayer.volume = -1;
+                return thisLayer.volume;
+            }
+        )JS", "test/invalid_sound_volume", sr::script::FieldKind::Scalar,
+        Parse("{}"), Parse("0"), &node);
+    Check(script != nullptr, "invalid sound volume script compiles");
+    if (! script) return;
+    runtime.SetSceneRoot(&node);
+    runtime.TickAll();
+    const auto* value = std::get_if<sr::script::ScalarValue>(&script->last_value());
+    Check(value && value->v == 0 && node.Volume() == 0,
+          "script rejects invalid volume without breaking finite volume and clamping");
+}
+
 int main() {
+    TestInvalidSoundVolumeWrites();
     TestStorageSnapshots();
     TestVectorAngle2();
     TestMediaCompatibilityFields();
