@@ -26,10 +26,28 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug"
       }
+    },
+    {
+      "name": "linux-release",
+      "displayName": "Linux · Release",
+      "inherits": "_base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "linux-debug",
+      "displayName": "Linux · Debug",
+      "inherits": "_base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
     }
   ],
   "buildPresets": [
     { "name": "release", "configurePreset": "release" },
-    { "name": "debug",   "configurePreset": "debug" }
+    { "name": "debug",   "configurePreset": "debug" },
+    { "name": "linux-release", "configurePreset": "linux-release" },
+    { "name": "linux-debug", "configurePreset": "linux-debug" }
   ]
 }

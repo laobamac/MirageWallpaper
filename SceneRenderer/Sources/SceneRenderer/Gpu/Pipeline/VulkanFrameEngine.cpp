@@ -1,4 +1,9 @@
 module;
+
+#if defined(__linux__)
+#include <string>
+#endif
+
 #include <rstd/macro.hpp>
 
 #include "vvk/macros.hpp"
@@ -111,8 +116,10 @@ constexpr std::array base_inst_exts {
 constexpr std::array base_device_exts {
     Extension { false, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME },
     Extension { true, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME },
+#if defined(__APPLE__)
     Extension { true, "VK_KHR_portability_subset" },
     Extension { false, "VK_EXT_metal_objects" },
+#endif
     Extension { true, VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME },
     Extension { false, VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME },
 };
@@ -135,6 +142,14 @@ bool RequiresVulkanVideoDeviceExtensions(std::string_view hwdec) {
 #else
     return hwdec != "none";
 #endif
+}
+
+bool IsRecoverableSurfaceResult(VkResult result) {
+    return result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR;
+}
+
+bool NeedsSurfaceSwapchainRecreate(VkResult result) {
+    return result == VK_SUBOPTIMAL_KHR || result == VK_ERROR_OUT_OF_DATE_KHR;
 }
 
 struct RenderProgram {
@@ -830,6 +845,7 @@ struct VulkanRender::Impl {
     std::array<bool, 2> UpdateCameraPosition(Scene&, sr::FillMode, WallpaperPosition);
 
     bool                       initRes();
+    bool                       recreateSurfaceSwapchain();
     bool                       acquireUploadCommandSlot(RenderingResources&, std::size_t&);
     bool                       commitPreparedUploads();
     bool                       drawFrameSwapchain();
@@ -844,6 +860,9 @@ struct VulkanRender::Impl {
     bool                       waitForPendingUploads();
     bool                       prepareForResourceMutation();
     void                       finishMeshUpload();
+    void                       initializeGpuTiming();
+    void                       destroyGpuTiming();
+    void                       readGpuTiming();
     void                       fail(VkResult);
     void                       evictUnusedMeshes();
 
@@ -868,6 +887,7 @@ struct VulkanRender::Impl {
     vvk::CommandBuffer              m_render_cmd;
 
     bool              m_with_surface { false };
+    bool              m_external_swapchain { false };
     std::atomic<bool> m_inited { false };
     // Set when acquire/present reported the swapchain no longer matches the
     // surface. Consumed at the top / tail of drawFrameSwapchain.
@@ -892,6 +912,18 @@ struct VulkanRender::Impl {
     std::vector<vvk::Semaphore> m_sem_swap_finish_per_image;
 
     RenderProgram m_program;
+
+    // Optional per-frame GPU timestamps.  The query pool is created only when
+    // SCENERENDERER_GPU_TIMINGS_DIR is set, so normal rendering pays no query
+    // recording or readback cost.  Results are consumed after the frame fence
+    // signals, which keeps diagnostics from introducing a GPU wait.
+    std::string  m_gpu_timing_directory;
+    VkQueryPool  m_gpu_timing_pool { VK_NULL_HANDLE };
+    float        m_gpu_timestamp_period { 0.0f };
+    uint64_t     m_gpu_timing_frame { 0 };
+    bool         m_gpu_timing_enabled { false };
+    bool         m_gpu_timing_pending { false };
+    bool         m_gpu_timing_labels { false };
 };
 
 VulkanRender::VulkanRender(): pImpl(std::make_unique<Impl>()) {}
@@ -1090,6 +1122,23 @@ bool VulkanRender::Impl::init(RenderInitInfo info) {
             if (extension.name == "VK_EXT_metal_objects") extension.required = true;
         }
     }
+    m_external_swapchain = static_cast<bool>(info.ex_swapchain_factory);
+    if (m_external_swapchain) {
+        const Extension external_extensions[] = {
+            { true, VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME },
+            { true, VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME },
+            { true, VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME },
+            { true, VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME },
+            { true, VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME },
+            { true, VK_KHR_EXTERNAL_SEMAPHORE_EXTENSION_NAME },
+            { true, VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME },
+            { true, VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME },
+            { true, VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME },
+            { true, VK_EXT_PHYSICAL_DEVICE_DRM_EXTENSION_NAME },
+        };
+        device_exts.insert(device_exts.end(), std::begin(external_extensions),
+                           std::end(external_extensions));
+    }
     const bool needs_vulkan_video = RequiresVulkanVideoDeviceExtensions(info.video_hwdec);
     if (needs_vulkan_video) {
         AppendVideoDeviceExtensions(device_exts);
@@ -1131,7 +1180,23 @@ bool VulkanRender::Impl::init(RenderInitInfo info) {
     }
     {
         auto surface   = *m_instance.surface();
-        auto check_gpu = [&device_exts, surface](const vvk::PhysicalDevice& gpu) {
+        auto check_gpu = [&device_exts, surface, &info](const vvk::PhysicalDevice& gpu) {
+            if (info.target_drm_render_major != 0U) {
+                VkPhysicalDeviceDrmPropertiesEXT drm {
+                    .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRM_PROPERTIES_EXT,
+                    .pNext = nullptr,
+                };
+                VkPhysicalDeviceProperties2 properties {
+                    .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
+                    .pNext = &drm,
+                };
+                gpu.GetProperties2KHR(properties);
+                if (drm.hasRender != VK_TRUE || drm.renderMajor < 0 || drm.renderMinor < 0 ||
+                    static_cast<uint32_t>(drm.renderMajor) != info.target_drm_render_major ||
+                    static_cast<uint32_t>(drm.renderMinor) != info.target_drm_render_minor) {
+                    return false;
+                }
+            }
             return Device::CheckGPU(gpu, device_exts, surface);
         };
         if (! m_instance.ChoosePhysicalDevice(check_gpu, info.uuid)) return false;
@@ -1173,12 +1238,19 @@ bool VulkanRender::Impl::init(RenderInitInfo info) {
     }
 
     if (info.offscreen && ! m_metal_frame_cb) {
-        m_ex_swapchain = CreateLocalExSwapchain(*m_device,
-                                                extent.width,
-                                                extent.height,
-                                                (info.offscreen_tiling == TexTiling::OPTIMAL
-                                                     ? VK_IMAGE_TILING_OPTIMAL
-                                                     : VK_IMAGE_TILING_LINEAR));
+        if (info.ex_swapchain_factory) {
+            m_ex_swapchain = info.ex_swapchain_factory(
+                *m_instance.inst(), *m_device->gpu(), *m_device->handle(),
+                *m_device->graphics_queue().handle, m_device->graphics_queue().family_index,
+                extent.width, extent.height);
+        } else {
+            m_ex_swapchain = CreateLocalExSwapchain(*m_device,
+                                                    extent.width,
+                                                    extent.height,
+                                                    (info.offscreen_tiling == TexTiling::OPTIMAL
+                                                         ? VK_IMAGE_TILING_OPTIMAL
+                                                         : VK_IMAGE_TILING_LINEAR));
+        }
         if (! m_ex_swapchain) return false;
         m_with_surface = false;
     }
@@ -1238,7 +1310,77 @@ bool VulkanRender::Impl::initRes() {
     }
     if (! CreateRenderingResource(m_rendering_resources)) return false;
 
+    initializeGpuTiming();
+
     return true;
+}
+
+void VulkanRender::Impl::initializeGpuTiming() {
+    const char* directory = std::getenv("SCENERENDERER_GPU_TIMINGS_DIR");
+    if (directory == nullptr || directory[0] == '\0' || ! m_device) return;
+
+    m_gpu_timing_directory = directory;
+    m_gpu_timestamp_period = m_device->limits().timestampPeriod;
+    if (m_gpu_timestamp_period <= 0.0f) {
+        rstd_warn("GPU timing disabled: Vulkan timestamp period is invalid");
+        m_gpu_timing_directory.clear();
+        return;
+    }
+
+    const VkQueryPoolCreateInfo info {
+        .sType      = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+        .pNext      = nullptr,
+        .queryType  = VK_QUERY_TYPE_TIMESTAMP,
+        .queryCount = 2,
+    };
+    const VkResult result = m_device->handle().Dispatch().vkCreateQueryPool(
+        *m_device->handle(), &info, nullptr, &m_gpu_timing_pool);
+    if (result != VK_SUCCESS) {
+        rstd_warn("GPU timing disabled: query pool creation failed ({})", vvk::ToString(result));
+        m_gpu_timing_directory.clear();
+        m_gpu_timing_pool = VK_NULL_HANDLE;
+        return;
+    }
+
+    m_gpu_timing_enabled = true;
+    m_gpu_timing_labels = m_device->supportExt(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+}
+
+void VulkanRender::Impl::destroyGpuTiming() {
+    if (m_gpu_timing_pool == VK_NULL_HANDLE || ! m_device || ! m_device->handle()) return;
+    m_device->handle().Dispatch().vkDestroyQueryPool(*m_device->handle(), m_gpu_timing_pool, nullptr);
+    m_gpu_timing_pool = VK_NULL_HANDLE;
+    m_gpu_timing_enabled = false;
+    m_gpu_timing_pending = false;
+}
+
+void VulkanRender::Impl::readGpuTiming() {
+    if (! m_gpu_timing_enabled || ! m_gpu_timing_pending || ! m_device) return;
+
+    std::array<uint64_t, 2> timestamps {};
+    const VkResult result = m_device->handle().Dispatch().vkGetQueryPoolResults(
+        *m_device->handle(), m_gpu_timing_pool, 0, 2, sizeof(timestamps), timestamps.data(),
+        sizeof(uint64_t), VK_QUERY_RESULT_64_BIT);
+    if (result != VK_SUCCESS) {
+        rstd_warn("GPU timing read failed for frame {} ({})", m_gpu_timing_frame,
+                  vvk::ToString(result));
+        m_gpu_timing_pending = false;
+        return;
+    }
+
+    const double gpu_nanoseconds =
+        static_cast<double>(timestamps[1] - timestamps[0]) * m_gpu_timestamp_period;
+    std::ofstream output(m_gpu_timing_directory + "/frame-" +
+                         std::to_string(m_gpu_timing_frame) + ".json");
+    if (! output) {
+        rstd_warn("GPU timing output could not be opened for frame {}", m_gpu_timing_frame);
+        m_gpu_timing_pending = false;
+        return;
+    }
+    output << "{\"frame\":" << m_gpu_timing_frame
+           << ",\"timestamp_period_ns\":" << m_gpu_timestamp_period
+           << ",\"render_graph_ns\":" << gpu_nanoseconds << "}\n";
+    m_gpu_timing_pending = false;
 }
 
 void VulkanRender::Impl::destroy() {
@@ -1246,11 +1388,15 @@ void VulkanRender::Impl::destroy() {
     if (m_device && m_device->handle()) {
         if (! m_skip_wait_idle) VVK_CHECK(m_device->handle().WaitIdle());
 
+        readGpuTiming();
+
         m_program.destroyPasses(*m_device, m_rendering_resources);
         ReleaseCompletedRetiredResources(m_rendering_resources);
         m_program.clear();
         m_dyn_buf->destroy();
         m_device->mesh_cache().destroy();
+
+        destroyGpuTiming();
 
         m_device->Destroy(! m_skip_wait_idle);
     }
@@ -1338,12 +1484,51 @@ bool VulkanRender::Impl::CreateRenderingResource(RenderingResources& rr) {
         if (! createSwapchainSemaphores()) return false;
     }
 
+    if (! m_with_surface) {
+        VkExportSemaphoreCreateInfo export_info {
+            .sType = VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO,
+            .pNext = nullptr,
+            .handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT,
+        };
+        VkSemaphoreCreateInfo ci {
+            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+            .pNext = m_external_swapchain ? &export_info : nullptr,
+            .flags = 0,
+        };
+        VVK_CHECK_BOOL_RE(m_device->handle().CreateSemaphore(ci, rr.sem_export));
+    }
     rr.dyn_buf                 = m_dyn_buf.get();
     rr.shader_reflection_cache = &m_shader_reflection_cache;
     return true;
 }
 
 void VulkanRender::Impl::DestroyRenderingResource(RenderingResources& rr) {}
+
+bool VulkanRender::Impl::recreateSurfaceSwapchain() {
+    if (! m_with_surface || ! m_device || ! m_finpass) return false;
+
+    const VkExtent2D old_extent = m_device->out_extent();
+    if (! m_device->RecreateSwapchain(*m_instance.surface(), old_extent)) return false;
+
+    m_finpass->setPresentFormat(m_device->swapchain().format());
+    m_finpass->setPresentCanTransferSrc(
+        (m_device->swapchain().usage() & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0);
+
+    VkSemaphoreCreateInfo ci { .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+                               .pNext = nullptr };
+    m_sem_swap_finish_per_image.clear();
+    m_sem_swap_finish_per_image.resize(m_device->swapchain().images().size());
+    for (auto& s : m_sem_swap_finish_per_image) {
+        VVK_CHECK_BOOL_RE(m_device->handle().CreateSemaphore(ci, s));
+    }
+
+    const VkExtent2D new_extent = m_device->swapchain().extent();
+    rstd_info("surface swapchain recreated: {}x{} images={}",
+              new_extent.width,
+              new_extent.height,
+              m_device->swapchain().images().size());
+    return true;
+}
 
 bool VulkanRender::Impl::acquireUploadCommandSlot(RenderingResources& rr, std::size_t& slot) {
     if (m_upload_cmds.empty() || m_failed) return false;
@@ -1525,6 +1710,7 @@ bool VulkanRender::Impl::retireInFlightFrame() {
         fail(res);
         return false;
     }
+    readGpuTiming();
     m_frame_in_flight = false;
     ReleaseCompletedRetiredResources(rr);
     m_finpass->finishFrameDump(*m_device);
@@ -1606,12 +1792,26 @@ bool VulkanRender::Impl::drawFrameSwapchain() {
         fail(command_res);
         return false;
     }
+    if (m_gpu_timing_enabled) {
+        rr.command.ResetQueryPool(m_gpu_timing_pool, 0, 2);
+        rr.command.WriteTimestamp(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, m_gpu_timing_pool, 0);
+    }
     m_device->tex_cache().RecordPendingUploads(rr.command);
     if (! m_dyn_buf->recordUpload(rr.command)) {
         fail(VK_ERROR_INITIALIZATION_FAILED);
         return false;
     }
-    m_program.execute(*m_device, rr);
+    if (m_gpu_timing_labels) {
+        std::array<float, 4> color { 0.15f, 0.55f, 0.95f, 1.0f };
+        rr.command.BeginDebugUtilsLabelEXT("SceneRenderer RenderGraph", color);
+        m_program.execute(*m_device, rr);
+        rr.command.EndDebugUtilsLabelEXT();
+    } else {
+        m_program.execute(*m_device, rr);
+    }
+    if (m_gpu_timing_enabled) {
+        rr.command.WriteTimestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_gpu_timing_pool, 1);
+    }
     command_res = rr.command.End();
     if (command_res != VK_SUCCESS) {
         fail(command_res);
@@ -1688,6 +1888,10 @@ bool VulkanRender::Impl::drawFrameSwapchain() {
     // rebuild is handled — rebuilding here would tear down images this frame's
     // work may still be reading.
     m_frame_in_flight = true;
+    if (m_gpu_timing_enabled) {
+        ++m_gpu_timing_frame;
+        m_gpu_timing_pending = true;
+    }
     return true;
 }
 bool VulkanRender::Impl::drawFrameOffscreen() {
@@ -1724,13 +1928,27 @@ bool VulkanRender::Impl::drawFrameOffscreen() {
         fail(command_res);
         return false;
     }
+    if (m_gpu_timing_enabled) {
+        rr.command.ResetQueryPool(m_gpu_timing_pool, 0, 2);
+        rr.command.WriteTimestamp(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, m_gpu_timing_pool, 0);
+    }
     m_device->tex_cache().RecordPendingUploads(rr.command);
     if (! m_dyn_buf->recordUpload(rr.command)) {
         fail(VK_ERROR_INITIALIZATION_FAILED);
         return false;
     }
 
-    m_program.execute(*m_device, rr);
+    if (m_gpu_timing_labels) {
+        std::array<float, 4> color { 0.15f, 0.55f, 0.95f, 1.0f };
+        rr.command.BeginDebugUtilsLabelEXT("SceneRenderer RenderGraph", color);
+        m_program.execute(*m_device, rr);
+        rr.command.EndDebugUtilsLabelEXT();
+    } else {
+        m_program.execute(*m_device, rr);
+    }
+    if (m_gpu_timing_enabled) {
+        rr.command.WriteTimestamp(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_gpu_timing_pool, 1);
+    }
 
     command_res = rr.command.End();
     if (command_res != VK_SUCCESS) {
@@ -1748,13 +1966,16 @@ bool VulkanRender::Impl::drawFrameOffscreen() {
     std::array<uint64_t, 1> wait_values {
         rr.pending_upload_value,
     };
+    std::array<uint64_t, 1> signal_values { 0 };
     VkTimelineSemaphoreSubmitInfo timeline_info {
         .sType                     = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO,
         .pNext                     = nullptr,
         .waitSemaphoreValueCount   = wait_upload ? 1u : 0u,
         .pWaitSemaphoreValues      = wait_upload ? wait_values.data() : nullptr,
-        .signalSemaphoreValueCount = 0,
-        .pSignalSemaphoreValues    = nullptr,
+        // The external DMA-BUF path signals one binary semaphore. Its value
+        // entry must still be present when the upload timeline wait is chained.
+        .signalSemaphoreValueCount = m_external_swapchain ? 1u : 0u,
+        .pSignalSemaphoreValues    = m_external_swapchain ? signal_values.data() : nullptr,
     };
     VkSubmitInfo sub_info {
         .sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO,
@@ -1764,14 +1985,19 @@ bool VulkanRender::Impl::drawFrameOffscreen() {
         .pWaitDstStageMask    = wait_upload ? wait_stages.data() : nullptr,
         .commandBufferCount   = 1,
         .pCommandBuffers      = rr.command.address(),
-        .signalSemaphoreCount = 0,
-        .pSignalSemaphores    = nullptr,
+        .signalSemaphoreCount = m_external_swapchain ? 1u : 0u,
+        .pSignalSemaphores    = m_external_swapchain ? rr.sem_export.address() : nullptr,
     };
     VkResult res = m_device->graphics_queue().handle.Submit(sub_info, *rr.fence_frame);
     if (res != VK_SUCCESS) {
         fail(res);
         return false;
     }
+
+    /* The mirage-display exporter consumes the signalled sync_file before the
+     * host fence wait. Apple MetalFX presents through m_metal_frame_cb and has
+     * no ExSwapchain, so it must not enter this protocol-only publication. */
+    if (m_external_swapchain) m_ex_swapchain->submitRendered(*rr.sem_export);
 
     res = rr.fence_frame.Wait(vk_wait_time);
     if (res != VK_SUCCESS) {
@@ -1789,8 +2015,10 @@ bool VulkanRender::Impl::drawFrameOffscreen() {
         fail(res);
         return false;
     }
-
-    if (m_ex_swapchain) m_ex_swapchain->submitRendered(-1);
+    // Local offscreen swapchains have no exported semaphore; publish only
+    // after the fence confirms completion, matching the upstream Apple path.
+    if (m_ex_swapchain && ! m_external_swapchain)
+        m_ex_swapchain->submitRendered(VK_NULL_HANDLE);
     return true;
 }
 

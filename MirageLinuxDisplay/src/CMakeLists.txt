@@ -1,0 +1,20 @@
+mirage_add_library(mirage_display
+    SOURCES
+        codec.cpp
+        protocol.cpp
+        display.cpp
+        producer.cpp
+        broker.cpp
+        sync.cpp
+        common/drm.cpp
+        common/util.cpp
+        common/net.cpp
+        common/outbox.cpp
+        common/handshake.cpp
+    HEADERS
+        ${PROJECT_SOURCE_DIR}/include/mirage_display.h
+        ${PROJECT_SOURCE_DIR}/include/mirage_display_producer.h
+        ${PROJECT_SOURCE_DIR}/include/mirage_display_broker.h
+    PRIVATE_INCLUDE
+        ${PROJECT_SOURCE_DIR}/src
+        ${PROJECT_SOURCE_DIR}/src/common)

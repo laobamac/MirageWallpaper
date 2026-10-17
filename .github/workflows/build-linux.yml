@@ -1,0 +1,250 @@
+name: Build Linux packages
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    container:
+      image: ${{ matrix.container }}
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Debian 13 .deb
+            id: debian13
+            format: deb
+            container: debian:13
+          - name: Ubuntu 26.04 .deb
+            id: ubuntu2604
+            format: deb
+            container: ubuntu:26.04
+          - name: Fedora 44 .rpm
+            id: fedora44
+            format: rpm
+            container: fedora:44
+
+    steps:
+      - name: Bootstrap checkout tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v apt-get >/dev/null 2>&1; then
+            apt-get update
+            apt-get install -y --no-install-recommends ca-certificates curl git gnupg nodejs xz-utils
+          else
+            dnf install -y ca-certificates curl git nodejs xz
+          fi
+
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Mark checkout as a safe Git directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Container jobs may run checkout and subsequent packaging commands
+          # with different numeric owners; RPM source archival still needs Git.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      
+      - name: Copy packaing scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.format }}" = "rpm" ]; then
+            cp -a scripts/linux_packaging/RPMBUILD RPMBUILD
+          else
+            cp -a scripts/linux_packaging/debian debian
+          fi
+
+      - name: Install Debian/Ubuntu dependencies
+        if: matrix.format == 'deb'
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get update
+          curl --fail --location --silent --show-error \
+            "https://packages.microsoft.com/config/${{ matrix.id == 'debian13' && 'debian/13' || 'ubuntu/26.04' }}/packages-microsoft-prod.deb" \
+            -o /tmp/packages-microsoft-prod.deb
+          dpkg -i /tmp/packages-microsoft-prod.deb
+          if [ "${{ matrix.id }}" = "debian13" ]; then
+            # Keep Debian 13's backports enabled for the native build
+            # dependencies; the pinned CMake binary below is used for all
+            # three distributions.
+            printf '%s\n' 'deb https://deb.debian.org/debian trixie-backports main' \
+              > /etc/apt/sources.list.d/trixie-backports.list
+          fi
+          apt-get update
+          # The package verification below validates the installed desktop
+          # entry, so the Debian/Ubuntu container needs this validator.
+          apt-get install -y --no-install-recommends \
+            build-essential clang cmake debhelper desktop-file-utils dpkg-dev fakeroot glslang-tools lld \
+            libasound2-dev libass-dev libavcodec-dev libavformat-dev libavutil-dev \
+            libdbus-1-dev libdrm-dev libegl-dev libfontconfig1-dev libfreetype-dev \
+            libgles2-mesa-dev libglvnd-dev libmpv-dev libpipewire-0.3-dev \
+            libplacebo-dev libpulse-dev libswresample-dev libswscale-dev libvulkan-dev \
+            libx11-dev libxkbcommon-dev libxml2-dev ninja-build pkg-config \
+            qt6-5compat-dev qt6-base-dev qt6-declarative-dev qt6-shadertools-dev \
+            qt6-wayland-dev qt6-webchannel-dev qt6-webengine-dev dotnet-sdk-10.0
+
+      - name: Install Fedora dependencies
+        if: matrix.format == 'rpm'
+        shell: bash
+        run: |
+          set -euo pipefail
+          dnf install -y \
+            alsa-lib-devel clang cmake dbus-devel desktop-file-utils lld \
+            dotnet-sdk-10.0 ffmpeg-free-devel fontconfig-devel freetype-devel \
+            gcc-c++ glslang libX11-devel libass-devel libdrm-devel libglvnd-devel \
+            lttng-ust lz4-devel mpv-libs-devel libplacebo-devel pulseaudio-libs-devel mesa-libEGL-devel \
+            mesa-libGLES-devel ninja-build pipewire-devel pkgconf-pkg-config \
+            qt6-qt5compat-devel qt6-qtbase-devel qt6-qtdeclarative-devel \
+            qt6-qtshadertools-devel qt6-qtwayland-devel qt6-qtwebchannel-devel \
+            qt6-qtwebengine-devel rpm-build vulkan-headers vulkan-loader-devel \
+            libxkbcommon-devel
+
+      - name: Install pinned CMake and LLVM toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake_version="4.3.4"
+          llvm_version="21.1.0"
+          cmake_root="/opt/cmake-${cmake_version}"
+          llvm_root="/opt/LLVM-${llvm_version}-Linux-X64"
+
+          curl --fail --location --retry 3 --silent --show-error \
+            "https://cmake.org/files/v4.3/cmake-${cmake_version}-linux-x86_64.sh" \
+            -o /tmp/cmake-installer.sh
+          # The upstream self-extractor changes into --prefix but does not
+          # create that directory itself.
+          install -d "$cmake_root"
+          sh /tmp/cmake-installer.sh --skip-license --prefix="$cmake_root"
+
+          test -x "$cmake_root/bin/cmake"
+          printf '%s\n' "$cmake_root/bin" >> "$GITHUB_PATH"
+          if [ "${{ matrix.id }}" = "debian13" ]; then
+            # Debian 13 does not provide the Clang version required by the
+            # SceneRenderer module build, while the upstream LLVM archive is
+            # compatible with Debian's libxml2 ABI.
+            curl --fail --location --retry 3 --silent --show-error \
+              "https://github.com/llvm/llvm-project/releases/download/llvmorg-${llvm_version}/LLVM-${llvm_version}-Linux-X64.tar.xz" \
+              -o /tmp/llvm.tar.xz
+            tar -xJf /tmp/llvm.tar.xz -C /opt
+            test -x "$llvm_root/bin/clang"
+            test -x "$llvm_root/bin/clang++"
+            printf '%s\n' "$llvm_root/bin" >> "$GITHUB_PATH"
+            printf 'CC=%s\n' "$llvm_root/bin/clang" >> "$GITHUB_ENV"
+            printf 'CXX=%s\n' "$llvm_root/bin/clang++" >> "$GITHUB_ENV"
+          else
+            # Ubuntu 26.04 has moved libxml2 to a newer SONAME, so the
+            # upstream LLVM archive cannot start there. Both Ubuntu 26.04 and
+            # Fedora 44 ship a compatible Clang 21-or-newer compiler.
+            printf 'CC=%s\n' "$(command -v clang)" >> "$GITHUB_ENV"
+            printf 'CXX=%s\n' "$(command -v clang++)" >> "$GITHUB_ENV"
+          fi
+
+      - name: Verify compiler and CMake versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake_version="$(cmake --version | awk 'NR == 1 { print $3 }')"
+          test "$(printf '%s\n' 4.3.1 "$cmake_version" | sort -V | head -n1)" = "4.3.1"
+          compiler_version="$($CC --version | awk 'NR == 1 { for (i = 1; i <= NF; ++i) if ($i ~ /^[0-9]+\./) { print $i; exit } }')"
+          test "$(printf '%s\n' 21 "$compiler_version" | sort -V | head -n1)" = "21"
+          printf 'Using CMake %s and %s\n' "$cmake_version" "$compiler_version"
+
+      - name: Build Debian package
+        if: matrix.format == 'deb'
+        shell: bash
+        run: |
+          set -euo pipefail
+          dpkg-buildpackage -us -uc -b -j"$(nproc)"
+
+      - name: Build RPM package
+        if: matrix.format == 'rpm'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash RPMBUILD/build.sh
+
+      - name: Verify Debian package
+        if: matrix.format == 'deb'
+        shell: bash
+        run: |
+          set -euo pipefail
+          package="$(find .. -maxdepth 1 -name 'miragewallpaper_*.deb' -print -quit)"
+          test -n "$package"
+          dpkg-deb --info "$package"
+          apt-get install -y "$package"
+          test -x /usr/bin/MirageQt
+          test -x /usr/libexec/miragewallpaper/SceneWallpaper
+          test -x /usr/libexec/miragewallpaper/VideoWallpaper
+          test -x /usr/libexec/miragewallpaper/WebWallpaper
+          test -x /usr/libexec/miragewallpaper/SteamService/linux-x64/runtime/dotnet
+          test -d /usr/share/miragewallpaper/assets
+          desktop-file-validate /usr/share/applications/mirageqt.desktop
+
+      - name: Verify RPM package
+        if: matrix.format == 'rpm'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # rpmbuild also emits debuginfo packages. The runtime checks must
+          # install the main package, whose version follows the package name.
+          package="$(find RPMBUILD/RPMS/x86_64 -name 'miragewallpaper-[0-9]*.x86_64.rpm' -print -quit)"
+          test -n "$package"
+          rpm -qip "$package"
+          dnf install -y "$package"
+          test -x /usr/bin/MirageQt
+          test -x /usr/libexec/miragewallpaper/SceneWallpaper
+          test -x /usr/libexec/miragewallpaper/VideoWallpaper
+          test -x /usr/libexec/miragewallpaper/WebWallpaper
+          test -x /usr/libexec/miragewallpaper/SteamService/linux-x64/runtime/dotnet
+          test -d /usr/share/miragewallpaper/assets
+          desktop-file-validate /usr/share/applications/mirageqt.desktop
+
+      - name: Stage Debian package artifact
+        if: matrix.format == 'deb'
+        shell: bash
+        run: |
+          set -euo pipefail
+          package="$(find .. -maxdepth 1 -name 'miragewallpaper_*.deb' -print -quit)"
+          test -n "$package"
+          # upload-artifact rejects parent-directory paths, so copy the
+          # verified package into the workspace before uploading it.
+          install -Dm644 "$package" package-artifacts/miragewallpaper.deb
+
+      - name: Upload Debian package
+        if: matrix.format == 'deb'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: Mirage-${{ matrix.id }}-amd64-deb
+          path: package-artifacts/miragewallpaper.deb
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Upload RPM package
+        if: matrix.format == 'rpm'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: Mirage-${{ matrix.id }}-x86_64-rpm
+          # Keep this release artifact to the installable application RPM;
+          # debug and debug-source RPMs are separate development artifacts.
+          path: RPMBUILD/RPMS/x86_64/miragewallpaper-[0-9]*.x86_64.rpm
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0

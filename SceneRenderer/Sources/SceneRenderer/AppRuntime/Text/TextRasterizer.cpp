@@ -1,5 +1,10 @@
 module;
 
+#if defined(__linux__)
+#include <string>
+#include <memory>
+#endif
+
 #include <rstd/macro.hpp>
 
 #include <ft2build.h>

@@ -1,0 +1,35 @@
+# Copyright © 2026 王孝慈. All rights reserved.
+AboutPage 1.0 AboutPage.qml
+BakeSheet 1.0 BakeSheet.qml
+CreatorProfile 1.0 CreatorProfile.qml
+DetailPane 1.0 DetailPane.qml
+EmptyState 1.0 EmptyState.qml
+singleton FilterData 1.0 FilterData.qml
+FilterSidebar 1.0 FilterSidebar.qml
+FormSection 1.0 FormSection.qml
+Icon 1.0 Icon.qml
+LibraryView 1.0 LibraryView.qml
+MButton 1.0 MButton.qml
+MCheck 1.0 MCheck.qml
+MCombo 1.0 MCombo.qml
+MField 1.0 MField.qml
+MSlider 1.0 MSlider.qml
+MText 1.0 MText.qml
+Main 1.0 Main.qml
+OnlineView 1.0 OnlineView.qml
+PageNavigator 1.0 PageNavigator.qml
+PlaylistPane 1.0 PlaylistPane.qml
+PlaylistSettings 1.0 PlaylistSettings.qml
+PropertyEditor 1.0 PropertyEditor.qml
+SavedPlaylists 1.0 SavedPlaylists.qml
+SectionTitle 1.0 SectionTitle.qml
+SettingRow 1.0 SettingRow.qml
+SettingsWindow 1.0 SettingsWindow.qml
+Sheet 1.0 Sheet.qml
+SteamSheet 1.0 SteamSheet.qml
+singleton Store 1.0 Store.qml
+TaskManager 1.0 TaskManager.qml
+singleton Theme 1.0 Theme.qml
+WallpaperCard 1.0 WallpaperCard.qml
+WelcomeSheet 1.0 WelcomeSheet.qml
+WorkshopDetail 1.0 WorkshopDetail.qml

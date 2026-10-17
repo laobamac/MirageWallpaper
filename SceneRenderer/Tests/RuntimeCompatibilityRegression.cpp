@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdlib>
@@ -6,8 +7,10 @@
 #include <limits>
 #include <memory>
 #include <numbers>
+#include <optional>
 #include <span>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 import sr.scene;

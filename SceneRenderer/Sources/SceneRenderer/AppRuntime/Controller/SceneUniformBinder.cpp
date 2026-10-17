@@ -1,5 +1,9 @@
 module;
 
+#if defined(__linux__)
+#include <string>
+#endif
+
 #include <rstd/macro.hpp>
 
 module sr.scene_uniform_updater;
@@ -205,6 +209,7 @@ SceneUniformUpdater::NodeTransform(SceneNode* pNode, SceneRenderViewKind render_
                                    bool screen_camera, bool apply_geometry_transform,
                                    SceneCamera* camera_override) {
     if (pNode == nullptr) return std::nullopt;
+
     pNode->UpdateTrans();
 
     SceneCamera*     camera { nullptr };

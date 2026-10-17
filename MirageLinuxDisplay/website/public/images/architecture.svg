@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 675" role="img" aria-labelledby="title desc">
+  <title id="title">MirageLinuxDisplay 架构：渲染器到桌面环境的 DMA-BUF 数据流</title>
+  <desc id="desc">MirageWallpaper 渲染器作为生产者，通过 mirage-display-v1 协议把 DMA-BUF 帧与显式同步交给嵌入式 md_broker 路由核心，再经 libmirage-display 消费库分发给 KDE Plasma、GNOME Shell 与 layer-shell 等桌面环境适配器；像素数据全程留在 GPU 显存。</desc>
+  <rect width="1200" height="675" fill="#0b1620"/>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#4a5c68"/>
+    </marker>
+    <linearGradient id="box-g" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#14232d"/>
+      <stop offset="1" stop-color="#10202b"/>
+    </linearGradient>
+  </defs>
+
+  <text x="600" y="42" text-anchor="middle" font-family="system-ui,'PingFang SC',sans-serif" font-size="24" font-weight="650" fill="#edf4fb">mirage-display-v1 数据流</text>
+  <text x="600" y="68" text-anchor="middle" font-family="system-ui,'PingFang SC',sans-serif" font-size="14" fill="#9badb9">协议驱动 · 零拷贝 · DE 自有的壁纸表面</text>
+
+  <text x="70" y="100" font-family="system-ui,'PingFang SC',sans-serif" font-size="14" font-weight="600" fill="#9badb9">MirageWallpaper 渲染器（渲染生产者）</text>
+  <g font-family="system-ui,'PingFang SC',sans-serif" text-anchor="middle">
+    <rect x="70" y="112" width="250" height="62" rx="12" fill="url(#box-g)" stroke="#283a45"/>
+    <text x="195" y="139" font-size="16" font-weight="600" fill="#edf4fb">SceneWallpaper</text>
+    <text x="195" y="160" font-size="12" fill="#9badb9">Vulkan / OpenGL</text>
+
+    <rect x="475" y="112" width="250" height="62" rx="12" fill="url(#box-g)" stroke="#283a45"/>
+    <text x="600" y="139" font-size="16" font-weight="600" fill="#edf4fb">WebWallpaper</text>
+    <text x="600" y="160" font-size="12" fill="#9badb9">WKWebView / 浏览器</text>
+
+    <rect x="880" y="112" width="250" height="62" rx="12" fill="url(#box-g)" stroke="#283a45"/>
+    <text x="1005" y="139" font-size="16" font-weight="600" fill="#edf4fb">VideoWallpaper</text>
+    <text x="1005" y="160" font-size="12" fill="#9badb9">FFmpeg / 硬件解码</text>
+  </g>
+
+  <g stroke="#4a5c68" stroke-width="2">
+    <line x1="195" y1="174" x2="195" y2="278" marker-end="url(#arrow)"/>
+    <line x1="600" y1="174" x2="600" y2="278" marker-end="url(#arrow)"/>
+    <line x1="1005" y1="174" x2="1005" y2="278" marker-end="url(#arrow)"/>
+  </g>
+  <text x="625" y="216" font-family="system-ui,'PingFang SC',sans-serif" font-size="13" fill="#c5d2dc">DMA-BUF 帧 + 显式同步</text>
+  <text x="625" y="238" font-family="system-ui,'PingFang SC',sans-serif" font-size="12" fill="#9badb9">acquire sync_file / release syncobj</text>
+
+  <g font-family="system-ui,'PingFang SC',sans-serif" text-anchor="middle">
+    <rect x="120" y="280" width="960" height="88" rx="14" fill="url(#box-g)" stroke="#67cce9" stroke-width="1.5"/>
+    <text x="600" y="316" font-size="18" font-weight="650" fill="#edf4fb">md_broker 路由核心（嵌入式，运行于 MirageQt 内）</text>
+    <text x="600" y="342" font-size="13" fill="#9badb9">同 UID 校验 · 稳定输出路由 · 格式协商 · 多消费者扇出</text>
+  </g>
+
+  <g stroke="#4a5c68" stroke-width="2">
+    <line x1="600" y1="368" x2="600" y2="448" marker-end="url(#arrow)"/>
+  </g>
+  <text x="625" y="402" font-family="system-ui,'PingFang SC',sans-serif" font-size="13" fill="#c5d2dc">$XDG_RUNTIME_DIR/mirage-wallpaper/display-v1.sock</text>
+  <text x="625" y="424" font-family="system-ui,'PingFang SC',sans-serif" font-size="12" fill="#9badb9">AF_UNIX · SOCK_SEQPACKET · 0600</text>
+
+  <g font-family="system-ui,'PingFang SC',sans-serif" text-anchor="middle">
+    <rect x="120" y="450" width="960" height="72" rx="14" fill="url(#box-g)" stroke="#283a45"/>
+    <text x="600" y="484" font-size="18" font-weight="650" fill="#edf4fb">libmirage-display 消费库（稳定 C ABI）</text>
+    <text x="600" y="506" font-size="13" fill="#9badb9">缓冲池生命周期 · 帧接收 · 显式同步 · 延迟解绑 · 指针/窗口状态</text>
+  </g>
+
+  <g stroke="#4a5c68" stroke-width="2">
+    <line x1="600" y1="522" x2="600" y2="573" marker-end="url(#arrow)"/>
+  </g>
+  <text x="625" y="552" font-family="system-ui,'PingFang SC',sans-serif" font-size="12" fill="#9badb9">EGL_EXT_image_dma_buf_import / Vulkan external memory</text>
+
+  <g font-family="system-ui,'PingFang SC',sans-serif" text-anchor="middle">
+    <rect x="70" y="575" width="250" height="70" rx="12" fill="url(#box-g)" stroke="#283a45"/>
+    <text x="195" y="602" font-size="15" font-weight="600" fill="#edf4fb">KDE Plasma</text>
+    <text x="195" y="625" font-size="12" fill="#9badb9">X11 / Wayland · 已实现</text>
+
+    <rect x="475" y="575" width="250" height="70" rx="12" fill="url(#box-g)" stroke="#283a45" stroke-dasharray="5 4"/>
+    <text x="600" y="602" font-size="15" font-weight="600" fill="#edf4fb">GNOME Shell</text>
+    <text x="600" y="625" font-size="12" fill="#9badb9">扩展 + 纹理助手 · 规划中</text>
+
+    <rect x="880" y="575" width="250" height="70" rx="12" fill="url(#box-g)" stroke="#283a45" stroke-dasharray="5 4"/>
+    <text x="1005" y="602" font-size="15" font-weight="600" fill="#edf4fb">layer-shell</text>
+    <text x="1005" y="625" font-size="12" fill="#9badb9">通用消费者 · 规划中</text>
+  </g>
+
+  <text x="600" y="664" text-anchor="middle" font-family="system-ui,'PingFang SC',sans-serif" font-size="13" fill="#778b99">像素数据全程留在 GPU 显存——broker 只转发协议报文与文件描述符。</text>
+</svg>

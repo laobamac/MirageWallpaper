@@ -1,5 +1,9 @@
 module;
 
+#if defined(__linux__)
+#include <string>
+#endif
+
 #include <rstd/macro.hpp>
 
 export module sr.vulkan_render:resource;
@@ -912,6 +916,7 @@ struct RenderingResources {
     vvk::CommandBuffer command;
 
     vvk::Semaphore sem_swap_wait_image;
+    vvk::Semaphore sem_export;
     vvk::Semaphore sem_upload;
     vvk::Fence     fence_frame;
     uint64_t       upload_timeline_value { 0 };

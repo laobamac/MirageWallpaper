@@ -1,5 +1,10 @@
 module;
 
+#if defined(__linux__)
+#include <string>
+#include <memory>
+#endif
+
 #include <rstd/macro.hpp>
 #include "Utils/StringUtil.h"
 
@@ -1089,6 +1094,9 @@ inline std::string Preprocessor(const std::string& in_src, ShaderType type, cons
 
     // GS source uses `in`/`out` storage classes; VS/FS use `attribute`/`varying`.
     ForEachDeclLine(src, { "attribute", "varying", "in", "out" }, [&](const DeclMatch& m) {
+        // attribute-in-vertex and varying-in-fragment both behave as inputs;
+        // varying-in-vertex behaves as output. GS: `in` is input (from VS),
+        // `out` is output (to FS).
         bool        is_input = (m.storage == "attribute") || (m.storage == "in") ||
                                (m.storage == "varying" && type == ShaderType::FRAGMENT);
         std::string line(src.substr(m.start, m.end - m.start));

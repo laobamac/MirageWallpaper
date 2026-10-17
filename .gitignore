@@ -34,3 +34,7 @@ cmake-build-debug
 .secrets/
 xcuserdata
 .reasonix
+.workbuddy
+.qtcreator
+.agents
+
