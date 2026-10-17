@@ -159,6 +159,7 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
 - (void)teardownPlaybackForRestart;
 - (BOOL)canRecoverFromError:(nullable NSError *)error;
 - (void)observeSystemPowerTransitions;
+- (void)handleSystemWillSleep;
 - (void)handleSystemDidWake;
 - (void)verifyPlaybackAfterWakeForGeneration:(uint64_t)generation
                                 attemptsLeft:(NSInteger)attemptsLeft;
@@ -417,9 +418,45 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
                                  queue:NSOperationQueue.mainQueue
                             usingBlock:wake]];
     }
+
+    // After sleep, the system could still wake briefly in the background (DarkWake) without
+    // any notification. At this point, the system is not ready to play video, so we drop
+    // playback when the system is about to sleep and rebuild it on wake. Display-only sleep
+    // is fine since playback could survive it.
+    [self.systemPowerObservers addObject:
+        [center addObserverForName:NSWorkspaceWillSleepNotification
+                            object:nil
+                             queue:NSOperationQueue.mainQueue
+                        usingBlock:^(NSNotification *note) {
+            (void)note;
+            [weakSelf handleSystemWillSleep];
+        }]];
+}
+
+- (void)handleSystemWillSleep {
+    // Leave a permanent failure alone, otherwise every wake would report it again.
+    if (self.playingURL == nil || self.failureReported) return;
+    fprintf(stderr, "VideoRenderer: system sleeping, dropping playback until wake\n");
+    [self teardownPlaybackForRestart];
+    // Clear the scheduled recovery task since we will rebuild playback on wake anyway.
+    // If not, scheduleRecovery could skip the rebuild.
+    self.recoveryScheduled = NO;
+    self.recoveryAttempts = 0;
 }
 
 - (void)handleSystemDidWake {
+    // Rebuild the playback after the system wakes up. This method runs twice on wake
+    // (DidWake, then ScreensDidWake). scheduleRecovery will skip the second call since
+    // a rebuild is already scheduled.
+    if (self.playingURL != nil && !self.loaded && !self.failureReported) {
+        // Only log the first wake event
+        if (!self.recoveryScheduled) {
+            fprintf(stderr, "VideoRenderer: rebuilding playback after wake\n");
+        }
+        [self scheduleRecovery];
+        return;
+    }
+
     if (!self.loaded) return;
     [self updateDynamicRangeForScreen:self.window.screen ?: NSScreen.mainScreen];
     AVPlayerItem *current = self.player.currentItem;
