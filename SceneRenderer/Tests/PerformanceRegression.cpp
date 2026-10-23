@@ -164,8 +164,14 @@ void TestIdleAudio() {
     Check(! wavsen::audio::loopback::snapshot(spectrum), "no FFT is published without a consumer");
     wavsen::audio::AudioCapture capture;
     Check(capture.init(false), "scene-only spectrum consumer initializes without system capture");
+    // Linux capture backends consume the system monitor and do not own the
+    // CoreAudio scene-output subscription. Subscribe explicitly so this
+    // backend-independent analyzer regression has identical ownership on
+    // every platform; AudioCapture retains its normal platform semantics.
+    wavsen::audio::loopback::subscribe();
     wavsen::audio::loopback::ingest(pcm.data(), 4096, 2, 48000);
     Check(wavsen::audio::loopback::snapshot(spectrum), "subscribed scene output produces spectrum");
+    wavsen::audio::loopback::unsubscribe();
     capture.uninit();
     capture.uninit();
 }

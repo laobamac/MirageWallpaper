@@ -13,16 +13,16 @@ using namespace sr::vulkan;
 
 constexpr std::array<InstanceLayer, 0> base_inst_layers {};
 
-// MoltenVK is reported as a "portability" driver. The loader will hide
-// it from vkEnumeratePhysicalDevices unless we both:
-//   1) enable VK_KHR_portability_enumeration at instance create time, AND
-//   2) pass VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR (handled in
-//      vvk::Instance::Create in vulkan_wrapper.cpp).
-// The extension-name macros from vulkan_core.h aren't re-exported by the
-// `sr.vulkan` module, so use the bare strings here.
+// MoltenVK is reported as a "portability" driver. On Apple the loader will
+// hide it from vkEnumeratePhysicalDevices unless we enable
+// VK_KHR_portability_enumeration and pass the matching create flag in
+// vvk::Instance::Create. Native Linux drivers should not be forced to expose
+// that extension.
 constexpr std::array base_inst_exts {
     Extension { true,  VK_EXT_DEBUG_UTILS_EXTENSION_NAME },
+#if defined(__APPLE__)
     Extension { true,  "VK_KHR_portability_enumeration" },
+#endif
     Extension { false, "VK_KHR_get_physical_device_properties2" },
     Extension { false, VK_KHR_EXTERNAL_MEMORY_CAPABILITIES_EXTENSION_NAME },
     Extension { false, VK_KHR_EXTERNAL_SEMAPHORE_CAPABILITIES_EXTENSION_NAME },

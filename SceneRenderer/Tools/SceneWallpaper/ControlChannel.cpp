@@ -17,6 +17,12 @@ namespace mirage {
 
 namespace {
 
+// WINDOW_STATE flag bits (mirage-display protocol): 0x1 covered, 0x2 focus
+// lost, 0x4 maximized, 0x8 fullscreen. Playback pauses while focus is lost or
+// a fullscreen window covers the wallpaper.
+constexpr std::uint32_t kWindowFocusLost = 0x2u;
+constexpr std::uint32_t kWindowFullscreen = 0x8u;
+
 // Maps the wire fill-mode name (matching WE / the other renderers' vocabulary)
 // to sr::FillMode. cover→ASPECTCROP, contain/fit→ASPECTFIT, stretch→STRETCH.
 bool ParseFillMode(const std::string& s, sr::FillMode& out) {

@@ -154,6 +154,9 @@ public:
         return rstd::lexicographical_compare_three_way(
             a.begin(), a.end(), b.vec.begin(), b.vec.end());
     }
+    friend constexpr bool operator==(const String& a, const String& b) noexcept {
+        return a.size() == b.size() && rstd::mem::memcmp(a.begin(), b.begin(), a.size()) == 0;
+    }
     friend constexpr bool operator==(const String& a, ref<str> b) noexcept {
         return a.size() == b.size() && rstd::mem::memcmp(a.begin(), b.begin(), a.size()) == 0;
     }

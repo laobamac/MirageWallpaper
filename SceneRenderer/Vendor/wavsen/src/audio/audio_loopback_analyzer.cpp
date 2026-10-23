@@ -57,9 +57,9 @@ public:
         dsp::fft_inplace(buf_left.data(), dsp::kFftSize);
         dsp::fft_inplace(buf_right.data(), dsp::kFftSize);
 
-        const float norm = 2.0f / static_cast<float>(dsp::kFftSize);
         const auto raw =
-            dsp::analyze_stereo_spectrum(buf_left.data(), buf_right.data(), band_layout_, norm);
+            dsp::analyze_stereo_spectrum(buf_left.data(), buf_right.data(), band_layout_,
+                                         dsp::kFftAmplitudeNorm);
         const auto dt_sec =
             static_cast<float>(dsp::kHopSize) / static_cast<float>(sample_rate_);
         const auto bands = dsp::smooth_spectrum(raw, smoothed_, dt_sec);

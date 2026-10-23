@@ -1,5 +1,9 @@
 module;
 
+#if defined(__linux__)
+#include <string>
+#endif
+
 #include <rstd/macro.hpp>
 #include "Utils/AutoDeletor.hpp"
 #include "vvk/macros.hpp"

@@ -1,0 +1,248 @@
+name: Build Linux dist
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  HOMEBREW_NO_AUTO_UPDATE: "1"
+  HOMEBREW_NO_INSTALL_CLEANUP: "1"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+
+jobs:
+  build:
+    name: Linux x86_64 dist
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Homebrew
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v brew >/dev/null 2>&1; then
+            brew_bin="$(command -v brew)"
+          else
+            NONINTERACTIVE=1 /bin/bash -c "$(curl --fail --location --silent --show-error https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+            brew_bin="/home/linuxbrew/.linuxbrew/bin/brew"
+          fi
+
+          eval "$("$brew_bin" shellenv)"
+          test "$(uname -s)" = "Linux"
+          printf '%s\n' "$HOMEBREW_PREFIX/bin" "$HOMEBREW_PREFIX/sbin" >> "$GITHUB_PATH"
+          printf 'HOMEBREW_PREFIX=%s\n' "$HOMEBREW_PREFIX" >> "$GITHUB_ENV"
+
+      - name: Install build dependencies with Homebrew
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install \
+            alsa-lib cmake dbus dotnet ffmpeg fontconfig freetype glslang \
+            libass libdrm libplacebo libx11 libxkbcommon llvm lld lz4 mesa mpv \
+            ninja patchelf pipewire pkgconf pulseaudio qt qtwebengine \
+            vulkan-headers vulkan-loader
+
+          brew_prefix="$(brew --prefix)"
+          llvm_prefix="$(brew --prefix llvm)"
+          lld_prefix="$(brew --prefix lld)"
+          dotnet_prefix="$(brew --prefix dotnet)"
+          printf '%s\n' "$llvm_prefix/bin" "$lld_prefix/bin" >> "$GITHUB_PATH"
+          {
+            printf 'CC=%s\n' "$llvm_prefix/bin/clang"
+            printf 'CXX=%s\n' "$llvm_prefix/bin/clang++"
+            printf 'CMAKE_PREFIX_PATH=%s\n' "$brew_prefix"
+            printf 'DOTNET_ROOT=%s/libexec\n' "$dotnet_prefix"
+            printf 'PKG_CONFIG_PATH=%s/lib/pkgconfig:%s/share/pkgconfig\n' "$brew_prefix" "$brew_prefix"
+          } >> "$GITHUB_ENV"
+
+          dotnet --version | grep -Eq '^10\.'
+          cmake --version
+          clang++ --version | head -1
+
+      - name: Build Linux renderers and application
+        shell: bash
+        run: |
+          set -euo pipefail
+          build_root="$GITHUB_WORKSPACE/build/linux-release"
+          jobs="$(nproc)"
+
+          cmake -S SceneRenderer -B "$build_root/scene" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_LINKER_TYPE=LLD \
+            -DSCENERENDERER_BUILD_VIEWER=OFF \
+            -DSCENERENDERER_BUILD_WALLPAPER_HOST=ON
+          cmake --build "$build_root/scene" --parallel "$jobs"
+
+          cmake -S VideoRenderer -B "$build_root/video" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_LINKER_TYPE=LLD \
+            -DVIDEORENDERER_BUILD_VIEWER=OFF
+          cmake --build "$build_root/video" --parallel "$jobs"
+
+          cmake -S WebRenderer -B "$build_root/web" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_LINKER_TYPE=LLD \
+            -DWEBRENDERER_BUILD_VIEWER=OFF
+          cmake --build "$build_root/web" --parallel "$jobs"
+
+          cmake -S MirageQt -B "$build_root/mirageqt" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_LINKER_TYPE=LLD \
+            -DCMAKE_INSTALL_PREFIX=/usr \
+            -DMIRAGEQT_RUNTIME_DIR=/usr/libexec/miragewallpaper \
+            -DMIRAGEQT_DATA_DIR=/usr/share/miragewallpaper
+          cmake --build "$build_root/mirageqt" --parallel "$jobs"
+
+          bash scripts/build_steam_service_linux.sh "$build_root/steamservice/linux-x64"
+
+      - name: Stage and archive the portable dist
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "x86_64"
+
+          build_root="$GITHUB_WORKSPACE/build/linux-release"
+          version="$(git describe --tags --long --always)"
+          dist_name="MirageWallpaper-${version}-linux-x86_64"
+          dist_root="$GITHUB_WORKSPACE/dist"
+          dist_dir="$dist_root/$dist_name"
+          archive="$dist_root/$dist_name.tar.gz"
+
+          mkdir -p "$dist_dir"
+          install -Dm755 "$build_root/mirageqt/bin/MirageQt" "$dist_dir/MirageQt"
+          install -Dm755 "$build_root/scene/Tools/SceneWallpaper/SceneWallpaper" "$dist_dir/SceneWallpaper"
+          install -Dm755 "$build_root/video/Tools/VideoWallpaper/VideoWallpaper" "$dist_dir/VideoWallpaper"
+          install -Dm755 "$build_root/web/Tools/WebWallpaper/WebWallpaper" "$dist_dir/WebWallpaper"
+          install -Dm644 "$build_root/mirageqt/mirageqt.desktop" "$dist_dir/mirageqt.desktop"
+          install -Dm644 MirageQt/Sources/Resources/mirage.png "$dist_dir/mirageqt.png"
+          install -Dm644 LICENSE "$dist_dir/LICENSE"
+          install -Dm644 MirageQt/Vendor/libqrcode/LICENSE "$dist_dir/Licenses/libqrcode-LICENSE"
+          cp -a assets "$dist_dir/"
+          install -Dm755 "$HOMEBREW_PREFIX/bin/ffmpeg" "$dist_dir/bin/ffmpeg"
+          install -d "$dist_dir/SteamService"
+          cp -a "$build_root/steamservice/linux-x64" "$dist_dir/SteamService/"
+
+          # Qt's shared libraries, QML imports, platform plugins, and WebEngine
+          # helper/resources are runtime inputs rather than build-only files.
+          install -d "$dist_dir/share/qt"
+          cp -aL "$HOMEBREW_PREFIX/share/qt/plugins" "$dist_dir/"
+          cp -aL "$HOMEBREW_PREFIX/share/qt/qml" "$dist_dir/"
+          cp -aL "$HOMEBREW_PREFIX/share/qt/resources" "$dist_dir/share/qt/"
+          cp -aL "$HOMEBREW_PREFIX/share/qt/translations" "$dist_dir/share/qt/"
+          install -Dm755 "$HOMEBREW_PREFIX/share/qt/libexec/QtWebEngineProcess" \
+            "$dist_dir/libexec/QtWebEngineProcess"
+          cat > "$dist_dir/qt.conf" <<'EOF'
+          [Paths]
+          Prefix=.
+          Libraries=lib
+          Plugins=plugins
+          QmlImports=qml
+          Qml2Imports=qml
+          Data=share/qt
+          Translations=share/qt/translations
+          LibraryExecutables=libexec
+          EOF
+
+          # Copy the non-glibc ELF dependency closure from both Homebrew and
+          # the build host; glibc and the ELF loader must come from the target.
+          install -d "$dist_dir/lib"
+          while IFS= read -r -d '' elf; do
+            if ! readelf -h "$elf" >/dev/null 2>&1; then
+              continue
+            fi
+            dependencies="$(ldd "$elf")"
+            if grep -q 'not found' <<< "$dependencies"; then
+              printf 'Unresolved runtime dependency in %s:\n%s\n' "$elf" "$dependencies" >&2
+              exit 1
+            fi
+            while IFS= read -r dependency; do
+              case "$(basename "$dependency")" in
+                libc.so.*|libm.so.*|libdl.so.*|libpthread.so.*|librt.so.*|ld-linux*.so.*|linux-vdso.so.*)
+                  continue
+                  ;;
+              esac
+              destination="$dist_dir/lib/$(basename "$dependency")"
+              if [[ -e "$destination" ]]; then
+                if ! cmp -s "$dependency" "$destination"; then
+                  printf 'Conflicting runtime library name: %s\n' "$destination" >&2
+                  exit 1
+                fi
+              else
+                install -Dm755 "$dependency" "$destination"
+              fi
+            done < <(awk \
+              '$2 == "=>" && substr($3, 1, 1) == "/" { print $3 }
+               substr($1, 1, 1) == "/" { print $1 }' \
+              <<< "$dependencies")
+          done < <(find "$dist_dir" -type f -print0)
+
+          # Replace build-machine/Homebrew RPATHs with paths relative to the
+          # extracted dist so the archive can find its copied libraries.
+          while IFS= read -r -d '' elf; do
+            if readelf -h "$elf" >/dev/null 2>&1; then
+              relative_lib="$(realpath --relative-to="$(dirname "$elf")" "$dist_dir/lib")"
+              patchelf --set-rpath "\$ORIGIN:\$ORIGIN/$relative_lib" "$elf"
+              dependencies="$(ldd "$elf")"
+              if grep -q 'not found' <<< "$dependencies"; then
+                printf 'Unresolved bundled runtime dependency in %s:\n%s\n' "$elf" "$dependencies" >&2
+                exit 1
+              fi
+              if grep -Fq "$HOMEBREW_PREFIX" <<< "$dependencies"; then
+                printf 'Homebrew runtime library escaped the dist bundle for %s:\n%s\n' \
+                  "$elf" "$dependencies" >&2
+                exit 1
+              fi
+            fi
+          done < <(find "$dist_dir" -type f -print0)
+
+          cat > "$dist_dir/run.sh" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          export LD_LIBRARY_PATH="$root/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          export PATH="$root/bin:$PATH"
+          export QT_PLUGIN_PATH="$root/plugins"
+          export QML2_IMPORT_PATH="$root/qml"
+          export QTWEBENGINEPROCESS_PATH="$root/libexec/QtWebEngineProcess"
+          export QTWEBENGINE_RESOURCES_PATH="$root/share/qt/resources"
+          export QTWEBENGINE_LOCALES_PATH="$root/share/qt/translations/qtwebengine_locales"
+          exec "$root/MirageQt" "$@"
+          EOF
+          chmod 755 "$dist_dir/run.sh"
+
+          test -x "$dist_dir/MirageQt"
+          test -x "$dist_dir/SceneWallpaper"
+          test -x "$dist_dir/VideoWallpaper"
+          test -x "$dist_dir/WebWallpaper"
+          test -x "$dist_dir/bin/ffmpeg"
+          test -x "$dist_dir/SteamService/linux-x64/runtime/dotnet"
+          test -f "$dist_dir/SteamService/linux-x64/app/MirageSteamService.dll"
+          test -x "$dist_dir/libexec/QtWebEngineProcess"
+          test -d "$dist_dir/plugins/platforms"
+          test -d "$dist_dir/qml/QtQuick"
+          test -f "$dist_dir/share/qt/resources/qtwebengine_resources.pak"
+          tar -czf "$archive" -C "$dist_root" "$dist_name"
+          tar -tzf "$archive" >/dev/null
+          printf 'Created %s\n' "$archive"
+
+      - name: Upload Linux dist archive
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: MirageWallpaper-linux-x86_64-dist
+          path: dist/MirageWallpaper-*-linux-x86_64.tar.gz
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0

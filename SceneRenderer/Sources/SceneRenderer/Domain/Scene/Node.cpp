@@ -1,5 +1,9 @@
 module;
 
+#if defined(__linux__)
+#include <string>
+#endif
+
 module sr.scene;
 import eigen;
 import rstd.cppstd;
