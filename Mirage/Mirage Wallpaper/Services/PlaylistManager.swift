@@ -126,6 +126,7 @@ final class PlaylistManager: ObservableObject {
     func stopAllRotators() {
         rotators.values.forEach { $0.stop() }
         rotators.removeAll()
+        rotationAnchor = nil
         wallpaperViewModel = nil
         if let displayObserver {
             NotificationCenter.default.removeObserver(displayObserver)
@@ -133,8 +134,28 @@ final class PlaylistManager: ObservableObject {
         }
     }
 
+    // MARK: Shared rotation grid
+
+    /// Anchor for timer-based rotation across the whole wall. Every screen
+    /// schedules its switches on the grid from this anchor
+    /// (`anchor + k * interval`), so they change at the same moment.
+    /// Main-thread confined.
+    private var rotationAnchor: Date?
+
+    func rotationAnchor(forInterval interval: TimeInterval) -> Date {
+        if let anchor = rotationAnchor { return anchor }
+        let anchor = Date()
+        rotationAnchor = anchor
+        return anchor
+    }
+
+    /// Re-anchors the rotation grid at "now" so every screen gets a full interval.
+    func resetRotationAnchor() {
+        rotationAnchor = Date()
+    }
+
     private func rotator(on screen: Int,
-                         startingWith reason: PlaylistRotator.StartReason = .manualAdvance) -> PlaylistRotator? {
+                         startingWith reason: PlaylistRotator.StartReason = .settingsChanged) -> PlaylistRotator? {
         guard currents[screen] != nil, let wallpaperViewModel,
               let key = DisplayRegistry.shared.key(forScreenIndex: screen) else { return nil }
         if let existing = rotators[screen], existing.displayKey == key { return existing }

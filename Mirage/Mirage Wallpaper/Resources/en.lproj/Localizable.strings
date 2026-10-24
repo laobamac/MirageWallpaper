@@ -711,6 +711,8 @@
 "%@平均播放时长最长" = "Longest Average Playtime %@";
 "%@播放次数最多" = "Most Sessions %@";
 "停止此显示器" = "Stop This Display";
+"跨屏同步" = "Sync Across Displays";
+"播放列表会应用到所有显示器" = "The playlist applies to every display";
 "选择要设置的显示器" = "Choose a display to configure";
 "未连接的显示器" = "Disconnected display";
 "正在为 %@ 设置" = "Configuring %@";

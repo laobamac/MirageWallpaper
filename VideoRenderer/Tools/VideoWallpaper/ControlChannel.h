@@ -8,6 +8,14 @@
 //   {"cmd":"volume","value":0.5}   // 0..1
 //   {"cmd":"muted","value":true}
 //   {"cmd":"fillmode","value":"cover"|"contain"|"stretch"}
+//   {"cmd":"seek","t":12.5}        // jump to an absolute offset (seconds)
+//   {"cmd":"playbackTime"}         // replies {"event":"playbackTime","t":..}
+//   {"cmd":"sync","anchor":<CLOCK_MONOTONIC_RAW>}
+//         Cross-display playback sync. `anchor` is the monotonic time at which
+//         this wallpaper's playback started, shared by every renderer showing
+//         it; each one maps it to fmod(now - anchor, duration) and trims its
+//         rate to stay on it. Optional keys: "hold" (tolerance), "trim" (false
+//         on the renderer that owns audio), "join" (land now, do not chase).
 //   {"cmd":"setProperty","key":"...","value":...}   // (no live video props; ignored)
 //   {"cmd":"quit"}
 //

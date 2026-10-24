@@ -13,6 +13,7 @@
 
 #include <cerrno>
 #include <cmath>
+#include <cstdarg>
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
@@ -20,6 +21,7 @@
 #include <sys/event.h>
 #include <sys/syslimits.h>
 #include <sys/types.h>
+#include <time.h>
 #include <unistd.h>
 
 struct WallpaperArgs {
@@ -493,11 +495,446 @@ static BOOL MirageWindowServerState(NSWindow *window, CGRect *bounds,
 }
 @end
 
+#pragma mark - Cross-display playback sync
+
+// Every display runs its own VideoWallpaper process with its own AVPlayer, so
+// the only thing keeping their playheads together is a shared anchor. The
+// parent seeds that anchor from a renderer's real playhead and sends it out,
+// and each process maps it to a media position on its own.
+//
+// CLOCK_MONOTONIC_RAW instead of CFAbsoluteTimeGetCurrent: it reads the same in
+// every process, keeps counting through sleep, and an NTP step cannot move
+// every renderer's target at once.
+static double MirageSyncNow(void) {
+    return (double)clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) / 1e9;
+}
+
+// The sync trace goes to a file, not to stderr. stderr is a pipe the parent
+// only reads for fatal startup errors, so a trace written there is lost exactly
+// while a wallpaper is playing. One file per display, truncated when it grows
+// past a megabyte.
+static char sSyncLogPath[PATH_MAX] = {0};
+
+static void MirageSyncLogOpen(CGDirectDisplayID displayID, int screen) {
+    snprintf(sSyncLogPath, sizeof(sSyncLogPath), "/tmp/mirage-sync-%u-%d.log",
+             (unsigned)displayID, screen);
+    FILE *probe = fopen(sSyncLogPath, "r");
+    if (probe != NULL) {
+        long size = fseek(probe, 0, SEEK_END) == 0 ? ftell(probe) : 0;
+        fclose(probe);
+        if (size > 1024 * 1024) {
+            FILE *truncate = fopen(sSyncLogPath, "w");
+            if (truncate != NULL) fclose(truncate);
+        }
+    }
+}
+
+static void MirageSyncLog(const char *format, ...) __attribute__((format(printf, 1, 2)));
+
+static void MirageSyncLog(const char *format, ...) {
+    if (sSyncLogPath[0] == '\0') return;
+    FILE *fp = fopen(sSyncLogPath, "a");
+    if (fp == NULL) return;
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    fprintf(fp, "%.3f ", (double)ts.tv_sec + (double)ts.tv_nsec / 1e9);
+    va_list args;
+    va_start(args, format);
+    vfprintf(fp, format, args);
+    va_end(args);
+    fputc('\n', fp);
+    fclose(fp);
+}
+
+// Tolerance and cooldown.
+//
+// The tolerance decides whether a tick touches the player at all, so it has to
+// sit above one-frame sampling noise and below what looks out of step. 150 ms
+// was too coarse: it is where two screens *start* to look wrong, so every
+// settled state was allowed to be visibly late. The eye compares motion, and
+// two frames of offset already reads as an echo.
+//
+// 65 ms is about two frames at 30 fps. The seek tolerance below is a frame, so
+// chasing anything finer is pointless.
+static const double kMirageSyncHold = 0.065;
+// Wait this long after a correction before measuring again. A seek needs time
+// to land, and measuring early reads the pre-seek playhead and stacks a second
+// seek on top of the first.
+static const double kMirageSyncLandingCooldown = 0.900;
+
+// How a correction is applied: a rate trim, not a seek.
+//
+// A tolerant seek costs about 450 ms of playback here. The decoder flushes and
+// re-primes, the picture sits still, and the screen ends up further behind than
+// the offset it was meant to remove, so each seek made the next measurement
+// worse and the loop fed itself until the budget cut it off.
+//
+// A trim costs one dropped frame and moves the picture smoothly instead. At
+// 1.03x a 120 ms offset is gone in four seconds and nobody watching a wallpaper
+// can tell.
+//
+// The gain keeps the close time the same for any offset: rate - 1 is
+// proportional to the offset, so it shrinks geometrically in 1/gain seconds.
+static const double kMirageTrimGain = 0.25;   // ~4 s to close, any offset
+static const double kMirageTrimMax = 0.040;   // never more than ±4%
+// Stop trimming below this. Under kMirageSyncHold, so a trim that starts at the
+// tolerance does not oscillate around it.
+static const double kMirageTrimStop = 0.030;
+// How often a running trim is resized. Each resize assigns `rate`, and
+// assigning on every tick is what made the corrected screen stutter: it forces
+// AVFoundation to recompute playback timing, which costs a frame.
+static const double kMirageTrimReeval = 2.000;
+// Smallest change worth an assignment.
+static const double kMirageTrimQuantum = 0.005;
+
+static BOOL sTrimActive = NO;
+static double sTrimScale = 1.0;
+static double sTrimStartedAt = -1.0e9;
+
+// Offset big enough that a seek is worth its 450 ms. Only a screen that really
+// stopped gets here: a stall or a bad landing, not drift.
+static const double kMirageHardSeekDrift = 0.250;
+
+// One sample over tolerance is not a decision. The playhead reads a frame low
+// across a loop swap and right after a seek, and acting on a single sample like
+// that turns it into a visible seek.
+static NSInteger sDriftStreak = 0;
+static NSInteger sDriftStreakSign = 0;
+
+// Set while the engine has not accepted the join yet (it refuses seeks until
+// the first frame is decoded), so the next tick retries.
+static BOOL sJoinPending = NO;
+// True while the player is paused. Nothing can be corrected in this state: the
+// engine refuses seeks and drops rate writes. Measuring drift here just spends
+// the seek budget on seeks that never happen, and once the budget is gone this
+// screen has none left exactly when it resumes. Corrections are held instead,
+// and the first sync after the pause lifts lands like a join.
+static BOOL sSyncPaused = NO;
+// Set when the pause lifts: the next sync is a join, not a chase.
+static BOOL sResumeJoin = NO;
+// Previous tick's reference position, used to spot the reference crossing its
+// own loop seam.
+static double sLastSyncTarget = -1.0;
+// Corrections stay off until this instant after a seam.
+//
+// Right after a seam the local player is not running at 1.0x: AVPlayerLooper is
+// wiring in a fresh copy and its decoder is priming, so over the next second the
+// playhead advances a little slower than real time. Measuring inside that window
+// reads the slowdown as drift. A seek used to turn that into a jump; a trim
+// turns it into a screen that speeds up to compensate for a slowdown that has
+// already ended, which is just as wrong and lasts longer. The slowdown is
+// transient and self-correcting, so the only useful response is to wait it out.
+static double sSeamGraceUntil = -1.0e9;
+static const double kMirageSeamGrace = 1.200;
+
+// Playhead seen on the previous tick, used to notice a loop restart. One
+// process drives one wallpaper window, so a file-scope value is enough.
+static double sLastSyncPosition = -1.0;
+// Monotonic time of the last seek. A seek needs time to land, and measuring too
+// early reads the pre-seek playhead and stacks another seek on it.
+static double sLastSyncLandingTime = -1.0e9;
+// Seek budget. Only seeks count, because they are the corrections that cost
+// something visible.
+static double sSyncCorrectionWindowStart = -1.0e9;
+static NSInteger sSyncCorrectionCount = 0;
+static double sSyncSuspendUntil = -1.0e9;
+static const double kMirageSyncBudgetWindow = 30.0;
+static const NSInteger kMirageSyncBudgetCount = 8;
+static const double kMirageSyncSuspendDuration = 45.0;
+
+// Distance from `position` to `target` along the shorter arc of the loop.
+// Positive means this renderer is behind and has to speed up.
+static double MirageSyncDelta(double target, double position, double total) {
+    double delta = target - position;
+    if (total > 0.0) {
+        double half = total * 0.5;
+        if (delta > half) delta -= total;
+        else if (delta < -half) delta += total;
+    }
+    return delta;
+}
+
+// Landing point for a seek, kept away from the seam.
+//
+// A zero-tolerance seek to exactly 0 (or exactly the duration) on a freshly
+// enqueued loop copy can land on an item that never presents another frame: the
+// picture parks on the first frame and the clock stops. Staying 100 ms inside
+// the clip avoids that and nobody notices the difference.
+static double MirageSyncLanding(double target, double total) {
+    if (!(total > 0.4)) return target;
+    if (target < 0.10) return 0.10;
+    if (target > total - 0.10) return total - 0.10;
+    return target;
+}
+
+// Aligns `eng` to the shared anchor.
+//
+// `trimAllowed` is NO on the renderer that owns audio. Changing its rate would
+// shift pitch, so the muted screens do the chasing.
+//
+// `join` is YES on the first message a renderer gets after launching. It has
+// been playing from zero since it started, so it has to land on the anchor
+// right away; otherwise the next tick reads its stray playhead and re-anchors
+// everyone onto it.
+static void MirageSyncApply(VRVideoRendererEngine *eng, double anchor,
+                            double hold, BOOL trimAllowed, BOOL join) {
+    double total = [eng currentPlaybackDuration];
+    if (!isfinite(total) || total <= 0.0) return;
+    double elapsed = MirageSyncNow() - anchor;
+    if (!(elapsed >= 0.0)) return;
+    double target = fmod(elapsed, total);
+
+    // Log the anchor itself every few ticks. `target` alone cannot distinguish
+    // "the parent moved the anchor" from "this player fell behind", since both
+    // look like target drifting away from the playhead. anchor = now - target,
+    // so logging the pair shows which one moved.
+    {
+        static NSInteger sAnchorTick = 0;
+        if (sAnchorTick++ % 4 == 0) {
+            MirageSyncLog("anchor=%.3f now=%.3f target=%.3f role=%s",
+                          anchor, MirageSyncNow(), target,
+                          trimAllowed ? "follow" : "ref");
+        }
+    }
+
+    // The join usually arrives while the wallpaper is still opening, and the
+    // engine refuses a seek before the first frame is decoded. Dropping it would
+    // leave this renderer playing from zero, half a second off the anchor, so
+    // keep retrying until the engine takes one.
+    if (sJoinPending) join = YES;
+
+    // A paused screen is a stopped clock, not a late one. Nothing can be
+    // corrected while it is stopped, and measuring against a frozen playhead
+    // only spends the seek budget on seeks the engine refuses. Hold everything
+    // and land on the anchor once it plays again.
+    if ([eng paused]) {
+        if (!sSyncPaused) {
+            sSyncPaused = YES;
+            MirageSyncLog("paused: holding sync (target %.3f)", target);
+        }
+        // The anchor keeps moving while this screen is stopped, so whatever the
+        // loop-restart detector last saw means nothing by the time playback
+        // resumes.
+        sLastSyncTarget = target;
+        sResumeJoin = YES;
+        return;
+    }
+    if (sSyncPaused) {
+        sSyncPaused = NO;
+        MirageSyncLog("resumed: landing on target %.3f", target);
+    }
+    // Resuming is the one case where this screen was stopped while the
+    // reference kept playing, so it is behind by the length of the pause.
+    // Landing on the anchor beats asking a trim to close seconds at 4 %.
+    if (sResumeJoin) {
+        sResumeJoin = NO;
+        join = YES;
+    }
+
+    if (join) {
+        // No trim here. This is not "catch up", it is "land where the reference
+        // is", and the player has only just started.
+        double landing = MirageSyncLanding(target, total);
+        BOOL issued = [eng seekApproximatelyTo:landing];
+        sJoinPending = !issued;
+        sLastSyncPosition = issued ? landing : -1.0;
+        sLastSyncTarget = target;
+        sSeamGraceUntil = -1.0e9;
+        sDriftStreak = 0;
+        sDriftStreakSign = 0;
+        sTrimActive = NO;
+        sTrimScale = 1.0;
+        MirageSyncLog("join seek target=%.3f landing=%.3f %s total=%.3f",
+                      target, landing, issued ? "ok" : "deferred", total);
+        return;
+    }
+
+    // The screen that owns audio defines the reference, so it is never
+    // corrected: a seek would break the soundtrack every other screen follows,
+    // and it is already on time by definition.
+    //
+    // It still logs what it is playing every few ticks. Without a line from the
+    // reference on the same clock, a follower's trace cannot tell "the follower
+    // is late" from "the reference is early" or from "the anchor is wrong".
+    if (!trimAllowed) {
+        // This screen defines the timeline, so it has to run at exactly the
+        // configured rate. A screen that was just promoted (the audio owner got
+        // paused, this one kept playing) may still carry the catch-up trim it
+        // had as a follower, and nothing corrects the reference, so that offset
+        // would stick.
+        [eng setSyncRateScale:1.0];
+        static NSInteger sRefTick = 0;
+        if (sRefTick++ % 4 == 0) {
+            double refPosition = [eng currentPlaybackPosition];
+            if (isfinite(refPosition) && refPosition >= 0.0) {
+                MirageSyncLog("ref position=%.3f target=%.3f lag=%+.3f",
+                              refPosition, target, refPosition - target);
+            }
+        }
+        return;
+    }
+
+    // `target` stepping backwards means the reference screen just took a loop
+    // seam. Its item swap costs it a slice of time and the parent only sees that
+    // on its next measurement, so this follower is briefly ahead by that slice.
+    // Nothing to do here: the seam window below keeps this screen from reacting
+    // to its own priming, and the anchor catches up meanwhile.
+    if (sLastSyncTarget >= 0.0 && target + total * 0.5 < sLastSyncTarget) {
+        sSeamGraceUntil = MirageSyncNow() + kMirageSeamGrace;
+        MirageSyncLog("reference crossed seam, target %.3f (was %.3f), quiet for %.1fs",
+                      target, sLastSyncTarget, kMirageSeamGrace);
+    }
+    sLastSyncTarget = target;
+
+    // Re-apply whatever trim is running. `rate` cannot be set while the player
+    // is swapping items or waiting, and a trim set in that window is dropped
+    // without a word and never reissued.
+    [eng applySyncRateIfNeeded];
+
+    double position = [eng currentPlaybackPosition];
+    if (!isfinite(position) || position < 0.0) {
+        // Read across a loop restart, where the playhead is momentarily
+        // unreadable. Touching the player here is what parked the built-in
+        // screen on the first frame of the new loop. Wait for the next tick.
+        return;
+    }
+
+    // The playhead just wrapped, so AVPlayerLooper is swapping in a new copy
+    // right now. Anything corrected here lands on an item that is still being
+    // wired up.
+    if (sLastSyncPosition >= 0.0 && position + 0.5 < sLastSyncPosition) {
+        sLastSyncPosition = position;
+        return;
+    }
+    sLastSyncPosition = position;
+
+    // Quiet window after a seam. The playhead is still read above, so the
+    // loop-restart detector stays honest, but nothing is corrected while the new
+    // copy primes.
+    double now = MirageSyncNow();
+    if (now < sSeamGraceUntil) return;
+
+    double delta = MirageSyncDelta(target, position, total);
+    double drift = fabs(delta);
+
+    // Below the stop band the trim has done its job: put the rate back.
+    //
+    // Checked before the tolerance, because a trim that started at the tolerance
+    // has to run down past it instead of freezing halfway.
+    if (drift <= kMirageTrimStop) {
+        if (sTrimActive) {
+            [eng setSyncRateScale:1.0];
+            MirageSyncLog("trim done, drift %+.3f (scale %.3f->1.000)", delta, sTrimScale);
+            sTrimActive = NO;
+            sTrimScale = 1.0;
+        } else if (sDriftStreak != 0) {
+            MirageSyncLog("drift %+.3f back inside hold %.3f", delta, hold);
+        }
+        sDriftStreak = 0;
+        sDriftStreakSign = 0;
+        return;
+    }
+
+    // Inside tolerance and not already trimming: leave the player alone. No rate
+    // assignment, no seek. The assignment on every tick is what used to drop a
+    // frame here.
+    if (!sTrimActive && drift <= hold) {
+        sDriftStreak = 0;
+        sDriftStreakSign = 0;
+        return;
+    }
+
+    // One sample is not a decision: the playhead reads a frame low right after a
+    // loop swap and right after a seek. Want two ticks in the same direction, or
+    // an error too big to be sampling noise.
+    BOOL hardSeek = drift > kMirageHardSeekDrift;
+    if (!hardSeek && !sTrimActive) {
+        NSInteger sign = delta > 0.0 ? 1 : -1;
+        if (sign != sDriftStreakSign) {
+            sDriftStreakSign = sign;
+            sDriftStreak = 1;
+            MirageSyncLog("drift %+.3f (single sample, %s) target=%.3f position=%.3f",
+                          delta, sign > 0 ? "behind" : "ahead", target, position);
+            return;
+        }
+        sDriftStreak += 1;
+    }
+
+    if (hardSeek) {
+        // Only for an offset a trim should not be asked to close: a screen that
+        // stopped while the reference kept playing. Budgeted, because a seek
+        // costs about 450 ms, and if it keeps being needed the two screens are
+        // not on the same timeline: chasing it only trades a wrong picture for
+        // a stuttering one.
+        if (now < sSyncSuspendUntil) return;
+
+        if (now - sSyncCorrectionWindowStart > kMirageSyncBudgetWindow) {
+            sSyncCorrectionWindowStart = now;
+            sSyncCorrectionCount = 0;
+        }
+        if (sSyncCorrectionCount >= kMirageSyncBudgetCount) {
+            sSyncSuspendUntil = now + kMirageSyncSuspendDuration;
+            sSyncCorrectionCount = 0;
+            MirageSyncLog("suspend hard seeks for %.0fs (drift %+.3f)",
+                          kMirageSyncSuspendDuration, delta);
+            return;
+        }
+
+        // Skip while a previous seek is still settling: the playhead measured
+        // this tick may be the pre-seek one.
+        if (now - sLastSyncLandingTime < kMirageSyncLandingCooldown) return;
+
+        sLastSyncLandingTime = now;
+        sSyncCorrectionCount += 1;
+        sDriftStreak = 0;
+        sDriftStreakSign = 0;
+        sTrimActive = NO;
+        sTrimScale = 1.0;
+
+        double landing = MirageSyncLanding(target, total);
+        MirageSyncLog("seek drift=%+.3f target=%.3f landing=%.3f", delta, target, landing);
+        [eng seekApproximatelyTo:landing];
+        // The playhead is about to move, so the loop-restart detector must
+        // compare against where it is going, not where it was.
+        sLastSyncPosition = landing;
+        MirageEmitEvent(@{ @"event": @"sync-applied",
+                           @"target": @(target),
+                           @"drift": @(delta) });
+        return;
+    }
+
+    // Steady state: hold a small rate offset until the drift is gone.
+    //
+    // Sized once from the offset (time to close is 1/gain either way) and only
+    // re-checked every couple of seconds, because every assignment costs about a
+    // frame and this path is meant to be invisible.
+    if (!sTrimActive || now - sTrimStartedAt >= kMirageTrimReeval) {
+        double scale = 1.0 + delta * kMirageTrimGain;
+        if (scale > 1.0 + kMirageTrimMax) scale = 1.0 + kMirageTrimMax;
+        if (scale < 1.0 - kMirageTrimMax) scale = 1.0 - kMirageTrimMax;
+        // Quantised, so a slowly shrinking offset cannot produce an assignment
+        // on every tick: anything under a quantum is the same trim.
+        scale = round(scale / kMirageTrimQuantum) * kMirageTrimQuantum;
+        if (!sTrimActive || fabs(scale - sTrimScale) >= kMirageTrimQuantum * 0.5) {
+            double previous = sTrimScale;
+            [eng setSyncRateScale:scale];
+            sTrimScale = scale;
+            sTrimStartedAt = now;
+            sTrimActive = YES;
+            sDriftStreak = 0;
+            sDriftStreakSign = 0;
+            MirageSyncLog("trim drift=%+.3f scale %.3f->%.3f target=%.3f position=%.3f",
+                          delta, previous, scale, target, position);
+        }
+    }
+}
+
 int main(int argc, char *argv[]) {
     @autoreleasepool {
         WallpaperArgs args;
         if (!ParseArgs(argc, argv, args)) return 1;
 
+        MirageSyncLogOpen(args.displayID, args.screen);
         MirageStartParentWatchdog();
         MirageMakeStdoutNonBlocking();
 
@@ -647,6 +1084,44 @@ int main(int argc, char *argv[]) {
                         if ([value isKindOfClass:[NSString class]]) {
                             VRVideoFillMode mode;
                             if (ParseFillMode([value UTF8String], mode)) [eng setFillMode:mode];
+                        }
+                    } else if ([name isEqualToString:@"seek"]) {
+                        NSNumber *t = cmd[@"t"];
+                        if ([t isKindOfClass:[NSNumber class]]) [eng seekToTime:t.doubleValue];
+                    } else if ([name isEqualToString:@"playbackTime"]) {
+                        // Report the playhead so the parent can build the anchor
+                        // from real playback instead of from the moment the
+                        // window appeared. The duration goes along because the
+                        // parent needs it to fold both onto the same loop.
+                        double position = CMTimeGetSeconds(eng.player.currentTime);
+                        double duration = [eng currentPlaybackDuration];
+                        if (isfinite(position) && position >= 0.0) {
+                            MirageEmitEvent(@{ @"event": @"playbackTime",
+                                               @"t": @(position),
+                                               @"d": isfinite(duration) ? @(duration) : @0,
+                                               // A paused screen reports a frozen
+                                               // playhead. The parent must not take
+                                               // that as the clock, so it hears
+                                               // about the pause from here.
+                                               @"paused": @([eng paused]) });
+                        }
+                    } else if ([name isEqualToString:@"sync"]) {
+                        // `anchor` is the monotonic time playback started,
+                        // `hold` the tolerance to keep, `trim` NO on the
+                        // renderer that owns audio.
+                        NSNumber *anchor = cmd[@"anchor"];
+                        NSNumber *hold = cmd[@"hold"];
+                        NSNumber *trim = cmd[@"trim"];
+                        NSNumber *join = cmd[@"join"];
+                        if ([anchor isKindOfClass:[NSNumber class]]) {
+                            MirageSyncApply(eng,
+                                            anchor.doubleValue,
+                                            [hold isKindOfClass:[NSNumber class]]
+                                                ? hold.doubleValue : kMirageSyncHold,
+                                            [trim isKindOfClass:[NSNumber class]]
+                                                ? trim.boolValue : YES,
+                                            [join isKindOfClass:[NSNumber class]]
+                                                ? join.boolValue : NO);
                         }
                     } else if ([name isEqualToString:@"hdr"]) {
                         if ([value isKindOfClass:[NSNumber class]]) [eng setHDREnabled:[value boolValue]];

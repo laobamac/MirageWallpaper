@@ -8,6 +8,18 @@ import AppKit
 import Darwin
 import Foundation
 
+/// Monotonic clock in seconds, the same value in every process.
+///
+/// The anchor has to stay put for as long as a wallpaper plays, so we cannot
+/// use `CFAbsoluteTimeGetCurrent`: that is wall-clock time, and an NTP step
+/// mid-playback would shift every renderer's target at once.
+/// `CLOCK_MONOTONIC_RAW` is shared by the whole machine, never goes backwards,
+/// and keeps counting through sleep.
+@inline(__always)
+func mirageMonotonicNow() -> Double {
+    Double(clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)) / 1_000_000_000
+}
+
 enum FillMode: String, CaseIterable, Codable, Identifiable {
     case cover, contain, stretch
     var id: Self { self }
@@ -599,6 +611,86 @@ final class RendererController {
     private var transitions: [CGDirectDisplayID: ReplacementTransition] = [:] { didSet { updateQuerySnapshotLocked() } }
     private var pendingRequests: [CGDirectDisplayID: RenderRequest] = [:] { didSet { updateQuerySnapshotLocked() } }
     private var retiring: [ObjectIdentifier: RendererProcess] = [:] { didSet { updateQuerySnapshotLocked() } }
+    /// Cross-display video playback sync: wallpaper ID -> monotonic anchor.
+    /// Renderers turn the anchor into a media position with
+    /// fmod(now - anchor, duration). Only touch this on `queue`.
+    private var playbackAnchors: [String: Double] = [:]
+    /// Outstanding `playbackTime` queries (wallpaper ID -> token), so a renderer
+    /// that never answers still gets a fallback anchor. Only touch on `queue`.
+    private var playbackSyncFallbackTokens: [String: UUID] = [:]
+    /// Recent anchors built from the audio owner's reports. A report is always
+    /// late by one socket hop, and the hop is not constant, so we keep a short
+    /// window and use the smallest value. Only touch on `queue`.
+    private var playbackSyncAnchorSamples: [String: [Double]] = [:]
+    /// Last playhead each display reported, and the time we read it. Lets us
+    /// tell "the playhead stopped" apart from "the anchor moved".
+    ///
+    /// Keyed by display, not by wallpaper. Audio ownership moves to whichever
+    /// screen is still playing, so a per-wallpaper entry gets overwritten by
+    /// the other screen. A screen coming back from a pause would then be
+    /// compared against that screen's position, look like it jumped, and pull
+    /// the anchor onto its frozen playhead. Only touch on `queue`.
+    private var playbackLastPositions: [CGDirectDisplayID: (position: Double, time: Double)] = [:]
+    /// Closed-loop tick. Lining the screens up once at start does not hold:
+    /// each process restarts its loop on its own schedule and the small losses
+    /// add up. Re-sending the same anchor fixes that without moving it. Only
+    /// touch on `queue`.
+    private var playbackSyncTimer: DispatchSourceTimer?
+    /// Which display outputs sound for a video wallpaper. Two renderers playing
+    /// the same video both play audio, which is heard as an echo. Written on
+    /// `queue`, read from `commandQueue`.
+    private let audioOwnerLock = NSLock()
+    private var audioOwnerStorage: [String: CGDirectDisplayID] = [:]
+    /// Master switch, from the UI. Read on `queue`, written on main.
+    private let syncToggleLock = NSLock()
+    private var syncEnabledStorage = true
+    var isPlaybackSyncEnabled: Bool {
+        get { syncToggleLock.withLock { syncEnabledStorage } }
+        set { syncToggleLock.withLock { syncEnabledStorage = newValue } }
+    }
+
+    /// How often the anchor is re-sent while two or more displays play the same
+    /// video. This is also the only chance a follower gets to measure its
+    /// drift, so it sets how fast a correction can converge. The tick only
+    /// reads a playhead; it never touches the player.
+    private static let playbackSyncInterval: TimeInterval = 0.6
+    /// Drift the renderers are allowed to keep. This is what decides whether a
+    /// tick touches the player at all, so it sits above the noise of a playhead
+    /// read and below what looks out of step. Two frames of offset already
+    /// reads as an echo. Must match `kMirageSyncHold` in VideoWallpaper.mm.
+    private static let playbackSyncHold: Double = 0.065
+    /// How far the newest reading must sit from the anchor before we move it.
+    /// Small, because what we track here is the slice of time the owner loses
+    /// on a loop swap: tiny per loop, visible only once it adds up.
+    private static let playbackReanchorDeadband: Double = 0.005
+    /// How many recent reports the anchor is picked from. Enough that one slow
+    /// round trip cannot move it, short enough to follow a loop swap within a
+    /// couple of seconds.
+    private static let playbackReanchorWindow = 5
+    /// How far a report may sit from the anchor before we treat it as a
+    /// different timeline instead of a moved one. A loop swap loses tens of
+    /// milliseconds; half a second means the owner's playhead was reset.
+    private static let playbackReanchorReseed: Double = 0.500
+
+    /// Re-sends the anchor to every active video renderer, e.g. when sync is
+    /// turned back on. Turning it off drops the anchors, so turning it on again
+    /// starts from a fresh one.
+    func resendPlaybackSync() {
+        queue.async { [weak self] in
+            guard let self else { return }
+            guard isPlaybackSyncEnabled else {
+                playbackAnchors.removeAll()
+                playbackSyncAnchorSamples.removeAll()
+                playbackLastPositions.removeAll()
+                stopPlaybackSyncTimerLocked()
+                return
+            }
+            for handle in running.values where handle.wallpaper.kind == .video {
+                sendPlaybackSyncLocked(to: handle)
+            }
+            updatePlaybackSyncTimerLocked()
+        }
+    }
     private struct PreviewProcess {
         let handle: RendererProcess
         let completion: (Bool) -> Void
@@ -1666,6 +1758,16 @@ final class RendererController {
             return
         }
 
+        if event == "playbackTime" {
+            guard isActive || isCandidate,
+                  let position = (message["t"] as? NSNumber)?.doubleValue else { return }
+            let duration = (message["d"] as? NSNumber)?.doubleValue ?? 0
+            let paused = (message["paused"] as? NSNumber)?.boolValue ?? false
+            playbackTimeReportedLocked(position, duration: duration,
+                                       paused: paused, for: handle)
+            return
+        }
+
         if isCandidate, let transition {
             switch event {
             case "vulkan-ready", "scene-ready":
@@ -1975,6 +2077,10 @@ final class RendererController {
     }
 
     private func replayDesiredStateLocked(to handle: RendererProcess) {
+        // Re-elect the audio owner before replaying volume and mute below, so a
+        // renderer that just became the second screen is muted in the same
+        // pass instead of staying audible until the next property change.
+        refreshAudioOwnersLocked()
         handle.send(["cmd": "fps", "value": handle.desiredFps])
         handle.send(["cmd": "fillmode", "value": handle.desiredFillMode.rawValue])
         sendPosition(handle.desiredPosition, to: handle)
@@ -1993,6 +2099,396 @@ final class RendererController {
         if handle.wallpaper.kind != .scene {
             applyInitialProperties(handle.desiredUserProperties, to: handle)
         }
+        if handle.wallpaper.kind == .video {
+            // Take the anchor from a real playhead, not from "now". A renderer
+            // has already been playing for a while when it reports activated,
+            // and that head start would become a permanent offset.
+            if playbackAnchors[handle.wallpaper.id] != nil {
+                // First message this renderer sees: land it on the anchor.
+                sendPlaybackSyncLocked(to: handle, join: true)
+            } else {
+                handle.send(["cmd": "playbackTime"])
+                scheduleSyncFallbackLocked(for: handle.wallpaper.id)
+            }
+            // The tick only runs while this wallpaper is on two or more
+            // displays, so arm or disarm it as renderers come and go.
+            updatePlaybackSyncTimerLocked()
+        }
+    }
+
+    /// Sends the anchor to a video renderer. Each display has its own process
+    /// that started playing at launch, so screens showing the same wallpaper
+    /// drift apart; the anchor gives them all the same target. Called from
+    /// `replayDesiredStateLocked` for standby restore, and from the timer to
+    /// close the loop.
+    ///
+    /// `join` is set on the first message a freshly launched renderer gets. It
+    /// has been playing from zero for an unknown time, so it is told to land on
+    /// the anchor instead of being taken as the reference.
+    ///
+    /// Must be called on `queue` while `handle` is (or is becoming) active.
+    private func sendPlaybackSyncLocked(to handle: RendererProcess, join: Bool = false) {
+        guard isPlaybackSyncEnabled, handle.wallpaper.kind == .video else { return }
+        let wallpaperID = handle.wallpaper.id
+        let anchor: Double
+        if let existing = playbackAnchors[wallpaperID] {
+            anchor = existing
+        } else {
+            anchor = mirageMonotonicNow()
+            playbackAnchors[wallpaperID] = anchor
+        }
+        let ownsAudio = audioOwnerLock.withLock {
+            audioOwnerStorage[wallpaperID] == handle.displayID
+        }
+        handle.send(["cmd": "sync",
+                     "anchor": anchor,
+                     "hold": Self.playbackSyncHold,
+                     // The screen that owns audio must not change rate: it
+                     // would shift pitch. The muted screens chase instead.
+                     "trim": !ownsAudio,
+                     "join": join])
+    }
+
+    /// Keeps the anchor on the audio owner's real timeline.
+    ///
+    /// The owner is the reference. It cannot be rate trimmed (that shifts pitch)
+    /// or seeked (that drops the soundtrack), so we move the anchor to where it
+    /// actually is and let the muted screens chase it.
+    ///
+    /// The anchor cannot be a fixed instant. Every loop restart costs the owner
+    /// a little time at the item swap, and that loss adds up: after a couple of
+    /// loops a pinned anchor sits tens of milliseconds behind the picture, and
+    /// every follower that seeks to it lands ahead by the same amount. The gap
+    /// grows one slice per loop until it is heard as an echo.
+    ///
+    /// What must not be followed is the latency of the report itself. `now` is
+    /// read on arrival and `position` was read before the message went out, so
+    /// every candidate is late by one socket hop. Closing that gap would treat
+    /// a constant delay as drift, walk the anchor forward on every tick, and
+    /// leave the followers chasing a target that runs slower than real time.
+    private func playbackTimeReportedLocked(_ position: Double, duration: Double,
+                                            paused: Bool, for handle: RendererProcess) {
+        guard isPlaybackSyncEnabled, handle.wallpaper.kind == .video else { return }
+        let wallpaperID = handle.wallpaper.id
+        // A paused screen is a stopped clock, not a late one. Its playhead is
+        // frozen while "now - position" keeps growing, so adopting it would
+        // drag the anchor forward; and since the screen cannot be corrected
+        // while it is stopped, it would stay out of step for good. Only a
+        // playing screen may define the timeline.
+        guard !handle.desiredPaused, !paused else { return }
+        guard position >= 0, duration > 0 else { return }
+        let now = mirageMonotonicNow()
+
+        // Fold onto the anchor's period: a reading taken just after a loop
+        // restart describes the same timeline one period later.
+        var candidate = now - position
+        if let anchor = playbackAnchors[wallpaperID] {
+            let periods = ((anchor - candidate) / duration).rounded()
+            candidate += periods * duration
+        }
+
+        guard let anchor = playbackAnchors[wallpaperID] else {
+            playbackAnchors[wallpaperID] = candidate
+            playbackSyncAnchorSamples[wallpaperID] = [candidate]
+            playbackLastPositions[handle.displayID] = (position, now)
+            playbackSyncFallbackTokens[wallpaperID] = nil
+            rebroadcastSyncLocked(for: wallpaperID)
+            updatePlaybackSyncTimerLocked()
+            return
+        }
+
+        // A playhead that stopped moving is a stopped clock, not a moved
+        // anchor. "now - position" keeps growing while the playhead sits still,
+        // so each candidate lands a tick further out than the last and clears
+        // the reseed threshold within a few ticks. Every reseed sends a join,
+        // and a join costs a seek, so a screen parked at a loop seam turned
+        // into a seek on every tick.
+        //
+        // So compare the playhead itself. A playing owner tracks the clock; one
+        // that does not gets the anchor held where it is. The followers keep
+        // playing along it, and the owner's own resume join puts it back on the
+        // timeline once it starts playing again.
+        //
+        // Compare against this screen's own last reading, never another
+        // screen's: ownership moves, so a per-wallpaper baseline becomes the
+        // other screen's position and the resume reads as a jump.
+        let previous = playbackLastPositions[handle.displayID]
+        playbackLastPositions[handle.displayID] = (position, now)
+        if let previous, previous.time > 0.0 {
+            let elapsed = now - previous.time
+            if elapsed > 0.0 {
+                // Distance actually travelled along the loop, so a wrap at the
+                // seam reads as the small step it is.
+                var moved = position - previous.position
+                if moved > duration * 0.5 { moved -= duration }
+                else if moved < -duration * 0.5 { moved += duration }
+                // Half of what the clock says it should have covered. Below
+                // that the playhead is stopped, or the decoder is not
+                // presenting frames.
+                let expected = elapsed * max(Double(handle.desiredSpeed), 0.01)
+                if abs(moved) < expected * 0.5 {
+                    // Still send the anchor: a stopped owner latches a resume
+                    // join and needs to hear it to land on return.
+                    rebroadcastSyncLocked(for: wallpaperID)
+                    return
+                }
+            }
+        }
+
+        // A jump this big is not a dropped frame, it is a different timeline:
+        // the owner restarted, or the wallpaper was reloaded under it, and its
+        // playhead now starts from zero somewhere unrelated to the anchor.
+        // Take it and tell the followers to land.
+        if abs(candidate - anchor) > Self.playbackReanchorReseed {
+            playbackAnchors[wallpaperID] = candidate
+            playbackSyncAnchorSamples[wallpaperID] = [candidate]
+            playbackSyncFallbackTokens[wallpaperID] = nil
+            NSLog("[Mirage] 同步基准重置 (壁纸=\(wallpaperID), 跳变=\(String(format: "%+.3f", candidate - anchor))s)")
+            rebroadcastSyncLocked(for: wallpaperID, join: true)
+            updatePlaybackSyncTimerLocked()
+            return
+        }
+
+        var samples = playbackSyncAnchorSamples[wallpaperID] ?? []
+        samples.append(candidate)
+        if samples.count > Self.playbackReanchorWindow {
+            samples.removeFirst(samples.count - Self.playbackReanchorWindow)
+        }
+        playbackSyncAnchorSamples[wallpaperID] = samples
+
+        // Every candidate is late, never early: position was read before the
+        // message went out and now on arrival, so each one carries its own hop
+        // as error. That hop jitters by hundreds of milliseconds, which rules
+        // out both a mean and a difference of consecutive readings: a
+        // difference reads the jitter as movement. The smallest of a short
+        // window has the least hop in it, and it cannot integrate, so it only
+        // follows real movement.
+        let best = samples.min() ?? candidate
+        guard abs(best - anchor) > Self.playbackReanchorDeadband else { return }
+
+        playbackAnchors[wallpaperID] = best
+        playbackSyncFallbackTokens[wallpaperID] = nil
+        NSLog("[Mirage] 同步基准跟随 (壁纸=\(wallpaperID), 偏移=\(String(format: "%+.3f", best - anchor))s)")
+        // The anchor moved, so send it now instead of waiting for the tick.
+        rebroadcastSyncLocked(for: wallpaperID)
+        updatePlaybackSyncTimerLocked()
+    }
+
+    /// Sends the anchor to every muted screen showing `wallpaperID`. The audio
+    /// owner is skipped on purpose: it is the reference, and correcting it is
+    /// what broke the soundtrack and the loop.
+    ///
+    /// Paused screens are skipped too. The engine refuses corrections while
+    /// stopped, and they get a join of their own when they resume
+    /// (see `setPower`).
+    private func rebroadcastSyncLocked(for wallpaperID: String, join: Bool = false) {
+        let owner = audioOwnerLock.withLock { audioOwnerStorage[wallpaperID] }
+        for other in running.values
+        where other.wallpaper.id == wallpaperID && other.wallpaper.kind == .video
+            && !other.desiredPaused {
+            // The owner gets the anchor too, but never as a join: a join seeks,
+            // and seeking the audio screen is the one thing that must not
+            // happen. It has no use for the value, but seeing it keeps its
+            // trace in step with what the followers were given.
+            sendPlaybackSyncLocked(to: other,
+                                   join: join && other.displayID != owner)
+        }
+    }
+
+    /// Starts the anchor from "now" if the queried renderer never answers, so a
+    /// renderer that does not know `playbackTime` still gets synced.
+    private func scheduleSyncFallbackLocked(for wallpaperID: String) {
+        guard playbackSyncFallbackTokens[wallpaperID] == nil else { return }
+        let token = UUID()
+        playbackSyncFallbackTokens[wallpaperID] = token
+        queue.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            guard let self,
+                  playbackSyncFallbackTokens[wallpaperID] == token,
+                  playbackAnchors[wallpaperID] == nil else { return }
+            playbackSyncFallbackTokens[wallpaperID] = nil
+            guard isPlaybackSyncEnabled else { return }
+            playbackAnchors[wallpaperID] = mirageMonotonicNow()
+            // This anchor is a guess made before any playhead was seen, so
+            // nothing may be compared against it; the first real reading
+            // replaces it.
+            playbackSyncAnchorSamples[wallpaperID] = nil
+            for other in running.values
+            where other.wallpaper.id == wallpaperID && other.wallpaper.kind == .video {
+                sendPlaybackSyncLocked(to: other)
+            }
+        }
+    }
+
+    // MARK: - Closed-loop playback sync
+
+    /// Number of running video renderers per wallpaper. Sync and audio
+    /// arbitration only matter once a wallpaper is on two or more displays.
+    private func videoHandleCountsLocked() -> [String: Int] {
+        var counts: [String: Int] = [:]
+        for handle in running.values where handle.wallpaper.kind == .video {
+            counts[handle.wallpaper.id, default: 0] += 1
+        }
+        return counts
+    }
+
+    /// Runs only while some video wallpaper is on two or more displays.
+    private func updatePlaybackSyncTimerLocked() {
+        guard isPlaybackSyncEnabled,
+              videoHandleCountsLocked().values.contains(where: { $0 > 1 }) else {
+            stopPlaybackSyncTimerLocked()
+            return
+        }
+        guard playbackSyncTimer == nil else { return }
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + Self.playbackSyncInterval,
+                       repeating: Self.playbackSyncInterval,
+                       leeway: .milliseconds(50))
+        timer.setEventHandler { [weak self] in
+            self?.resyncPlaybackLocked()
+        }
+        timer.resume()
+        playbackSyncTimer = timer
+    }
+
+    private func stopPlaybackSyncTimerLocked() {
+        playbackSyncTimer?.cancel()
+        playbackSyncTimer = nil
+    }
+
+    /// One tick. For each wallpaper on two or more displays the audio owner is
+    /// asked where it actually is; its answer re-anchors (see
+    /// `playbackTimeReportedLocked`) and every muted screen is told to chase
+    /// that. The audible screen is never rate trimmed, it defines "on time".
+    private func resyncPlaybackLocked() {
+        guard isPlaybackSyncEnabled else {
+            stopPlaybackSyncTimerLocked()
+            return
+        }
+        let shared = videoHandleCountsLocked().filter { $0.value > 1 }
+        guard !shared.isEmpty else {
+            stopPlaybackSyncTimerLocked()
+            return
+        }
+        let owners = audioOwnerLock.withLock { audioOwnerStorage }
+        for wallpaperID in shared.keys {
+            let handles = running.values.filter {
+                $0.wallpaper.kind == .video && $0.wallpaper.id == wallpaperID
+            }
+            let ownerDisplay = owners[wallpaperID]
+            // Only ask the owner where it is while it is playing. A paused
+            // owner reports a frozen playhead, which would pin the anchor to a
+            // standstill and leave it out of step on resume.
+            if let ownerDisplay,
+               let owner = handles.first(where: {
+                   $0.displayID == ownerDisplay && !$0.desiredPaused }) {
+                owner.send(["cmd": "playbackTime"])
+            }
+            // A paused screen cannot act on the anchor, so sending it is noise;
+            // it gets a join when it resumes.
+            for handle in handles
+            where handle.displayID != ownerDisplay && !handle.desiredPaused {
+                sendPlaybackSyncLocked(to: handle)
+            }
+        }
+    }
+
+    // MARK: - Audio ownership
+
+    /// Picks the display that may output sound for each video wallpaper and
+    /// publishes the decision for `commandQueue` callers.
+    ///
+    /// The built-in panel wins when it is showing the wallpaper: it has the
+    /// speakers and it is the screen the user is looking at, even after the
+    /// menu bar has been dragged to an external monitor. Otherwise the main
+    /// display wins, and ties break on the lowest display ID, which stays the
+    /// same across relaunches.
+    ///
+    /// A paused screen is never the owner. The owner is the reference and the
+    /// one screen that is never corrected, so a stopped one (a fullscreen app
+    /// took the display, the user paused the wallpaper) would hold the clock
+    /// still and then come back out of step for good. Ownership moves to a
+    /// screen that is playing, and moves back when the paused one returns.
+    private func refreshAudioOwnersLocked() {
+        var grouped: [String: [CGDirectDisplayID]] = [:]
+
+        var playing: [String: [CGDirectDisplayID]] = [:]
+        for handle in running.values where handle.wallpaper.kind == .video {
+            grouped[handle.wallpaper.id, default: []].append(handle.displayID)
+            if !handle.desiredPaused {
+                playing[handle.wallpaper.id, default: []].append(handle.displayID)
+            }
+        }
+        let main = CGMainDisplayID()
+        let previous = audioOwnerLock.withLock { audioOwnerStorage }
+        var owners: [String: CGDirectDisplayID] = [:]
+        for (wallpaperID, displays) in grouped {
+            let candidates: [CGDirectDisplayID]
+            if let live = playing[wallpaperID], !live.isEmpty {
+                candidates = live
+            } else if let kept = previous[wallpaperID], displays.contains(kept) {
+                // Nothing is playing. Keep whoever owned it, so a pause that
+                // covers every display does not shuffle ownership on its way
+                // through and all screens come back to the same owner.
+                candidates = [kept]
+            } else {
+                candidates = displays
+            }
+            if let builtIn = candidates.first(where: { CGDisplayIsBuiltin($0) != 0 }) {
+                owners[wallpaperID] = builtIn
+            } else if candidates.contains(main) {
+                owners[wallpaperID] = main
+            } else if let fallback = candidates.min() {
+                owners[wallpaperID] = fallback
+            }
+        }
+        guard previous != owners else { return }
+        audioOwnerLock.withLock { audioOwnerStorage = owners }
+        // Re-issue the gate so a display that just gained or lost ownership
+        // takes effect now, not on the next volume replay.
+        for handle in running.values where handle.wallpaper.kind == .video {
+            sendVolumeAndMute(handle.desiredVolume,
+                              muted: handle.desiredMuted,
+                              to: handle)
+            if owners[handle.wallpaper.id] == handle.displayID,
+               playbackAnchors[handle.wallpaper.id] != nil {
+                // Drop any catch-up trim latched while this screen was a
+                // follower. An owner running at 0.92 plays slow forever,
+                // because nobody corrects the reference. Only against an
+                // existing anchor: seeding one here would restart playback.
+                sendPlaybackSyncLocked(to: handle)
+            }
+        }
+    }
+
+    /// True when this handle must stay silent because another display already
+    /// outputs audio for the same wallpaper.
+    private func audioIsGatedOff(for handle: RendererProcess) -> Bool {
+        guard handle.wallpaper.kind == .video else { return false }
+        let owner = audioOwnerLock.withLock { audioOwnerStorage[handle.wallpaper.id] }
+        guard let owner else { return false }
+        return owner != handle.displayID
+    }
+
+    /// Drops anchors no longer shown by any running or preparing renderer, so
+    /// a wallpaper re-applied later starts from its beginning.
+    private func prunePlaybackAnchorsLocked() {
+        refreshAudioOwnersLocked()
+        updatePlaybackSyncTimerLocked()
+        guard !playbackAnchors.isEmpty else { return }
+        let activeIDs = Set(running.values.map { $0.wallpaper.id })
+            .union(candidates.values.map { $0.wallpaper.id })
+            .union(transitions.values.map { $0.candidate.wallpaper.id })
+        playbackAnchors = playbackAnchors.filter { activeIDs.contains($0.key) }
+        playbackSyncAnchorSamples = playbackSyncAnchorSamples.filter {
+            activeIDs.contains($0.key)
+        }
+        // Only a running renderer reports. A paused one keeps its entry: on
+        // resume it must still compare against its own frozen reading, not
+        // against the screen that covered for it.
+        let activeDisplays = Set(running.values.map { $0.displayID })
+        playbackLastPositions = playbackLastPositions.filter {
+            activeDisplays.contains($0.key)
+        }
     }
 
     @discardableResult
@@ -2001,6 +2497,7 @@ final class RendererController {
         guard handle.process.isRunning else { return false }
         retiring[ObjectIdentifier(handle)] = handle
         handle.stop(alreadyDeactivated: alreadyDeactivated)
+        prunePlaybackAnchorsLocked()
         return true
     }
 
@@ -2372,6 +2869,7 @@ final class RendererController {
             }
         }
         drainCoverageSettlementWaitersIfNeededLocked(displayID)
+        prunePlaybackAnchorsLocked()
         return (handles, completions)
     }
 
@@ -2845,6 +3343,10 @@ final class RendererController {
 
     private func sendVolumeAndMute(_ volume: Float, muted: Bool,
                                    to handle: RendererProcess) {
+        // The second renderer for the same video stays silent. Two AVPlayers
+        // playing one soundtrack are heard as a doubled track with a short
+        // delay, which is the "song lag" people report with two screens.
+        let muted = muted || audioIsGatedOff(for: handle)
         // When muting, close the audio gate before changing gain. When unmuting,
         // establish the target gain before opening it. This avoids exposing a
         // renderer's default or previous volume between two JSON commands.
@@ -2878,7 +3380,14 @@ final class RendererController {
         let actives: [RendererProcess] = queue.sync {
             let handles = targetsLocked(
                 displayID, includeCandidates: true, assignmentID: assignmentID)
+            let wasPaused = handles.map { $0.desiredPaused }
             handles.forEach { updateDesiredStateLocked($0, from: scopedOptions) }
+            // A screen starting or stopping playback changes who may own audio
+            // and whose playhead the clock follows, so re-arbitrate now instead
+            // of waiting for a renderer to be launched or retired.
+            if zip(handles, wasPaused).contains(where: { $0.desiredPaused != $1 }) {
+                playbackParticipantsChangedLocked()
+            }
             updatePendingOptionsLocked(displayID, assignmentID: assignmentID) {
                 Self.mergePlaybackOptions(scopedOptions, into: &$0)
             }
@@ -2934,6 +3443,19 @@ final class RendererController {
         for active in actives { active.send(["cmd": "muted", "value": muted]) }
     }
 
+    /// Re-arbitrates audio ownership and the clock after a screen started or
+    /// stopped playing. Must be called on `queue`.
+    ///
+    /// A paused screen cannot be the reference. It is the one screen that never
+    /// gets corrected, so a screen stopped while its neighbours keep playing
+    /// would hold the clock still and then come back out of step for good.
+    /// Ownership moves to a screen that is playing, and the anchor follows that
+    /// screen's playhead from then on.
+    private func playbackParticipantsChangedLocked() {
+        refreshAudioOwnersLocked()
+        updatePlaybackSyncTimerLocked()
+    }
+
     // Pause/resume route through the same power directive as everything else so
     // `desiredPowerState` can never disagree with what the renderer was told.
     // Passing no fps leaves the renderer's current frame rate untouched.
@@ -2980,21 +3502,48 @@ final class RendererController {
         // Hidden candidates/standbys only record policy. Sending resume to a
         // hidden Web renderer would restart its global input monitors, and
         // unmuting any candidate would violate the handoff barrier.
+        var resumed: [RendererProcess] = []
         let actives: [RendererProcess] = queue.sync {
+            let handles = targetsLocked(displayID, includeCandidates: true)
+            let wasPaused = handles.map { $0.desiredPaused }
             func record(_ process: RendererProcess) {
                 process.desiredPaused = paused
                 process.desiredPowerState = state
                 process.desiredPowerFps = fps
             }
-            targetsLocked(displayID, includeCandidates: true).forEach(record)
+            handles.forEach(record)
+            if zip(handles, wasPaused).contains(where: { $0.desiredPaused != $1 }) {
+                playbackParticipantsChangedLocked()
+            }
             updatePendingOptionsLocked(displayID) {
                 $0.powerState = state
                 $0.powerFps = fps
             }
-            return liveRunningTargetsLocked(displayID)
+            let live = liveRunningTargetsLocked(displayID)
+            if state == .run {
+                resumed = live.filter { $0.wallpaper.kind == .video }
+            }
+            return live
         }
         let command = Self.powerCommand(state: state, fps: fps)
         for active in actives { active.send(command) }
+        if !resumed.isEmpty {
+            // A screen that just resumed was stopped while the reference kept
+            // playing, so it is behind by however long it was paused. Land it
+            // on the anchor instead of letting the drift build until it crosses
+            // the seek threshold. Send it after the power command, because a
+            // join seeks and a seek is refused while the player is paused.
+            //
+            // Runs inline: we are already on `queue`, and calling `queue.sync`
+            // from a block submitted to the same serial queue deadlocks the
+            // controller.
+            queue.async { [weak self] in
+                guard let self else { return }
+                for handle in resumed where self.running[handle.displayID] === handle {
+                    self.sendPlaybackSyncLocked(to: handle, join: true)
+                }
+            }
+        }
         refreshAudioSpectrumService()
     }
 

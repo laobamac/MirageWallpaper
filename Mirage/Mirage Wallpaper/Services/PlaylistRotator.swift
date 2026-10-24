@@ -123,6 +123,10 @@ final class PlaylistRotator {
         if reason != .manualAdvance { cancelPendingAdvance() }
         guard isRunning, let manager, let vm = wallpaperViewModel,
               DisplayRegistry.shared.screenIndex(for: displayKey) == screen else { return }
+        if reason == .manualAdvance {
+            // Re-anchor the shared rotation grid so every screen gets a full interval.
+            manager.resetRotationAnchor()
+        }
         let playlist = manager.current(on: screen)
         navigation.synchronize(with: playlist)
         if navigation.history.isEmpty { navigation.observe(vm.state(for: displayKey)?.wallpaper.id) }
@@ -152,8 +156,15 @@ final class PlaylistRotator {
 
     private func scheduleTimer(after seconds: TimeInterval) {
         let generation = schedulingGeneration
+        // Align the first fire to the shared grid (anchor + k * interval), so
+        // timer-based screens switch together.
+        let anchor = manager?.rotationAnchor(forInterval: seconds) ?? Date()
+        let elapsed = Date().timeIntervalSince(anchor)
+        var delay = seconds - elapsed.truncatingRemainder(dividingBy: seconds)
+        if delay <= 0 || delay > seconds { delay = seconds }
+        if delay < 0.5 { delay += seconds } // avoid an immediate switch on rebuild
         let timer = DispatchSource.makeTimerSource(queue: .main)
-        timer.schedule(deadline: .now() + seconds, repeating: seconds)
+        timer.schedule(deadline: .now() + delay, repeating: seconds)
         timer.setEventHandler { [weak self] in
             guard let self, self.schedulingGeneration == generation else { return }
             self.tick()

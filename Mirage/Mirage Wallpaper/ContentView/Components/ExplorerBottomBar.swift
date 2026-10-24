@@ -11,6 +11,7 @@ struct ExplorerBottomBar: View {
     @Bindable var wallpaperViewModel: WallpaperViewModel
     var isActive = true
     @ObservedObject private var manager = PlaylistManager.shared
+    @Environment(GlobalSettingsViewModel.self) private var globalSettingsViewModel
 
     @AppStorage("PlaylistCollapsed") private var isCollapsed = false
 
@@ -27,6 +28,15 @@ struct ExplorerBottomBar: View {
 
     private var itemCount: Int {
         manager.current(on: targetScreen).items.count
+    }
+
+    /// With sync on there is one wall, not one playlist per screen: what is
+    /// added here is mirrored to every display and rotates from a shared grid.
+    /// So the header names the wall instead of offering a per-screen entry that
+    /// would only fight the mirroring.
+    private var isPlaybackSynced: Bool {
+        displays.count > 1 &&
+            globalSettingsViewModel.settings.shouldSyncPlaybackAcrossDisplays
     }
 
     var body: some View {
@@ -87,13 +97,20 @@ struct ExplorerBottomBar: View {
                 .lineLimit(1)
 
             if displays.count > 1 {
-                Picker("", selection: $targetScreen) {
-                    ForEach(displays) { info in
-                        Text(L("显示器 %d", info.index + 1) + " · " + info.name).tag(info.index)
+                if isPlaybackSynced {
+                    Label(L("跨屏同步"), systemImage: "rectangle.on.rectangle")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .help(L("播放列表会应用到所有显示器"))
+                } else {
+                    Picker("", selection: $targetScreen) {
+                        ForEach(displays) { info in
+                            Text(L("显示器 %d", info.index + 1) + " · " + info.name).tag(info.index)
+                        }
                     }
+                    .labelsHidden()
+                    .frame(width: 190)
                 }
-                .labelsHidden()
-                .frame(width: 190)
             }
 
             Spacer()

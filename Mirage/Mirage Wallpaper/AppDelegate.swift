@@ -199,6 +199,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         SteamServiceManager.shared.start()
         mobileDevicesViewModel.startBackgroundReconnect()
 
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            self?.wallpaperViewModel.normalizeMirroredWallpaperIfNeeded()
+        }
+
         DynamicLockScreenManager.shared.prepareAtLaunch()
         if DynamicLockScreenManager.shared.isEnabled {
             DynamicLockScreenManager.shared.setEnabled(true)

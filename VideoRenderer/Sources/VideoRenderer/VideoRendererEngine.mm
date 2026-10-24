@@ -8,6 +8,7 @@
 #import <CoreVideo/CoreVideo.h>
 #import <ImageIO/ImageIO.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+#import <mach/mach_time.h>
 
 NSString *const VRVideoEngineErrorDomain = @"VideoRenderer.Engine";
 
@@ -52,7 +53,7 @@ static const NSTimeInterval kVRRecoveryBaseDelay = 0.75;
 static const NSTimeInterval kVRWakeVerifyDelay = 1.5;
 static const NSInteger kVRErrorMediaServicesWereReset = -11819;
 static const NSTimeInterval kVRPlaybackHealthInterval = 1.0;
-static const NSInteger kVRPlaybackStallSamples = 5;
+static const NSInteger kVRPlaybackStallSamples = 3;
 static const NSInteger kVRStablePlaybackSamples = 30;
 
 static NSError *VRVideoEngineError(NSInteger code, NSString *description) {
@@ -84,6 +85,11 @@ static float VRClampPlaybackRate(float value) {
     return value;
 }
 
+// Bounds for the catch-up multiplier. 8 % closes a 200 ms gap in about 2.5 s and
+// stays well below where the decoder starts dropping frames on a 4K clip.
+static const double kVRSyncRateScaleMin = 0.92;
+static const double kVRSyncRateScaleMax = 1.08;
+
 // HEIC keeps a 5K still in the low hundreds of KB. Macs without an HEVC encoder
 // return a null destination, so fall back to JPEG rather than writing nothing.
 static BOOL VRWriteImage(CGImageRef image, NSString *path, CFStringRef type) {
@@ -110,6 +116,10 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
 @property (nonatomic, strong) AVPlayerLooper *looper;
 @property (nonatomic, assign) BOOL loaded;
 @property (nonatomic, assign) float playbackRate;
+/// Multiplier on top of `playbackRate` while a sync is catching up. Kept
+/// separate so -applyPlaybackState and -setPlaybackRate still own the
+/// wallpaper's configured rate. 1.0 means no catch-up is running.
+@property (nonatomic, assign) double syncRateScale;
 @property (nonatomic, assign) float volume;
 @property (nonatomic, assign) BOOL muted;
 @property (nonatomic, assign) VRVideoFillMode fillMode;
@@ -128,6 +138,10 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
 @property (nonatomic, assign) BOOL looperObserved;
 @property (nonatomic, assign) BOOL failureReported;
 @property (nonatomic, assign) BOOL firstFrameReported;
+// Monotonic time the player entered "waiting to play at the specified rate". It
+// can sit there forever if whatever it waits for never arrives, which looks like
+// a freeze; the health check watches this so it can kick the player out.
+@property (nonatomic, assign) double waitingSinceClock;
 @property (nonatomic, assign) BOOL hostPaused;
 @property (nonatomic, assign) CFTimeInterval lastItemEndReport;
 @property (nonatomic, strong) AVPlayerItemVideoOutput *frameProbe;
@@ -146,6 +160,10 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
 @property (nonatomic, assign) double lastPlaybackTime;
 @property (nonatomic, assign) NSInteger lastLoopCount;
 @property (nonatomic, assign) NSInteger stalledPlaybackSamples;
+/// Remedies already tried for the current stall, before the item is rebuilt. A
+/// wallpaper parked on the first frame of a new loop recovers from a kick;
+/// rebuilding the item costs a multi-second black flash.
+@property (nonatomic, assign) NSInteger stallNudges;
 @property (nonatomic, assign) NSInteger stablePlaybackSamples;
 - (void)detachLooperObserver;
 - (void)removeItemEndObservers;
@@ -155,6 +173,8 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
 - (BOOL)startPlaybackOfURL:(NSURL *)url error:(NSError **)error;
 - (void)armFirstFrameWatchdogForGeneration:(uint64_t)generation deadline:(NSDate *)deadline;
 - (void)applyPlaybackState;
+- (void)releaseStuckLandingIfNeeded;
+- (void)nudgeStalledPlayback;
 - (void)scheduleRecovery;
 - (void)teardownPlaybackForRestart;
 - (BOOL)canRecoverFromError:(nullable NSError *)error;
@@ -207,6 +227,7 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
         _volume = _player.volume;
         _muted = config.muted;
         _playbackRate = 1.0f;
+        _syncRateScale = 1.0;
         _autoplay = config.autoplay;
         _hostPaused = !config.autoplay;
         _loadFromMemory = config.loadFromMemory;
@@ -376,6 +397,7 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
     self.lastPlaybackTime = NAN;
     self.lastLoopCount = NSNotFound;
     self.stalledPlaybackSamples = 0;
+    self.stallNudges = 0;
     self.stablePlaybackSamples = 0;
 }
 
@@ -468,15 +490,51 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
     });
 }
 
+- (void)nudgeStalledPlayback {
+    AVPlayerItem *item = self.player.currentItem;
+    if (item == nil) return;
+
+    // 1. Re-assert the rate. A player stuck at a loop seam can sit at rate 0
+    //    with its item ready, so nothing ever advances the clock.
+    double scale = self.syncRateScale;
+    if (!isfinite(scale) || scale <= 0.0) scale = 1.0;
+    self.player.rate = (float)(self.playbackRate * scale);
+
+    // 2. A playhead parked on the seam is the other half of it: the
+    //    zero-tolerance seek that put it there can land on a copy whose first
+    //    frame is the last thing it will ever present. Move a little past the
+    //    seam so the decoder has somewhere to go.
+    double position = CMTimeGetSeconds(item.currentTime);
+    if (!isfinite(position) || position < 0.25) {
+        [self.player seekToTime:CMTimeMakeWithSeconds(0.10, 600)
+                toleranceBefore:CMTimeMake(1, 600)
+                 toleranceAfter:CMTimeMake(1, 600)];
+    }
+
+    // 3. An AVPlayerLayer that stopped getting frames only starts again once its
+    //    player is reattached.
+    self.playerLayer.player = nil;
+    self.playerLayer.player = self.player;
+
+    fprintf(stderr, "VideoRenderer: nudged stalled playback at %.3fs\n",
+            isfinite(position) ? position : -1.0);
+}
+
 - (void)checkPlaybackHealth {
     if (!self.loaded || !self.firstFrameReported || self.failureReported ||
         self.recoveryScheduled || self.hostPaused || self.playbackRate <= 0.0f) {
         self.lastPlaybackTime = NAN;
         self.lastLoopCount = NSNotFound;
         self.stalledPlaybackSamples = 0;
+        self.stallNudges = 0;
         self.stablePlaybackSamples = 0;
         return;
     }
+
+    // A player waiting out a scheduled landing has not failed: it is holding,
+    // and no stall heuristic below will ever see progress. Release it first so
+    // the rest of this check runs against a player that is actually playing.
+    [self releaseStuckLandingIfNeeded];
 
     AVPlayerItem *item = self.player.currentItem;
     if (item == nil || item.status == AVPlayerItemStatusFailed) return;
@@ -492,6 +550,7 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
 
     if (progressed) {
         self.stalledPlaybackSamples = 0;
+        self.stallNudges = 0;
         self.stablePlaybackSamples += 1;
         if (self.stablePlaybackSamples >= kVRStablePlaybackSamples) {
             self.recoveryAttempts = 0;
@@ -503,6 +562,14 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
     self.stablePlaybackSamples = 0;
     self.stalledPlaybackSamples += 1;
     if (self.stalledPlaybackSamples < kVRPlaybackStallSamples) return;
+
+    if (self.stallNudges < 2) {
+        self.stallNudges += 1;
+        // Retry on the next tick instead of waiting out another full window.
+        self.stalledPlaybackSamples = kVRPlaybackStallSamples - 1;
+        [self nudgeStalledPlayback];
+        return;
+    }
 
     NSString *reason = self.player.reasonForWaitingToPlay ?: @"none";
     NSString *message = [NSString stringWithFormat:
@@ -618,6 +685,7 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
     self.lastPlaybackTime = NAN;
     self.lastLoopCount = NSNotFound;
     self.stalledPlaybackSamples = 0;
+    self.stallNudges = 0;
     self.stablePlaybackSamples = 0;
     self.openGeneration += 1;
 
@@ -811,7 +879,34 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
 
 - (void)pause {
     self.hostPaused = YES;
+    // A catch-up trim latched before the pause would resume the wallpaper at a
+    // trimmed rate with nothing to walk it back: the sync loop holds every
+    // correction while paused and a resume lands on the anchor instead. Written
+    // straight to the ivar for the same reason as -setSyncRateScale:, because a
+    // property assignment here re-enters that method and then tries to apply a
+    // rate to a player that is being paused.
+    _syncRateScale = 1.0;
     [self applyPlaybackState];
+}
+
+- (BOOL)paused {
+    return self.hostPaused || self.playbackRate <= 0.0f;
+}
+
+- (void)seekToTime:(double)seconds {
+    if (!self.loaded) return;
+    // currentItem is briefly nil across a loop boundary. Skipping the seek there
+    // is fine, the parent re-issues sync.
+    AVPlayerItem *item = self.player.currentItem;
+    CMTime duration = item != nil ? item.duration : kCMTimeInvalid;
+    double total = CMTimeGetSeconds(duration);
+    if (!isfinite(total) || total <= 0.0) return;
+    if (!isfinite(seconds)) return;
+    seconds = fmin(fmax(seconds, 0.0), total);
+    // Zero tolerance, so every display lands on the same offset.
+    [self.player seekToTime:CMTimeMakeWithSeconds(seconds, 600)
+            toleranceBefore:kCMTimeZero
+             toleranceAfter:kCMTimeZero];
 }
 
 - (void)setPlaybackRate:(float)playbackRate {
@@ -830,7 +925,138 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
         [self.player pause];
         return;
     }
+    // Fold in any catch-up trim. Re-applying the plain rate here would cancel a
+    // trim on the next volume, mute or property replay.
+    double scale = self.syncRateScale;
+    if (!isfinite(scale) || scale <= 0.0) scale = 1.0;
+    [self.player playImmediatelyAtRate:(float)(self.playbackRate * scale)];
+}
+
+- (void)setSyncRateScale:(double)scale {
+    if (!isfinite(scale) || scale <= 0.0) scale = 1.0;
+    scale = fmin(fmax(scale, kVRSyncRateScaleMin), kVRSyncRateScaleMax);
+    if (fabs(scale - _syncRateScale) < 1e-4) return;
+    // The ivar, not the property. This class overrides the synthesised setter,
+    // so `self.syncRateScale = scale` here calls this method again with an
+    // unchanged ivar, the guard above lets it through, and it recurses until the
+    // stack runs out. Writing the ivar is the whole point of the override.
+    _syncRateScale = scale;
+    [self applySyncRateIfNeeded];
+}
+
+// Applies a catch-up trim to a player that is already running.
+//
+// -playImmediatelyAtRate: is the wrong tool: that is the "start now, ignore
+// readiness" kick, and calling it every tick re-primes the render pipeline. On a
+// 4K clip that shows as a hitch, and near a loop seam it can leave the new item
+// parked on its first frame. Assigning `rate` only retimes a pipeline that is
+// already playing.
+//
+// Assigning is not free either: AVFoundation recomputes playback timing, which
+// costs about a frame. So this compares against the player's actual rate first
+// and does nothing when they already agree, which makes it safe to call every
+// tick and keeps a trim alive across the windows where it cannot be set (a loop
+// swap, a seek that has not landed, a player briefly out of `Playing`).
+- (void)applySyncRateIfNeeded {
+    if (!self.loaded || !self.firstFrameReported) return;
+    if (self.hostPaused || self.playbackRate <= 0.0f) return;
+    if (self.player.timeControlStatus != AVPlayerTimeControlStatusPlaying) return;
+    double scale = self.syncRateScale;
+    if (!isfinite(scale) || scale <= 0.0) scale = 1.0;
+    float want = (float)(self.playbackRate * scale);
+    // AVPlayer quantises `rate`, so compare loosely: within a thousandth is the
+    // value it would be set to anyway.
+    if (fabs((double)self.player.rate - (double)want) < 1e-3) return;
+    self.player.rate = want;
+}
+
+// Re-locates the playhead with a tolerant seek.
+//
+// Deliberately not -setRate:time:atHostTime:. That API pauses first and resumes
+// at the given host time, which is right for starting several players together
+// and wrong for nudging one that is already running: under AVPlayerLooper a
+// pause near an item swap can leave the player holding with no frames until the
+// swap finishes, which looks like a frozen picture. A tolerant seek moves the
+// playhead without stopping playback.
+//
+// Returns NO when the seek cannot be issued yet. The first correction usually
+// arrives while the wallpaper is still opening: `loaded` is set but the first
+// frame is not decoded, and the guard below would drop the seek silently,
+// leaving this renderer playing from zero. The caller needs to know so it can
+// retry.
+- (BOOL)seekApproximatelyTo:(double)seconds {
+    if (!self.loaded || self.hostPaused || self.playbackRate <= 0.0f) return NO;
+    if (!self.firstFrameReported) return NO;
+    AVPlayerItem *item = self.player.currentItem;
+    if (item == nil) return NO;
+    double duration = CMTimeGetSeconds(item.duration);
+    if (!isfinite(duration) || duration <= 0.0) return NO;
+    if (!isfinite(seconds) || seconds < 0.0) return NO;
+    if (seconds > duration) seconds = duration;
+
+    // Drop any catch-up trim. The seek is about to put the playhead exactly
+    // where the sync wants it, so there is nothing left to catch up with. The
+    // ivar is written directly so the reset cannot be skipped, and the player's
+    // rate then goes back to plain playback: a stale 1.03 left behind would keep
+    // this screen fast for the rest of the loop.
+    _syncRateScale = 1.0;
+    [self applySyncRateIfNeeded];
+
+    // One frame of slop. An exact seek has to decode up to the frame and
+    // re-primes the pipeline, which is slower and is what used to park a looping
+    // item on its first frame. A frame is nothing next to the tolerance the sync
+    // keeps anyway.
+    CMTime tolerance = CMTimeMake(1, 30);
+    [self.player seekToTime:CMTimeMakeWithSeconds(seconds, 600)
+            toleranceBefore:tolerance
+             toleranceAfter:tolerance];
+    return YES;
+}
+
+// Kicks a player out of an indefinite "waiting to play at the specified rate".
+//
+// A player can sit in that state if what it waits for never arrives. The stall
+// heuristics below only look at whether the playhead moves, so a player parked
+// there looks exactly like a frozen one; catch it early and restart it instead
+// of waiting out the longer escalation.
+- (void)releaseStuckLandingIfNeeded {
+    if (self.player.timeControlStatus != AVPlayerTimeControlStatusWaitingToPlayAtSpecifiedRate) {
+        self.waitingSinceClock = 0.0;
+        return;
+    }
+    double now = (double)clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) / 1e9;
+    if (self.waitingSinceClock <= 0.0) {
+        self.waitingSinceClock = now;
+        return;
+    }
+    // Local files do wait briefly while a seek settles. Anything past this is a
+    // wait that is not going to end on its own.
+    if (now - self.waitingSinceClock < 2.0) return;
+
+    self.waitingSinceClock = 0.0;
+    NSString *reason = self.player.reasonForWaitingToPlay ?: @"none";
+    fprintf(stderr, "VideoRenderer: released stalled wait (reason=%s)\n",
+            reason.UTF8String);
     [self.player playImmediatelyAtRate:self.playbackRate];
+}
+
+- (double)currentPlaybackPosition {
+    if (!self.loaded) return NAN;
+    // With AVPlayerLooper the current item is one of several copies, so this is
+    // the position inside the copy that is playing now, which is the timeline the
+    // sync target is expressed in.
+    AVPlayerItem *item = self.player.currentItem;
+    if (item == nil) return NAN;
+    double position = CMTimeGetSeconds(item.currentTime);
+    return isfinite(position) ? position : NAN;
+}
+
+- (double)currentPlaybackDuration {
+    if (!self.loaded) return NAN;
+    AVPlayerItem *item = self.player.currentItem;
+    if (item == nil) return NAN;
+    double duration = CMTimeGetSeconds(item.duration);
+    return (isfinite(duration) && duration > 0.0) ? duration : NAN;
 }
 
 - (void)setVolume:(float)volume {

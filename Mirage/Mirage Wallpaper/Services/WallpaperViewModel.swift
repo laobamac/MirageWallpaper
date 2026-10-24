@@ -227,6 +227,8 @@ class WallpaperViewModel: PlaylistPlayback {
             self.scheduleRuntimeSave(for: key)
         }
         renderer.isWallpaperTrusted = { WallpaperViewModel.isWallpaperTrusted($0) }
+        renderer.isPlaybackSyncEnabled =
+            AppDelegate.shared.globalSettingsViewModel.settings.shouldSyncPlaybackAcrossDisplays
         renderer.onPositionAvailabilityChanged = { [weak self] displayID in
             guard let self, self.selectedDisplay?.displayID == displayID else { return }
             self.positionAvailabilityGeneration &+= 1
@@ -539,6 +541,14 @@ class WallpaperViewModel: PlaylistPlayback {
             completion?.finish(false)
             return
         }
+        // With sync on, applying a wallpaper puts it on every screen: "sync"
+        // means nothing while the screens show different things. Playlist
+        // rotation and other internal assignments pass restoreFocus: false and
+        // stay per-screen.
+        if restoreFocus, shouldMirrorAssignments, !isMirroringAssignments,
+           displayStates[key]?.wallpaper.id != wallpaper.id {
+            mirrorAssignment(of: wallpaper, skipping: key)
+        }
         let previous = displayStates[key]
         if !preservingPlaybackState { clearSessionPlaybackOverrides() }
         var resolved: WallpaperRuntimeState
@@ -710,9 +720,44 @@ class WallpaperViewModel: PlaylistPlayback {
 
     func applyToAllDisplays(_ w: WEWallpaper, restoreFocus: Bool = true) {
         guard w.isValid, w.kind != .unsupported else { return }
+        isMirroringAssignments = true
+        defer { isMirroringAssignments = false }
         for info in DisplayRegistry.shared.connected {
             assign(w, to: info.key, restoreFocus: restoreFocus)
         }
+    }
+
+    // MARK: 跨屏镜像
+
+    /// Set while an assignment is being mirrored to the other displays, so the
+    /// nested `assign` calls do not mirror again.
+    private var isMirroringAssignments = false
+
+    private var shouldMirrorAssignments: Bool {
+        DisplayRegistry.shared.connected.count > 1 &&
+            AppDelegate.shared.globalSettingsViewModel.settings.shouldSyncPlaybackAcrossDisplays
+    }
+
+    private func mirrorAssignment(of wallpaper: WEWallpaper, skipping key: DisplayKey) {
+        isMirroringAssignments = true
+        defer { isMirroringAssignments = false }
+        for info in DisplayRegistry.shared.connected where info.key != key {
+            assign(wallpaper, to: info.key, restoreFocus: false)
+        }
+    }
+
+    /// Repairs a state saved while the screens still showed different
+    /// wallpapers: with sync on they have to match, so the main display wins.
+    /// Runs once after launch.
+    func normalizeMirroredWallpaperIfNeeded() {
+        guard shouldMirrorAssignments else { return }
+        let registry = DisplayRegistry.shared
+        let currentIDs = Set(registry.connected.compactMap { displayStates[$0.key]?.wallpaper.id })
+        guard currentIDs.count > 1 else { return }
+        let source = registry.mainKey.flatMap { displayStates[$0]?.wallpaper }
+            ?? displayStates[selectedDisplayKey]?.wallpaper
+        guard let wallpaper = source else { return }
+        applyToAllDisplays(wallpaper, restoreFocus: false)
     }
 
     func applyToAllScreens() {
@@ -1780,6 +1825,21 @@ class WallpaperViewModel: PlaylistPlayback {
             force: true)
         for (key, state) in displayStates where state.wallpaper.kind == .video {
             persistRuntime(state.runtime, for: state.wallpaper, on: key)
+        }
+    }
+
+    /// Turns cross-display playback sync on or off and saves the choice.
+    /// Enabling also copies the current wallpaper to every screen and re-sends
+    /// the anchor, so they line up right away.
+    func setPlaybackSyncEnabled(_ enabled: Bool) {
+        let global = AppDelegate.shared.globalSettingsViewModel
+        global.settings.crossDisplaySync = enabled
+        global.save()
+        renderer.isPlaybackSyncEnabled = enabled
+        renderer.resendPlaybackSync()
+        guard enabled else { return }
+        if let state = displayStates[selectedDisplayKey] {
+            applyToAllDisplays(state.wallpaper, restoreFocus: false)
         }
     }
 

@@ -184,9 +184,15 @@ struct GlobalSettings: Codable, Equatable {
     // MARK: Video
     var videoFramework = GSVideoFramework.avkit
     var enableHDRVideo: Bool? = false
+    // Optional keeps settings written by older Mirage versions decodable.
+    var crossDisplaySync: Bool? = true
 
     var shouldEnableHDRVideo: Bool {
         enableHDRVideo ?? false
+    }
+
+    var shouldSyncPlaybackAcrossDisplays: Bool {
+        crossDisplaySync ?? true
     }
     
     // MARK: Advanced

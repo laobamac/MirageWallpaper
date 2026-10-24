@@ -9,6 +9,7 @@ import SwiftUI
 struct DisplayPicker: View {
     @Bindable var wallpaperViewModel: WallpaperViewModel
     @ObservedObject private var registry = DisplayRegistryObserver.shared
+    @Environment(GlobalSettingsViewModel.self) private var globalSettingsViewModel
 
     @State private var hovering = false
 
@@ -26,6 +27,18 @@ struct DisplayPicker: View {
                         Label(rowTitle(info), systemImage: icon(for: info))
                     }
                 }
+            }
+
+            Section {
+                Toggle(isOn: Binding(
+                    get: {
+                        globalSettingsViewModel.settings.shouldSyncPlaybackAcrossDisplays
+                    },
+                    set: { wallpaperViewModel.setPlaybackSyncEnabled($0) }
+                )) {
+                    Label(L("跨屏同步"), systemImage: "rectangle.on.rectangle")
+                }
+                .disabled(displays.count < 2)
             }
 
             Section {
@@ -61,11 +74,21 @@ struct DisplayPicker: View {
     }
 
     private var label: String {
+        if isPlaybackSynced { return L("跨屏同步") }
         guard let selected = wallpaperViewModel.selectedDisplay else {
             return L("显示器")
         }
         guard displays.count > 1 else { return selected.name }
         return L("显示器 %d", selected.index + 1)
+    }
+
+    /// With sync on, the picker no longer chooses a display: whatever is assigned
+    /// here is mirrored to every screen and played from one anchor, so the label
+    /// names the wall instead of one of its screens. The menu still lists the
+    /// displays, since checking what is on one screen is still per-screen.
+    private var isPlaybackSynced: Bool {
+        displays.count > 1 &&
+            globalSettingsViewModel.settings.shouldSyncPlaybackAcrossDisplays
     }
 
     private var helpText: String {

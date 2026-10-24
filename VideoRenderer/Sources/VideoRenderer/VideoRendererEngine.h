@@ -37,7 +37,42 @@ typedef struct {
 
 - (void)play;
 - (void)pause;
+// True while playback is halted, either because the host asked for a pause or
+// because the configured rate is zero. The sync code reads this as "stopped
+// clock": nothing may be corrected against a frozen playhead, and the screen
+// lands on the anchor once it plays again.
+@property (nonatomic, assign, readonly) BOOL paused;
+// Jumps the playhead to `seconds` (clamped to the item duration), zero tolerance.
+- (void)seekToTime:(double)seconds;
 - (void)setPlaybackRate:(float)playbackRate;
+// Cross-display sync. `scale` multiplies the configured rate while this renderer
+// catches up with the anchor; 1.0 is normal speed. Out-of-range values are
+// clamped, and it never resumes a paused player.
+//
+// Only for a deliberate, sustained change. Assigning `rate` makes AVFoundation
+// recompute its playback timing, so driving this from a periodic tick costs a
+// dropped frame every tick.
+- (void)setSyncRateScale:(double)scale;
+// Makes the player's rate match the last `-setSyncRateScale:` value.
+//
+// Does nothing when the rates already agree. That matters twice: a scale has to
+// survive the windows where `rate` cannot be set (a loop swap, a seek still
+// landing, a player briefly out of `Playing`), and it has to come back without
+// paying for an assignment on every tick.
+- (void)applySyncRateIfNeeded;
+
+// Re-locates the playhead for cross-display sync.
+//
+// Tolerant seek, a frame either way, instead of an exact one: an exact seek has
+// to decode up to the frame and re-primes the pipeline, which is slower and is
+// what used to park a looping item on its first frame. A frame of slop is far
+// below the tolerance the sync keeps anyway. Does not touch `rate`.
+- (BOOL)seekApproximatelyTo:(double)seconds;
+// Position and duration of the item playing right now, in the timeline the sync
+// target uses. NAN when unknown, i.e. nothing loaded or read across a loop
+// restart, in which case the caller should re-anchor instead of correcting.
+- (double)currentPlaybackPosition;
+- (double)currentPlaybackDuration;
 - (void)setVolume:(float)volume;
 - (void)setMuted:(BOOL)muted;
 - (void)setFillMode:(VRVideoFillMode)fillMode;
