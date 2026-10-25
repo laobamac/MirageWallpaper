@@ -203,6 +203,11 @@ private struct UIResponsivenessRegression {
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             NSApplication.shared.setActivationPolicy(.accessory)
             NSApplication.shared.finishLaunching()
+            if CommandLine.arguments.contains("--wallpaper-deletion") {
+                try testWallpaperDeletion()
+                print("WallpaperDeletionRegression: all checks passed")
+                return
+            }
             if CommandLine.arguments.contains("--wallpaper-runtime") {
                 ImageProtocol.imageData = try pngData(color: .green)
                 try await testConfiguration()
@@ -234,6 +239,7 @@ private struct UIResponsivenessRegression {
                 return
             }
             try testStartupAndPlaylistNavigation()
+            try testWallpaperDeletion()
             try await testPlaylistControls()
             try await testPlaylistTransitions()
             try await testWorkers()
@@ -1980,6 +1986,37 @@ private struct UIResponsivenessRegression {
         print("PASS: repeated lock suspension, in-flight cancellation, unlock switching and terminal shutdown")
         print("PASS: renderer activation, failure rollback, 100 rapid requests, display isolation and stop ordering")
         print("PASS: hidden video and scene previews, crop and property propagation, desktop isolation and preview shutdown")
+    }
+
+    static func testWallpaperDeletion() throws {
+        let first = try wallpaper("deletion-first")
+        let second = try wallpaper("deletion-second")
+        let firstKey = DisplayKey(rawValue: "deletion-a")
+        let duplicateKey = DisplayKey(rawValue: "deletion-b")
+        let otherKey = DisplayKey(rawValue: "deletion-c")
+        let state = DisplayWallpaperState(wallpaper: first, runtime: WallpaperRuntimeState())
+        let model = WallpaperViewModel(initialStates: [firstKey: state, duplicateKey: state,
+            otherKey: DisplayWallpaperState(wallpaper: second, runtime: WallpaperRuntimeState())])
+        for errorCode in [CocoaError.fileWriteNoPermission, .fileNoSuchFile] {
+            do {
+                try model.removeWallpaper(first) { _ in throw CocoaError(errorCode) }
+                throw RegressionFailure(description: "Deletion failure was swallowed")
+            } catch let error as CocoaError {
+                try require(error.code == errorCode, "Deletion changed the reported error")
+            }
+            try require(model.state(for: firstKey) == state && model.state(for: duplicateKey) == state,
+                        "Failed removal cleared an active wallpaper or its runtime")
+            try require(FileManager.default.fileExists(atPath: first.wallpaperDirectory.path),
+                        "Failed removal changed the wallpaper directory")
+        }
+        try model.removeWallpaper(first) { wallpaper in
+            try FileManager.default.removeItem(at: wallpaper.wallpaperDirectory)
+        }
+        try require(model.state(for: firstKey) == nil && model.state(for: duplicateKey) == nil,
+                    "Successful removal retained an assignment on another display")
+        try require(model.state(for: otherKey)?.wallpaper.id == second.id,
+                    "Removing one wallpaper cleared a different wallpaper")
+        print("PASS: deletion failures preserve assignments; successful deletion clears only matching displays")
     }
 
     static func testLogs() async throws {
