@@ -66,10 +66,10 @@ def main():
             '-O2', '-c', SOURCE / 'D3D11MetalInterop.c', '-o', output / 'interop.o')
         run(gcc, '-shared', '-static-libgcc', output / 'interop.o', SOURCE / 'd3d11.def',
             '-o', output / 'd3d11.dll', '-ldxguid')
-        run('clang', '-dynamiclib', '-fobjc-arc', '-I' + headers,
+        run('clang', '-O2', '-dynamiclib', '-fobjc-arc', '-I' + headers,
             '-framework', 'AppKit', '-framework', 'QuartzCore', '-framework', 'Metal',
             SOURCE / 'NativeCompositor.m', SOURCE / 'WineWindowLocks.c', SOURCE / 'NativeIdentity.m',
-            SOURCE / 'MetalInterop.m', '-o', output / 'MetalInterop.dylib')
+            SOURCE / 'MetalInterop.m', SOURCE / 'ShaderOptimizer.m', '-o', output / 'MetalInterop.dylib')
         run('swiftc', SOURCE / 'Launcher.swift', '-o', output / 'Launcher')
         run('swiftc', SOURCE / 'NativeBridge.swift', '-o', output / 'ProjectPicker')
         run('node', '--check', SOURCE / 'standalone.js')
