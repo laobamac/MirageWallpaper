@@ -16,6 +16,11 @@ from build_icon import build_icon
 PROJECT = Path(__file__).resolve().parents[1]
 SOURCE = PROJECT / 'src'
 DXVK_SHA = '0ff0b0835dde29556bd01dfce7b1ae348d7f229cb1e1a37cc71ea1a028beeca4'
+AUDIO_USAGE = {
+    'en': 'Mirage Editor uses system audio to animate audio-responsive wallpaper effects.',
+    'zh-Hans': 'Mirage Editor 使用系统音频驱动壁纸中的音频响应效果。',
+    'zh-Hant': 'Mirage Editor 使用系統音訊驅動桌布中的音訊回應效果。',
+}
 
 def existing(candidates):
     for candidate in candidates:
@@ -68,8 +73,10 @@ def main():
             '-o', output / 'd3d11.dll', '-ldxguid')
         run('clang', '-O2', '-dynamiclib', '-fobjc-arc', '-I' + headers,
             '-framework', 'AppKit', '-framework', 'QuartzCore', '-framework', 'Metal',
+            '-framework', 'CoreAudio',
             SOURCE / 'NativeCompositor.m', SOURCE / 'WineWindowLocks.c', SOURCE / 'NativeIdentity.m',
-            SOURCE / 'MetalInterop.m', SOURCE / 'ShaderOptimizer.m', '-o', output / 'MetalInterop.dylib')
+            SOURCE / 'MetalInterop.m', SOURCE / 'ShaderOptimizer.m', SOURCE / 'SystemAudio.m',
+            '-o', output / 'MetalInterop.dylib')
         run('swiftc', SOURCE / 'Launcher.swift', '-o', output / 'Launcher')
         run('swiftc', SOURCE / 'NativeBridge.swift', '-o', output / 'ProjectPicker')
         run('node', '--check', SOURCE / 'standalone.js')
@@ -95,6 +102,15 @@ def main():
             info_path = bundle / 'Contents/Info.plist'
             info = plistlib.loads(info_path.read_bytes())
             info['CFBundleIconFile'] = 'MirageEditor.icns'
+            info['NSAudioCaptureUsageDescription'] = AUDIO_USAGE['en']
+            info['CFBundleDevelopmentRegion'] = 'en'
+            for language, usage in AUDIO_USAGE.items():
+                localized = bundle / 'Contents/Resources' / (language + '.lproj')
+                localized.mkdir(exist_ok=True)
+                (localized / 'InfoPlist.strings').write_text(
+                    '//\n//  InfoPlist.strings\n//  Mirage Wallpaper\n//\n'
+                    '//  Created on 2026/10/28.\n//  Copyright © 2026 王孝慈. All rights reserved.\n//\n'
+                    '"NSAudioCaptureUsageDescription" = ' + json.dumps(usage, ensure_ascii=False) + ';\n')
             temporary = info_path.with_name('Info.plist.mirage-new')
             temporary.write_bytes(plistlib.dumps(info, sort_keys=False))
             os.replace(temporary, info_path)
@@ -106,7 +122,7 @@ def main():
         }.items():
             install(SOURCE / name, target)
     (runtime / 'native-preview-patch.json').write_text(json.dumps(native_manifest, ensure_ascii=False, indent=2))
-    print('Rebuilt standalone editor integration and particle compatibility patch. No editor process was restarted.')
+    print('Rebuilt editor preview, shader optimization, native audio and compatibility integration. No editor process was restarted.')
 
 if __name__ == '__main__':
     main()

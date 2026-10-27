@@ -13,6 +13,7 @@ static VkResult (*setTexture)(VkImage,id<MTLTexture>);
 static NSMutableDictionary<NSString*,id<MTLTexture>> *exports;
 static NSMutableDictionary<NSNumber*,NSString*> *imageKeys;
 static NSLock *lock;
+extern void *MirageAudioFunctions(void *original);
 static VkResult setName(VkDevice device,const VkDebugUtilsObjectNameInfoEXT *info){
     const char *name=info->pObjectName;
     if(info->objectType==VK_OBJECT_TYPE_IMAGE && name && (!strncmp(name,"MirageExport:",13)||!strncmp(name,"MirageImport:",13))) {
@@ -51,6 +52,7 @@ static PFN_vkVoidFunction instanceProc(VkInstance instance,const char *name){
 }
 static void *lookup(void *handle,const char *name){
     void *original=dlsym(handle,name);
+    if(!strcmp(name,"__wine_unix_call_funcs"))return MirageAudioFunctions(original);
     if(!strcmp(name,"vkGetInstanceProcAddr")||!strcmp(name,"vk_icdGetInstanceProcAddr")){
         Dl_info info={0};dladdr(original,&info);
         if(!info.dli_fname||!strstr(info.dli_fname,"MoltenVK"))return original;

@@ -8,6 +8,7 @@ import plistlib
 from pathlib import Path
 
 from patch_native_preview import patch
+from build_runtime import AUDIO_USAGE
 
 PROJECT = Path(__file__).resolve().parents[1]
 RUNTIME = PROJECT / 'runtime'
@@ -36,6 +37,12 @@ def verify():
         info = plistlib.loads((bundle / 'Contents/Info.plist').read_bytes())
         if info.get('CFBundleIconFile') != 'MirageEditor.icns':
             raise ValueError('Editor icon is not selected: ' + str(bundle))
+        if info.get('NSAudioCaptureUsageDescription') != AUDIO_USAGE['en']:
+            raise ValueError('Missing system audio permission description: ' + str(bundle))
+        for language, usage in AUDIO_USAGE.items():
+            localized = bundle / 'Contents/Resources' / (language + '.lproj/InfoPlist.strings')
+            if not localized.is_file() or json.dumps(usage, ensure_ascii=False) not in localized.read_text():
+                raise ValueError('Missing localized audio permission: ' + str(localized))
 
     expected, manifest = patch((RUNTIME / 'originals/wallpaperui.exe').read_bytes())
     if (RUNTIME / 'windows/WallpaperEngine/bin/wallpaperui.exe').read_bytes() != expected:
