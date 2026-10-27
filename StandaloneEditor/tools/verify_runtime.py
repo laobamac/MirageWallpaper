@@ -80,7 +80,16 @@ def verify():
                           if 'window.mirageEditor.createPreview' in edit['after']), '')
     if not preview_patch or 'createShader' in preview_patch:
         raise ValueError('Preview resource management patch is missing')
-    print('Passed: required files, version-locked particle patch, UI, source/runtime consistency and relative drive mapping.')
+    build = json.loads((RUNTIME / 'integration-build.json').read_text())
+    for name, digest in build['sources'].items():
+        if hashlib.sha256((PROJECT / name).read_bytes()).hexdigest() != digest:
+            raise ValueError('Integration needs rebuilding: ' + name)
+    for name, digest in build['binaries'].items():
+        if hashlib.sha256((RUNTIME / name).read_bytes()).hexdigest() != digest:
+            raise ValueError('Integration binary differs: ' + name)
+    if hashlib.sha256((RUNTIME / 'private/ui-patches.json').read_bytes()).hexdigest() != build['ui_manifest_sha256']:
+        raise ValueError('UI integration needs rebuilding')
+    print('Passed: native build/source hashes, localized audio permission, preview lifecycle, version-locked patches and drive mapping.')
     print('Graphics configuration contains only the required texture-sharing flag.')
     print('Editor SHA-256: ' + manifest['sha256'])
 

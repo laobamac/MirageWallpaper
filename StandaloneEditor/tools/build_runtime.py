@@ -122,6 +122,16 @@ def main():
         }.items():
             install(SOURCE / name, target)
     (runtime / 'native-preview-patch.json').write_text(json.dumps(native_manifest, ensure_ascii=False, indent=2))
+    inputs = [path for path in SOURCE.iterdir() if path.is_file() and not path.name.startswith('.')]
+    inputs += [PROJECT / 'tools' / name for name in ['build_runtime.py', 'build_icon.py', 'patch_native_preview.py']]
+    build = {
+        '_copyright': 'Copyright © 2026 王孝慈. All rights reserved.',
+        'sources': {str(path.relative_to(PROJECT)): hashlib.sha256(path.read_bytes()).hexdigest() for path in inputs},
+        'binaries': {str(path.relative_to(runtime)): hashlib.sha256(path.read_bytes()).hexdigest()
+                     for path in [runtime / 'MetalInterop.dylib', system / 'd3d11.dll']},
+        'ui_manifest_sha256': hashlib.sha256((runtime / 'private/ui-patches.json').read_bytes()).hexdigest(),
+    }
+    (runtime / 'integration-build.json').write_text(json.dumps(build, indent=2) + '\n')
     print('Rebuilt editor preview, shader optimization, native audio and compatibility integration. No editor process was restarted.')
 
 if __name__ == '__main__':
