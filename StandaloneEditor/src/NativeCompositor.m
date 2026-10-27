@@ -11,6 +11,13 @@
 static IMP originalCreateMetalView;
 static char surfaceOrderKey;
 static NSUInteger surfaceOrder;
+static IMP originalDisplaySync;
+static char interfaceLayerKey;
+
+static void setDisplaySync(CAMetalLayer *layer, SEL selector, BOOL enabled) {
+    ((void (*)(id, SEL, BOOL))originalDisplaySync)(layer, selector,
+        objc_getAssociatedObject(layer, &interfaceLayerKey) ? NO : enabled);
+}
 
 static id createMetalView(id owner, SEL selector, id device) {
     NSView *view = ((id (*)(id, SEL, id))originalCreateMetalView)(owner, selector, device);
@@ -29,6 +36,11 @@ static id createMetalView(id owner, SEL selector, id device) {
     container.layer.actions = @{@"position":NSNull.null, @"bounds":NSNull.null,
                                 @"sublayers":NSNull.null, @"hidden":NSNull.null};
     [CATransaction commit];
+    if (!order.unsignedLongValue && [view.layer isKindOfClass:CAMetalLayer.class]) {
+        objc_setAssociatedObject(view.layer, &interfaceLayerKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        view.layer.opaque = YES;
+        ((CAMetalLayer *)view.layer).displaySyncEnabled = NO;
+    }
     fprintf(stderr, "[Mirage compositor] GPU surface order %lu, size %.0fx%.0f\n",
             order.unsignedLongValue, container.frame.size.width, container.frame.size.height);
     return view;
@@ -43,6 +55,8 @@ static void install(unsigned attempts) {
         return;
     }
     originalCreateMetalView = method_setImplementation(create, (IMP)createMetalView);
+    originalDisplaySync = method_setImplementation(class_getInstanceMethod(CAMetalLayer.class,
+        @selector(setDisplaySyncEnabled:)), (IMP)setDisplaySync);
 }
 
 __attribute__((constructor)) static void initialize(void) {

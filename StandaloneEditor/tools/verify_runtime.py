@@ -67,8 +67,12 @@ def verify():
     if not drive.is_symlink() or drive.readlink().is_absolute() or drive.resolve() != RUNTIME / 'windows':
         raise ValueError('Editor drive mapping is not relative to the runtime')
     installed = (RUNTIME / 'windows/WallpaperEngine/ui/dist/index.html').read_text()
-    if 'mirage-diagnostics.js' in installed or 'miragePreview(' in ui or 'antialias:false' in ui:
+    if 'mirage-diagnostics.js' in installed or 'miragePreview(' in ui:
         raise ValueError('Experimental preview or diagnostic code remains')
+    preview_patch = next((edit['after'] for edit in ui_manifest['edits']
+                          if 'window.mirageEditor.createPreview' in edit['after']), '')
+    if not preview_patch or 'createShader' in preview_patch:
+        raise ValueError('Preview resource management patch is missing')
     print('Passed: required files, version-locked particle patch, UI, source/runtime consistency and relative drive mapping.')
     print('Graphics configuration contains only the required texture-sharing flag.')
     print('Editor SHA-256: ' + manifest['sha256'])

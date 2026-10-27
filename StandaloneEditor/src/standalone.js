@@ -25,6 +25,113 @@
     if (location.hash.startsWith('#/editor')) watchAppearance();
     let choosingProject = false;
     window.mirageEditor = {
+        createPreview(canvas, requestSize) {
+            let gl, program, texture, handle, importedHandle, frame, disposed = false, visible = true;
+            const vertex = '#version 300 es\nout vec2 uv;void main(){vec2 p=vec2((gl_VertexID<<1)&2,gl_VertexID&2);gl_Position=vec4(p*2.0-1.0,0,1);uv=vec2(p.x,1.0-p.y);}';
+            const fragment = '#version 300 es\nprecision highp float;uniform sampler2D image;in vec2 uv;out vec4 color;void main(){color=vec4(texture(image,uv).rgb,1);}';
+            let width, height;
+            function stop() {
+                if (frame !== undefined) cancelAnimationFrame(frame);
+                frame = undefined;
+            }
+            function release() {
+                stop();
+                if (gl && !gl.isContextLost()) {
+                    gl.useProgram(null);
+                    gl.bindTexture(gl.TEXTURE_2D, null);
+                    if (texture) gl.deleteTexture(texture);
+                    if (program) gl.deleteProgram(program);
+                }
+                texture = program = importedHandle = width = height = undefined;
+            }
+            function prepare() {
+                if (!gl) gl = canvas.getContext('webgl2', {alpha: false, depth: false, stencil: false, antialias: false});
+                if (!gl || gl.isContextLost()) return false;
+                if (program && handle === importedHandle && width === canvas.width && height === canvas.height) return true;
+                if (!program) {
+                    const shaders = [];
+                    try {
+                        program = gl.createProgram();
+                        for (const [type, source] of [[gl.VERTEX_SHADER, vertex], [gl.FRAGMENT_SHADER, fragment]]) {
+                            const shader = gl.createShader(type);
+                            shaders.push(shader);
+                            gl.shaderSource(shader, source);
+                            gl.compileShader(shader);
+                            if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(shader));
+                            gl.attachShader(program, shader);
+                        }
+                        gl.linkProgram(program);
+                        if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program));
+                        gl.useProgram(program);
+                        gl.uniform1i(gl.getUniformLocation(program, 'image'), 0);
+                        gl.disable(gl.DEPTH_TEST);
+                        gl.disable(gl.BLEND);
+                    } catch (error) {
+                        release();
+                        window.ui.logError('Mirage preview: ' + error.message);
+                        return false;
+                    } finally { for (const shader of shaders) gl.deleteShader(shader); }
+                }
+                if (handle !== importedHandle) {
+                    if (texture) gl.deleteTexture(texture);
+                    texture = gl.createTexture();
+                    gl.activeTexture(gl.TEXTURE0);
+                    gl.bindTexture(gl.TEXTURE_2D, texture);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+                    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+                    gl.texImage2DShared(handle);
+                    importedHandle = handle;
+                }
+                gl.viewport(0, 0, canvas.width, canvas.height);
+                width = canvas.width;
+                height = canvas.height;
+                return true;
+            }
+            function draw() {
+                frame = undefined;
+                if (disposed || !visible || document.hidden || !handle || !canvas.width || !canvas.height) return;
+                if (!prepare()) return;
+                gl.drawArrays(gl.TRIANGLES, 0, 3);
+                frame = requestAnimationFrame(draw);
+            }
+            function schedule() {
+                stop();
+                if (!disposed && visible && !document.hidden && handle) frame = requestAnimationFrame(draw);
+            }
+            function lost(event) { event.preventDefault(); release(); }
+            function restored() { requestSize(); schedule(); }
+            document.addEventListener('visibilitychange', schedule);
+            canvas.addEventListener('webglcontextlost', lost);
+            canvas.addEventListener('webglcontextrestored', restored);
+            const observer = new IntersectionObserver(entries => {
+                visible = entries[0].isIntersecting;
+                schedule();
+            });
+            observer.observe(canvas);
+            return {
+                resize(width, height) {
+                    if (canvas.width !== width) canvas.width = width;
+                    if (canvas.height !== height) canvas.height = height;
+                    schedule();
+                },
+                show(nextHandle) {
+                    handle = nextHandle;
+                    canvas.style.visibility = handle ? 'visible' : 'hidden';
+                    if (!handle) release();
+                    schedule();
+                },
+                destroy() {
+                    disposed = true;
+                    release();
+                    observer.disconnect();
+                    document.removeEventListener('visibilitychange', schedule);
+                    canvas.removeEventListener('webglcontextlost', lost);
+                    canvas.removeEventListener('webglcontextrestored', restored);
+                }
+            };
+        },
         brandTranslations(translations) {
             for (const key of Object.keys(translations)) {
                 if (typeof translations[key] === 'string') translations[key] = translations[key].replace(/Wallpaper Engine/g, 'Mirage Editor');
