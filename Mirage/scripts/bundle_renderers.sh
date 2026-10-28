@@ -78,7 +78,6 @@ chmod u+w "$FRAMEWORKS/libMirageSceneSaver.dylib"
 is_bundleable() {
     case "$1" in
         /usr/lib/*|/System/*) return 1 ;;
-        @rpath/*|@loader_path/*|@executable_path/*) return 1 ;;
         *) return 0 ;;
     esac
 }
@@ -92,6 +91,37 @@ resolve() {
     fi
 }
 
+resolve_dependency() {
+    python3 - "$@" <<'PY'
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+name = sys.argv[1]
+sources = [Path(path).resolve() for path in sys.argv[2:]]
+source, executable = sources[0], sources[-1]
+def expand(value, owner):
+    return value.replace('@loader_path', str(owner.parent)).replace('@executable_path', str(executable.parent))
+if name.startswith('@rpath/'):
+    directories = []
+    for owner in sources:
+        commands = subprocess.check_output(['otool', '-l', str(owner)], text=True)
+        paths = re.findall(r'cmd LC_RPATH\n\s+cmdsize \d+\n\s+path (.+?) \(offset', commands)
+        directories.extend(Path(expand(path, owner)) for path in paths)
+    directories.append(source.parent)
+    candidates = [directory / name.removeprefix('@rpath/') for directory in directories]
+else:
+    candidates = [Path(expand(name, source))]
+for candidate in candidates:
+    if candidate.is_file():
+        print(candidate.resolve())
+        break
+else:
+    sys.exit(f'[bundle] Cannot resolve {name} from {source}')
+PY
+}
+
 # bash 3.2 没有关联数组。
 COPIED_LIST="$FRAMEWORKS/.copied"
 : > "$COPIED_LIST"
@@ -101,39 +131,54 @@ mark_copied() { echo "$1" >> "$COPIED_LIST"; }
 
 collect_deps() {
     local target="$1"
-    local deps
-    deps=$(otool -L "$target" | tail -n +2 | awk '{print $1}')
+    shift
+    local deps dep
+    deps=$(otool -L "$target" | sed -En 's/^[[:space:]]+(.+) \(compatibility version .*$/\1/p')
     while IFS= read -r dep; do
         [ -z "$dep" ] && continue
         is_bundleable "$dep" || continue
         local real base
-        real=$(resolve "$dep")
+        real=$(resolve_dependency "$dep" "$target" "$@")
         base=$(basename "$real")
         if ! is_copied "$base"; then
             if [ -f "$real" ]; then
                 mark_copied "$base"
                 cp -f "$real" "$FRAMEWORKS/$base"
                 chmod u+w "$FRAMEWORKS/$base"
-                collect_deps "$FRAMEWORKS/$base"
+                # Resolve loader-relative paths while the original directory
+                # and its LC_RPATH entries are still available.
+                collect_deps "$real" "$target" "$@"
             else
                 echo "[bundle] 警告: 找不到依赖 $dep (real=$real)" >&2
+            fi
+        fi
+        local alias
+        alias=$(basename "$dep")
+        if [ "$alias" != "$base" ]; then
+            if [ -e "$FRAMEWORKS/$alias" ] || [ -L "$FRAMEWORKS/$alias" ]; then
+                [ "$(resolve "$FRAMEWORKS/$alias")" = "$(resolve "$FRAMEWORKS/$base")" ] || {
+                    echo "[bundle] Conflicting dependency alias: $alias" >&2
+                    exit 1
+                }
+            else
+                ln -s "$base" "$FRAMEWORKS/$alias"
             fi
         fi
     done <<< "$deps"
 }
 
 echo "[bundle] 收集场景引擎依赖..."
-collect_deps "$RENDERERS/SceneWallpaper"
-collect_deps "$FRAMEWORKS/libMirageSceneSaver.dylib"
+collect_deps "$SCENE_BIN"
+collect_deps "$SCENE_SAVER_LIB"
 
 # 视频渲染器依赖 libav*（转码无法解码的编码，如 VP9/AV1）。场景引擎恰好也链接同一批
 # 库，但不能依赖这个副作用：否则场景引擎一旦不再链接 ffmpeg，视频渲染器就会带着
 # 绝对路径的 /usr/local 依赖发布，在没有 Homebrew 的机器上启动即失败。
 echo "[bundle] 收集视频引擎依赖..."
-collect_deps "$RENDERERS/VideoWallpaper"
-collect_deps "$RENDERERS/SceneBaker"
-collect_deps "$RENDERERS/WebBaker"
-collect_deps "$RENDERERS/VideoBaker"
+collect_deps "$VIDEO_BIN"
+collect_deps "$SCENE_BAKER"
+collect_deps "$WEB_BAKER"
+collect_deps "$VIDEO_BAKER"
 
 MVK_BASE=$(basename "$MOLTENVK")
 cp -f "$MOLTENVK" "$FRAMEWORKS/$MVK_BASE"
@@ -141,7 +186,7 @@ chmod u+w "$FRAMEWORKS/$MVK_BASE"
 if ! is_copied "$MVK_BASE"; then
     mark_copied "$MVK_BASE"
 fi
-collect_deps "$FRAMEWORKS/$MVK_BASE"
+collect_deps "$MOLTENVK"
 
 FFMPEG_PREFIX="${MIRAGE_FFMPEG_DIR:-$ROOT/Mirage/build/ffmpeg/$(uname -m)}"
 [ -f "$FFMPEG_PREFIX/.mirage-ffmpeg" ] || { echo "[bundle] missing minimal FFmpeg build" >&2; exit 1; }
@@ -177,12 +222,15 @@ retarget_lib() {
     remove_build_rpaths "$lib"
     install_name_tool -id "@rpath/$base" "$lib"
     local deps
-    deps=$(otool -L "$lib" | tail -n +2 | awk '{print $1}')
+    deps=$(otool -L "$lib" | sed -En 's/^[[:space:]]+(.+) \(compatibility version .*$/\1/p')
     while IFS= read -r dep; do
         [ -z "$dep" ] && continue
         is_bundleable "$dep" || continue
         local db
-        db=$(basename "$(resolve "$dep")")
+        case "$dep" in
+            @*) db=$(basename "$dep") ;;
+            *) db=$(basename "$(resolve "$dep")") ;;
+        esac
         if [ -f "$FRAMEWORKS/$db" ]; then
             install_name_tool -change "$dep" "@loader_path/$db" "$lib"
         fi
@@ -216,12 +264,15 @@ retarget_bin() {
     local bin="$1"
     remove_build_rpaths "$bin"
     local deps
-    deps=$(otool -L "$bin" | tail -n +2 | awk '{print $1}')
+    deps=$(otool -L "$bin" | sed -En 's/^[[:space:]]+(.+) \(compatibility version .*$/\1/p')
     while IFS= read -r dep; do
         [ -z "$dep" ] && continue
         is_bundleable "$dep" || continue
         local db
-        db=$(basename "$(resolve "$dep")")
+        case "$dep" in
+            @*) db=$(basename "$dep") ;;
+            *) db=$(basename "$(resolve "$dep")") ;;
+        esac
         if [ -f "$FRAMEWORKS/$db" ]; then
             install_name_tool -change "$dep" "@rpath/$db" "$bin" 2>/dev/null || true
         fi

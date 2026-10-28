@@ -176,6 +176,50 @@ class PackagingTests(unittest.TestCase):
         with patch.object(CODECS.ctypes, 'CDLL', return_value=dyld):
             CODECS.verify_loaded_codec_paths(libraries)
 
+    def test_transitive_rpath_dependency_is_collected_and_relocated(self):
+        original = self.root / 'original libraries'
+        libraries = original / 'lib'
+        libraries.mkdir(parents=True)
+        frameworks = self.root / 'relocated package/Frameworks'
+        frameworks.mkdir(parents=True)
+        common = libraries / 'libfixture_common.1.2.0.dylib'
+        decoder = libraries / 'libfixture_decoder.1.2.0.dylib'
+        consumer = original / 'libfixture_consumer.dylib'
+        (original / 'common.c').write_text('int common_value(void) { return 42; }\n')
+        (original / 'decoder.c').write_text('extern int common_value(void); int decoded_value(void) { return common_value() + 1; }\n')
+        (original / 'consumer.c').write_text('extern int decoded_value(void); int fixture_read(void) { return decoded_value(); }\n')
+        def compile(source, target, identity, *arguments):
+            subprocess.run(['xcrun', 'clang', '-dynamiclib', original / source, '-o', target,
+                            '-Wl,-headerpad_max_install_names', '-install_name', identity, *arguments], check=True, timeout=60)
+        compile('common.c', common, '@rpath/libfixture_common.1.dylib')
+        (libraries / 'libfixture_common.1.dylib').symlink_to(common.name)
+        compile('decoder.c', decoder, '@rpath/libfixture_decoder.1.dylib', common, '-Wl,-rpath,@loader_path/../lib')
+        (libraries / 'libfixture_decoder.1.dylib').symlink_to(decoder.name)
+        compile('consumer.c', consumer, str(consumer), decoder, '-Wl,-rpath,' + str(libraries))
+        script = (ROOT / 'Mirage/scripts/bundle_renderers.sh').read_text()
+        names = ['is_bundleable', 'resolve', 'resolve_dependency', 'is_copied', 'mark_copied',
+                 'collect_deps', 'remove_build_rpaths', 'retarget_lib']
+        functions = []
+        for name in names:
+            match = re.search(r'^' + name + r'\(\) \{.*?^\}', script, re.MULTILINE | re.DOTALL)
+            if name in ['is_copied', 'mark_copied']:
+                match = re.search(r'^' + name + r'\(\) \{[^\n]+\}', script, re.MULTILINE)
+            self.assertIsNotNone(match, name)
+            functions.append(match.group())
+        shell = ('set -euo pipefail\n' + '\n'.join(functions) + '\nFRAMEWORKS="$1"\n'
+                 'COPIED_LIST="$FRAMEWORKS/.copied"\n: > "$COPIED_LIST"\ncollect_deps "$2"\n'
+                 'for lib in "$FRAMEWORKS"/*.dylib; do [ -L "$lib" ] || retarget_lib "$lib"; done\n')
+        subprocess.run(['bash', '-c', shell, 'collect-test', frameworks, consumer], check=True, timeout=60)
+        self.assertTrue((frameworks / common.name).is_file())
+        self.assertEqual((frameworks / 'libfixture_common.1.dylib').resolve(), (frameworks / common.name).resolve())
+        shutil.rmtree(original)
+        for path in frameworks.glob('*.dylib'):
+            if not path.is_symlink():
+                subprocess.run(['codesign', '--force', '--sign', '-', path], check=True, capture_output=True, timeout=20)
+        environment = {key: value for key, value in os.environ.items() if not key.startswith('DYLD_')}
+        probe = 'import ctypes,sys; lib=ctypes.CDLL(sys.argv[1]); assert lib.fixture_read() == 43'
+        subprocess.run(['/usr/bin/python3', '-c', probe, frameworks / consumer.name], env=environment, check=True, timeout=20)
+
     def test_component_lookup(self):
         binary = self.root / 'lookup'
         subprocess.run(['xcrun', 'swiftc', ROOT / 'Mirage/Mirage Screen Saver/MirageHostApplication.swift',
