@@ -15,7 +15,7 @@ using SteamKit2.WebUI.Internal;
 
 namespace MirageSteamService;
 
-internal sealed class SteamSession : IAsyncDisposable
+internal sealed partial class SteamSession : IAsyncDisposable
 {
     public const uint AppId = 431960;
     private const uint WorkshopSubscriptionListType = 1;
@@ -94,6 +94,7 @@ internal sealed class SteamSession : IAsyncDisposable
         callbacks.Subscribe<SteamClient.DisconnectedCallback>(OnDisconnected);
         callbacks.Subscribe<SteamUser.LoggedOnCallback>(OnLoggedOn);
         callbacks.Subscribe<SteamUser.LoggedOffCallback>(OnLoggedOff);
+        callbacks.Subscribe<SteamApps.LicenseListCallback>(ReceiveEditorLicenses);
         callbackLoop = RunCallbacksAsync();
     }
 
@@ -651,6 +652,7 @@ internal sealed class SteamSession : IAsyncDisposable
 
     public void Logout()
     {
+        ResetEditorLicenses();
         CancelAuthentication();
         CancelRecovery();
         IsLoggedIn = false;
@@ -821,6 +823,7 @@ internal sealed class SteamSession : IAsyncDisposable
 
     private async Task LogOnAsync(string username, string refreshToken, uint loginId, CancellationToken cancellationToken)
     {
+        ResetEditorLicenses();
         loggedOnSource = new TaskCompletionSource<SteamUser.LoggedOnCallback>(TaskCreationOptions.RunContinuationsAsynchronously);
         user.LogOn(new SteamUser.LogOnDetails
         {
@@ -866,6 +869,7 @@ internal sealed class SteamSession : IAsyncDisposable
 
     private void OnDisconnected(SteamClient.DisconnectedCallback callback)
     {
+        ResetEditorLicenses();
         if (callback.UserInitiated)
         {
             resetConnectionSource?.TrySetResult(true);
@@ -890,6 +894,7 @@ internal sealed class SteamSession : IAsyncDisposable
 
     private void OnLoggedOff(SteamUser.LoggedOffCallback callback)
     {
+        ResetEditorLicenses();
         if (shuttingDown || !IsLoggedIn) return;
         IsLoggedIn = false;
         SteamId = "";

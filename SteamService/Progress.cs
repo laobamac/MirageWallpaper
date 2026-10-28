@@ -26,6 +26,7 @@ internal sealed class DownloadProgressTracker : IDisposable
     private long totalBytes;
     private readonly HashSet<DownloadTransfer> transfers = [];
     private bool active;
+    public string? CurrentFile { get; set; }
 
     public DownloadProgressTracker(ProtocolWriter writer, string taskId)
     {
@@ -103,7 +104,7 @@ internal sealed class DownloadProgressTracker : IDisposable
         }
         var remaining = Math.Max(0, total - received);
         double? eta = speed > 1 && remaining > 0 ? remaining / speed : null;
-        writer.DownloadState(taskId, "downloading", received, total, speed, eta);
+        writer.DownloadState(taskId, "downloading", received, total, speed, eta, currentFile: CurrentFile);
     }
 
     public void Dispose()

@@ -27,6 +27,8 @@ internal sealed class ServiceCommand
     public int? StartIndex { get; set; }
     public int? Count { get; set; }
     public uint? LoginId { get; set; }
+    public string? PlanId { get; set; }
+    public EditorCompatibility? EditorCompatibility { get; set; }
 }
 
 internal sealed class ProtocolWriter
@@ -58,8 +60,8 @@ internal sealed class ProtocolWriter
         Send(new { type = "authState", state, accountName, message, challengeUrl, refreshToken, guardData, errorCode, steamId });
     }
 
-    public void DownloadState(string taskId, string state, long receivedBytes = 0, long totalBytes = 0, double bytesPerSecond = 0, double? etaSeconds = null, string? outputPath = null, string? message = null, string? errorCode = null)
+    public void DownloadState(string taskId, string state, long receivedBytes = 0, long totalBytes = 0, double bytesPerSecond = 0, double? etaSeconds = null, string? outputPath = null, string? message = null, string? errorCode = null, string? currentFile = null)
     {
-        Send(new { type = "downloadState", taskId, state, receivedBytes, totalBytes, bytesPerSecond, etaSeconds, outputPath, message, errorCode });
+        Send(new { type = "downloadState", taskId, state, receivedBytes, totalBytes, bytesPerSecond, etaSeconds, outputPath, message, errorCode, currentFile });
     }
 }

@@ -13,9 +13,12 @@ using SteamKit2.Authentication;
 var writer = new ProtocolWriter();
 await using var session = new SteamSession(writer);
 var downloader = new WorkshopDownloader(session, writer);
+var editor = new EditorContentService(session, writer);
 var downloads = new ConcurrentDictionary<string, DownloadOperation>();
 CancellationTokenSource? authenticationCancellation = null;
 Task? authenticationTask = null;
+Task? editorRequestTask = null;
+CancellationTokenSource? editorRequestCancellation = null;
 var jsonOptions = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
 var running = true;
 
@@ -276,6 +279,49 @@ while (running)
                 writer.Response(command.RequestId, true, data: new { commentId = commentId.ToString() });
             }).ConfigureAwait(false);
             break;
+        case "editorOwnership":
+        case "editorPlan":
+            if (editorRequestTask is { IsCompleted: false })
+            {
+                writer.Response(command.RequestId, false, "An editor request is already running.", "EDITOR_REQUEST_BUSY");
+                break;
+            }
+            editorRequestCancellation?.Dispose();
+            editorRequestCancellation = new CancellationTokenSource();
+            editorRequestTask = RunRequestAsync(command.RequestId, writer, async token =>
+            {
+                if (command.Command == "editorOwnership")
+                {
+                    var steamId = await session.RequireEditorOwnershipAsync(token).ConfigureAwait(false);
+                    writer.Response(command.RequestId, true, data: new { steamId, owned = true });
+                }
+                else
+                {
+                    if (command.EditorCompatibility == null) throw new ServiceException("INVALID_EDITOR_CATALOG", "Editor catalog is missing.");
+                    var plan = await editor.PrepareAsync(command.EditorCompatibility, token).ConfigureAwait(false);
+                    writer.Response(command.RequestId, true, data: plan);
+                }
+            }, editorRequestCancellation.Token);
+            break;
+        case "cancelEditorRequest":
+            editorRequestCancellation?.Cancel();
+            writer.Response(command.RequestId, true);
+            break;
+        case "editorDownload":
+            if (string.IsNullOrWhiteSpace(command.TaskId) || string.IsNullOrWhiteSpace(command.PlanId) || string.IsNullOrWhiteSpace(command.OutputRoot) || downloads.ContainsKey("editor"))
+            {
+                writer.Response(command.RequestId, false, "Editor download is busy or invalid.", "INVALID_DOWNLOAD");
+                break;
+            }
+            var editorOperation = new DownloadOperation(new CancellationTokenSource());
+            downloads["editor"] = editorOperation;
+            writer.Response(command.RequestId, true);
+            editorOperation.Task = RunEditorDownloadAsync(command.TaskId, command.PlanId, command.OutputRoot, editorOperation, downloads, editor, writer);
+            break;
+        case "cancelEditorDownload":
+            if (downloads.TryGetValue("editor", out var activeEditor)) activeEditor.Cancel();
+            writer.Response(command.RequestId, true);
+            break;
         case "download":
             if (!session.IsLoggedIn)
             {
@@ -315,6 +361,7 @@ while (running)
             }
             break;
         case "logout":
+            editorRequestCancellation?.Cancel();
             await StopAuthenticationAsync(session, authenticationCancellation, authenticationTask).ConfigureAwait(false);
             authenticationCancellation = null;
             authenticationTask = null;
@@ -332,6 +379,9 @@ while (running)
     }
 }
 
+editorRequestCancellation?.Cancel();
+if (editorRequestTask != null) await editorRequestTask.ConfigureAwait(false);
+editorRequestCancellation?.Dispose();
 await StopAuthenticationAsync(session, authenticationCancellation, authenticationTask).ConfigureAwait(false);
 await StopDownloadsAsync(downloads).ConfigureAwait(false);
 
@@ -360,6 +410,29 @@ static async Task RunAuthenticationAsync(Func<Task> action, ProtocolWriter write
     catch (Exception error)
     {
         writer.AuthState("failed", message: UserMessage(error), errorCode: ErrorCode(error));
+    }
+}
+
+static async Task RunEditorDownloadAsync(string taskId, string planId, string outputRoot, DownloadOperation operation,
+    ConcurrentDictionary<string, DownloadOperation> downloads, EditorContentService editor, ProtocolWriter writer)
+{
+    try
+    {
+        var result = await editor.DownloadAsync(taskId, planId, outputRoot, operation.Token).ConfigureAwait(false);
+        writer.DownloadState(taskId, "completed", result.TotalBytes, result.TotalBytes, outputPath: result.OutputPath);
+    }
+    catch (OperationCanceledException) when (operation.Token.IsCancellationRequested)
+    {
+        writer.DownloadState(taskId, "cancelled", errorCode: "DOWNLOAD_CANCELLED");
+    }
+    catch (Exception error)
+    {
+        writer.DownloadState(taskId, "failed", message: UserMessage(error), errorCode: ErrorCode(error));
+    }
+    finally
+    {
+        downloads.TryRemove("editor", out _);
+        operation.Dispose();
     }
 }
 
@@ -413,9 +486,10 @@ static async Task StopDownloadsAsync(ConcurrentDictionary<string, DownloadOperat
     try { await Task.WhenAll(active.Select(operation => operation.Task)).ConfigureAwait(false); } catch { }
 }
 
-static async Task RunRequestAsync(string? requestId, ProtocolWriter writer, Func<CancellationToken, Task> action)
+static async Task RunRequestAsync(string? requestId, ProtocolWriter writer, Func<CancellationToken, Task> action, CancellationToken externalCancellation = default)
 {
-    using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+    using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(externalCancellation);
+    cancellation.CancelAfter(TimeSpan.FromSeconds(60));
     try
     {
         await action(cancellation.Token).ConfigureAwait(false);

@@ -243,7 +243,7 @@ internal sealed class WorkshopDownloader
         return error is AsyncJobFailedException or SteamKitWebRequestException or HttpRequestException or IOException or TimeoutException or TaskCanceledException;
     }
 
-    private static bool IsChunkValid(FileStream stream, DepotManifest.ChunkData chunk)
+    internal static bool IsChunkValid(FileStream stream, DepotManifest.ChunkData chunk)
     {
         if (chunk.UncompressedLength == 0) return true;
         if ((ulong)stream.Length < chunk.Offset + chunk.UncompressedLength) return false;
@@ -259,7 +259,7 @@ internal sealed class WorkshopDownloader
         return DepotChunk.AdlerHash(buffer) == chunk.Checksum;
     }
 
-    private static string ResolveContainedPath(string root, string relative)
+    internal static string ResolveContainedPath(string root, string relative)
     {
         var normalized = relative.Replace('\\', Path.DirectorySeparatorChar).Replace('/', Path.DirectorySeparatorChar);
         if (Path.IsPathRooted(normalized)) throw new ServiceException("UNSAFE_PATH", "The content manifest contains an absolute path.");
@@ -296,7 +296,7 @@ internal sealed class WorkshopDownloader
         }
     }
 
-    private static void ValidateNoLinks(string root, CancellationToken cancellationToken)
+    internal static void ValidateNoLinks(string root, CancellationToken cancellationToken)
     {
         ValidatePathIsNotLink(root);
         var pending = new Stack<string>();

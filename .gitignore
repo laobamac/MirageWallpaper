@@ -28,6 +28,8 @@ cmake-build-debug
 /defaultprojects
 /SteamService/bin/
 /SteamService/obj/
+/SteamService.Tests/bin/
+/SteamService.Tests/obj/
 .DS_Store
 .claude
 .codex
