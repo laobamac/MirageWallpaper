@@ -13,6 +13,11 @@ let base = root.appendingPathComponent("Mirage WE Editor.app/Contents/Resources/
 let base = root.appendingPathComponent("engines/Wine Devel.app/Contents/Resources/wine")
 #endif
 func path(_ relative: String) -> String { root.appendingPathComponent(relative).path }
+#if arch(arm64)
+let wineUnixArchitecture = "aarch64-unix"
+#else
+let wineUnixArchitecture = "x86_64-unix"
+#endif
 func systemLanguage() -> String {
     for language in Locale.preferredLanguages {
         let tag = language.lowercased()
@@ -88,16 +93,20 @@ func run() throws -> Never {
         "WINEPREFIX":path("prefix-devel"), "WINEARCH":"win64", "WINEDEBUG":"fixme-all",
         "WINEDLLOVERRIDES":"winemenubuilder.exe=d;d3d11,d3d10core=n,b;dxgi,vulkan-1=b",
         "DXVK_CONFIG_FILE":"Z:" + path("dxvk.conf"), "DXVK_LOG_PATH":path("logs"), "DXVK_LOG_LEVEL":"error", "MVK_CONFIG_LOG_LEVEL":"1",
-        "VK_DRIVER_FILES":base.appendingPathComponent("lib/wine/x86_64-unix/vulkan/icd.d/MoltenVK_icd.json").path,
+        "VK_DRIVER_FILES":base.appendingPathComponent("lib/wine/\(wineUnixArchitecture)/vulkan/icd.d/MoltenVK_icd.json").path,
+        "WINELOADER":path("Mirage WE Editor.app/Contents/MacOS/wine"),
         "MIRAGE_WE_EDITOR_LOADER":path("Mirage WE Editor.app/Contents/MacOS/wine"),
         "DYLD_INSERT_LIBRARIES":path("MetalInterop.dylib"),
         "PATH":base.appendingPathComponent("bin").path + ":/usr/bin:/bin:/usr/sbin:/sbin"
     ]
     for (key,value) in environment { setenv(key,value,1) }
+    #if arch(arm64)
+    setenv("DYLD_LIBRARY_PATH", base.appendingPathComponent("lib/external").path, 1)
+    #endif
     let log = Darwin.open(path("logs/editor.log"),O_WRONLY|O_CREAT|O_APPEND,0o600)
     if log >= 0 { dup2(log,STDOUT_FILENO); dup2(log,STDERR_FILENO); close(log) }
     guard chdir(path("windows/WallpaperEngine/bin")) == 0 else { throw POSIXError(.ENOENT) }
-    let arguments = [base.appendingPathComponent("bin/wine").path, "M:\\WallpaperEngine\\bin\\wallpaperui.exe",
+    let arguments = [path("Mirage WE Editor.app/Contents/MacOS/wine"), "M:\\WallpaperEngine\\bin\\wallpaperui.exe",
         "-weuimain", "-window", "editor", "-buildv", "20000800000042", "-skin", "mirage", "-language", language, "-steamlanguage", language,
         "--in-process-gpu", "--disable-gpu-driver-bug-workarounds", "--use-cmd-decoder=validating", "--use-angle=d3d11", "--disable-software-rasterizer", "--disable-direct-composition", "--ignore-gpu-blocklist",
         "--enable-gpu-rasterization", "--disable-background-networking", "--disable-component-update", "--disable-sync",

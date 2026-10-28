@@ -1,0 +1,36 @@
+{
+  "autosavingenabled": true,
+  "cameracursorspeed2d": 10,
+  "cameracursorspeed3d": 10,
+  "hasshownworkshoprules": true,
+  "previewratio": "free",
+  "recentfiles": [],
+  "savedlayouts": {
+    "simple": {
+      "background": {
+        "first": {
+          "panels": [
+            "files"
+          ]
+        },
+        "orientation": "horizontal",
+        "position": 300,
+        "second": {
+          "panels": [
+            "preview"
+          ]
+        }
+      },
+      "floating": []
+    }
+  },
+  "scriptconsoleautoscroll": true,
+  "showgrid": true,
+  "showonstartup": true,
+  "showparticlecollision": true,
+  "showselectionbox": true,
+  "showstats": false,
+  "showstatsmode": "auto",
+  "suggestimportresolution": true,
+  "_copyright": "Copyright © 2026 王孝慈. All rights reserved."
+}

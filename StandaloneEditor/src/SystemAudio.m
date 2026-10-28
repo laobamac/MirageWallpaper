@@ -14,6 +14,13 @@
 #include <mach-o/loader.h>
 #include <stddef.h>
 
+#ifndef MIRAGE_AUDIO_UUID_BYTES
+#if defined(__arm64__)
+#error Build ARM64 audio against the verified Wine UUID using package_support.py.
+#endif
+#define MIRAGE_AUDIO_UUID_BYTES 0xf4,0xdc,0x30,0x8e,0xc7,0xf2,0x30,0xc7,0xb2,0xf1,0x1d,0x7d,0x1b,0xb6,0xdf,0x68
+#endif
+
 typedef int32_t (*AudioCall)(void *);
 typedef struct {
     const uint16_t *name;
@@ -111,7 +118,7 @@ void *MirageAudioFunctions(void *original) {
     if (!original || !dladdr(original, &info) || !info.dli_fname || !strstr(info.dli_fname, "/winecoreaudio.so")) return original;
     const struct mach_header_64 *header = info.dli_fbase;
     if (header->magic != MH_MAGIC_64) return original;
-    const uint8_t expected[16] = {0xf4,0xdc,0x30,0x8e,0xc7,0xf2,0x30,0xc7,0xb2,0xf1,0x1d,0x7d,0x1b,0xb6,0xdf,0x68};
+    const uint8_t expected[16] = {MIRAGE_AUDIO_UUID_BYTES};
     const struct load_command *command = (const void *)(header + 1);
     BOOL supported = NO;
     for (uint32_t index = 0; index < header->ncmds; ++index) {

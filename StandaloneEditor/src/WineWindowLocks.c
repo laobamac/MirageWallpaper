@@ -10,6 +10,10 @@
 #include <stdatomic.h>
 #include <errno.h>
 
+// These offsets describe the pinned Intel Wine binary only. Native ARM64
+// Wine must never install interpositions based on another architecture's ABI.
+#if defined(__x86_64__)
+
 // Wine 11.18 has inversions among the user, driver, client-surface and window-
 // surface locks during SetWindowPos, GPU presentation and surface flushing.
 // Acquire Wine's recursive user lock before each of these specific locks;
@@ -142,3 +146,4 @@ __attribute__((constructor)) static void initialize_window_locks(void) {
     enabled = 1;
     _dyld_register_func_for_add_image(image_added);
 }
+#endif

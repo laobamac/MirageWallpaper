@@ -20,7 +20,8 @@ struct EditorServiceError: LocalizedError {
         case "OWNERSHIP_UNAVAILABLE": return L("暂时无法验证购买资格，请稍后重试。")
         case "EDITOR_PLAN_EXPIRED": return L("安装信息已过期，请重新检查。")
         case "EDITOR_SUPPORT_MISSING": return L("此 Mirage 安装包未包含编辑器运行组件，请安装包含编辑器的版本。")
-        case "EDITOR_ARCHITECTURE": return L("当前编辑器运行组件仅支持 Intel Mac。")
+        case "EDITOR_ARCHITECTURE": return L("编辑器运行组件与此 Mac 的芯片架构不匹配。")
+        case "EDITOR_SYSTEM_VERSION": return L("Apple Silicon 编辑器需要 macOS 26.5 或更高版本。")
         case "EDITOR_SPACE": return L("可用磁盘空间不足，请释放空间后重试。")
         case "EDITOR_BUSY": return L("请先保存工程并退出编辑器，再进行此操作。")
         case "EDITOR_FILES": return L("编辑器文件校验失败，请修复安装。")
@@ -43,6 +44,8 @@ struct EditorCatalog: Decodable, Sendable {
     let compatibility: Compatibility
     let files: [String: String]
     let links: [String: String]
+    let minimumMacOS: String?
+    let rosetta: Bool?
 }
 
 struct EditorDiskUsage: Sendable {
@@ -52,6 +55,11 @@ struct EditorDiskUsage: Sendable {
 }
 
 enum EditorInstallation {
+    #if arch(arm64)
+    static let architecture = "arm64"
+    #else
+    static let architecture = "x86_64"
+    #endif
     #if MIRAGE_EDITOR_TESTING
     static let root = URL(fileURLWithPath: ProcessInfo.processInfo.environment["MIRAGE_EDITOR_TEST_ROOT"]!, isDirectory: true)
     #else
@@ -64,10 +72,12 @@ enum EditorInstallation {
     static var runtime: URL { active.appendingPathComponent("runtime", isDirectory: true) }
     static var support: URL? {
         #if MIRAGE_EDITOR_TESTING
-        return URL(fileURLWithPath: ProcessInfo.processInfo.environment["MIRAGE_EDITOR_TEST_SUPPORT"]!, isDirectory: true)
+        let base = URL(fileURLWithPath: ProcessInfo.processInfo.environment["MIRAGE_EDITOR_TEST_SUPPORT"]!, isDirectory: true)
         #else
-        return Bundle.main.resourceURL?.appendingPathComponent("EditorSupport", isDirectory: true)
+        guard let base = Bundle.main.resourceURL?.appendingPathComponent("EditorSupport", isDirectory: true) else { return nil }
         #endif
+        let selected = base.appendingPathComponent(architecture, isDirectory: true)
+        return FileManager.default.fileExists(atPath: selected.appendingPathComponent("catalog.json").path) ? selected : base
     }
 
     static func catalog() throws -> EditorCatalog {
@@ -76,12 +86,23 @@ enum EditorInstallation {
         }
         let catalog = try JSONDecoder().decode(EditorCatalog.self, from: data)
         guard catalog.schema == 1, !catalog.identifier.isEmpty else { throw EditorServiceError(code: "EDITOR_FILES") }
-        #if arch(x86_64)
-        guard catalog.architecture == "x86_64" else { throw EditorServiceError(code: "EDITOR_ARCHITECTURE") }
-        #else
-        throw EditorServiceError(code: "EDITOR_ARCHITECTURE")
-        #endif
+        try validateCompatibility(catalog)
         return catalog
+    }
+
+    static func validateCompatibility(_ catalog: EditorCatalog, hostArchitecture: String = architecture,
+                                      systemVersion: OperatingSystemVersion = ProcessInfo.processInfo.operatingSystemVersion) throws {
+        guard catalog.architecture == hostArchitecture else { throw EditorServiceError(code: "EDITOR_ARCHITECTURE") }
+        if hostArchitecture == "arm64" {
+            guard catalog.rosetta == false, let minimum = catalog.minimumMacOS else { throw EditorServiceError(code: "EDITOR_FILES") }
+            let parts = minimum.split(separator: ".", omittingEmptySubsequences: false).compactMap { Int($0) }
+            guard (2...3).contains(parts.count), parts.allSatisfy({ $0 >= 0 }),
+                  parts.count == minimum.split(separator: ".", omittingEmptySubsequences: false).count else { throw EditorServiceError(code: "EDITOR_FILES") }
+            let required = parts + Array(repeating: 0, count: 3 - parts.count)
+            let current = [systemVersion.majorVersion, systemVersion.minorVersion, systemVersion.patchVersion]
+            guard !required.lexicographicallyPrecedes([26, 5, 0]) else { throw EditorServiceError(code: "EDITOR_FILES") }
+            guard !current.lexicographicallyPrecedes(required) else { throw EditorServiceError(code: "EDITOR_SYSTEM_VERSION") }
+        }
     }
 
     static var isInstalled: Bool {
@@ -173,12 +194,17 @@ enum EditorInstallation {
 
     static func verifyInstalled(catalog: EditorCatalog) throws {
         try validateRoot()
-        let binaries = ["Mirage Editor.app/Contents/MacOS/Launcher", "runtime/MetalInterop.dylib",
+        var binaries = ["Mirage Editor.app/Contents/MacOS/Launcher", "runtime/MetalInterop.dylib",
                         "runtime/Mirage Project Picker.app/Contents/MacOS/ProjectPicker",
                         "runtime/Mirage WE Editor.app/Contents/MacOS/wine",
                         "runtime/Mirage WE Editor.app/Contents/Resources/wine/bin/wine",
                         "runtime/Mirage WE Editor.app/Contents/Resources/wine/bin/wineserver",
                         "runtime/adaptations.json"]
+        if catalog.architecture == "arm64" {
+            let engine = "runtime/Mirage WE Editor.app/Contents/Resources/wine/lib/wine/"
+            binaries += [engine + "aarch64-unix/ntdll.so", engine + "aarch64-unix/libarm64ecfex.so",
+                         engine + "aarch64-windows/xtajit64.dll", "runtime/native-build.json"]
+        }
         for relative in binaries {
             let url = try contained(relative, in: active)
             guard url.resolvingSymlinksInPath().path.hasPrefix(active.resolvingSymlinksInPath().path + "/"),
@@ -328,6 +354,10 @@ enum EditorInstallation {
         environment["WINEDEBUG"] = "-all"
         environment["WINEDLLOVERRIDES"] = "winemenubuilder.exe=d"
         environment["DYLD_INSERT_LIBRARIES"] = nil
+        environment["WINELOADER"] = nil
+        #if arch(arm64)
+        environment["DYLD_LIBRARY_PATH"] = engine.appendingPathComponent("lib/external").path
+        #endif
         environment["PATH"] = engine.appendingPathComponent("bin").path + ":/usr/bin:/bin:/usr/sbin:/sbin"
         func run(_ binary: String, _ arguments: [String], cancellable: Bool = true) throws {
             let process = Process()

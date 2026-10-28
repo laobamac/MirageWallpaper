@@ -1399,7 +1399,6 @@
 "已安装：%@ · 可清理：%@" = "Installed: %@ · Can be cleaned: %@";
 "当前 Steam 账号未拥有 Wallpaper Engine 的永久许可证。" = "This Steam account does not own a permanent Wallpaper Engine license.";
 "当前可用空间" = "Available space";
-"当前编辑器运行组件仅支持 Intel Mac。" = "This editor runtime currently supports Intel Macs.";
 "打开编辑器" = "Open Editor";
 "暂时无法验证购买资格，请稍后重试。" = "Unable to verify ownership right now. Please try again later.";
 "查看进度" = "View Progress";
@@ -1433,3 +1432,5 @@
 "登录 Steam 以使用编辑器" = "Sign in to Steam to use the editor";
 "壁纸编辑器" = "Wallpaper editor";
 "登录由本机直连 Steam，登录凭据保存在 macOS 钥匙串中。" = "This Mac connects directly to Steam. Sign-in credentials are stored in macOS Keychain.";
+"编辑器运行组件与此 Mac 的芯片架构不匹配。" = "The editor runtime does not match this Mac’s chip architecture.";
+"Apple Silicon 编辑器需要 macOS 26.5 或更高版本。" = "The Apple Silicon editor requires macOS 26.5 or later.";
