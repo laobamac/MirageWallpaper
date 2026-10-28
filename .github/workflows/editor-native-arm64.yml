@@ -86,6 +86,8 @@ jobs:
           "$work/hadron/toolchains/llvm-mingw/bin/x86_64-w64-mingw32-clang" \
             -O2 StandaloneEditor/Tests/WindowsX64Probe.c -o "$work/windows-x64-probe.exe"
           export WINEPREFIX="$work/prefix" WINEARCH=win64 WINEDEBUG=-all
+          export WINEDLLOVERRIDES='winemenubuilder.exe=d;mscoree,mshtml='
+          export DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib
           trap '"$runtime/bin/wineserver" -k; "$runtime/bin/wineserver" -w' EXIT
           "$runtime/bin/wineboot" --init > "$work/wineboot.log" 2>&1
           "$runtime/bin/wine" "$work/windows-x64-probe.exe" > "$work/windows-x64.log" 2>&1

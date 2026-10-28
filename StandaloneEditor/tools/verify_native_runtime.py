@@ -48,7 +48,7 @@ def verify(support, compiler, evidence):
     with tempfile.TemporaryDirectory(prefix='mirage-runtime-probe-') as temporary:
         prefix = Path(temporary) / 'prefix'
         environment = dict(os.environ, WINEPREFIX=str(prefix), WINEARCH='win64', WINEDEBUG='-all',
-                           WINEDLLOVERRIDES='winemenubuilder.exe=d',
+                           WINEDLLOVERRIDES='winemenubuilder.exe=d;mscoree,mshtml=',
                            PATH=str(engine / 'bin') + ':/usr/bin:/bin:/usr/sbin:/sbin')
         environment.pop('DYLD_INSERT_LIBRARIES', None)
         environment.pop('WINELOADER', None)

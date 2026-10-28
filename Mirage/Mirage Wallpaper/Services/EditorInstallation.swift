@@ -352,7 +352,9 @@ enum EditorInstallation {
         environment["WINEPREFIX"] = prefix.path
         environment["WINEARCH"] = "win64"
         environment["WINEDEBUG"] = "-all"
-        environment["WINEDLLOVERRIDES"] = "winemenubuilder.exe=d"
+        // The editor uses its own CEF runtime. Wine's optional Mono/Gecko
+        // installers must not block initialization behind an unseen dialog.
+        environment["WINEDLLOVERRIDES"] = "winemenubuilder.exe=d;mscoree,mshtml="
         environment["DYLD_INSERT_LIBRARIES"] = nil
         environment["WINELOADER"] = nil
         #if arch(arm64)
