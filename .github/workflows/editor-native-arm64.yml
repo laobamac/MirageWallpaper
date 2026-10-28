@@ -44,7 +44,7 @@ jobs:
           path: |
             StandaloneEditor/build/native-arm64/hadron
             StandaloneEditor/build/native-arm64/*.tar.xz
-          key: editor-native-arm64-v3-${{ hashFiles('StandaloneEditor/tools/build_native_arm64.py') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: editor-native-arm64-v3-${{ hashFiles('StandaloneEditor/tools/build_native_arm64.py') }}
           restore-keys: |
             editor-native-arm64-v3-${{ hashFiles('StandaloneEditor/tools/build_native_arm64.py') }}-
             editor-native-arm64-v3-
@@ -57,20 +57,29 @@ jobs:
           StandaloneEditor/build/native-arm64/host-probe | tee StandaloneEditor/build/native-arm64/host.json
           test "$(uname -m)" = arm64
       - name: Build native Wine and FEX
+        id: native-build
         if: github.event_name == 'push' || inputs.build_runtime
         shell: bash
         run: |
           set -o pipefail
           python3 StandaloneEditor/tools/build_native_arm64.py --install-dependencies \
             2>&1 | tee StandaloneEditor/build/native-arm64/build.log
-      - name: Save Wine and FEX compilation progress
-        if: always() && (github.event_name == 'push' || inputs.build_runtime) && steps.native-cache.outputs.cache-hit != 'true'
+      - name: Save completed Wine and FEX build
+        if: steps.native-build.outcome == 'success' && steps.native-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: |
             StandaloneEditor/build/native-arm64/hadron
             StandaloneEditor/build/native-arm64/*.tar.xz
           key: ${{ steps.native-cache.outputs.cache-primary-key }}
+      - name: Save incomplete Wine and FEX compilation progress
+        if: always() && (steps.native-build.outcome == 'failure' || steps.native-build.outcome == 'cancelled')
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            StandaloneEditor/build/native-arm64/hadron
+            StandaloneEditor/build/native-arm64/*.tar.xz
+          key: ${{ steps.native-cache.outputs.cache-primary-key }}-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Test native dependency relocation
         shell: bash
         run: |
