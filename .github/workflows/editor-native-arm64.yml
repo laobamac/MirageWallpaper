@@ -44,8 +44,10 @@ jobs:
           path: |
             StandaloneEditor/build/native-arm64/hadron
             StandaloneEditor/build/native-arm64/*.tar.xz
-          key: editor-native-arm64-v3-${{ hashFiles('StandaloneEditor/tools/build_native_arm64.py') }}
-          restore-keys: editor-native-arm64-v3-
+          key: editor-native-arm64-v3-${{ hashFiles('StandaloneEditor/tools/build_native_arm64.py') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            editor-native-arm64-v3-${{ hashFiles('StandaloneEditor/tools/build_native_arm64.py') }}-
+            editor-native-arm64-v3-
       - name: Inspect native host and Metal availability
         shell: bash
         run: |
@@ -61,8 +63,8 @@ jobs:
           set -o pipefail
           python3 StandaloneEditor/tools/build_native_arm64.py --install-dependencies \
             2>&1 | tee StandaloneEditor/build/native-arm64/build.log
-      - name: Save completed Wine and FEX build
-        if: (github.event_name == 'push' || inputs.build_runtime) && steps.native-cache.outputs.cache-hit != 'true'
+      - name: Save Wine and FEX compilation progress
+        if: always() && (github.event_name == 'push' || inputs.build_runtime) && steps.native-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: |
@@ -71,7 +73,9 @@ jobs:
           key: ${{ steps.native-cache.outputs.cache-primary-key }}
       - name: Test native dependency relocation
         shell: bash
-        run: python3 StandaloneEditor/Tests/test_runtime_layout.py
+        run: |
+          python3 StandaloneEditor/Tests/test_native_build_cache.py
+          python3 StandaloneEditor/Tests/test_runtime_layout.py
       - name: Run original x64 instructions through native ARM64 FEX
         if: github.event_name == 'push' || inputs.build_runtime
         timeout-minutes: 8

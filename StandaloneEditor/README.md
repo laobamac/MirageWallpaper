@@ -177,7 +177,7 @@ python3 StandaloneEditor/tools/verify_native_runtime.py \
 
 构建固定 Wine、FEX、补丁集与工具链版本。打包校验每个 Mach-O 均只有 ARM64，重定位第三方动态库，并绑定当前 Wine 音频驱动的源码 ABI 和 UUID。Intel 专用的窗口锁偏移补丁不会用于 ARM64。
 
-`Validate native ARM64 editor runtime` 工作流先验证 x64 指令执行，再对签名后的组件包执行独立设备间的 GPU 共享纹理读回、连续更新、尺寸变化与释放测试。Wine/FEX 编译完成后即缓存构建结果，后续打包或 GPU 验证失败时可复用。全部通过后才上传运行包及相应 Wine/FEX 源码。测试不包含 WE 私有文件或 Steam 会话；完整编辑器工程、CEF 窗口与音频交互仍需在 Apple Silicon 上验收，不能仅凭交叉编译认定可用。
+`Validate native ARM64 editor runtime` 工作流先验证 x64 指令执行，再对签名后的组件包执行独立设备间的 GPU 共享纹理读回、连续更新、尺寸变化与释放测试。Wine/FEX 编译步骤结束后即保存工具链、源码和编译进度，编译失败或后续打包、GPU 验证失败时仍可复用。命中缓存后会核对源码和补丁；一致时保留文件时间戳并复用已有目标文件，避免重复应用补丁导致大量重编译。全部通过后才上传运行包及相应 Wine/FEX 源码。测试不包含 WE 私有文件或 Steam 会话；完整编辑器工程、CEF 窗口与音频交互仍需在 Apple Silicon 上验收，不能仅凭交叉编译认定可用。
 
 ## 许可与商业条款
 

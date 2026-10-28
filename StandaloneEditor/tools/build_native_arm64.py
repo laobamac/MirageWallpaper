@@ -41,6 +41,33 @@ def digest(path):
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
+def cached_source_matches(source, base, patches):
+    """Preserve source mtimes only when the cached checkout has the pinned patches."""
+    if not (source / '.git').exists():
+        return False
+    try:
+        if output('git', '-C', source, 'status', '--porcelain', '--untracked-files=no'):
+            return False
+        subprocess.run(['git', '-C', str(source), 'merge-base', '--is-ancestor', base, 'HEAD'],
+                       check=True, capture_output=True)
+        commits = output('git', '-C', source, 'rev-list', '--reverse', base + '..HEAD').splitlines()
+        if len(commits) != len(patches):
+            return False
+        def patch_id(data):
+            result = subprocess.run(['git', 'patch-id', '--stable'], input=data,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+            lines = result.stdout.splitlines()
+            return lines[0].split()[0] if len(lines) == 1 else None
+        for commit, patch in zip(commits, patches):
+            actual = subprocess.check_output(['git', '-C', str(source), 'show', '--format=', '--binary', commit])
+            expected = patch_id(patch.read_bytes())
+            if expected is None or patch_id(actual) != expected:
+                return False
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--work', type=Path, default=PROJECT / 'build/native-arm64')
@@ -108,10 +135,19 @@ def main():
     environment.update(GIT_CONFIG_COUNT='1',
                        GIT_CONFIG_KEY_0='url.https://github.com/wine-mirror/wine.git.insteadOf',
                        GIT_CONFIG_VALUE_0='https://gitlab.winehq.org/wine/wine.git')
-    run('bash', upstream / 'scripts/fetch.sh', 'wine', 'fex', env=environment)
+    # Re-checking out the base and reapplying identical patches touches shared
+    # headers and forces widespread recompilation even with cached object files.
+    # Verify the actual patch IDs before preserving a warmed source checkout.
+    fetch = [name for name, base in SOURCES.items()
+             if not cached_source_matches(upstream / 'src' / name, base,
+                                          sorted((upstream / 'patches' / name).glob('*.patch')))]
+    if fetch:
+        run('bash', upstream / 'scripts/fetch.sh', *fetch, env=environment)
     for name in SOURCES:
+        if name not in fetch:
+            print('Reusing verified patched source and incremental objects:', name, flush=True)
         run('git', '-C', upstream / 'src' / name, 'submodule', 'update', '--init', '--recursive',
-            '--force', '--checkout', env=environment)
+            *(['--force'] if name in fetch else []), '--checkout', env=environment)
     # The high-address variant supports the x64 editor without a restricted low-address profile.
     run('bash', upstream / 'scripts/build-wine.sh', '--dev', env=environment)
     run('bash', upstream / 'scripts/build-fex.sh', '--dev', env=environment)
