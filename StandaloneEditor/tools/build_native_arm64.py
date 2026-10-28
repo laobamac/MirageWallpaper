@@ -15,6 +15,8 @@ import subprocess
 import tarfile
 import urllib.request
 
+from runtime_layout import is_macho
+
 PROJECT = Path(__file__).resolve().parents[1]
 HADRON_COMMIT = '3e7043aa4264aab9d598ff6d52d49ac53d0fca00'
 TOOLCHAIN_NAME = 'llvm-mingw-20260922-ucrt-macos-universal'
@@ -91,11 +93,17 @@ def main():
         with tarfile.open(archive) as bundle:
             bundle.extractall(toolchains, filter='data')
         (toolchains / TOOLCHAIN_NAME).replace(toolchain)
-    for compiler in ['clang', 'arm64ec-w64-mingw32-clang', 'x86_64-w64-mingw32-clang']:
-        if 'arm64' not in output('lipo', '-archs', (toolchain / 'bin' / compiler).resolve()).split():
-            raise RuntimeError('The cross compiler lacks a native ARM64 host slice: ' + compiler)
+    # Target-specific clang commands are shell wrappers in LLVM-MinGW. Audit
+    # their underlying executables, including linker and resource tools.
+    native_tools = {p.resolve() for p in (toolchain / 'bin').iterdir() if is_macho(p.resolve())}
+    if not native_tools:
+        raise RuntimeError('The cross compiler toolchain contains no native executables.')
+    for compiler in sorted(native_tools):
+        if 'arm64' not in output('lipo', '-archs', compiler).split():
+            raise RuntimeError('The cross compiler lacks a native ARM64 host slice: ' + str(compiler))
 
-    environment = dict(os.environ, JOBS=os.environ.get('JOBS', '2'), HOMEBREW_NO_AUTO_UPDATE='1')
+    environment = dict(os.environ, JOBS=os.environ.get('JOBS', '2'), HOMEBREW_NO_AUTO_UPDATE='1',
+                       CMAKE_BUILD_PARALLEL_LEVEL=os.environ.get('JOBS', '2'))
     # Use Wine's official GitHub mirror for the same immutable source commit.
     environment.update(GIT_CONFIG_COUNT='1',
                        GIT_CONFIG_KEY_0='url.https://github.com/wine-mirror/wine.git.insteadOf',

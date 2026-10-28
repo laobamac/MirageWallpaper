@@ -2,10 +2,11 @@ name: Validate native ARM64 editor runtime
 
 on:
   push:
-    branches: [codex/native-arm64-editor]
+    branches: [main]
     paths:
       - '.github/workflows/editor-native-arm64.yml'
-      - 'StandaloneEditor/tools/build_native_arm64.py'
+      - 'StandaloneEditor/tools/**'
+      - 'StandaloneEditor/src/**'
       - 'StandaloneEditor/Tests/**'
   workflow_dispatch:
     inputs:
@@ -17,6 +18,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: editor-native-arm64-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   native-arm64:
     runs-on: macos-26
@@ -26,6 +31,19 @@ jobs:
       JOBS: '2'
     steps:
       - uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            StandaloneEditor
+            SteamService/Licenses
+            Mirage/Tests
+            Mirage/scripts
+            Mirage/Mirage Wallpaper/Services
+      - uses: actions/cache@v4
+        with:
+          path: |
+            StandaloneEditor/build/native-arm64
+          key: editor-native-arm64-v2-${{ hashFiles('StandaloneEditor/tools/build_native_arm64.py') }}
+          restore-keys: editor-native-arm64-v2-
       - name: Inspect native host and Metal availability
         shell: bash
         run: |
