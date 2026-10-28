@@ -17,6 +17,7 @@ static HRESULT (WINAPI *realTexture)(ID3D11Device*,const D3D11_TEXTURE2D_DESC*,c
 static HRESULT (WINAPI *realOpen)(ID3D11Device*,HANDLE,REFIID,void**);
 static HRESULT (WINAPI *realGetHandle)(IDXGIResource*,HANDLE*);
 static ULONG (WINAPI *realRelease)(ID3D11Texture2D*);
+static void (WINAPI *realClear)(ID3D11DeviceContext*,ID3D11RenderTargetView*,const FLOAT*);
 typedef struct SharedTexture { ID3D11Texture2D *texture; IDXGIResource *resource; HANDLE handle; struct SharedTexture *next; } SharedTexture;
 static SharedTexture *textures;
 
@@ -28,6 +29,41 @@ static void patch(void **entry, void *replacement, void **original) {
 }
 static const GUID IID_VkSurface={0x5546cf8c,0x77e7,0x4341,{0xb0,0x5d,0x8d,0x4d,0x50,0x00,0xe7,0x7d}};
 static const GUID IID_VkDevice={0xe2ef5fa5,0xdc21,0x4af7,{0x90,0xc4,0xf6,0x7e,0xf6,0xa0,0x93,0x23}};
+static void WINAPI clearRenderTarget(ID3D11DeviceContext *context,ID3D11RenderTargetView *view,const FLOAT *color) {
+    realClear(context,view,color);
+    if(!view)return;
+    ID3D11Resource *resource=NULL;ID3D11Texture2D *texture=NULL;
+    ID3D11RenderTargetView_GetResource(view,&resource);
+    if(!resource)return;
+    HRESULT hr=ID3D11Resource_QueryInterface(resource,&IID_ID3D11Texture2D,(void**)&texture);
+    ID3D11Resource_Release(resource);
+    if(FAILED(hr))return;
+    BOOL shared=FALSE;
+    EnterCriticalSection(&lock);
+    for(SharedTexture *t=textures;t;t=t->next)if(t->texture==texture){shared=TRUE;break;}
+    LeaveCriticalSection(&lock);
+    if(shared) {
+        void *surface=NULL,*interop=NULL;
+        hr=ID3D11Texture2D_QueryInterface(texture,&IID_VkSurface,&surface);
+        if(SUCCEEDED(hr)) {
+            VkImageLayout layout;
+            hr=((HRESULT (STDMETHODCALLTYPE*)(void*,VkImage*,VkImageLayout*,VkImageCreateInfo*))(*(void***)surface)[4])(surface,NULL,&layout,NULL);
+            if(SUCCEEDED(hr))hr=((HRESULT (STDMETHODCALLTYPE*)(void*,void**))(*(void***)surface)[3])(surface,&interop);
+            if(SUCCEEDED(hr)) {
+                D3D11_TEXTURE2D_DESC desc;ID3D11Texture2D_GetDesc(texture,&desc);
+                VkImageSubresourceRange range={VK_IMAGE_ASPECT_COLOR_BIT,0,desc.MipLevels,0,desc.ArraySize};
+                // The bridge removes DXGI's native sharing flag, so DXVK would
+                // otherwise defer this clear past Flush. A same-layout interop
+                // transition materializes it without a CPU/GPU wait per frame.
+                ((void (STDMETHODCALLTYPE*)(void*,void*,const VkImageSubresourceRange*,VkImageLayout,VkImageLayout))(*(void***)interop)[5])(interop,surface,&range,layout,layout);
+                IUnknown_Release((IUnknown*)interop);
+            }
+            IUnknown_Release((IUnknown*)surface);
+        }
+    }
+    ID3D11Texture2D_Release(texture);
+}
+
 static VkResult markTexture(ID3D11Texture2D *texture,HANDLE handle,const char *mode) {
     void *surface=NULL,*interop=NULL;ID3D11Device *device=NULL;
     HRESULT hr=ID3D11Texture2D_QueryInterface(texture,&IID_VkSurface,&surface);
@@ -44,7 +80,21 @@ static VkResult markTexture(ID3D11Texture2D *texture,HANDLE handle,const char *m
         PFN_vkSetDebugUtilsObjectNameEXT set=get?(void*)get(vkDevice,"vkSetDebugUtilsObjectNameEXT"):NULL;
         char name[80];snprintf(name,sizeof(name),"Mirage%s:%llx",mode,(unsigned long long)(uintptr_t)handle);
         VkDebugUtilsObjectNameInfoEXT info={VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,NULL,VK_OBJECT_TYPE_IMAGE,(uint64_t)image,name};
-        if(set)result=set(vkDevice,&info);
+        if(set && !strcmp(mode,"Import")) {
+            // DXVK queues a clear when creating the destination image. Finish
+            // that initialization before replacing its Metal backing, or the
+            // queued clear can erase the producer's already-rendered pixels.
+            PFN_vkQueueWaitIdle wait=(void*)get(vkDevice,"vkQueueWaitIdle");
+            VkQueue queue=VK_NULL_HANDLE;
+            ((void (STDMETHODCALLTYPE*)(void*,VkQueue*,uint32_t*))(*(void***)interop)[4])(interop,&queue,NULL);
+            if(wait && queue) {
+                ((void (STDMETHODCALLTYPE*)(void*))(*(void***)interop)[6])(interop);
+                ((void (STDMETHODCALLTYPE*)(void*))(*(void***)interop)[7])(interop);
+                result=wait(queue);
+                if(result==VK_SUCCESS)result=set(vkDevice,&info);
+                ((void (STDMETHODCALLTYPE*)(void*))(*(void***)interop)[8])(interop);
+            }
+        } else if(set)result=set(vkDevice,&info);
         else fprintf(stderr,"[Mirage interop] debug marker unavailable\n");
         IUnknown_Release((IUnknown*)interop);
     }
@@ -132,6 +182,9 @@ HRESULT WINAPI D3D11CreateDevice(IDXGIAdapter *adapter,D3D_DRIVER_TYPE type,HMOD
     EnterCriticalSection(&lock);
     patch((void**)&device->lpVtbl->CreateTexture2D,createTexture,(void**)&realTexture);
     patch((void**)&device->lpVtbl->OpenSharedResource,openResource,(void**)&realOpen);
+    ID3D11DeviceContext *immediate=NULL;ID3D11Device_GetImmediateContext(device,&immediate);
+    patch((void**)&immediate->lpVtbl->ClearRenderTargetView,clearRenderTarget,(void**)&realClear);
+    ID3D11DeviceContext_Release(immediate);
     LeaveCriticalSection(&lock);
     if(out)*out=device;else ID3D11Device_Release(device);
     return hr;
