@@ -1,6 +1,12 @@
 name: Validate native ARM64 editor runtime
 
 on:
+  push:
+    branches: [codex/native-arm64-editor]
+    paths:
+      - '.github/workflows/editor-native-arm64.yml'
+      - 'StandaloneEditor/tools/build_native_arm64.py'
+      - 'StandaloneEditor/Tests/**'
   workflow_dispatch:
     inputs:
       build_runtime:
@@ -29,13 +35,14 @@ jobs:
           StandaloneEditor/build/native-arm64/host-probe | tee StandaloneEditor/build/native-arm64/host.json
           test "$(uname -m)" = arm64
       - name: Build native Wine and FEX
-        if: inputs.build_runtime
+        if: github.event_name == 'push' || inputs.build_runtime
         shell: bash
         run: |
+          set -o pipefail
           python3 StandaloneEditor/tools/build_native_arm64.py --install-dependencies \
-            > StandaloneEditor/build/native-arm64/build.log 2>&1
+            2>&1 | tee StandaloneEditor/build/native-arm64/build.log
       - name: Run original x64 instructions through native ARM64 FEX
-        if: inputs.build_runtime
+        if: github.event_name == 'push' || inputs.build_runtime
         shell: bash
         run: |
           work="$PWD/StandaloneEditor/build/native-arm64"
