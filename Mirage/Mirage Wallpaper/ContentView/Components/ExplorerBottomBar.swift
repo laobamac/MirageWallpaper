@@ -129,14 +129,6 @@ struct ExplorerBottomBar: View {
 
     private var footer: some View {
         HStack(spacing: 8) {
-            Button {
-                AppDelegate.shared.openImportFromFolderPanel()
-            } label: {
-                Label(L("导入壁纸"), systemImage: "arrow.up.bin.fill")
-                    .frame(width: 160)
-            }
-            .buttonStyle(.borderedProminent)
-
             Spacer()
 
             Button {

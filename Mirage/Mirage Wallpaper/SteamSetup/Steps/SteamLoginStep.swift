@@ -11,38 +11,41 @@ import CoreImage.CIFilterBuiltins
 
 struct SteamLoginStep: View {
     @ObservedObject var viewModel: SteamSetupViewModel
+    var editorLogin = false
     @State private var isPasswordVisible = false
     @State private var showPasswordLogin = false
 
     var body: some View {
         VStack(spacing: 18) {
-            Image(systemName: "person.crop.circle.fill")
-                .font(.system(size: 44))
-                .foregroundStyle(.blue)
+            if !editorLogin {
+                Image(systemName: "person.crop.circle.fill")
+                    .font(.system(size: 44))
+                    .foregroundStyle(.blue)
 
-            Text("登录 Steam 账号")
-                .font(.title2)
-                .bold()
+                Text("登录 Steam 账号")
+                    .font(.title2)
+                    .bold()
 
-            Text("需要一个拥有 Wallpaper Engine 的全球 Steam 账号来下载创意工坊内容。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-
-            VStack(alignment: .leading, spacing: 6) {
-                Label("Mirage 并非 Steam 官方客户端。", systemImage: "info.circle.fill")
+                Text("需要一个拥有 Wallpaper Engine 的全球 Steam 账号来下载创意工坊内容。")
                     .font(.caption)
-                    .foregroundStyle(.orange)
-                Text("登录由内置 Steam 服务直接连接 Valve。二维码和密码均只在本机处理，刷新令牌保存在 macOS 钥匙串中，可随时退出并清除。")
-                    .font(.caption2)
                     .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(10)
-            .frame(maxWidth: 420, alignment: .leading)
-            .background(Color.orange.opacity(0.08))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .multilineTextAlignment(.center)
 
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("Mirage 并非 Steam 官方客户端。", systemImage: "info.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                    Text("登录由内置 Steam 服务直接连接 Valve。二维码和密码均只在本机处理，刷新令牌保存在 macOS 钥匙串中，可随时退出并清除。")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(10)
+                .frame(maxWidth: 420, alignment: .leading)
+                .background(Color.orange.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+
+            }
             Group {
                 switch viewModel.loginState {
                 case .idle, .failed:
@@ -57,7 +60,7 @@ struct SteamLoginStep: View {
                     successView
                 }
             }
-            .frame(width: 320)
+            .frame(maxWidth: editorLogin ? .infinity : 320)
             .animation(.easeInOut(duration: 0.2), value: viewModel.loginState)
 
             if let error = viewModel.errorMessage {
@@ -68,7 +71,7 @@ struct SteamLoginStep: View {
                     .padding(.horizontal, 30)
             }
         }
-        .padding()
+        .padding(editorLogin ? 0 : 16)
     }
 
     private var entryView: some View {
@@ -163,9 +166,10 @@ struct SteamLoginStep: View {
                 Image(nsImage: image)
                     .interpolation(.none)
                     .resizable()
-                    .frame(width: 196, height: 196)
-                    .padding(12)
+                    .frame(width: editorLogin ? 156 : 196, height: editorLogin ? 156 : 196)
+                    .padding(editorLogin ? 8 : 12)
                     .background(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
                     .id(challenge)
             }
             Text("使用 Steam 手机应用扫描二维码")

@@ -54,6 +54,8 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
     private var requestHandlers: [String: RequestHandler] = [:]
     private var downloadHandlers: [String: (DownloadState) -> Void] = [:]
     private var downloadWorkshopIDs: [String: String] = [:]
+    private var editorSessionRequested = false
+    private var editorTransfer: (id: String, handler: ([String: Any]) -> Void)?
     private var restoringSession = false
     private var reconnectingSession = false
     private var restoreRetryCount = 0
@@ -137,6 +139,39 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
             self?.startOnQueue()
         }
     }
+
+    func startForEditor() {
+        ioQueue.async {
+            self.editorSessionRequested = true
+            if self.process?.isRunning != true { self.startOnQueue() }
+            else if !self.isLoggedIn && !self.restoreOperationPending { self.restoreSessionOnQueue() }
+        }
+    }
+
+    func editorRequest(_ command: String, fields: [String: Any] = [:]) async throws -> [String: Any] {
+        try await withCheckedThrowingContinuation { continuation in
+            sendDataCommand(command, fields: fields) { success, data, message, code in
+                if success, let data { continuation.resume(returning: data) }
+                else { continuation.resume(throwing: EditorServiceError(code: code ?? "STEAM_REQUEST_FAILED", detail: message)) }
+            }
+        }
+    }
+
+    func downloadEditor(planId: String, output: URL, onEvent: @escaping ([String: Any]) -> Void) {
+        ioQueue.async {
+            let id = UUID().uuidString
+            self.editorTransfer = (id, onEvent)
+            self.sendCommandOnQueue("editorDownload", fields: ["taskId": id, "planId": planId, "outputRoot": output.path]) { success, message, code in
+                if !success {
+                    self.editorTransfer = nil
+                    self.updateOnMain { onEvent(["state": "failed", "message": message ?? "", "errorCode": code ?? "STEAM_REQUEST_FAILED"]) }
+                }
+            }
+        }
+    }
+
+    func cancelEditorDownload() { sendCommand("cancelEditorDownload") }
+    func cancelEditorRequest() { sendCommand("cancelEditorRequest") }
 
     func restoreSessionIfNeeded() {
         ioQueue.async { [weak self] in
@@ -615,7 +650,7 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
     }
 
     private func restoreSessionOnQueue() {
-        guard !DirectWorkshopService.shared.requestsDirectMode else {
+        guard editorSessionRequested || !DirectWorkshopService.shared.requestsDirectMode else {
             updateOnMain { self.authenticationState = .needsAction(L("免登录下载已开启")) }
             return
         }
@@ -962,7 +997,12 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
         case "authState":
             handleAuthEvent(event)
         case "downloadState":
-            handleDownloadEvent(event)
+            if let transfer = editorTransfer, event["taskId"] as? String == transfer.id {
+                if ["completed", "failed", "cancelled"].contains(event["state"] as? String ?? "") { editorTransfer = nil }
+                updateOnMain { transfer.handler(event) }
+            } else {
+                handleDownloadEvent(event)
+            }
         default:
             break
         }
@@ -1180,6 +1220,10 @@ final class SteamServiceManager: ObservableObject, @unchecked Sendable {
     }
 
     private func failActiveDownloadsOnQueue(_ message: String) {
+        if let transfer = editorTransfer {
+            editorTransfer = nil
+            updateOnMain { transfer.handler(["state": "failed", "message": message, "errorCode": "CONNECTION_LOST"]) }
+        }
         let handlers = Array(downloadHandlers.values)
         downloadHandlers.removeAll()
         downloadWorkshopIDs.removeAll()

@@ -26,6 +26,18 @@
 
 ## 快速开始
 
+### 从 Mirage 打开
+
+Mirage 主窗口左下角的「编辑器」会复用现有 Steam 登录。首次使用在主窗口的浮层中验证当前账号的 Wallpaper Engine 永久自有许可证，并显示下载大小、预计安装占用和安装期间所需空间。点击「下载并安装」后从 Steam 下载原版组件，显示进度、当前文件、速度及预计剩余时间，完成本地组装后打开编辑器。
+
+编辑器启动成功后，Mirage 主窗口与启动浮层一起淡出，并收起 Mirage 的 Dock 图标。编辑器显示在前台，Mirage 可通过菜单栏入口重新打开。
+
+「设置 → 通用 → 管理编辑器」及入口的右键菜单提供修复、缓存清理和卸载。关闭浮层不停止下载；取消后可再次继续。缓存清理保留编辑器偏好，卸载保留用户工程。运行中的编辑器须先保存并退出，再进行修复或卸载。
+
+安装数据位于 `~/Library/Application Support/Mirage/Editor/`：`active/` 存放当前安装，`downloads/` 存放可复用的 Steam 下载，`Projects/` 与 `UserData/` 分别保存工程和界面偏好。Steam 凭据只由 Mirage 的 Steam 服务管理，不传入 Wine 或编辑器网页。
+
+### 独立开发环境
+
 1. 将完整的 `StandaloneEditor` 文件夹放置在本地可读写目录。
 2. 双击 `Mirage Editor.app`。
 3. 在「文件 → 打开」中选择壁纸工程文件夹或其中的 `project.json`。
@@ -117,6 +129,33 @@ python3 StandaloneEditor/tools/verify_runtime.py
 ```
 
 构建工具使用 `runtime/originals/` 中的原始输入，生成原生辅助程序、GPU 桥接库和编辑器适配文件。常规双击启动无需安装编译工具。
+
+### Mirage 发行组件
+
+在已有匹配运行环境的维护机上生成运行组件包：
+
+```sh
+python3 StandaloneEditor/tools/package_support.py
+```
+
+默认使用 `src/EditorAdaptations.json` 中已经验证的转换指令。维护新 UI 版本时，可用 `--original-ui /path/to/Steam/scripts.js --update-adaptations` 迁移锚点；任何锚点不唯一或语法不合法都会拒绝生成。
+
+输出为被 Git 忽略的 `StandaloneEditor/dist/EditorSupport/`。包中仅包含自有适配组件、第三方运行依赖、许可证、校验清单及本地转换指令。原版 WE、包含原版代码的私有补丁清单、已初始化的 Wine prefix、用户配置及工程不会进入组件包。
+
+Mirage 构建步骤通过 `Mirage/scripts/bundle_editor_support.py` 验证、签名并嵌入该包。构建机可设置 `MIRAGE_EDITOR_SUPPORT` 指向已准备的组件目录；Intel Release 构建要求此目录存在。当前没有经过验证的 Apple Silicon 编辑器运行包，arm64 主程序不嵌入 Intel 组件。
+
+发行包将 Wine 引擎保存在编辑器应用内，保持其运行库和语言数据的相对目录，并对每个应用执行严格签名校验。原生文件选择服务随编辑器进程退出。
+
+安装器按 Steam 清单挂载原版内容，并将原版安装布局 `distribution/` 的内容映射到安装根目录。清单中的 depot/manifest 固定于当次安装计划，下载首先校验编辑器 EXE 与 UI 的 SHA-256，只有精确匹配的版本才应用转换指令。运行依赖随 Mirage 构建发布，WE 本体始终通过用户的 Steam 会话获取。
+
+回归检查：
+
+```sh
+dotnet run --project SteamService.Tests
+python3 Mirage/Tests/run_editor_installation.py
+```
+
+完整初始化测试可使用隔离目录中的原版文件：`run_editor_installation.py --assemble-root /path/to/test/Editor --support /path/to/EditorSupport`。原版文件应位于测试目录的 `downloads/` 中；测试会组装安装并验证产物，不使用生产目录。
 
 ## 许可与商业条款
 

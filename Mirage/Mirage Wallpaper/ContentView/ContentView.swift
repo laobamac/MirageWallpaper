@@ -177,6 +177,7 @@ struct ContentView: View {
                         }
                         .isolatedFromParentLayout()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        LibraryActionBar()
                     }
                     .padding()
                     .frame(minWidth: 640)

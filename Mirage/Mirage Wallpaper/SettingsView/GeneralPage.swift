@@ -117,6 +117,16 @@ struct GeneralPage: SettingsPage {
     var body: some View {
         Form {
             Section {
+                HStack {
+                    Text("安装、修复、清理或卸载编辑器。")
+                    Spacer()
+                    Button("管理编辑器…") { EditorManager.shared.manage() }
+                }
+            } header: {
+                Label("编辑器", systemImage: "pencil.and.outline")
+            }
+
+            Section {
                 Picker("启动时显示", selection: $viewModel.settings.startupSection) {
                     ForEach(MainSection.allCases, id: \.self) { section in
                         Text(section.title).tag(section)

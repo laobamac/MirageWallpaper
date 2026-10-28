@@ -181,6 +181,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return false
     }
 
+    func application(_ application: NSApplication, open urls: [URL]) {
+        guard urls.contains(where: { $0.scheme == "mirage" && $0.host == "editor" }) else { return }
+        openMainWindow()
+        EditorManager.shared.open()
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         let launchedLocked = currentScreenIsLocked()
         if !launchedLocked {
@@ -313,6 +319,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func openMainWindow() {
         NSApp.setActivationPolicy(.regular)
+        NSApp.unhide(nil)
         if !self.mainWindowController.window.isVisible,
            UserDefaults.standard.string(forKey: "NSWindow Frame MainWindow") == nil {
             self.mainWindowController.window.center()
