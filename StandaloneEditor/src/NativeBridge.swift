@@ -14,11 +14,22 @@ final class NativeBridge: NSObject, NSApplicationDelegate {
     var choosing = false
     var appearanceObserver: NSObjectProtocol?
     var appearanceWaiters: [UUID: NWConnection] = [:]
+    #if MIRAGE_MANAGED_EDITOR
+    private var editorLifetime: DispatchSourceProcess?
+    #endif
     var appearance: String {
         NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? "dark" : "light"
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        #if MIRAGE_MANAGED_EDITOR
+        let parent = getppid()
+        guard parent > 1 else { NSApp.terminate(nil); return }
+        let lifetime = DispatchSource.makeProcessSource(identifier: parent, eventMask: .exit, queue: .main)
+        lifetime.setEventHandler { NSApp.terminate(nil) }
+        editorLifetime = lifetime
+        lifetime.resume()
+        #endif
         appearanceObserver = DistributedNotificationCenter.default().addObserver(forName: NSNotification.Name("AppleInterfaceThemeChangedNotification"), object: nil, queue: .main) { [weak self] _ in
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { self?.publishAppearance() }
         }

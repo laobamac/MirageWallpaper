@@ -1,6 +1,7 @@
 /runtime/
 /Mirage Editor.app/
 /Projects/
+/dist/
 # Legacy UI manifests contain proprietary upstream interface code.
 /src/ui-patches.json
 __pycache__/

@@ -104,3 +104,5 @@ if [ -f "$PRIVATE_BUNDLE/MirageDirectWorkshop.dll" ]; then
         exit 1
     fi
 fi
+
+python3 "$ROOT/Mirage/scripts/bundle_editor_support.py" "$APP" "$ROOT" "$ARCHITECTURES"

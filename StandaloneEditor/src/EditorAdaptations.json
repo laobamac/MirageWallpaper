@@ -1,0 +1,490 @@
+{
+  "created": "2026/10/28",
+  "copyright": "Copyright \u00a9 2026 \u738b\u5b5d\u6148. All rights reserved.",
+  "patches": [
+    {
+      "path": "bin/wallpaperui.exe",
+      "sourceSHA256": "dab38bfc017dd5fd4947a09706d23f27833870d1bbb87485677a3e67d1d55791",
+      "resultSHA256": "b38ab29c4b4f998375887ff5fff2696bcfe7484780b1fa25f244b6b66552d93f",
+      "operations": [
+        {
+          "offset": 0,
+          "count": 70
+        },
+        {
+          "data": "CQ=="
+        },
+        {
+          "offset": 71,
+          "count": 74
+        },
+        {
+          "data": "UA=="
+        },
+        {
+          "offset": 146,
+          "count": 6
+        },
+        {
+          "data": "AAAA"
+        },
+        {
+          "offset": 155,
+          "count": 493
+        },
+        {
+          "data": "Lm1pcmFnZQ=="
+        },
+        {
+          "offset": 655,
+          "count": 1
+        },
+        {
+          "data": "IgE="
+        },
+        {
+          "offset": 658,
+          "count": 3
+        },
+        {
+          "data": "QMU="
+        },
+        {
+          "offset": 663,
+          "count": 2
+        },
+        {
+          "data": "Ag=="
+        },
+        {
+          "offset": 666,
+          "count": 3
+        },
+        {
+          "data": "cMI="
+        },
+        {
+          "offset": 671,
+          "count": 13
+        },
+        {
+          "data": "IA=="
+        },
+        {
+          "offset": 685,
+          "count": 2
+        },
+        {
+          "data": "YA=="
+        },
+        {
+          "offset": 688,
+          "count": 1268084
+        },
+        {
+          "data": "6avYsQCQkJCQ"
+        },
+        {
+          "offset": 1268781,
+          "count": 3265030
+        },
+        {
+          "data": "6csGgACQkJCQ"
+        },
+        {
+          "offset": 4533820,
+          "count": 605115
+        },
+        {
+          "data": "6RjLdg=="
+        },
+        {
+          "offset": 5138939,
+          "count": 1
+        },
+        {
+          "data": "kA=="
+        },
+        {
+          "offset": 5138941,
+          "count": 6074248
+        },
+        {
+          "data": "TUc="
+        },
+        {
+          "offset": 11213191,
+          "count": 180481
+        },
+        {
+          "data": "d3B4"
+        },
+        {
+          "offset": 11393675,
+          "count": 45234
+        },
+        {
+          "data": "TUc="
+        },
+        {
+          "offset": 11438911,
+          "count": 1303729
+        },
+        {
+          "data": "AAAAAAAAAAAAAAAAAAAAAEiD7FhIiUwkIEiJVCQoTIlEJDBMiUwkOEiJ0THSTI0FUgAAAEUxyf8VA+zY/0iFwHQkSIlEJChIicEx0kyNBVkAAABFMcn/FeTr2P9IhcB0BUiJRCQoSItMJCBIi1QkKEyLRCQwTItMJDhIg8RYSIlREEUz5MNDAGgAcgBvAG0AZQBfAFcAaQBkAGcAZQB0AFcAaQBuAF8AMQAAAEMAaAByAG8AbQBlAF8AUgBlAG4AZABlAHIAVwBpAGQAZwBlAHQASABvAHMAdABIAFcATgBEAAAASItFn4P4AnUhg3wkQAp8GoN8JEBQfRODfCRECHwMg3wkRCB9BbgBAAAA6RMoTv+LQiCD4PeJgRgBAADpKPl//4Pg94mHKAEAAOnbNIn/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      ]
+    },
+    {
+      "path": "ui/dist/scripts/scripts.js",
+      "sourceSHA256": "ab5a72773ceca706e5f352b0e436b19d1cc20f4b70fd4e310e30d62f80540903",
+      "resultSHA256": "cec3a6e677857c33b394da30388bc26b4b7379414540c01bce08c6b678a10568",
+      "operations": [
+        {
+          "offset": 0,
+          "count": 6401
+        },
+        {
+          "offset": 6401,
+          "count": 13
+        },
+        {
+          "data": "d2luZG93Lm1pcmFnZUVkaXRvci5icmFuZFRyYW5zbGF0aW9ucyg="
+        },
+        {
+          "offset": 6414,
+          "count": 31
+        },
+        {
+          "data": "KQ=="
+        },
+        {
+          "offset": 6445,
+          "count": 37
+        },
+        {
+          "offset": 6482,
+          "count": 172363
+        },
+        {
+          "offset": 178845,
+          "count": 26
+        },
+        {
+          "data": "d2luZG93Lm1pcmFnZUVkaXRvci5maWx0ZXJNZW51KA=="
+        },
+        {
+          "offset": 178871,
+          "count": 10
+        },
+        {
+          "data": "KQ=="
+        },
+        {
+          "offset": 178881,
+          "count": 41
+        },
+        {
+          "offset": 178922,
+          "count": 5366
+        },
+        {
+          "data": "aWYod2luZG93Lm1pcmFnZUVkaXRvcil7d2luZG93Lm1pcmFnZUVkaXRvci5vcGVuRXh0ZXJuYWxQcm9qZWN0KCk7cmV0dXJufQ=="
+        },
+        {
+          "offset": 184288,
+          "count": 33207
+        },
+        {
+          "offset": 217495,
+          "count": 22
+        },
+        {
+          "data": "d2luZG93"
+        },
+        {
+          "offset": 217518,
+          "count": 1
+        },
+        {
+          "data": "bWly"
+        },
+        {
+          "offset": 217520,
+          "count": 1
+        },
+        {
+          "data": "Zw=="
+        },
+        {
+          "offset": 217534,
+          "count": 7
+        },
+        {
+          "data": "LnNhdmU="
+        },
+        {
+          "offset": 217541,
+          "count": 8
+        },
+        {
+          "offset": 217565,
+          "count": 2
+        },
+        {
+          "offset": 217568,
+          "count": 76
+        },
+        {
+          "offset": 217644,
+          "count": 103877
+        },
+        {
+          "offset": 321521,
+          "count": 17
+        },
+        {
+          "data": "IiI="
+        },
+        {
+          "offset": 321686,
+          "count": 18
+        },
+        {
+          "data": "IiI="
+        },
+        {
+          "offset": 321895,
+          "count": 507
+        },
+        {
+          "data": "LG1pcmFnZVNpemUsbWlyYWdlSW5pdGlhbCxtaXJhZ2VEaXNwb3NlZD0hMSxtaXJhZ2VQcmV2aWV3PXdpbmRvdy5taXJhZ2VFZGl0b3IuY3JlYXRlUHJldmlldyhtLGZ1bmN0aW9uKCl7bWlyYWdlU2l6ZT12b2lkIDA7digpfSk="
+        },
+        {
+          "offset": 322402,
+          "count": 168
+        },
+        {
+          "data": "aWYo"
+        },
+        {
+          "offset": 322570,
+          "count": 1
+        },
+        {
+          "data": "aXJhZ2VEaXNwb3NlZClyZXR1cm47dmFyIG5leHQ9W2U="
+        },
+        {
+          "offset": 322571,
+          "count": 1
+        },
+        {
+          "data": "bGVm"
+        },
+        {
+          "offset": 322575,
+          "count": 1
+        },
+        {
+          "data": "LGUudG9wLA=="
+        },
+        {
+          "offset": 322578,
+          "count": 2
+        },
+        {
+          "data": "dF07aWYo"
+        },
+        {
+          "offset": 322580,
+          "count": 1
+        },
+        {
+          "data": "aXJhZ2VTaXplJiZuZXh0"
+        },
+        {
+          "offset": 322581,
+          "count": 1
+        },
+        {
+          "offset": 322583,
+          "count": 1
+        },
+        {
+          "data": "dmVyeShmdW5jdA=="
+        },
+        {
+          "offset": 322584,
+          "count": 1
+        },
+        {
+          "data": "b24odmFsdWUsaW5kZXgpe3JldHVybiB2YWx1ZT09PW1pcmE="
+        },
+        {
+          "offset": 322585,
+          "count": 1
+        },
+        {
+          "data": "ZVNpemVbaW5kZXhdfSkpcmU="
+        },
+        {
+          "offset": 322587,
+          "count": 1
+        },
+        {
+          "data": "dXJuO21pcmFnZVNpemU="
+        },
+        {
+          "offset": 322588,
+          "count": 1
+        },
+        {
+          "data": "bmV4"
+        },
+        {
+          "offset": 322589,
+          "count": 1
+        },
+        {
+          "data": "O21pcmFnZVByZXZpZXcucmVzaXplKGE="
+        },
+        {
+          "offset": 322590,
+          "count": 1
+        },
+        {
+          "data": "dCk7"
+        },
+        {
+          "offset": 322591,
+          "count": 86
+        },
+        {
+          "data": "aXJhZ2VQcmV2aWV3"
+        },
+        {
+          "offset": 322677,
+          "count": 2
+        },
+        {
+          "data": "aG93KG51"
+        },
+        {
+          "offset": 322681,
+          "count": 1
+        },
+        {
+          "offset": 322690,
+          "count": 1
+        },
+        {
+          "offset": 322740,
+          "count": 16
+        },
+        {
+          "offset": 322797,
+          "count": 65
+        },
+        {
+          "data": "IW1pcmFnZURpc3Bvc2VkKW1pcmFnZVByZXZpZXcucw=="
+        },
+        {
+          "offset": 322862,
+          "count": 1
+        },
+        {
+          "data": "b3c="
+        },
+        {
+          "offset": 322863,
+          "count": 1
+        },
+        {
+          "offset": 322866,
+          "count": 9
+        },
+        {
+          "offset": 324149,
+          "count": 60
+        },
+        {
+          "offset": 324356,
+          "count": 556
+        },
+        {
+          "data": "bWlyYWdlRGlzcG9zZWQ9ITA7eC5jYW5jZWwoaSk7eC5jYW5jZWwodCk7eC5jYW5jZWwoYSk7eC5jYW5jZWwobWlyYWdlSW5pdGlhbCk7bWlyYWdlUHJldmlldy5kZXN0cm95KCk7"
+        },
+        {
+          "offset": 324912,
+          "count": 901
+        },
+        {
+          "data": "bWlyYWdlSW5pdGlhbD0="
+        },
+        {
+          "offset": 325813,
+          "count": 27
+        },
+        {
+          "data": "ZnVuY3Rpb24oKXttaXJhZ2VTaXplPQ=="
+        },
+        {
+          "offset": 325840,
+          "count": 1
+        },
+        {
+          "data": "b2lkIDA7digpfQ=="
+        },
+        {
+          "offset": 325841,
+          "count": 3626
+        },
+        {
+          "offset": 329481,
+          "count": 9
+        },
+        {
+          "offset": 329491,
+          "count": 21
+        },
+        {
+          "data": "fQ=="
+        },
+        {
+          "offset": 329617,
+          "count": 3
+        },
+        {
+          "offset": 329835,
+          "count": 763389
+        },
+        {
+          "offset": 1093224,
+          "count": 426
+        },
+        {
+          "offset": 1093657,
+          "count": 2
+        },
+        {
+          "data": "cmFnZUVkaXRvci4="
+        },
+        {
+          "offset": 1093659,
+          "count": 1
+        },
+        {
+          "data": "b29t"
+        },
+        {
+          "offset": 1093661,
+          "count": 33
+        },
+        {
+          "offset": 1093694,
+          "count": 151733
+        }
+      ]
+    }
+  ]
+}

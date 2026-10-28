@@ -7,7 +7,11 @@ import Darwin
 
 let root = Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent("runtime", isDirectory: true)
 let files = FileManager.default
+#if MIRAGE_MANAGED_EDITOR
+let base = root.appendingPathComponent("Mirage WE Editor.app/Contents/Resources/wine")
+#else
 let base = root.appendingPathComponent("engines/Wine Devel.app/Contents/Resources/wine")
+#endif
 func path(_ relative: String) -> String { root.appendingPathComponent(relative).path }
 func systemLanguage() -> String {
     for language in Locale.preferredLanguages {
@@ -21,6 +25,24 @@ func systemLanguage() -> String {
     return "en-us"
 }
 func run() throws -> Never {
+    #if MIRAGE_MANAGED_EDITOR
+    let launchArguments = CommandLine.arguments
+    guard let index = launchArguments.firstIndex(of: "--launch-ticket"), index + 1 < launchArguments.count,
+          UUID(uuidString: launchArguments[index + 1]) != nil else {
+        NSWorkspace.shared.open(URL(string: "mirage://editor")!)
+        exit(0)
+    }
+    let ticket = root.appendingPathComponent("launch-" + launchArguments[index + 1] + ".json")
+    let ticketDescriptor = Darwin.open(ticket.path, O_RDONLY | O_NOFOLLOW)
+    guard ticketDescriptor >= 0, flock(ticketDescriptor, LOCK_EX | LOCK_NB) == 0 else { throw POSIXError(.EACCES) }
+    let handle = FileHandle(fileDescriptor: ticketDescriptor, closeOnDealloc: true)
+    let permit = try JSONSerialization.jsonObject(with: handle.readToEnd() ?? Data()) as? [String: Any]
+    try files.removeItem(at: ticket)
+    try handle.close()
+    guard let expiry = permit?["expires"] as? Double, expiry > Date().timeIntervalSince1970,
+          expiry < Date().timeIntervalSince1970 + 60,
+          permit?["runtime"] as? String == root.standardizedFileURL.path else { throw POSIXError(.EACCES) }
+    #endif
     // Reopening the launcher must activate the editor, not start a second CEF
     // instance against the same profile and replace its native bridge session.
     if let existing = NSRunningApplication.runningApplications(withBundleIdentifier: "cn.laobamac.Mirage.WEEditor.Editor")
