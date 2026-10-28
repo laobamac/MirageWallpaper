@@ -293,8 +293,9 @@ jobs:
           fingerprint="$( { xcodebuild -version; xcrun --sdk macosx --show-sdk-version; brew list --versions dav1d nasm; } | shasum -a 256 | cut -d' ' -f1)"
           echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
 
-      - name: Cache decoder-only FFmpeg
-        uses: actions/cache@v4
+      - name: Restore decoder-only FFmpeg cache
+        id: codec_cache
+        uses: actions/cache/restore@v4
         with:
           path: Mirage/build/ffmpeg/${{ matrix.arch }}
           key: ffmpeg-${{ runner.os }}-${{ matrix.arch }}-${{ steps.codecs.outputs.fingerprint }}-${{ hashFiles('scripts/build_ffmpeg.sh') }}
@@ -302,6 +303,13 @@ jobs:
       - name: Build decoder-only FFmpeg
         shell: bash
         run: ./scripts/build_ffmpeg.sh "${{ matrix.arch }}"
+
+      - name: Save completed codec build
+        if: steps.codec_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: Mirage/build/ffmpeg/${{ matrix.arch }}
+          key: ${{ steps.codec_cache.outputs.cache-primary-key }}
 
       - name: Test asset and runtime packaging
         shell: bash
