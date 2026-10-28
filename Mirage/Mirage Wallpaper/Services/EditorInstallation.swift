@@ -359,6 +359,7 @@ enum EditorInstallation {
         environment["WINELOADER"] = nil
         #if arch(arm64)
         environment["DYLD_LIBRARY_PATH"] = engine.appendingPathComponent("lib/external").path
+        environment["WINEDLLPATH"] = engine.appendingPathComponent("lib/wine").path
         #endif
         environment["PATH"] = engine.appendingPathComponent("bin").path + ":/usr/bin:/bin:/usr/sbin:/sbin"
         func run(_ binary: String, _ arguments: [String], cancellable: Bool = true) throws {

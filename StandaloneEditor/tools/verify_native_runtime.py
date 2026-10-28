@@ -54,6 +54,7 @@ def verify(support, compiler, evidence):
         environment.pop('WINELOADER', None)
         if architecture == 'arm64':
             environment['DYLD_LIBRARY_PATH'] = str(engine / 'lib/external')
+            environment['WINEDLLPATH'] = str(engine / 'lib/wine')
         unix = 'aarch64-unix' if architecture == 'arm64' else 'x86_64-unix'
         environment['VK_DRIVER_FILES'] = str(engine / 'lib/wine' / unix / 'vulkan/icd.d/MoltenVK_icd.json')
         def run(command, log_name, marker=None):
@@ -77,6 +78,8 @@ def verify(support, compiler, evidence):
                                DXVK_CONFIG_FILE='Z:' + str(runtime / 'dxvk.conf'),
                                DXVK_LOG_PATH=str(evidence), DXVK_STATE_CACHE_PATH=str(evidence),
                                DXVK_LOG_LEVEL='info', MVK_CONFIG_LOG_LEVEL='1')
+            run([runtime / 'Mirage WE Editor.app/Contents/MacOS/wine', evidence / 'cpu.exe'],
+                'identity-x64.log', 'MIRAGE_FEX_X64_OK')
             run([runtime / 'Mirage WE Editor.app/Contents/MacOS/wine', evidence / 'gpu.exe'],
                 'windows-d3d11.log', 'MIRAGE_D3D11_SHARED_TEXTURE_OK')
         finally:
@@ -85,7 +88,8 @@ def verify(support, compiler, evidence):
                 subprocess.run([str(engine / 'bin/wineserver')] + arguments, env=environment,
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
     (evidence / 'result.json').write_text(json.dumps(dict(architecture=architecture, rosetta=False,
-        nativeFiles=native_files, x64Execution='passed', sharedTextureReadback='passed'), indent=2) + '\n')
+        nativeFiles=native_files, x64Execution='passed', identityX64Execution='passed',
+        sharedTextureReadback='passed'), indent=2) + '\n')
 
 
 if __name__ == '__main__':

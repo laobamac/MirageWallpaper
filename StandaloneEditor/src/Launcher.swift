@@ -102,6 +102,7 @@ func run() throws -> Never {
     for (key,value) in environment { setenv(key,value,1) }
     #if arch(arm64)
     setenv("DYLD_LIBRARY_PATH", base.appendingPathComponent("lib/external").path, 1)
+    setenv("WINEDLLPATH", base.appendingPathComponent("lib/wine").path, 1)
     #endif
     let log = Darwin.open(path("logs/editor.log"),O_WRONLY|O_CREAT|O_APPEND,0o600)
     if log >= 0 { dup2(log,STDOUT_FILENO); dup2(log,STDERR_FILENO); close(log) }
