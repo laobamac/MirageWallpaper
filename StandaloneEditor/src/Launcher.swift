@@ -15,8 +15,10 @@ let base = root.appendingPathComponent("engines/Wine Devel.app/Contents/Resource
 func path(_ relative: String) -> String { root.appendingPathComponent(relative).path }
 #if arch(arm64)
 let wineUnixArchitecture = "aarch64-unix"
+let graphicsOverrides = "d3d11,d3d10core,dxgi=n,b;vulkan-1=b"
 #else
 let wineUnixArchitecture = "x86_64-unix"
+let graphicsOverrides = "d3d11,d3d10core=n,b;dxgi,vulkan-1=b"
 #endif
 func systemLanguage() -> String {
     for language in Locale.preferredLanguages {
@@ -91,7 +93,7 @@ func run() throws -> Never {
     for cache in ["Cache", "Code Cache"] { try? files.removeItem(atPath:path("windows/WallpaperEngine/ui/uicache/editor/base/Default/" + cache)) }
     let environment = [
         "WINEPREFIX":path("prefix-devel"), "WINEARCH":"win64", "WINEDEBUG":"fixme-all",
-        "WINEDLLOVERRIDES":"winemenubuilder.exe=d;d3d11,d3d10core=n,b;dxgi,vulkan-1=b",
+        "WINEDLLOVERRIDES":"winemenubuilder.exe=d;" + graphicsOverrides,
         "DXVK_CONFIG_FILE":"Z:" + path("dxvk.conf"), "DXVK_LOG_PATH":path("logs"), "DXVK_LOG_LEVEL":"error", "MVK_CONFIG_LOG_LEVEL":"1",
         "VK_DRIVER_FILES":base.appendingPathComponent("lib/wine/\(wineUnixArchitecture)/vulkan/icd.d/MoltenVK_icd.json").path,
         "WINELOADER":path("Mirage WE Editor.app/Contents/MacOS/wine"),

@@ -215,7 +215,7 @@ enum EditorInstallation {
             let url = try contained(patch.path, in: runtime.appendingPathComponent("windows/WallpaperEngine"))
             guard try hash(url) == patch.resultSHA256 else { throw EditorServiceError(code: "EDITOR_FILES") }
         }
-        for name in ["d3d11.dll", "d3d10core.dll", "mirage_dxvk.dll"] {
+        for name in graphicsLibraries(architecture: catalog.architecture) {
             guard try hash(runtime.appendingPathComponent("prefix-devel/drive_c/windows/system32/" + name)) == catalog.files["runtime/overrides/" + name] else {
                 throw EditorServiceError(code: "EDITOR_FILES")
             }
@@ -294,7 +294,7 @@ enum EditorInstallation {
         let profile = we.appendingPathComponent("ui/uicache")
         if fm.fileExists(atPath: profile.path) { try fm.removeItem(at: profile) }
         try fm.createSymbolicLink(at: profile, withDestinationURL: userData)
-        try initializePrefix(runtime)
+        try initializePrefix(runtime, architecture: catalog.architecture)
         try Task.checkCancellation()
         for name in ["user.reg", "userdef.reg", "system.reg"] {
             let file = runtime.appendingPathComponent("prefix-devel/" + name)
@@ -338,7 +338,13 @@ enum EditorInstallation {
         }
     }
 
-    private static func initializePrefix(_ runtime: URL) throws {
+    private static func graphicsLibraries(architecture: String) -> [String] {
+        // Native Wine's DXGI initializes OpenGL even when D3D11 uses DXVK.
+        // Use DXVK's matching DXGI on ARM64 so enumeration stays on Vulkan.
+        ["d3d11.dll", "d3d10core.dll", "mirage_dxvk.dll"] + (architecture == "arm64" ? ["dxgi.dll"] : [])
+    }
+
+    private static func initializePrefix(_ runtime: URL, architecture: String) throws {
         let fm = FileManager.default
         let engine = runtime.appendingPathComponent("Mirage WE Editor.app/Contents/Resources/wine")
         let prefix = runtime.appendingPathComponent("prefix-devel")
@@ -387,7 +393,7 @@ enum EditorInstallation {
         let mount = prefix.appendingPathComponent("dosdevices/m:")
         try fm.createSymbolicLink(atPath: mount.path, withDestinationPath: "../../windows")
         try run("wine", ["reg", "add", "HKCU\\Software\\WallpaperEngine", "/v", "installPath", "/d", "M:\\WallpaperEngine\\wallpaper64.exe", "/f"])
-        for name in ["d3d11.dll", "d3d10core.dll", "mirage_dxvk.dll"] {
+        for name in graphicsLibraries(architecture: architecture) {
             let target = prefix.appendingPathComponent("drive_c/windows/system32/" + name)
             if fm.fileExists(atPath: target.path) { try fm.removeItem(at: target) }
             try fm.copyItem(at: runtime.appendingPathComponent("overrides/" + name), to: target)

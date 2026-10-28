@@ -144,7 +144,8 @@ def prepare(upstream, destination):
         overrides = runtime / 'overrides'
         overrides.mkdir()
         with tarfile.open(archive) as bundle:
-            for original, name in [('d3d11.dll', 'mirage_dxvk.dll'), ('d3d10core.dll', 'd3d10core.dll')]:
+            for original, name in [('d3d11.dll', 'mirage_dxvk.dll'), ('d3d10core.dll', 'd3d10core.dll'),
+                                   ('dxgi.dll', 'dxgi.dll')]:
                 (overrides / name).write_bytes(bundle.extractfile('dxvk-v1.10.3/x64/' + original).read())
         if digest(overrides / 'mirage_dxvk.dll') != DXVK_DLL_SHA:
             raise ValueError('Unexpected DXVK D3D11 ABI.')

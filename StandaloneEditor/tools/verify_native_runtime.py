@@ -68,11 +68,16 @@ def verify(support, compiler, evidence):
         try:
             run([engine / 'bin/wineboot', '--init'], 'wineboot.log')
             run([engine / 'bin/wine', evidence / 'cpu.exe'], 'windows-x64.log', 'MIRAGE_FEX_X64_OK')
-            for name in ['d3d11.dll', 'd3d10core.dll', 'mirage_dxvk.dll']:
+            overrides = ['d3d11.dll', 'd3d10core.dll', 'mirage_dxvk.dll']
+            if architecture == 'arm64':
+                overrides.append('dxgi.dll')
+            for name in overrides:
                 target = prefix / 'drive_c/windows/system32' / name
                 if target.exists() or target.is_symlink(): target.unlink()
                 shutil.copy2(runtime / 'overrides' / name, target)
-            environment.update(WINEDLLOVERRIDES='winemenubuilder.exe=d;d3d11,d3d10core=n,b;dxgi,vulkan-1=b',
+            graphics = 'd3d11,d3d10core,dxgi=n,b;vulkan-1=b' if architecture == 'arm64' else 'd3d11,d3d10core=n,b;dxgi,vulkan-1=b'
+            environment.update(WINEDLLOVERRIDES='winemenubuilder.exe=d;' + graphics,
+                               WINEDEBUG='fixme-all',
                                DYLD_INSERT_LIBRARIES=str(runtime / 'MetalInterop.dylib'),
                                WINELOADER=str(runtime / 'Mirage WE Editor.app/Contents/MacOS/wine'),
                                DXVK_CONFIG_FILE='Z:' + str(runtime / 'dxvk.conf'),
