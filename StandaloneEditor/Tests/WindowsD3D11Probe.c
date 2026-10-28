@@ -86,6 +86,13 @@ int main(void) {
         // The imported texture must retain its backing after the producer exits.
         if (readback(reader, readContext, imported, nextExpected, "released producer")) return 4;
         ID3D11Texture2D_Release(imported);
+        ID3D11Texture2D *stale = NULL;
+        HRESULT reopened = ID3D11Device_OpenSharedResource(reader, handle, &IID_ID3D11Texture2D, (void **)&stale);
+        if (SUCCEEDED(reopened) || stale) {
+            fprintf(stderr, "Released producer handle was reused\n");
+            if (stale) ID3D11Texture2D_Release(stale);
+            return 5;
+        }
     }
     ID3D11DeviceContext_Release(readContext); ID3D11DeviceContext_Release(writeContext);
     ID3D11Device_Release(reader); ID3D11Device_Release(writer);

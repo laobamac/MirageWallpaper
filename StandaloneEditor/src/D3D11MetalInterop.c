@@ -18,7 +18,13 @@ static HRESULT (WINAPI *realOpen)(ID3D11Device*,HANDLE,REFIID,void**);
 static HRESULT (WINAPI *realGetHandle)(IDXGIResource*,HANDLE*);
 static ULONG (WINAPI *realRelease)(ID3D11Texture2D*);
 static void (WINAPI *realClear)(ID3D11DeviceContext*,ID3D11RenderTargetView*,const FLOAT*);
-typedef struct SharedTexture { ID3D11Texture2D *texture; IDXGIResource *resource; HANDLE handle; struct SharedTexture *next; } SharedTexture;
+typedef struct SharedTexture {
+    ID3D11Texture2D *texture;
+    IDXGIResource *resource;
+    HANDLE handle;
+    D3D11_TEXTURE2D_DESC description;
+    struct SharedTexture *next;
+} SharedTexture;
 static SharedTexture *textures;
 
 static void patch(void **entry, void *replacement, void **original) {
@@ -139,6 +145,7 @@ static HRESULT WINAPI createTexture(ID3D11Device *device,const D3D11_TEXTURE2D_D
     SharedTexture *t=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,sizeof(*t));
     if(!t){IDXGIResource_Release(resource);ID3D11Texture2D_Release(*out);*out=NULL;return E_OUTOFMEMORY;}
     t->texture=*out;t->resource=resource;
+    ID3D11Texture2D_GetDesc(*out,&t->description);
     EnterCriticalSection(&lock);
     // Opaque KMT-style IDs never go to the OS. Monotonic IDs prevent an old
     // GPU image destruction callback from erasing a newer export after resize.
@@ -155,12 +162,14 @@ static HRESULT WINAPI createTexture(ID3D11Device *device,const D3D11_TEXTURE2D_D
 static HRESULT WINAPI openResource(ID3D11Device *device,HANDLE handle,REFIID iid,void **out) {
     if(!out)return E_INVALIDARG;
     *out=NULL;
-    ID3D11Texture2D *source=NULL;
+    D3D11_TEXTURE2D_DESC desc;BOOL found=FALSE;
     EnterCriticalSection(&lock);
-    for(SharedTexture *t=textures;t;t=t->next)if(t->handle==handle){source=t->texture;ID3D11Texture2D_AddRef(source);break;}
+    for(SharedTexture *t=textures;t;t=t->next)if(t->handle==handle){desc=t->description;found=TRUE;break;}
     LeaveCriticalSection(&lock);
-    if(!source)return realOpen(device,handle,iid,out);
-    D3D11_TEXTURE2D_DESC desc;ID3D11Texture2D_GetDesc(source,&desc);
+    if(!found)return realOpen(device,handle,iid,out);
+    // The producer's final Release runs outside our lock. Retaining its raw
+    // COM pointer here could race destruction; only the immutable description
+    // is needed. The native bridge retains the Metal backing under its lock.
     ID3D11Texture2D *imported=NULL;
     HRESULT hr=realTexture(device,&desc,NULL,&imported);
     if(SUCCEEDED(hr)) {
@@ -168,7 +177,6 @@ static HRESULT WINAPI openResource(ID3D11Device *device,HANDLE handle,REFIID iid
         hr=native==VK_SUCCESS?ID3D11Texture2D_QueryInterface(imported,iid,out):E_FAIL;
         ID3D11Texture2D_Release(imported);
     }
-    ID3D11Texture2D_Release(source);
     return hr;
 }
 HRESULT WINAPI D3D11CreateDevice(IDXGIAdapter *adapter,D3D_DRIVER_TYPE type,HMODULE software,UINT flags,const D3D_FEATURE_LEVEL *levels,UINT count,UINT sdk,ID3D11Device **out,D3D_FEATURE_LEVEL *level,ID3D11DeviceContext **context) {
