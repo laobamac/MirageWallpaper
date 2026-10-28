@@ -142,7 +142,9 @@ python3 StandaloneEditor/tools/package_support.py
 
 输出为被 Git 忽略的 `StandaloneEditor/dist/EditorSupport/`。包中仅包含自有适配组件、第三方运行依赖、许可证、校验清单及本地转换指令。原版 WE、包含原版代码的私有补丁清单、已初始化的 Wine prefix、用户配置及工程不会进入组件包。
 
-Mirage 构建步骤通过 `Mirage/scripts/bundle_editor_support.py` 验证、签名并嵌入该包。构建机可设置 `MIRAGE_EDITOR_SUPPORT` 指向已准备的组件目录；Intel Release 构建要求此目录存在。当前没有经过验证的 Apple Silicon 编辑器运行包，arm64 主程序不嵌入 Intel 组件。
+Mirage 构建步骤通过 `Mirage/scripts/bundle_editor_support.py` 验证、签名并嵌入该包。构建机可设置 `MIRAGE_EDITOR_SUPPORT` 指向已准备的组件目录，或设置 `MIRAGE_REQUIRE_EDITOR_SUPPORT=1` 要求默认目录提供组件。显式配置缺失、校验失败或架构不匹配都会终止构建。未配置组件的干净检出可以构建普通 Mirage；编辑器入口会提示该安装包没有运行组件。
+
+组件目录支持单个架构的 `catalog.json`，或分别放在 `arm64/`、`x86_64/` 子目录的两个组件包。安装器按当前原生进程架构选择组件，不回退到其他架构。
 
 发行包将 Wine 引擎保存在编辑器应用内，保持其运行库和语言数据的相对目录，并对每个应用执行严格签名校验。原生文件选择服务随编辑器进程退出。
 
@@ -153,9 +155,29 @@ Mirage 构建步骤通过 `Mirage/scripts/bundle_editor_support.py` 验证、签
 ```sh
 dotnet run --project SteamService.Tests
 python3 Mirage/Tests/run_editor_installation.py
+python3 Mirage/Tests/run_editor_packaging.py
 ```
 
 完整初始化测试可使用隔离目录中的原版文件：`run_editor_installation.py --assemble-root /path/to/test/Editor --support /path/to/EditorSupport`。原版文件应位于测试目录的 `downloads/` 中；测试会组装安装并验证产物，不使用生产目录。
+
+### Apple Silicon 原生运行组件
+
+ARM64 路线使用原生 Wine + FEX，不使用 Rosetta。macOS 侧的启动器、Wine、辅助服务和 Metal 桥接均为 ARM64；原版 Windows x64 编辑器与 DXVK 的指令由 FEX 执行。当前使用高地址 Wine 变体，最低要求 macOS 26.5，不支持 Windows 32 位程序。
+
+在 Apple Silicon 构建机上运行：
+
+```sh
+python3 StandaloneEditor/tools/build_native_arm64.py --install-dependencies
+python3 StandaloneEditor/tools/package_support.py --architecture arm64
+MIRAGE_EDITOR_SUPPORT="$PWD/StandaloneEditor/dist/EditorSupport/arm64" \
+  python3 Mirage/scripts/bundle_editor_support.py /path/to/Mirage.app "$PWD" arm64
+python3 StandaloneEditor/tools/verify_native_runtime.py \
+  --support /path/to/Mirage.app/Contents/Resources/EditorSupport
+```
+
+构建固定 Wine、FEX、补丁集与工具链版本。打包校验每个 Mach-O 均只有 ARM64，重定位第三方动态库，并绑定当前 Wine 音频驱动的源码 ABI 和 UUID。Intel 专用的窗口锁偏移补丁不会用于 ARM64。
+
+`Validate native ARM64 editor runtime` 工作流先验证 x64 指令执行，再对签名后的组件包执行独立设备间的 GPU 共享纹理读回、连续更新、尺寸变化与释放测试。Wine/FEX 编译完成后即缓存构建结果，后续打包或 GPU 验证失败时可复用。全部通过后才上传运行包及相应 Wine/FEX 源码。测试不包含 WE 私有文件或 Steam 会话；完整编辑器工程、CEF 窗口与音频交互仍需在 Apple Silicon 上验收，不能仅凭交叉编译认定可用。
 
 ## 许可与商业条款
 

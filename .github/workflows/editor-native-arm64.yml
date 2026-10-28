@@ -38,12 +38,14 @@ jobs:
             Mirage/Tests
             Mirage/scripts
             Mirage/Mirage Wallpaper/Services
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
+        id: native-cache
         with:
           path: |
-            StandaloneEditor/build/native-arm64
-          key: editor-native-arm64-v2-${{ hashFiles('StandaloneEditor/tools/build_native_arm64.py') }}
-          restore-keys: editor-native-arm64-v2-
+            StandaloneEditor/build/native-arm64/hadron
+            StandaloneEditor/build/native-arm64/*.tar.xz
+          key: editor-native-arm64-v3-${{ hashFiles('StandaloneEditor/tools/build_native_arm64.py') }}
+          restore-keys: editor-native-arm64-v3-
       - name: Inspect native host and Metal availability
         shell: bash
         run: |
@@ -59,8 +61,20 @@ jobs:
           set -o pipefail
           python3 StandaloneEditor/tools/build_native_arm64.py --install-dependencies \
             2>&1 | tee StandaloneEditor/build/native-arm64/build.log
+      - name: Save completed Wine and FEX build
+        if: (github.event_name == 'push' || inputs.build_runtime) && steps.native-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            StandaloneEditor/build/native-arm64/hadron
+            StandaloneEditor/build/native-arm64/*.tar.xz
+          key: ${{ steps.native-cache.outputs.cache-primary-key }}
+      - name: Test native dependency relocation
+        shell: bash
+        run: python3 StandaloneEditor/Tests/test_runtime_layout.py
       - name: Run original x64 instructions through native ARM64 FEX
         if: github.event_name == 'push' || inputs.build_runtime
+        timeout-minutes: 8
         shell: bash
         run: |
           work="$PWD/StandaloneEditor/build/native-arm64"
@@ -68,12 +82,45 @@ jobs:
           "$work/hadron/toolchains/llvm-mingw/bin/x86_64-w64-mingw32-clang" \
             -O2 StandaloneEditor/Tests/WindowsX64Probe.c -o "$work/windows-x64-probe.exe"
           export WINEPREFIX="$work/prefix" WINEARCH=win64 WINEDEBUG=-all
+          trap '"$runtime/bin/wineserver" -k; "$runtime/bin/wineserver" -w' EXIT
           "$runtime/bin/wineboot" --init > "$work/wineboot.log" 2>&1
           "$runtime/bin/wine" "$work/windows-x64-probe.exe" > "$work/windows-x64.log" 2>&1
           cat "$work/windows-x64.log"
           grep -q MIRAGE_FEX_X64_OK "$work/windows-x64.log"
-          "$runtime/bin/wineserver" -k
-          "$runtime/bin/wineserver" -w
+      - name: Package and sign native editor support
+        if: github.event_name == 'push' || inputs.build_runtime
+        shell: bash
+        run: |
+          python3 Mirage/Tests/run_editor_packaging.py
+          python3 Mirage/Tests/run_editor_installation.py
+          python3 StandaloneEditor/tools/package_support.py --architecture arm64
+          export MIRAGE_EDITOR_SUPPORT="$PWD/StandaloneEditor/dist/EditorSupport/arm64"
+          python3 Mirage/scripts/bundle_editor_support.py "$RUNNER_TEMP/NativeEditor/Mirage.app" "$PWD" arm64
+      - name: Validate packaged x64 execution and shared GPU textures
+        if: github.event_name == 'push' || inputs.build_runtime
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          python3 StandaloneEditor/tools/verify_native_runtime.py \
+            --support "$RUNNER_TEMP/NativeEditor/Mirage.app/Contents/Resources/EditorSupport"
+      - name: Archive verified runtime and corresponding source
+        if: github.event_name == 'push' || inputs.build_runtime
+        shell: bash
+        run: |
+          tar -czf "$RUNNER_TEMP/EditorSupport-arm64.tar.gz" \
+            -C "$RUNNER_TEMP/NativeEditor/Mirage.app/Contents/Resources" EditorSupport
+          tar -czf "$RUNNER_TEMP/EditorSupport-arm64-sources.tar.gz" --exclude=.git \
+            -C StandaloneEditor/build/native-arm64/hadron sources.conf patches scripts packaging src/wine src/fex
+      - name: Upload verified native runtime
+        if: github.event_name == 'push' || inputs.build_runtime
+        uses: actions/upload-artifact@v7
+        with:
+          name: editor-native-arm64-support
+          path: |
+            ${{ runner.temp }}/EditorSupport-arm64.tar.gz
+            ${{ runner.temp }}/EditorSupport-arm64-sources.tar.gz
+          retention-days: 7
+          compression-level: 0
       - name: Upload native validation evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -82,6 +129,8 @@ jobs:
           path: |
             StandaloneEditor/build/native-arm64/host.json
             StandaloneEditor/build/native-arm64/*.log
+            StandaloneEditor/build/native-arm64/packaged-validation/*.log
+            StandaloneEditor/build/native-arm64/packaged-validation/result.json
             StandaloneEditor/build/native-arm64/hadron/dist-dev/mirage-native-build.json
           if-no-files-found: error
           retention-days: 7

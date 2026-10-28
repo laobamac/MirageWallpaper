@@ -30,6 +30,7 @@ cmake-build-debug
 /SteamService/obj/
 /SteamService.Tests/bin/
 /SteamService.Tests/obj/
+/Mirage/scripts/__pycache__/
 .DS_Store
 .claude
 .codex

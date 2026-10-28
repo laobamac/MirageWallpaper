@@ -24,20 +24,19 @@ def bundle(app, root, architectures, environment):
     if target.exists(): shutil.rmtree(target)
     selected = []
     flat = source / 'catalog.json'
-    if flat.is_file():
-        catalog = json.loads(flat.read_text())
-        if catalog['architecture'] in architectures:
-            selected.append((source, target, catalog))
-        elif required:
-            sys.exit('error: Configured editor support does not match the app architecture.')
-    else:
-        for architecture in architectures:
-            candidate = source / architecture
-            if (candidate / 'catalog.json').is_file():
-                catalog = json.loads((candidate / 'catalog.json').read_text())
-                if catalog['architecture'] != architecture:
-                    sys.exit('error: Editor support architecture does not match its directory.')
-                selected.append((candidate, target / architecture, catalog))
+    legacy = json.loads(flat.read_text()) if flat.is_file() else None
+    for architecture in architectures:
+        candidate = source / architecture
+        if (candidate / 'catalog.json').is_file():
+            catalog = json.loads((candidate / 'catalog.json').read_text())
+            if catalog['architecture'] != architecture:
+                sys.exit('error: Editor support architecture does not match its directory.')
+        elif legacy and legacy['architecture'] == architecture:
+            candidate, catalog = source, legacy
+        else:
+            continue
+        destination = target if len(architectures) == 1 else target / architecture
+        selected.append((candidate, destination, catalog))
     if required and {item[2]['architecture'] for item in selected} != set(architectures):
         sys.exit('error: Editor support is missing for a requested architecture. Set MIRAGE_EDITOR_SUPPORT to a prepared payload.')
     if not selected:

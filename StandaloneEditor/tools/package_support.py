@@ -96,11 +96,18 @@ def executable_patch(runtime):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--runtime', type=Path, default=PROJECT / 'runtime')
-    parser.add_argument('--output', type=Path, default=PROJECT / 'dist/EditorSupport')
+    parser.add_argument('--output', type=Path)
     parser.add_argument('--original-ui', type=Path, help='Migrate validated anchors to a new official UI file.')
     parser.add_argument('--update-adaptations', action='store_true')
+    parser.add_argument('--architecture', choices=['x86_64', 'arm64'], default='x86_64')
+    parser.add_argument('--native-root', type=Path, default=PROJECT / 'build/native-arm64/hadron')
     args = parser.parse_args()
-    runtime, destination = args.runtime.resolve(), args.output.resolve()
+    destination = args.output or PROJECT / 'dist/EditorSupport' / args.architecture
+    if args.architecture == 'arm64':
+        from package_native_support import prepare
+        prepare(args.native_root, destination)
+        return
+    runtime, destination = args.runtime.resolve(), destination.resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='editor-package-', dir=destination.parent) as temporary:
         output = Path(temporary)
@@ -120,9 +127,9 @@ def main():
         ntdll = identity / 'MacOS/ntdll.so'
         ntdll.unlink()
         ntdll.symlink_to('../Resources/wine/lib/wine/x86_64-unix/ntdll.so')
-        subprocess.run(['swiftc', '-D', 'MIRAGE_MANAGED_EDITOR', str(PROJECT / 'src/Launcher.swift'),
+        subprocess.run(['swiftc', '-target', 'x86_64-apple-macos14.2', '-D', 'MIRAGE_MANAGED_EDITOR', str(PROJECT / 'src/Launcher.swift'),
                         '-o', str(output / 'Mirage Editor.app/Contents/MacOS/Launcher')], check=True)
-        subprocess.run(['swiftc', '-D', 'MIRAGE_MANAGED_EDITOR', str(PROJECT / 'src/NativeBridge.swift'),
+        subprocess.run(['swiftc', '-target', 'x86_64-apple-macos14.2', '-D', 'MIRAGE_MANAGED_EDITOR', str(PROJECT / 'src/NativeBridge.swift'),
                         '-o', str(target / 'Mirage Project Picker.app/Contents/MacOS/ProjectPicker')], check=True)
         for name in ['MetalInterop.dylib', 'MirageEditor.icns', 'standalone-defaults.json']:
             shutil.copy2(runtime / name, target / name)
