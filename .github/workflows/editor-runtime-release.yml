@@ -1,0 +1,130 @@
+name: Prepare editor runtime downloads
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing draft release for immutable runtime assets
+        required: true
+        type: string
+      native_run_id:
+        description: Successful native ARM64 validation run on main
+        required: true
+        type: string
+      intel_asset:
+        description: Prebuilt Intel support archive in the draft release
+        required: true
+        type: string
+      intel_sha256:
+        description: SHA-256 of the Intel input archive
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: editor-runtime-release-${{ inputs.release_tag }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: arm64
+            runner: macos-26
+          - architecture: x86_64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      NATIVE_RUN_ID: ${{ inputs.native_run_id }}
+      INTEL_ASSET: ${{ inputs.intel_asset }}
+      INTEL_SHA256: ${{ inputs.intel_sha256 }}
+      RUNTIME_ARCHITECTURE: ${{ matrix.architecture }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Validate release inputs
+        shell: bash
+        run: |
+          [[ "$RELEASE_TAG" =~ ^editor-runtime-[A-Za-z0-9._-]+$ ]]
+          [[ "$NATIVE_RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$INTEL_ASSET" =~ ^EditorRuntime-x86_64-[a-f0-9]{16}\.tar\.gz$ ]]
+          [[ "$INTEL_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          [[ "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" == true ]]
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$NATIVE_RUN_ID" > "$RUNNER_TEMP/native-run.json"
+          python3 - "$RUNNER_TEMP/native-run.json" <<'PY'
+          import json, sys
+          run = json.load(open(sys.argv[1]))
+          assert run['conclusion'] == 'success' and run['head_branch'] == 'main'
+          assert run['path'] == '.github/workflows/editor-native-arm64.yml'
+          PY
+      - name: Restore verified native runtime and corresponding sources
+        if: matrix.architecture == 'arm64'
+        uses: actions/download-artifact@v7
+        with:
+          name: editor-native-arm64-support
+          run-id: ${{ inputs.native_run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/runtime-input
+      - name: Retrieve prepared Intel runtime
+        if: matrix.architecture == 'x86_64'
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/runtime-input"
+          gh release download "$RELEASE_TAG" --pattern "$INTEL_ASSET" --dir "$RUNNER_TEMP/runtime-input"
+          printf '%s  %s\n' "$INTEL_SHA256" "$RUNNER_TEMP/runtime-input/$INTEL_ASSET" | shasum -a 256 --check
+      - name: Extract only the support payload
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os, tarfile
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP'])
+          name = 'EditorSupport-arm64.tar.gz' if os.environ['RUNTIME_ARCHITECTURE'] == 'arm64' else os.environ['INTEL_ASSET']
+          with tarfile.open(root / 'runtime-input' / name) as archive:
+              assert all(item.name == 'EditorSupport' or item.name.startswith('EditorSupport/') for item in archive)
+              archive.extractall(root / 'runtime-source', filter='data')
+          PY
+      - name: Install signing and notarization credentials
+        shell: bash
+        env:
+          APPLE_DEVELOPER_ID_APPLICATION_P12: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_P12 }}
+          APPLE_DEVELOPER_ID_APPLICATION_P12_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_P12_PASSWORD }}
+          APPLE_NOTARY_APPLE_ID: ${{ secrets.APPLE_NOTARY_APPLE_ID }}
+          APPLE_NOTARY_PASSWORD: ${{ secrets.APPLE_NOTARY_PASSWORD }}
+          APPLE_DEVELOPER_TEAM_ID: ${{ secrets.APPLE_DEVELOPER_TEAM_ID }}
+        run: bash Mirage/scripts/setup_signing_ci.sh
+      - name: Sign, notarize and archive runtime
+        shell: bash
+        run: |
+          python3 StandaloneEditor/tools/package_runtime_download.py \
+            --support "$RUNNER_TEMP/runtime-source/EditorSupport" \
+            --output "$RUNNER_TEMP/runtime-output" \
+            --base-url "https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG" \
+            --sign-identity "$MIRAGE_SIGN_IDENTITY" \
+            --notary-profile "$MIRAGE_NOTARY_PROFILE" --notary-keychain "$MIRAGE_NOTARY_KEYCHAIN"
+      - name: Upload versioned archive to the draft release
+        shell: bash
+        run: |
+          [[ "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" == true ]]
+          gh release upload "$RELEASE_TAG" "$RUNNER_TEMP/runtime-output/"*.tar.gz \
+            "$RUNNER_TEMP/runtime-output/$RUNTIME_ARCHITECTURE.json" --clobber
+          if [[ "$RUNTIME_ARCHITECTURE" == arm64 ]]; then
+            gh release upload "$RELEASE_TAG" "$RUNNER_TEMP/runtime-input/EditorSupport-arm64-sources.tar.gz" --clobber
+          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: editor-runtime-manifest-${{ matrix.architecture }}
+          path: ${{ runner.temp }}/runtime-output/${{ matrix.architecture }}.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Remove signing keychain
+        if: always()
+        shell: bash
+        run: security delete-keychain "$RUNNER_TEMP/mirage-signing.keychain-db" || true
