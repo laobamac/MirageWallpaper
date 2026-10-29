@@ -31,7 +31,7 @@ internal sealed class ServiceCommand
     public EditorCompatibility? EditorCompatibility { get; set; }
 }
 
-internal sealed class ProtocolWriter
+internal sealed class ProtocolWriter(TextWriter? output = null)
 {
     private readonly object gate = new();
     private readonly JsonSerializerOptions options = new()
@@ -45,8 +45,9 @@ internal sealed class ProtocolWriter
         var json = JsonSerializer.Serialize(payload, options);
         lock (gate)
         {
-            Console.Out.WriteLine(json);
-            Console.Out.Flush();
+            var destination = output ?? Console.Out;
+            destination.WriteLine(json);
+            destination.Flush();
         }
     }
 
@@ -60,8 +61,10 @@ internal sealed class ProtocolWriter
         Send(new { type = "authState", state, accountName, message, challengeUrl, refreshToken, guardData, errorCode, steamId });
     }
 
-    public void DownloadState(string taskId, string state, long receivedBytes = 0, long totalBytes = 0, double bytesPerSecond = 0, double? etaSeconds = null, string? outputPath = null, string? message = null, string? errorCode = null, string? currentFile = null)
+    public void DownloadState(string taskId, string state, long receivedBytes = 0, long totalBytes = 0, double bytesPerSecond = 0, double? etaSeconds = null, string? outputPath = null, string? message = null, string? errorCode = null, string? currentFile = null,
+        int? totalFiles = null, int? completedFiles = null, int? activeFiles = null, int? activeChunks = null)
     {
-        Send(new { type = "downloadState", taskId, state, receivedBytes, totalBytes, bytesPerSecond, etaSeconds, outputPath, message, errorCode, currentFile });
+        Send(new { type = "downloadState", taskId, state, receivedBytes, totalBytes, bytesPerSecond, etaSeconds, outputPath, message, errorCode, currentFile,
+            totalFiles, completedFiles, activeFiles, activeChunks });
     }
 }

@@ -24,6 +24,8 @@ internal sealed class DownloadProgressTracker : IDisposable
     private long reusableBytes;
     private long completedBytes;
     private long totalBytes;
+    private int totalFiles;
+    private int completedFiles;
     private readonly HashSet<DownloadTransfer> transfers = [];
     private bool active;
     public string? CurrentFile { get; set; }
@@ -35,7 +37,7 @@ internal sealed class DownloadProgressTracker : IDisposable
         timer = new Timer(_ => Emit(), null, Timeout.Infinite, Timeout.Infinite);
     }
 
-    public void Start(long total, long reusable)
+    public void Start(long total, long reusable, int fileCount = 0)
     {
         lock (gate)
         {
@@ -43,6 +45,8 @@ internal sealed class DownloadProgressTracker : IDisposable
             reusableBytes = Math.Clamp(reusable, 0, totalBytes);
             networkBytes = 0;
             completedBytes = 0;
+            totalFiles = fileCount;
+            completedFiles = 0;
             transfers.Clear();
             samples.Clear();
             samples.Enqueue((DateTime.UtcNow, 0));
@@ -51,10 +55,19 @@ internal sealed class DownloadProgressTracker : IDisposable
         timer.Change(0, 500);
     }
 
-    public DownloadTransfer BeginTransfer(long expectedBytes)
+    public void CompleteFile()
     {
-        var transfer = new DownloadTransfer(this, expectedBytes);
-        lock (gate) transfers.Add(transfer);
+        lock (gate) completedFiles++;
+    }
+
+    public DownloadTransfer BeginTransfer(long expectedBytes, string? fileName = null)
+    {
+        var transfer = new DownloadTransfer(this, expectedBytes, fileName);
+        lock (gate)
+        {
+            transfers.Add(transfer);
+            if (fileName != null) CurrentFile = fileName;
+        }
         return transfer;
     }
 
@@ -90,6 +103,8 @@ internal sealed class DownloadProgressTracker : IDisposable
         long received;
         long total;
         double speed;
+        int files, completed, activeFiles, activeChunks;
+        string? currentFile;
         lock (gate)
         {
             if (!active && !force) return;
@@ -101,14 +116,22 @@ internal sealed class DownloadProgressTracker : IDisposable
             var inFlight = transfers.Sum(transfer => Math.Min(transfer.ReceivedBytes, transfer.ExpectedBytes));
             received = Math.Min(totalBytes, reusableBytes + completedBytes + inFlight);
             total = totalBytes;
+            files = totalFiles;
+            completed = completedFiles;
+            activeFiles = transfers.Where(transfer => transfer.FileName != null).Select(transfer => transfer.FileName).Distinct().Count();
+            activeChunks = transfers.Count;
+            currentFile = transfers.FirstOrDefault(transfer => transfer.FileName != null)?.FileName ?? CurrentFile;
+            var remaining = Math.Max(0, total - received);
+            double? eta = speed > 1 && remaining > 0 ? remaining / speed : null;
+            // Keep timer snapshots ordered with Stop so an older callback cannot overwrite final progress.
+            writer.DownloadState(taskId, "downloading", received, total, speed, eta, currentFile: currentFile,
+                totalFiles: files, completedFiles: completed, activeFiles: activeFiles, activeChunks: activeChunks);
         }
-        var remaining = Math.Max(0, total - received);
-        double? eta = speed > 1 && remaining > 0 ? remaining / speed : null;
-        writer.DownloadState(taskId, "downloading", received, total, speed, eta, currentFile: CurrentFile);
     }
 
     public void Dispose()
     {
+        lock (gate) active = false;
         timer.Dispose();
     }
 }
@@ -120,12 +143,14 @@ internal sealed class DownloadTransfer : IDisposable
     private bool disposed;
 
     public long ExpectedBytes { get; }
+    public string? FileName { get; }
     public long ReceivedBytes { get; private set; }
 
-    public DownloadTransfer(DownloadProgressTracker tracker, long expectedBytes)
+    public DownloadTransfer(DownloadProgressTracker tracker, long expectedBytes, string? fileName = null)
     {
         this.tracker = tracker;
         ExpectedBytes = Math.Max(0, expectedBytes);
+        FileName = fileName;
     }
 
     public void AddNetworkBytes(int count)

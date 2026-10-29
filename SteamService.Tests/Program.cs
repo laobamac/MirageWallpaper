@@ -48,3 +48,4 @@ await using var session = new SteamSession(new ProtocolWriter());
 try { await session.RequireEditorOwnershipAsync(CancellationToken.None); throw new Exception("Unauthenticated account accepted"); }
 catch (ServiceException error) when (error.Code == "NOT_AUTHENTICATED") { }
 Console.WriteLine("Ownership classification, unauthenticated access, manifest path containment and file integrity passed.");
+await EditorDownloadTests.RunAsync();

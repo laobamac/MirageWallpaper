@@ -35,6 +35,7 @@ internal sealed partial class SteamSession : IAsyncDisposable
     private readonly SemaphoreSlim contentServerGate = new(1, 1);
     private readonly object stateGate = new();
     private readonly ConcurrentDictionary<(uint DepotId, string Host), SteamContent.CDNAuthToken> cdnTokens = new();
+    private readonly ConcurrentDictionary<(uint DepotId, string Host), SemaphoreSlim> cdnTokenGates = new();
     private readonly ConcurrentDictionary<string, int> contentServerFailures = new(StringComparer.OrdinalIgnoreCase);
     private readonly Task callbackLoop;
     private TaskCompletionSource<bool>? connectedSource;
@@ -291,29 +292,43 @@ internal sealed partial class SteamSession : IAsyncDisposable
     public async Task<(Server Server, string? Token)> GetDownloadServerAsync(uint depotId, int offset, CancellationToken cancellationToken)
     {
         var servers = await GetContentServersAsync(cancellationToken).ConfigureAwait(false);
-        var eligible = servers
-            .OrderBy(server => contentServerFailures.TryGetValue(server.Host!, out var failures) ? failures : 0)
-            .ThenBy(server => server.WeightedLoad)
-            .ToArray();
-        if (eligible.Length == 0) throw new ServiceException("NO_CONTENT_SERVER", "Steam returned no eligible content server.");
-        var selection = unchecked((uint)(Interlocked.Increment(ref contentServerCursor) + offset));
-        var selected = eligible[selection % (uint)eligible.Length];
+        var selected = SelectDownloadServer(servers, contentServerFailures,
+            unchecked((uint)(Interlocked.Increment(ref contentServerCursor) + offset)));
         var host = selected.Host!;
         var key = (depotId, host);
-        if (!cdnTokens.TryGetValue(key, out var auth) || auth.Expiration <= DateTime.UtcNow.AddMinutes(1))
+        if (cdnTokens.TryGetValue(key, out var auth) && auth.Expiration > DateTime.UtcNow.AddMinutes(1))
+            return (selected, auth.Token);
+        var gate = cdnTokenGates.GetOrAdd(key, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            var result = await content.GetCDNAuthToken(AppId, depotId, host).WaitAsync(cancellationToken).ConfigureAwait(false);
-            if (result.Result == EResult.OK)
+            // Concurrent chunks for one host share the same authorization request.
+            if (!cdnTokens.TryGetValue(key, out auth) || auth.Expiration <= DateTime.UtcNow.AddMinutes(1))
             {
+                var result = await content.GetCDNAuthToken(AppId, depotId, host).WaitAsync(cancellationToken).ConfigureAwait(false);
+                if (result.Result != EResult.OK) return (selected, null);
                 auth = result;
                 cdnTokens[key] = result;
             }
-            else
-            {
-                return (selected, null);
-            }
+            return (selected, auth.Token);
         }
-        return (selected, auth.Token);
+        finally { gate.Release(); }
+    }
+
+    internal static Server SelectDownloadServer(Server[] servers, IReadOnlyDictionary<string, int> failures, uint cursor)
+    {
+        if (servers.Length == 0) throw new ServiceException("NO_CONTENT_SERVER", "Steam returned no eligible content server.");
+        var ranked = servers.Select(server => (Server: server, Failures: failures.GetValueOrDefault(server.Host!, 0))).ToArray();
+        var fewestFailures = ranked.Min(item => item.Failures);
+        // Reuse connections to a small healthy pool. Rotating through the entire sorted list
+        // defeated its ranking and repeatedly sent chunks to failing or overloaded hosts.
+        var eligible = ranked
+            .Where(item => item.Failures == fewestFailures)
+            .OrderBy(item => item.Server.WeightedLoad)
+            .Take(4)
+            .Select(item => item.Server)
+            .ToArray();
+        return eligible[cursor % (uint)eligible.Length];
     }
 
     public void ReportDownloadServerFailure(uint depotId, string? host)

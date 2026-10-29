@@ -121,81 +121,40 @@ internal sealed class EditorContentService(SteamSession session, ProtocolWriter 
         using var cdn = new Client(session.Client);
         using var cancellation = token.Register(cdn.Dispose);
         using var progress = new DownloadProgressTracker(writer, taskId);
-        var work = new List<(Entry Entry, string Path, DepotManifest.ChunkData[] Chunks)>();
-        long reusable = 0;
         writer.DownloadState(taskId, "validating", totalBytes: plan.DownloadBytes);
-        foreach (var target in targets)
+        var files = targets.Select(target => new EditorDownloadFile(target.Entry.Depot.Id, target.Entry.Depot.Key,
+            target.Entry.File, target.Entry.InstallPath, target.Path,
+            plan.Compatibility.SourceHashes.GetValueOrDefault(target.Entry.InstallPath))).ToArray();
+        var queue = new EditorDownloadQueue(progress, async (file, chunk, ct) =>
         {
-            token.ThrowIfCancellationRequested();
-            Directory.CreateDirectory(Path.GetDirectoryName(target.Path)!);
-            using var stream = new FileStream(target.Path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read);
-            stream.SetLength(checked((long)target.Entry.File.TotalSize));
-            var missing = new List<DepotManifest.ChunkData>();
-            foreach (var chunk in target.Entry.File.Chunks)
+            for (var attempt = 0; ; attempt++)
             {
-                token.ThrowIfCancellationRequested();
-                if (WorkshopDownloader.IsChunkValid(stream, chunk)) reusable += chunk.CompressedLength;
-                else missing.Add(chunk);
-            }
-            work.Add((target.Entry, target.Path, missing.ToArray()));
-        }
-        progress.Start(plan.DownloadBytes, reusable);
-        using var chunkSlots = new SemaphoreSlim(8, 8);
-        async Task DownloadFileAsync((Entry Entry, string Path, DepotManifest.ChunkData[] Chunks) file, CancellationToken fileToken)
-        {
-            fileToken.ThrowIfCancellationRequested();
-            session.EnsureEditorAccount(plan.SteamId, plan.Epoch);
-            await Parallel.ForEachAsync(file.Chunks, new ParallelOptions { MaxDegreeOfParallelism = 6, CancellationToken = fileToken }, async (chunk, ct) =>
-            {
-                await chunkSlots.WaitAsync(ct).ConfigureAwait(false);
+                ct.ThrowIfCancellationRequested();
+                session.EnsureEditorAccount(plan.SteamId, plan.Epoch);
+                var server = await session.GetDownloadServerAsync(file.DepotId, attempt, ct).ConfigureAwait(false);
+                using var transfer = progress.BeginTransfer(chunk.CompressedLength, file.InstallPath);
+                DownloadContext.Current.Value = transfer;
                 try
                 {
-                    progress.CurrentFile = file.Entry.InstallPath;
-                    for (var attempt = 0; ; attempt++)
-                    {
-                        ct.ThrowIfCancellationRequested();
-                        session.EnsureEditorAccount(plan.SteamId, plan.Epoch);
-                        var server = await session.GetDownloadServerAsync(file.Entry.Depot.Id, attempt, ct).ConfigureAwait(false);
-                        using var transfer = progress.BeginTransfer(chunk.CompressedLength);
-                        DownloadContext.Current.Value = transfer;
-                        try
-                        {
-                            var buffer = new byte[chunk.UncompressedLength];
-                            var count = await cdn.DownloadDepotChunkAsync(file.Entry.Depot.Id, chunk, server.Server, buffer, file.Entry.Depot.Key, cdnAuthToken: server.Token).WaitAsync(ct).ConfigureAwait(false);
-                            if (count != buffer.Length || DepotChunk.AdlerHash(buffer) != chunk.Checksum)
-                                throw new IOException("Steam chunk validation failed.");
-                            using var handle = File.OpenHandle(file.Path, FileMode.Open, FileAccess.Write, FileShare.ReadWrite, FileOptions.Asynchronous | FileOptions.RandomAccess);
-                            await RandomAccess.WriteAsync(handle, buffer, checked((long)chunk.Offset), ct).ConfigureAwait(false);
-                            transfer.Complete();
-                            session.ReportDownloadServerSuccess(server.Server.Host);
-                            break;
-                        }
-                        catch (Exception) when (!ct.IsCancellationRequested && attempt < 3)
-                        {
-                            session.ReportDownloadServerFailure(file.Entry.Depot.Id, server.Server.Host);
-                            await Task.Delay(500 * (attempt + 1), ct).ConfigureAwait(false);
-                        }
-                        finally { DownloadContext.Current.Value = null; }
-                    }
+                    var buffer = new byte[chunk.UncompressedLength];
+                    var count = await cdn.DownloadDepotChunkAsync(file.DepotId, chunk, server.Server, buffer, file.DepotKey, cdnAuthToken: server.Token).WaitAsync(ct).ConfigureAwait(false);
+                    if (count != buffer.Length || DepotChunk.AdlerHash(buffer) != chunk.Checksum)
+                        throw new IOException("Steam chunk validation failed.");
+                    using var handle = File.OpenHandle(file.Path, FileMode.Open, FileAccess.Write, FileShare.ReadWrite, FileOptions.Asynchronous | FileOptions.RandomAccess);
+                    await RandomAccess.WriteAsync(handle, buffer, checked((long)chunk.Offset), ct).ConfigureAwait(false);
+                    transfer.Complete();
+                    session.ReportDownloadServerSuccess(server.Server.Host);
+                    break;
                 }
-                finally { chunkSlots.Release(); }
-            }).ConfigureAwait(false);
-            using var validation = File.OpenRead(file.Path);
-            if (!IsFileValid(validation, file.Entry.File.TotalSize, file.Entry.File.FileHash))
-                throw new ServiceException("VALIDATION_FAILED", "Downloaded file failed verification: " + file.Entry.InstallPath);
-            var name = file.Entry.InstallPath;
-            if (plan.Compatibility.SourceHashes.TryGetValue(name, out var expected))
-            {
-                validation.Position = 0;
-                if (!Convert.ToHexString(SHA256.HashData(validation)).Equals(expected, StringComparison.OrdinalIgnoreCase))
-                    throw new ServiceException("EDITOR_VERSION_UNAVAILABLE", "The version provided by Steam needs a newer Mirage editor adapter.");
+                catch (Exception) when (!ct.IsCancellationRequested && attempt < 3)
+                {
+                    session.ReportDownloadServerFailure(file.DepotId, server.Server.Host);
+                    await Task.Delay(500 * (attempt + 1), ct).ConfigureAwait(false);
+                }
+                finally { DownloadContext.Current.Value = null; }
             }
-        }
-        foreach (var file in work.Where(item => plan.Compatibility.SourceHashes.ContainsKey(item.Entry.InstallPath)))
-            await DownloadFileAsync(file, token).ConfigureAwait(false);
-        await Parallel.ForEachAsync(work.Where(item => !plan.Compatibility.SourceHashes.ContainsKey(item.Entry.InstallPath)),
-            new ParallelOptions { MaxDegreeOfParallelism = 8, CancellationToken = token },
-            async (file, ct) => await DownloadFileAsync(file, ct).ConfigureAwait(false)).ConfigureAwait(false);
+        });
+        await queue.RunAsync(files, token).ConfigureAwait(false);
         progress.Stop();
         session.EnsureEditorAccount(plan.SteamId, plan.Epoch);
         WorkshopDownloader.ValidateNoLinks(root, token);

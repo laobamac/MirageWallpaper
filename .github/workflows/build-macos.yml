@@ -284,6 +284,7 @@ jobs:
       - name: Test editor packaging and installation
         shell: bash
         run: |
+          dotnet run --project SteamService.Tests
           python3 Mirage/Tests/run_editor_packaging.py
           python3 Mirage/Tests/run_editor_installation.py
           python3 Mirage/Tests/run_editor_runtime_download.py
