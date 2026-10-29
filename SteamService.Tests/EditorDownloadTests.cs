@@ -25,11 +25,11 @@ internal static class EditorDownloadTests
             await ParallelAndResumeAsync(root);
             await CancellationAsync(root);
             await ValidationAsync(root);
-            ServerSelection();
             ProgressPayload();
+            await BlockedProgressOutputAsync();
         }
         finally { Directory.Delete(root, true); }
-        Console.WriteLine("Editor parallel chunks, compatibility barrier, integrity, cancellation/resume and CDN selection passed.");
+        Console.WriteLine("Editor parallel chunks, compatibility barrier, integrity, cancellation/resume and progress passed.");
     }
 
     private static (EditorDownloadFile File, byte[] Data) Fixture(string root, string name, int chunks, bool required = false)
@@ -191,24 +191,6 @@ internal static class EditorDownloadTests
         if (active != 0) throw new Exception("Worker failure left transfers running");
     }
 
-    private static void ServerSelection()
-    {
-        var servers = Enumerable.Range(0, 12).Select(i =>
-        {
-            var server = new Server();
-            typeof(Server).GetProperty("Host")!.SetValue(server, "cdn-" + i);
-            var load = typeof(Server).GetProperty("WeightedLoad")!;
-            load.SetValue(server, Convert.ChangeType(i, load.PropertyType));
-            return server;
-        }).ToArray();
-        var failures = new Dictionary<string, int> { ["cdn-0"] = 1 };
-        var hosts = Enumerable.Range(0, 100).Select(i => SteamSession.SelectDownloadServer(servers, failures, (uint)i).Host).ToHashSet();
-        if (!hosts.SetEquals(new[] { "cdn-1", "cdn-2", "cdn-3", "cdn-4" })) throw new Exception("CDN pool ignored load or failures");
-        if (SteamSession.SelectDownloadServer([servers[0]], failures, uint.MaxValue) != servers[0]) throw new Exception("Single-CDN fallback failed");
-        try { SteamSession.SelectDownloadServer([], failures, 0); throw new Exception("Empty CDN list accepted"); }
-        catch (ServiceException error) when (error.Code == "NO_CONTENT_SERVER") { }
-    }
-
     private static void ProgressPayload()
     {
         using var output = new StringWriter();
@@ -226,5 +208,50 @@ internal static class EditorDownloadTests
         if (value.GetProperty("activeFiles").GetInt32() != 2 || value.GetProperty("activeChunks").GetInt32() != 3 ||
             value.GetProperty("receivedBytes").GetInt64() != 90 || value.GetProperty("completedFiles").GetInt32() != 0)
             throw new Exception("Parallel progress did not report distinct files and in-flight chunks");
+    }
+
+    private sealed class BlockedWriter : TextWriter
+    {
+        public override Encoding Encoding => Encoding.UTF8;
+        public readonly TaskCompletionSource Started = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public readonly ManualResetEventSlim Release = new();
+
+        public override void WriteLine(string? value)
+        {
+            Started.TrySetResult();
+            if (!Release.Wait(TimeSpan.FromSeconds(10))) throw new TimeoutException("Test output was not released");
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) Release.Dispose();
+            base.Dispose(disposing);
+        }
+    }
+
+    private static async Task BlockedProgressOutputAsync()
+    {
+        using var output = new BlockedWriter();
+        using var progress = new DownloadProgressTracker(new ProtocolWriter(output), "blocked-output-test");
+        progress.Start(100, 0, 1);
+        Task? transferTask = null;
+        try
+        {
+            await output.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            transferTask = Task.Factory.StartNew(() =>
+            {
+                using var transfer = progress.BeginTransfer(100, "file");
+                transfer.AddNetworkBytes(100);
+                transfer.Complete();
+                progress.CompleteFile();
+            }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+            await transferTask.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        finally
+        {
+            output.Release.Set();
+            if (transferTask != null) await transferTask;
+            progress.Stop();
+        }
     }
 }

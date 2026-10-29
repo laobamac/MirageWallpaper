@@ -18,6 +18,7 @@ internal sealed class DownloadProgressTracker : IDisposable
     private readonly ProtocolWriter writer;
     private readonly string taskId;
     private readonly object gate = new();
+    private readonly object emissionGate = new();
     private readonly Timer timer;
     private readonly Queue<(DateTime Time, long Bytes)> samples = new();
     private long networkBytes;
@@ -100,6 +101,12 @@ internal sealed class DownloadProgressTracker : IDisposable
 
     private void Emit(bool force = false)
     {
+        // Serializing stdout can block. Keep it away from the lock used by network reads.
+        lock (emissionGate) EmitOrdered(force);
+    }
+
+    private void EmitOrdered(bool force)
+    {
         long received;
         long total;
         double speed;
@@ -121,12 +128,11 @@ internal sealed class DownloadProgressTracker : IDisposable
             activeFiles = transfers.Where(transfer => transfer.FileName != null).Select(transfer => transfer.FileName).Distinct().Count();
             activeChunks = transfers.Count;
             currentFile = transfers.FirstOrDefault(transfer => transfer.FileName != null)?.FileName ?? CurrentFile;
-            var remaining = Math.Max(0, total - received);
-            double? eta = speed > 1 && remaining > 0 ? remaining / speed : null;
-            // Keep timer snapshots ordered with Stop so an older callback cannot overwrite final progress.
-            writer.DownloadState(taskId, "downloading", received, total, speed, eta, currentFile: currentFile,
-                totalFiles: files, completedFiles: completed, activeFiles: activeFiles, activeChunks: activeChunks);
         }
+        var remaining = Math.Max(0, total - received);
+        double? eta = speed > 1 && remaining > 0 ? remaining / speed : null;
+        writer.DownloadState(taskId, "downloading", received, total, speed, eta, currentFile: currentFile,
+            totalFiles: files, completedFiles: completed, activeFiles: activeFiles, activeChunks: activeChunks);
     }
 
     public void Dispose()
