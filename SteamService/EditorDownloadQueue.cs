@@ -19,9 +19,9 @@ internal sealed class EditorDownloadQueue(DownloadProgressTracker progress,
     internal const int MaxConcurrentChunks = 16;
     private sealed class PendingFile(EditorDownloadFile file, DepotManifest.ChunkData[] chunks)
     {
-        public readonly EditorDownloadFile File = file;
+        public readonly EditorDownloadFile Entry = file;
         public readonly DepotManifest.ChunkData[] Chunks = chunks;
-        public int Remaining = chunks.Length;
+        public int RemainingChunks = chunks.Length;
     }
 
     public async Task RunAsync(IReadOnlyList<EditorDownloadFile> files, CancellationToken token)
@@ -48,8 +48,8 @@ internal sealed class EditorDownloadQueue(DownloadProgressTracker progress,
         }
 
         progress.Start(files.Sum(file => file.Manifest.Chunks.Sum(chunk => (long)chunk.CompressedLength)), reusable, files.Count);
-        await RunBatchAsync(pending.Where(file => file.File.CompatibilityHash != null), token).ConfigureAwait(false);
-        await RunBatchAsync(pending.Where(file => file.File.CompatibilityHash == null), token).ConfigureAwait(false);
+        await RunBatchAsync(pending.Where(file => file.Entry.CompatibilityHash != null), token).ConfigureAwait(false);
+        await RunBatchAsync(pending.Where(file => file.Entry.CompatibilityHash == null), token).ConfigureAwait(false);
     }
 
     private async Task RunBatchAsync(IEnumerable<PendingFile> batch, CancellationToken token)
@@ -59,7 +59,7 @@ internal sealed class EditorDownloadQueue(DownloadProgressTracker progress,
             foreach (var file in batch)
             {
                 token.ThrowIfCancellationRequested();
-                if (file.Chunks.Length == 0) Validate(file.File, token);
+                if (file.Chunks.Length == 0) ValidateFile(file.Entry, token);
                 foreach (var chunk in file.Chunks) yield return (file, chunk);
             }
         }
@@ -68,16 +68,25 @@ internal sealed class EditorDownloadQueue(DownloadProgressTracker progress,
             new ParallelOptions { MaxDegreeOfParallelism = MaxConcurrentChunks, CancellationToken = token },
             async (work, ct) =>
             {
-                await downloadChunk(work.File.File, work.Chunk, ct).ConfigureAwait(false);
-                if (Interlocked.Decrement(ref work.File.Remaining) == 0) Validate(work.File.File, ct);
+                await downloadChunk(work.File.Entry, work.Chunk, ct).ConfigureAwait(false);
+                if (Interlocked.Decrement(ref work.File.RemainingChunks) == 0) ValidateFile(work.File.Entry, ct);
             }).ConfigureAwait(false);
     }
 
-    private void Validate(EditorDownloadFile file, CancellationToken token)
+    internal static bool IsFileValid(Stream stream, ulong expectedSize, byte[] expectedHash)
+    {
+        if (checked((ulong)stream.Length) != expectedSize) return false;
+        // Empty depot files may have an unset SHA-1. Their length fully determines their contents.
+        if (expectedSize == 0) return true;
+        stream.Position = 0;
+        return SHA1.HashData(stream).SequenceEqual(expectedHash);
+    }
+
+    private void ValidateFile(EditorDownloadFile file, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
         using var stream = File.OpenRead(file.Path);
-        if (!EditorContentService.IsFileValid(stream, file.Manifest.TotalSize, file.Manifest.FileHash))
+        if (!IsFileValid(stream, file.Manifest.TotalSize, file.Manifest.FileHash))
             throw new ServiceException("VALIDATION_FAILED", "Downloaded file failed verification: " + file.InstallPath);
         if (file.CompatibilityHash != null)
         {

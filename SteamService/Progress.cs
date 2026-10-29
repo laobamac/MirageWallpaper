@@ -29,7 +29,7 @@ internal sealed class DownloadProgressTracker : IDisposable
     private int completedFiles;
     private readonly HashSet<DownloadTransfer> transfers = [];
     private bool active;
-    public string? CurrentFile { get; set; }
+    private string? lastFileName;
 
     public DownloadProgressTracker(ProtocolWriter writer, string taskId)
     {
@@ -67,7 +67,7 @@ internal sealed class DownloadProgressTracker : IDisposable
         lock (gate)
         {
             transfers.Add(transfer);
-            if (fileName != null) CurrentFile = fileName;
+            if (fileName != null) lastFileName = fileName;
         }
         return transfer;
     }
@@ -127,7 +127,7 @@ internal sealed class DownloadProgressTracker : IDisposable
             completed = completedFiles;
             activeFiles = transfers.Where(transfer => transfer.FileName != null).Select(transfer => transfer.FileName).Distinct().Count();
             activeChunks = transfers.Count;
-            currentFile = transfers.FirstOrDefault(transfer => transfer.FileName != null)?.FileName ?? CurrentFile;
+            currentFile = transfers.FirstOrDefault(transfer => transfer.FileName != null)?.FileName ?? lastFileName;
         }
         var remaining = Math.Max(0, total - received);
         double? eta = speed > 1 && remaining > 0 ? remaining / speed : null;

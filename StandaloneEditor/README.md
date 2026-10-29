@@ -32,6 +32,8 @@ Mirage 主窗口左下角的「编辑器」会复用现有 Steam 登录。首次
 
 Steam 原版内容使用所有文件共用的分块队列，最多同时下载 16 个分块；兼容性文件先并行下载并校验，再下载其余内容。界面显示已完成文件数、同时传输的文件与分块数，支持简体中文、繁体中文和英文。CDN 沿用创意工坊原有的完整节点轮询与鉴权策略；继续下载时只获取缺失或损坏的分块。
 
+下载计划与 Steam 传输由 `EditorContentService` 管理，分块调度、断点复用和文件校验集中在 `EditorDownloadQueue`。`DownloadProgressTracker` 使用独立的输出锁，向主程序上报进度时不占用网络计数锁。Steam 节点选择和鉴权由壁纸下载共用；服务器的负载排序不代表当前网络的实际下载速度，调整共用策略需要验证两条下载路径的实际吞吐。
+
 编辑器启动成功后，Mirage 主窗口与启动浮层一起淡出，并收起 Mirage 的 Dock 图标。编辑器显示在前台，Mirage 可通过菜单栏入口重新打开。
 
 「设置 → 通用 → 管理编辑器」及入口的右键菜单提供修复、缓存清理和卸载。关闭浮层不停止下载；取消后可再次继续。缓存清理保留编辑器偏好，卸载保留用户工程。运行中的编辑器须先保存并退出，再进行修复或卸载。
@@ -162,7 +164,10 @@ python3 StandaloneEditor/tools/package_support.py
 dotnet run --project SteamService.Tests
 python3 Mirage/Tests/run_editor_installation.py
 python3 Mirage/Tests/run_editor_packaging.py
+python3 Mirage/Tests/run_editor_runtime_download.py
 ```
+
+Steam 服务测试使用本地合成文件，覆盖并发上限、兼容性校验顺序、取消续传、损坏分块修复及进度输出阻塞；不连接 Steam 或下载原版内容。运行组件下载测试使用本机 HTTP 服务验证续传、校验与缓存复用。
 
 完整初始化测试可使用隔离目录中的原版文件：`run_editor_installation.py --assemble-root /path/to/test/Editor --support /path/to/EditorSupport`。原版文件应位于测试目录的 `downloads/` 中；测试会组装安装并验证产物，不使用生产目录。
 

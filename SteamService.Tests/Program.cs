@@ -7,7 +7,6 @@
 //
 
 using System.Reflection;
-using System.Security.Cryptography;
 using MirageSteamService;
 using SteamKit2;
 using SteamKit2.Internal;
@@ -26,18 +25,6 @@ if (SteamSession.IsPersonalLicense(License(ELicenseFlags.None, 99), 42)) throw n
 if (SteamSession.IsPersonalLicense(License(ELicenseFlags.None, 42, ELicenseType.SinglePurchaseLimitedUse), 42)) throw new Exception("Trial license accepted");
 if (EditorContentService.InstallPath("distribution\\bin\\wallpaperui.exe") != "bin/wallpaperui.exe") throw new Exception("Steam distribution layout was not installed");
 if (EditorContentService.InstallPath("ui/dist/scripts/scripts.js") != "ui/dist/scripts/scripts.js") throw new Exception("Shared asset path was changed");
-using (var empty = new MemoryStream())
-{
-    if (!EditorContentService.IsFileValid(empty, 0, new byte[20])) throw new Exception("Empty depot file with unset hash rejected");
-    if (!EditorContentService.IsFileValid(empty, 0, SHA1.HashData([]))) throw new Exception("Empty depot file with SHA-1 rejected");
-    if (EditorContentService.IsFileValid(empty, 1, new byte[20])) throw new Exception("Truncated file accepted");
-}
-using (var data = new MemoryStream([1, 2, 3]))
-{
-    if (!EditorContentService.IsFileValid(data, 3, SHA1.HashData(new byte[] { 1, 2, 3 }))) throw new Exception("Valid depot file rejected");
-    if (EditorContentService.IsFileValid(data, 3, new byte[20])) throw new Exception("Corrupt depot file accepted");
-    if (EditorContentService.IsFileValid(data, 0, new byte[20])) throw new Exception("Nonempty content accepted for empty depot file");
-}
 var root = Path.Combine(Path.GetTempPath(), "mirage-editor-path-tests-" + Guid.NewGuid());
 foreach (var path in new[] { "../escape", "/tmp/escape", "folder/../../escape", "folder\\..\\..\\escape" })
 {
@@ -47,5 +34,6 @@ foreach (var path in new[] { "../escape", "/tmp/escape", "folder/../../escape", 
 await using var session = new SteamSession(new ProtocolWriter());
 try { await session.RequireEditorOwnershipAsync(CancellationToken.None); throw new Exception("Unauthenticated account accepted"); }
 catch (ServiceException error) when (error.Code == "NOT_AUTHENTICATED") { }
-Console.WriteLine("Ownership classification, unauthenticated access, manifest path containment and file integrity passed.");
+Console.WriteLine("Ownership classification, unauthenticated access, manifest path containment passed.");
 await EditorDownloadTests.RunAsync();
+await DownloadProgressTests.RunAsync();

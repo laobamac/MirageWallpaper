@@ -6,7 +6,6 @@
 //  Copyright © 2026 王孝慈. All rights reserved.
 //
 
-using System.Security.Cryptography;
 using SteamKit2;
 using SteamKit2.CDN;
 
@@ -16,7 +15,7 @@ internal sealed record EditorCompatibility(string Version, string Branch, Dictio
 
 internal sealed class EditorContentService(SteamSession session, ProtocolWriter writer)
 {
-    private sealed record Depot(uint Id, ulong ManifestId, byte[] Key, DepotManifest Manifest);
+    private sealed record Depot(uint Id, ulong ManifestId, byte[] Key);
     private sealed record Entry(Depot Depot, DepotManifest.FileData File, string InstallPath);
     private sealed record Plan(string Id, string SteamId, long Epoch, DateTime Created,
         EditorCompatibility Compatibility, Entry[] Files, long DownloadBytes, long InstalledBytes);
@@ -27,15 +26,6 @@ internal sealed class EditorContentService(SteamSession session, ProtocolWriter 
         var normalized = name.Replace('\\', '/');
         return normalized.StartsWith("distribution/", StringComparison.OrdinalIgnoreCase)
             ? normalized["distribution/".Length..] : normalized;
-    }
-
-    internal static bool IsFileValid(Stream stream, ulong expectedSize, byte[] expectedHash)
-    {
-        if (checked((ulong)stream.Length) != expectedSize) return false;
-        // Empty depot files may have an unset SHA-1. Their length fully determines their contents.
-        if (expectedSize == 0) return true;
-        stream.Position = 0;
-        return SHA1.HashData(stream).SequenceEqual(expectedHash);
     }
 
     public async Task<object> PrepareAsync(EditorCompatibility compatibility, CancellationToken token)
@@ -81,7 +71,7 @@ internal sealed class EditorContentService(SteamSession session, ProtocolWriter 
                 }
             }
             if (manifest?.Files == null) throw new ServiceException("EMPTY_MANIFEST", "Steam returned no Wallpaper Engine files.");
-            var depot = new Depot(id, manifestId, key.DepotKey, manifest);
+            var depot = new Depot(id, manifestId, key.DepotKey);
             foreach (var file in manifest.Files)
             {
                 if (file.Flags.HasFlag(EDepotFileFlag.Symlink)) throw new ServiceException("UNSAFE_PATH", "A Steam file is a symbolic link.");
@@ -125,35 +115,8 @@ internal sealed class EditorContentService(SteamSession session, ProtocolWriter 
         var files = targets.Select(target => new EditorDownloadFile(target.Entry.Depot.Id, target.Entry.Depot.Key,
             target.Entry.File, target.Entry.InstallPath, target.Path,
             plan.Compatibility.SourceHashes.GetValueOrDefault(target.Entry.InstallPath))).ToArray();
-        var queue = new EditorDownloadQueue(progress, async (file, chunk, ct) =>
-        {
-            for (var attempt = 0; ; attempt++)
-            {
-                ct.ThrowIfCancellationRequested();
-                session.EnsureEditorAccount(plan.SteamId, plan.Epoch);
-                var server = await session.GetDownloadServerAsync(file.DepotId, attempt, ct).ConfigureAwait(false);
-                using var transfer = progress.BeginTransfer(chunk.CompressedLength, file.InstallPath);
-                DownloadContext.Current.Value = transfer;
-                try
-                {
-                    var buffer = new byte[chunk.UncompressedLength];
-                    var count = await cdn.DownloadDepotChunkAsync(file.DepotId, chunk, server.Server, buffer, file.DepotKey, cdnAuthToken: server.Token).WaitAsync(ct).ConfigureAwait(false);
-                    if (count != buffer.Length || DepotChunk.AdlerHash(buffer) != chunk.Checksum)
-                        throw new IOException("Steam chunk validation failed.");
-                    using var handle = File.OpenHandle(file.Path, FileMode.Open, FileAccess.Write, FileShare.ReadWrite, FileOptions.Asynchronous | FileOptions.RandomAccess);
-                    await RandomAccess.WriteAsync(handle, buffer, checked((long)chunk.Offset), ct).ConfigureAwait(false);
-                    transfer.Complete();
-                    session.ReportDownloadServerSuccess(server.Server.Host);
-                    break;
-                }
-                catch (Exception) when (!ct.IsCancellationRequested && attempt < 3)
-                {
-                    session.ReportDownloadServerFailure(file.DepotId, server.Server.Host);
-                    await Task.Delay(500 * (attempt + 1), ct).ConfigureAwait(false);
-                }
-                finally { DownloadContext.Current.Value = null; }
-            }
-        });
+        var queue = new EditorDownloadQueue(progress,
+            (file, chunk, ct) => DownloadChunkAsync(plan, cdn, progress, file, chunk, ct));
         await queue.RunAsync(files, token).ConfigureAwait(false);
         progress.Stop();
         session.EnsureEditorAccount(plan.SteamId, plan.Epoch);
@@ -165,5 +128,36 @@ internal sealed class EditorContentService(SteamSession session, ProtocolWriter 
             if (!allowed.Contains(path)) File.Delete(path);
         }
         return new WorkshopDownloader.DownloadResult(plan.DownloadBytes, root);
+    }
+
+    private async Task DownloadChunkAsync(Plan plan, Client cdn, DownloadProgressTracker progress,
+        EditorDownloadFile file, DepotManifest.ChunkData chunk, CancellationToken token)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            token.ThrowIfCancellationRequested();
+            session.EnsureEditorAccount(plan.SteamId, plan.Epoch);
+            var server = await session.GetDownloadServerAsync(file.DepotId, attempt, token).ConfigureAwait(false);
+            using var transfer = progress.BeginTransfer(chunk.CompressedLength, file.InstallPath);
+            DownloadContext.Current.Value = transfer;
+            try
+            {
+                var buffer = new byte[chunk.UncompressedLength];
+                var count = await cdn.DownloadDepotChunkAsync(file.DepotId, chunk, server.Server, buffer, file.DepotKey, cdnAuthToken: server.Token).WaitAsync(token).ConfigureAwait(false);
+                if (count != buffer.Length || DepotChunk.AdlerHash(buffer) != chunk.Checksum)
+                    throw new IOException("Steam chunk validation failed.");
+                using var handle = File.OpenHandle(file.Path, FileMode.Open, FileAccess.Write, FileShare.ReadWrite, FileOptions.Asynchronous | FileOptions.RandomAccess);
+                await RandomAccess.WriteAsync(handle, buffer, checked((long)chunk.Offset), token).ConfigureAwait(false);
+                transfer.Complete();
+                session.ReportDownloadServerSuccess(server.Server.Host);
+                break;
+            }
+            catch (Exception) when (!token.IsCancellationRequested && attempt < 3)
+            {
+                session.ReportDownloadServerFailure(file.DepotId, server.Server.Host);
+                await Task.Delay(500 * (attempt + 1), token).ConfigureAwait(false);
+            }
+            finally { DownloadContext.Current.Value = null; }
+        }
     }
 }

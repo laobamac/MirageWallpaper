@@ -144,8 +144,9 @@ final class EditorManager: ObservableObject {
         state = .downloading
         downloadingRuntime = false
         phase = "正在校验可继续下载的文件…"
-        lastError = nil; currentFile = ""; receivedBytes = 0; bytesPerSecond = 0; etaSeconds = nil
-        totalFiles = 0; completedFiles = 0; activeFiles = 0; activeChunks = 0
+        lastError = nil
+        receivedBytes = 0
+        resetTransferProgress()
         let id = UUID(); operation = id
         steam.downloadEditor(planId: planId, output: EditorInstallation.downloads) { [weak self] event in
             Task { @MainActor in
@@ -181,9 +182,7 @@ final class EditorManager: ObservableObject {
         guard catalog.archive != nil else { prepare(catalog: catalog, operation: id); return }
         downloadingRuntime = true
         phase = "正在准备编辑器运行组件…"
-        currentFile = ""
-        totalFiles = 0; completedFiles = 0; activeFiles = 0; activeChunks = 0
-        bytesPerSecond = 0; etaSeconds = nil
+        resetTransferProgress()
         task = Task {
             do {
                 try await EditorRuntimeDownload.prepare(catalog: catalog) { [weak self] progress in
@@ -210,6 +209,16 @@ final class EditorManager: ObservableObject {
                 else if operation == id { fail(error) }
             }
         }
+    }
+
+    private func resetTransferProgress() {
+        currentFile = ""
+        totalFiles = 0
+        completedFiles = 0
+        activeFiles = 0
+        activeChunks = 0
+        bytesPerSecond = 0
+        etaSeconds = nil
     }
 
     private func prepare(catalog: EditorCatalog, operation id: UUID) {
