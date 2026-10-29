@@ -106,6 +106,7 @@ struct ContentView: View {
                     VStack(spacing: 5) {
                         TopTabBar(navigationModel: navigationModel,
                                   wallpaperViewModel: wallpaperViewModel)
+                        DesktopConflictBanner(wallpaperViewModel: wallpaperViewModel, isActive: interfaceActive)
                         ProjectFeedbackBanner()
                         ZStack {
                             if loadedSections.contains(.installed) {
