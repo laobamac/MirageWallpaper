@@ -31,7 +31,17 @@ struct TopTabBar: View {
     }
 
     var body: some View {
-        HStack(spacing: 10) {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 10) { tabs; Spacer(minLength: 10); actions }
+            VStack(alignment: .leading, spacing: 6) {
+                tabs
+                HStack { Spacer(); actions }
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    private var tabs: some View {
             HStack(spacing: 4) {
                 tab(section: .installed, title: "已安装", systemImage: "square.and.arrow.down.fill")
                 tab(section: .discover, title: "发现", systemImage: "sparkle.magnifyingglass")
@@ -42,8 +52,9 @@ struct TopTabBar: View {
             .mirageGlass(in: Capsule(), fallback: AnyShapeStyle(.quaternary.opacity(0.6)), interactive: false)
             .fixedSize()
 
-            Spacer(minLength: 10)
+    }
 
+    private var actions: some View {
             HStack(spacing: 2) {
                 chromeButton(
                     title: "移动端",
@@ -60,8 +71,6 @@ struct TopTabBar: View {
             .padding(3)
             .mirageGlass(in: Capsule(), fallback: AnyShapeStyle(.quaternary.opacity(0.32)), interactive: false)
             .fixedSize()
-        }
-        .padding(.vertical, 2)
     }
 
     // A single segmented pill. The selected segment gets an accent-filled

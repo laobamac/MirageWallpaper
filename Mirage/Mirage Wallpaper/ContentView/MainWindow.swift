@@ -8,7 +8,7 @@ import Cocoa
 import SwiftUI
 
 class MainWindowController: NSWindowController, NSWindowDelegate {
-    private let minimumContentSize = NSSize(width: 1300, height: 640)
+    private let minimumContentSize = NSSize(width: 800, height: 640)
 
     override var window: NSWindow! {
         get {
