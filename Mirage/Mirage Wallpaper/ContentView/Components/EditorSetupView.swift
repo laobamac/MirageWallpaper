@@ -27,7 +27,7 @@ struct EditorSetupView: View {
             if case .waitingForQR = login.loginState { return 530 }
             return 410
         case .confirmation: return 365
-        case .downloading: return 320
+        case .downloading: return 360
         case .checking, .preparing: return 235
         case .failed, .notOwned: return editor.installed || editor.usage.reclaimable > 0 ? 380 : 270
         case .ready, .idle: return 330
@@ -133,6 +133,14 @@ struct EditorSetupView: View {
                 Spacer()
                 Text(bytes(Int64(editor.bytesPerSecond)) + "/s")
             }.font(.caption.monospacedDigit())
+            if editor.totalFiles > 0 {
+                Text(L("文件进度：%d / %d", editor.completedFiles, editor.totalFiles))
+                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+            }
+            if editor.activeChunks > 0 {
+                Text(L("正在并行下载 %d 个文件（%d 个分块）", editor.activeFiles, editor.activeChunks))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             if !editor.currentFile.isEmpty {
                 Text(editor.currentFile).font(.caption).foregroundStyle(.secondary).lineLimit(2).truncationMode(.middle).textSelection(.enabled)
             }

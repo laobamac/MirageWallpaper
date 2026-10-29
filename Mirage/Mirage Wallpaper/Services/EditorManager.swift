@@ -20,6 +20,10 @@ final class EditorManager: ObservableObject {
     @Published private var lastError: Error?
     var errorMessage: String? { lastError?.localizedDescription }
     @Published private(set) var currentFile = ""
+    @Published private(set) var totalFiles = 0
+    @Published private(set) var completedFiles = 0
+    @Published private(set) var activeFiles = 0
+    @Published private(set) var activeChunks = 0
     @Published private(set) var receivedBytes: Int64 = 0
     @Published private(set) var totalBytes: Int64 = 0
     @Published private(set) var bytesPerSecond: Double = 0
@@ -141,6 +145,7 @@ final class EditorManager: ObservableObject {
         downloadingRuntime = false
         phase = "正在校验可继续下载的文件…"
         lastError = nil; currentFile = ""; receivedBytes = 0; bytesPerSecond = 0; etaSeconds = nil
+        totalFiles = 0; completedFiles = 0; activeFiles = 0; activeChunks = 0
         let id = UUID(); operation = id
         steam.downloadEditor(planId: planId, output: EditorInstallation.downloads) { [weak self] event in
             Task { @MainActor in
@@ -154,6 +159,10 @@ final class EditorManager: ObservableObject {
                     self.bytesPerSecond = (event["bytesPerSecond"] as? NSNumber)?.doubleValue ?? 0
                     self.etaSeconds = (event["etaSeconds"] as? NSNumber)?.doubleValue
                     self.currentFile = event["currentFile"] as? String ?? ""
+                    self.totalFiles = (event["totalFiles"] as? NSNumber)?.intValue ?? 0
+                    self.completedFiles = (event["completedFiles"] as? NSNumber)?.intValue ?? 0
+                    self.activeFiles = (event["activeFiles"] as? NSNumber)?.intValue ?? 0
+                    self.activeChunks = (event["activeChunks"] as? NSNumber)?.intValue ?? 0
                 case "validating": self.phase = "正在校验下载文件…"
                 case "completed":
                     if self.cancelling { self.finishCancellation() }
@@ -173,6 +182,7 @@ final class EditorManager: ObservableObject {
         downloadingRuntime = true
         phase = "正在准备编辑器运行组件…"
         currentFile = ""
+        totalFiles = 0; completedFiles = 0; activeFiles = 0; activeChunks = 0
         bytesPerSecond = 0; etaSeconds = nil
         task = Task {
             do {
