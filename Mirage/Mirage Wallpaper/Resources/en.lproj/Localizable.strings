@@ -1434,3 +1434,12 @@
 "登录由本机直连 Steam，登录凭据保存在 macOS 钥匙串中。" = "This Mac connects directly to Steam. Sign-in credentials are stored in macOS Keychain.";
 "编辑器运行组件与此 Mac 的芯片架构不匹配。" = "The editor runtime does not match this Mac’s chip architecture.";
 "Apple Silicon 编辑器需要 macOS 26.5 或更高版本。" = "The Apple Silicon editor requires macOS 26.5 or later.";
+
+"编辑器组件信息不可用，请更新 Mirage 后重试。" = "Editor component information is unavailable. Update Mirage and try again.";
+"编辑器运行组件下载失败，请重试。已下载的内容会保留。" = "The editor runtime download failed. Try again; downloaded data will be kept.";
+"正在准备编辑器运行组件…" = "Preparing editor runtime components…";
+"编辑器运行组件" = "Editor runtime components";
+"正在下载编辑器运行组件…" = "Downloading editor runtime components…";
+"正在校验编辑器运行组件…" = "Verifying editor runtime components…";
+"正在解压编辑器运行组件…" = "Extracting editor runtime components…";
+"首次使用需要下载编辑器运行组件和 Wallpaper Engine。" = "First use requires downloading the editor runtime components and Wallpaper Engine.";

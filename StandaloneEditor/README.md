@@ -28,13 +28,13 @@
 
 ### 从 Mirage 打开
 
-Mirage 主窗口左下角的「编辑器」会复用现有 Steam 登录。首次使用在主窗口的浮层中验证当前账号的 Wallpaper Engine 永久自有许可证，并显示下载大小、预计安装占用和安装期间所需空间。点击「下载并安装」后从 Steam 下载原版组件，显示进度、当前文件、速度及预计剩余时间，完成本地组装后打开编辑器。
+Mirage 主窗口左下角的「编辑器」会复用现有 Steam 登录。首次使用在主窗口的浮层中验证当前账号的 Wallpaper Engine 永久自有许可证，并显示下载大小、预计安装占用和安装期间所需空间。点击「下载并安装」后从 Steam 获取原版文件，再按需获取对应芯片架构的运行组件；下载过程显示进度、当前文件、速度及预计剩余时间，完成校验和本地组装后打开编辑器。普通 Mirage 安装包仅携带小型组件清单。
 
 编辑器启动成功后，Mirage 主窗口与启动浮层一起淡出，并收起 Mirage 的 Dock 图标。编辑器显示在前台，Mirage 可通过菜单栏入口重新打开。
 
 「设置 → 通用 → 管理编辑器」及入口的右键菜单提供修复、缓存清理和卸载。关闭浮层不停止下载；取消后可再次继续。缓存清理保留编辑器偏好，卸载保留用户工程。运行中的编辑器须先保存并退出，再进行修复或卸载。
 
-安装数据位于 `~/Library/Application Support/Mirage/Editor/`：`active/` 存放当前安装，`downloads/` 存放可复用的 Steam 下载，`Projects/` 与 `UserData/` 分别保存工程和界面偏好。Steam 凭据只由 Mirage 的 Steam 服务管理，不传入 Wine 或编辑器网页。
+安装数据位于 `~/Library/Application Support/Mirage/Editor/`：`active/` 存放当前安装，`downloads/` 存放可复用的 Steam 下载，`runtime-downloads/` 与 `runtime-cache/` 保存可续传的组件包及已校验组件，`Projects/` 与 `UserData/` 分别保存工程和界面偏好。清理组件缓存不会移除当前可运行的编辑器。Steam 凭据只由 Mirage 的 Steam 服务管理，不传入 Wine 或编辑器网页。
 
 ### 独立开发环境
 
@@ -142,13 +142,17 @@ python3 StandaloneEditor/tools/package_support.py
 
 输出为被 Git 忽略的 `StandaloneEditor/dist/EditorSupport/`。包中仅包含自有适配组件、第三方运行依赖、许可证、校验清单及本地转换指令。原版 WE、包含原版代码的私有补丁清单、已初始化的 Wine prefix、用户配置及工程不会进入组件包。
 
-Mirage 构建步骤通过 `Mirage/scripts/bundle_editor_support.py` 验证、签名并嵌入该包。构建机可设置 `MIRAGE_EDITOR_SUPPORT` 指向已准备的组件目录，或设置 `MIRAGE_REQUIRE_EDITOR_SUPPORT=1` 要求默认目录提供组件。显式配置缺失、校验失败或架构不匹配都会终止构建。未配置组件的干净检出可以构建普通 Mirage；编辑器入口会提示该安装包没有运行组件。
+正式 Mirage 构建通过 `Mirage/scripts/bundle_editor_support.py` 嵌入 `StandaloneEditor/releases/<架构>.json` 下载清单，组件本体单独保存在版本化 GitHub Release 中。清单随应用签名，固定组件地址、大小、SHA-256、文件校验值和最低系统版本；应用只在确认安装后获取组件，校验归档及解压文件后才组装。发行 CI 要求两种架构各自提供清单，缺失时终止构建。
+
+`Prepare editor runtime downloads` 工作流从已通过原生验证的 ARM64 产物及维护机准备的 Intel 组件生成正式签名、公证、附加公证票据的组件包，并将包和清单上传至草稿 Release。维护时须先确认工作流成功，发布该 Release，再将两份清单更新到 `StandaloneEditor/releases/`；应用发布前应检查两个地址均可匿名访问。已发布的版本化资产不可替换。Wine/FEX 对应源码随组件 Release 单独提供。
+
+离线开发可显式设置 `MIRAGE_EDITOR_SUPPORT` 指向已准备的完整组件目录，此时仍验证、签名并嵌入该包。`MIRAGE_EDITOR_RUNTIME_MANIFESTS` 可指定本地下载清单目录，`MIRAGE_REQUIRE_EDITOR_SUPPORT=1` 要求构建提供清单或完整组件。显式配置缺失、校验失败或架构不匹配都会终止构建。
 
 组件目录支持单个架构的 `catalog.json`，或分别放在 `arm64/`、`x86_64/` 子目录的两个组件包。安装器按当前原生进程架构选择组件，不回退到其他架构。
 
 发行包将 Wine 引擎保存在编辑器应用内，保持其运行库和语言数据的相对目录，并对每个应用执行严格签名校验。原生文件选择服务随编辑器进程退出。
 
-安装器按 Steam 清单挂载原版内容，并将原版安装布局 `distribution/` 的内容映射到安装根目录。清单中的 depot/manifest 固定于当次安装计划，下载首先校验编辑器 EXE 与 UI 的 SHA-256，只有精确匹配的版本才应用转换指令。运行依赖随 Mirage 构建发布，WE 本体始终通过用户的 Steam 会话获取。
+安装器按 Steam 清单挂载原版内容，并将原版安装布局 `distribution/` 的内容映射到安装根目录。清单中的 depot/manifest 固定于当次安装计划，下载首先校验编辑器 EXE 与 UI 的 SHA-256，只有精确匹配的版本才应用转换指令。运行依赖由 Mirage 的签名清单按需选择，WE 本体始终通过用户的 Steam 会话获取。
 
 回归检查：
 

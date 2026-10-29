@@ -22,6 +22,29 @@ def bundle(app, root, architectures, environment):
     target = app / 'Contents/Resources/EditorSupport'
     required = environment.get('MIRAGE_REQUIRE_EDITOR_SUPPORT') == '1' or 'MIRAGE_EDITOR_SUPPORT' in environment
     if target.exists(): shutil.rmtree(target)
+    # Release apps carry only pinned download metadata. An explicit local payload
+    # remains available for offline development and installation regression tests.
+    manifests = Path(environment.get('MIRAGE_EDITOR_RUNTIME_MANIFESTS', root / 'StandaloneEditor/releases'))
+    if 'MIRAGE_EDITOR_SUPPORT' not in environment and (manifests.exists() or 'MIRAGE_EDITOR_RUNTIME_MANIFESTS' in environment):
+        for architecture in architectures:
+            manifest = manifests / (architecture + '.json')
+            if not manifest.is_file():
+                sys.exit('error: Editor runtime download manifest is missing for ' + architecture)
+            catalog = json.loads(manifest.read_text())
+            archive = catalog.get('archive', {})
+            from urllib.parse import urlparse
+            url = urlparse(archive.get('url', ''))
+            if (catalog.get('architecture') != architecture or not catalog.get('files') or
+                url.scheme != 'https' or url.netloc != 'github.com' or
+                not url.path.startswith('/laobamac/MirageWallpaper/releases/download/') or
+                len(archive.get('sha256', '')) != 64 or any(c not in '0123456789abcdef' for c in archive['sha256']) or
+                not 0 < archive.get('bytes', 0) <= 10 * 1024 ** 3):
+                sys.exit('error: Invalid editor runtime download manifest: ' + str(manifest))
+            destination = target if len(architectures) == 1 else target / architecture
+            destination.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(manifest, destination / 'catalog.json')
+        print('Editor runtime download manifests embedded; components are fetched only during editor installation.')
+        return
     selected = []
     flat = source / 'catalog.json'
     legacy = json.loads(flat.read_text()) if flat.is_file() else None

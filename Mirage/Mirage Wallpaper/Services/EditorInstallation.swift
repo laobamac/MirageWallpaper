@@ -19,7 +19,8 @@ struct EditorServiceError: LocalizedError {
         case "EDITOR_VERSION_UNAVAILABLE": return L("Steam 提供的版本尚未适配，请更新 Mirage 后重试。")
         case "OWNERSHIP_UNAVAILABLE": return L("暂时无法验证购买资格，请稍后重试。")
         case "EDITOR_PLAN_EXPIRED": return L("安装信息已过期，请重新检查。")
-        case "EDITOR_SUPPORT_MISSING": return L("此 Mirage 安装包未包含编辑器运行组件，请安装包含编辑器的版本。")
+        case "EDITOR_SUPPORT_MISSING": return L("编辑器组件信息不可用，请更新 Mirage 后重试。")
+        case "EDITOR_RUNTIME_DOWNLOAD": return L("编辑器运行组件下载失败，请重试。已下载的内容会保留。")
         case "EDITOR_ARCHITECTURE": return L("编辑器运行组件与此 Mac 的芯片架构不匹配。")
         case "EDITOR_SYSTEM_VERSION": return L("Apple Silicon 编辑器需要 macOS 26.5 或更高版本。")
         case "EDITOR_SPACE": return L("可用磁盘空间不足，请释放空间后重试。")
@@ -29,6 +30,12 @@ struct EditorServiceError: LocalizedError {
         default: return detail?.isEmpty == false ? detail : L("编辑器操作失败，请重试。")
         }
     }
+}
+
+struct EditorRuntimeArchive: Codable, Sendable {
+    let url: URL
+    let sha256: String
+    let bytes: Int64
 }
 
 struct EditorCatalog: Decodable, Sendable {
@@ -46,6 +53,7 @@ struct EditorCatalog: Decodable, Sendable {
     let links: [String: String]
     let minimumMacOS: String?
     let rosetta: Bool?
+    let archive: EditorRuntimeArchive?
 }
 
 struct EditorDiskUsage: Sendable {
@@ -68,9 +76,11 @@ enum EditorInstallation {
     #endif
     static var active: URL { root.appendingPathComponent("active", isDirectory: true) }
     static var downloads: URL { root.appendingPathComponent("downloads", isDirectory: true) }
+    static var runtimeDownloads: URL { root.appendingPathComponent("runtime-downloads", isDirectory: true) }
+    static var runtimeCache: URL { root.appendingPathComponent("runtime-cache", isDirectory: true) }
     static var application: URL { active.appendingPathComponent("Mirage Editor.app", isDirectory: true) }
     static var runtime: URL { active.appendingPathComponent("runtime", isDirectory: true) }
-    static var support: URL? {
+    static var bundledSupport: URL? {
         #if MIRAGE_EDITOR_TESTING
         let base = URL(fileURLWithPath: ProcessInfo.processInfo.environment["MIRAGE_EDITOR_TEST_SUPPORT"]!, isDirectory: true)
         #else
@@ -80,8 +90,14 @@ enum EditorInstallation {
         return FileManager.default.fileExists(atPath: selected.appendingPathComponent("catalog.json").path) ? selected : base
     }
 
+    static var support: URL? {
+        guard let bundledSupport else { return nil }
+        guard let catalog = try? catalog(), let archive = catalog.archive else { return bundledSupport }
+        return runtimeCache.appendingPathComponent(archive.sha256).appendingPathComponent("EditorSupport")
+    }
+
     static func catalog() throws -> EditorCatalog {
-        guard let support, let data = try? Data(contentsOf: support.appendingPathComponent("catalog.json")) else {
+        guard let bundledSupport, let data = try? Data(contentsOf: bundledSupport.appendingPathComponent("catalog.json")) else {
             throw EditorServiceError(code: "EDITOR_SUPPORT_MISSING")
         }
         let catalog = try JSONDecoder().decode(EditorCatalog.self, from: data)
@@ -93,6 +109,14 @@ enum EditorInstallation {
     static func validateCompatibility(_ catalog: EditorCatalog, hostArchitecture: String = architecture,
                                       systemVersion: OperatingSystemVersion = ProcessInfo.processInfo.operatingSystemVersion) throws {
         guard catalog.architecture == hostArchitecture else { throw EditorServiceError(code: "EDITOR_ARCHITECTURE") }
+        if let archive = catalog.archive {
+            guard archive.url.scheme == "https", archive.url.host == "github.com",
+                  archive.url.user == nil, archive.url.password == nil,
+                  archive.url.path.hasPrefix("/laobamac/MirageWallpaper/releases/download/"),
+                  archive.sha256.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil,
+                  archive.bytes > 0, archive.bytes <= 10 * 1024 * 1024 * 1024,
+                  !catalog.files.isEmpty else { throw EditorServiceError(code: "EDITOR_FILES") }
+        }
         if hostArchitecture == "arm64" {
             guard catalog.rosetta == false, let minimum = catalog.minimumMacOS else { throw EditorServiceError(code: "EDITOR_FILES") }
             let parts = minimum.split(separator: ".", omittingEmptySubsequences: false).compactMap { Int($0) }
@@ -122,7 +146,7 @@ enum EditorInstallation {
     static func validateRoot() throws {
         let fm = FileManager.default
         try fm.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        for url in [root.deletingLastPathComponent(), root, active, downloads, root.appendingPathComponent("staging"), root.appendingPathComponent("previous"), root.appendingPathComponent("Projects"), root.appendingPathComponent("UserData")] {
+        for url in [root.deletingLastPathComponent(), root, active, downloads, runtimeDownloads, runtimeCache, root.appendingPathComponent("staging"), root.appendingPathComponent("previous"), root.appendingPathComponent("Projects"), root.appendingPathComponent("UserData")] {
             if (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true {
                 throw EditorServiceError(code: "EDITOR_FILES")
             }
@@ -146,13 +170,13 @@ enum EditorInstallation {
         return total
     }
 
-    static let cachePaths = ["downloads", "staging", "previous", "active/runtime/logs",
+    static let cachePaths = ["downloads", "runtime-downloads", "runtime-cache", "staging", "previous", "active/runtime/logs",
                              "UserData/editor/base/Default/Cache", "UserData/editor/base/Default/Code Cache",
                              "UserData/editor/base/Default/GPUCache", "UserData/editor/base/ShaderCache"]
 
     static func usage() -> EditorDiskUsage {
         EditorDiskUsage(installed: size(active), reclaimable: cachePaths.reduce(0) { $0 + size(root.appendingPathComponent($1)) },
-                        uninstallable: (["active", "downloads", "staging", "previous"] + cachePaths.filter { $0.hasPrefix("UserData/") }).reduce(0) { $0 + size(root.appendingPathComponent($1)) })
+                        uninstallable: (["active", "downloads", "runtime-downloads", "runtime-cache", "staging", "previous"] + cachePaths.filter { $0.hasPrefix("UserData/") }).reduce(0) { $0 + size(root.appendingPathComponent($1)) })
     }
 
     static func clean(uninstall: Bool) throws {
@@ -161,7 +185,7 @@ enum EditorInstallation {
         for relative in uninstall ? ["active", "previous", "staging"] : ["previous", "staging"] {
             try stopPrefix(root.appendingPathComponent(relative + "/runtime"))
         }
-        for relative in uninstall ? ["active", "previous", "staging", "downloads"] + cachePaths.filter({ $0.hasPrefix("UserData/") }) : cachePaths {
+        for relative in uninstall ? ["active", "previous", "staging", "downloads", "runtime-downloads", "runtime-cache"] + cachePaths.filter({ $0.hasPrefix("UserData/") }) : cachePaths {
             let url = try contained(relative, in: root)
             // Refuse an intermediate symlink; Wine's own project links are never traversed.
             var parent = url.deletingLastPathComponent()
@@ -182,6 +206,23 @@ enum EditorInstallation {
             digest.update(data: data)
         }
         return digest.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    static func verifySupport(_ directory: URL, catalog: EditorCatalog) throws {
+        let resolved = directory.resolvingSymlinksInPath().path + "/"
+        for (name, expected) in catalog.files {
+            let file = try contained(name, in: directory)
+            guard file.resolvingSymlinksInPath().path.hasPrefix(resolved),
+                  (try file.resourceValues(forKeys: [.isSymbolicLinkKey])).isSymbolicLink != true,
+                  try hash(file) == expected else { throw EditorServiceError(code: "EDITOR_FILES") }
+        }
+        for (name, expected) in catalog.links {
+            let file = try contained(name, in: directory)
+            guard !expected.hasPrefix("/"), file.resolvingSymlinksInPath().path.hasPrefix(resolved),
+                  try FileManager.default.destinationOfSymbolicLink(atPath: file.path) == expected else {
+                throw EditorServiceError(code: "EDITOR_FILES")
+            }
+        }
     }
 
     private struct Patch: Decodable {
@@ -317,8 +358,11 @@ enum EditorInstallation {
     }
 
     private static func stopPrefix(_ runtime: URL) throws {
-        guard let support else { return }
-        let executable = support.appendingPathComponent("runtime/Mirage WE Editor.app/Contents/Resources/wine/bin/wineserver")
+        // An installed editor remains self-contained after its download cache is cleared.
+        let installedServer = runtime.appendingPathComponent("Mirage WE Editor.app/Contents/Resources/wine/bin/wineserver")
+        let executable = FileManager.default.isExecutableFile(atPath: installedServer.path) ? installedServer :
+            support?.appendingPathComponent("runtime/Mirage WE Editor.app/Contents/Resources/wine/bin/wineserver")
+        guard let executable else { return }
         let prefix = runtime.appendingPathComponent("prefix-devel")
         guard prefix.resolvingSymlinksInPath().path.hasPrefix(root.resolvingSymlinksInPath().path + "/") else { throw EditorServiceError(code: "EDITOR_FILES") }
         guard FileManager.default.isExecutableFile(atPath: executable.path),

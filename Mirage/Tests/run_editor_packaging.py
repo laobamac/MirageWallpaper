@@ -15,6 +15,33 @@ spec.loader.exec_module(packaging)
 
 
 class EditorPackagingTests(unittest.TestCase):
+    def test_download_build_contains_only_the_pinned_manifest(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifests = root / 'StandaloneEditor/releases'
+            manifests.mkdir(parents=True)
+            catalog = {'architecture': 'x86_64', 'files': {'runtime/value': 'a' * 64},
+                       'archive': {'url': 'https://github.com/laobamac/MirageWallpaper/releases/download/editor-runtime-test/runtime.tar.gz',
+                                   'sha256': 'b' * 64, 'bytes': 1234}}
+            (manifests / 'x86_64.json').write_text(json.dumps(catalog))
+            packaging.bundle(root / 'Mirage.app', root, ['x86_64'], {'MIRAGE_REQUIRE_EDITOR_SUPPORT': '1'})
+            payload = root / 'Mirage.app/Contents/Resources/EditorSupport'
+            self.assertEqual(json.loads((payload / 'catalog.json').read_text()), catalog)
+            self.assertEqual([path.name for path in payload.iterdir()], ['catalog.json'])
+            self.assertLess((payload / 'catalog.json').stat().st_size, 1024)
+
+    def test_missing_or_untrusted_download_manifest_rejects_release(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifests = root / 'StandaloneEditor/releases'
+            manifests.mkdir(parents=True)
+            with self.assertRaisesRegex(SystemExit, 'missing'):
+                packaging.bundle(root / 'Mirage.app', root, ['arm64'], {})
+            (manifests / 'arm64.json').write_text(json.dumps({'architecture': 'arm64', 'files': {'runtime/value': 'a' * 64},
+                'archive': {'url': 'https://example.com/runtime.tar.gz', 'sha256': 'b' * 64, 'bytes': 1234}}))
+            with self.assertRaisesRegex(SystemExit, 'Invalid'):
+                packaging.bundle(root / 'Mirage.app', root, ['arm64'], {})
+
     def test_clean_release_without_optional_payload(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

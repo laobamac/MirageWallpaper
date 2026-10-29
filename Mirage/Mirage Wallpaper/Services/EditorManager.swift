@@ -17,7 +17,8 @@ final class EditorManager: ObservableObject {
     enum State { case idle, login, checking, confirmation, downloading, preparing, ready, failed, notOwned }
     @Published private(set) var state: State = .idle
     @Published private(set) var installed = EditorInstallation.isInstalled
-    @Published private(set) var errorMessage: String?
+    @Published private var lastError: Error?
+    var errorMessage: String? { lastError?.localizedDescription }
     @Published private(set) var currentFile = ""
     @Published private(set) var receivedBytes: Int64 = 0
     @Published private(set) var totalBytes: Int64 = 0
@@ -39,6 +40,8 @@ final class EditorManager: ObservableObject {
     private var pendingOpen = false
     private var repairRequested = false
     private var account = ""
+    private var downloadingRuntime = false
+    private var originalDownloadBytes: Int64 = 0
 
     var busy: Bool { [.checking, .downloading, .preparing].contains(state) }
     var canCancel: Bool { state == .checking || state == .downloading || (state == .preparing && worker != nil) }
@@ -81,7 +84,7 @@ final class EditorManager: ObservableObject {
     }
 
     private func begin() {
-        errorMessage = nil
+        lastError = nil
         do { catalog = try EditorInstallation.catalog() }
         catch { fail(error); return }
         steam.startForEditor()
@@ -92,7 +95,7 @@ final class EditorManager: ObservableObject {
     private func check() {
         guard !busy else { return }
         state = .checking
-        phase = L("正在验证购买资格…")
+        phase = "正在验证购买资格…"
         let id = UUID(); operation = id
         task = Task {
             do {
@@ -106,7 +109,7 @@ final class EditorManager: ObservableObject {
                     return
                 }
                 guard let catalog else { throw EditorServiceError(code: "EDITOR_SUPPORT_MISSING") }
-                phase = L("正在计算下载大小和所需空间…")
+                phase = "正在计算下载大小和所需空间…"
                 let compatibility = try JSONSerialization.jsonObject(with: JSONEncoder().encode(catalog.compatibility))
                 let planResult = try await steam.editorRequest("editorPlan", fields: ["editorCompatibility": compatibility])
                 try Task.checkCancellation()
@@ -116,9 +119,11 @@ final class EditorManager: ObservableObject {
                       let disk = planResult["installedBytes"] as? NSNumber else { throw EditorServiceError(code: "EDITOR_FILES") }
                 try EditorInstallation.validateRoot()
                 planId = plan
-                totalBytes = download.int64Value
+                originalDownloadBytes = download.int64Value
+                totalBytes = originalDownloadBytes + (catalog.archive?.bytes ?? 0)
                 installedBytes = disk.int64Value + catalog.installedBytes + 512 * 1024 * 1024
-                requiredBytes = installedBytes + disk.int64Value + 128 * 1024 * 1024
+                let runtimeCacheBytes = catalog.archive.map { $0.bytes + catalog.installedBytes } ?? 0
+                requiredBytes = installedBytes + disk.int64Value + runtimeCacheBytes + 128 * 1024 * 1024
                 availableBytes = EditorInstallation.availableBytes()
                 state = .confirmation
             } catch {
@@ -133,24 +138,26 @@ final class EditorManager: ObservableObject {
         availableBytes = EditorInstallation.availableBytes()
         guard availableBytes >= requiredBytes else { fail(EditorServiceError(code: "EDITOR_SPACE")); return }
         state = .downloading
-        phase = L("正在校验可继续下载的文件…")
-        errorMessage = nil; currentFile = ""; receivedBytes = 0; bytesPerSecond = 0; etaSeconds = nil
+        downloadingRuntime = false
+        phase = "正在校验可继续下载的文件…"
+        lastError = nil; currentFile = ""; receivedBytes = 0; bytesPerSecond = 0; etaSeconds = nil
         let id = UUID(); operation = id
         steam.downloadEditor(planId: planId, output: EditorInstallation.downloads) { [weak self] event in
             Task { @MainActor in
                 guard let self, self.operation == id else { return }
                 switch event["state"] as? String {
                 case "downloading":
-                    self.phase = L("正在下载 Wallpaper Engine…")
+                    self.phase = "正在下载 Wallpaper Engine…"
                     self.receivedBytes = (event["receivedBytes"] as? NSNumber)?.int64Value ?? 0
-                    self.totalBytes = (event["totalBytes"] as? NSNumber)?.int64Value ?? self.totalBytes
+                    self.originalDownloadBytes = (event["totalBytes"] as? NSNumber)?.int64Value ?? self.originalDownloadBytes
+                    self.totalBytes = self.originalDownloadBytes + (catalog.archive?.bytes ?? 0)
                     self.bytesPerSecond = (event["bytesPerSecond"] as? NSNumber)?.doubleValue ?? 0
                     self.etaSeconds = (event["etaSeconds"] as? NSNumber)?.doubleValue
                     self.currentFile = event["currentFile"] as? String ?? ""
-                case "validating": self.phase = L("正在校验下载文件…")
+                case "validating": self.phase = "正在校验下载文件…"
                 case "completed":
                     if self.cancelling { self.finishCancellation() }
-                    else { self.prepare(catalog: catalog, operation: id) }
+                    else { self.prepareRuntime(catalog: catalog, operation: id) }
                 case "cancelled": self.finishCancellation()
                 case "failed":
                     self.cancelling = false
@@ -161,9 +168,43 @@ final class EditorManager: ObservableObject {
         }
     }
 
+    private func prepareRuntime(catalog: EditorCatalog, operation id: UUID) {
+        guard catalog.archive != nil else { prepare(catalog: catalog, operation: id); return }
+        downloadingRuntime = true
+        phase = "正在准备编辑器运行组件…"
+        currentFile = ""
+        bytesPerSecond = 0; etaSeconds = nil
+        task = Task {
+            do {
+                try await EditorRuntimeDownload.prepare(catalog: catalog) { [weak self] progress in
+                    Task { @MainActor in
+                        guard let self, self.operation == id, self.downloadingRuntime, !self.cancelling else { return }
+                        self.receivedBytes = self.originalDownloadBytes + progress.received
+                        self.totalBytes = self.originalDownloadBytes + progress.total
+                        self.bytesPerSecond = progress.bytesPerSecond
+                        self.etaSeconds = progress.bytesPerSecond > 0 ? Double(progress.total - progress.received) / progress.bytesPerSecond : nil
+                        switch progress.phase {
+                        case .downloading: self.phase = "正在下载编辑器运行组件…"
+                        case .verifying: self.phase = "正在校验编辑器运行组件…"
+                        case .unpacking: self.phase = "正在解压编辑器运行组件…"
+                        }
+                    }
+                }
+                try Task.checkCancellation()
+                guard operation == id else { return }
+                downloadingRuntime = false
+                prepare(catalog: catalog, operation: id)
+            } catch {
+                downloadingRuntime = false
+                if cancelling || Task.isCancelled { finishCancellation() }
+                else if operation == id { fail(error) }
+            }
+        }
+    }
+
     private func prepare(catalog: EditorCatalog, operation id: UUID) {
         state = .preparing
-        phase = L("正在准备编辑器运行环境…")
+        phase = "正在准备编辑器运行环境…"
         worker = Task.detached(priority: .userInitiated) { try EditorInstallation.assemble(catalog: catalog) }
         task = Task {
             do {
@@ -185,7 +226,7 @@ final class EditorManager: ObservableObject {
 
     private func launch() async throws {
         guard let catalog else { throw EditorServiceError(code: "EDITOR_SUPPORT_MISSING") }
-        phase = L("正在启动编辑器…")
+        phase = "正在启动编辑器…"
         try await Task.detached(priority: .userInitiated) { try EditorInstallation.verifyInstalled(catalog: catalog) }.value
         try Task.checkCancellation()
         guard steam.isLoggedIn, steam.steamId == account else { throw EditorServiceError(code: "EDITOR_ACCOUNT_CHANGED") }
@@ -230,7 +271,8 @@ final class EditorManager: ObservableObject {
         pendingOpen = false
         if state == .downloading {
             cancelling = true
-            steam.cancelEditorDownload()
+            if downloadingRuntime { task?.cancel() }
+            else { steam.cancelEditorDownload() }
         } else if state == .preparing {
             cancelling = true
             worker?.cancel()
@@ -243,6 +285,7 @@ final class EditorManager: ObservableObject {
 
     private func finishCancellation() {
         cancelling = false
+        downloadingRuntime = false
         state = EditorInstallation.isInstalled ? .ready : .idle
         installed = EditorInstallation.isInstalled
         refreshUsage()
@@ -265,13 +308,13 @@ final class EditorManager: ObservableObject {
         guard !busy else { return }
         guard !running else { fail(EditorServiceError(code: "EDITOR_BUSY")); return }
         state = .preparing
-        phase = uninstall ? L("正在卸载编辑器…") : L("正在清理编辑器缓存…")
+        phase = uninstall ? "正在卸载编辑器…" : "正在清理编辑器缓存…"
         task = Task {
             do {
                 try await Task.detached(priority: .utility) { try EditorInstallation.clean(uninstall: uninstall) }.value
                 installed = EditorInstallation.isInstalled
                 state = installed ? .ready : .idle
-                errorMessage = nil
+                lastError = nil
                 refreshUsage()
             } catch { fail(error) }
         }
@@ -286,7 +329,7 @@ final class EditorManager: ObservableObject {
     }
 
     private func fail(_ error: Error) {
-        errorMessage = error.localizedDescription
+        lastError = error
         state = (error as? EditorServiceError)?.code == "WE_NOT_OWNED" ? .notOwned : .failed
         pendingOpen = false
         refreshUsage()

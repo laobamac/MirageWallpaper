@@ -121,12 +121,12 @@ struct EditorSetupView: View {
         case .checking, .preparing:
             HStack(spacing: 12) {
                 ProgressView().controlSize(.small)
-                Text(editor.phase).contentTransition(.opacity)
+                Text(L(editor.phase)).contentTransition(.opacity)
             }
             .animation(transitionAnimation, value: editor.phase)
             if editor.state == .preparing { Text("首次准备可能需要几分钟。关闭此窗口后任务会继续。").font(.caption).foregroundStyle(.secondary) }
         case .downloading:
-            Text(editor.phase).font(.headline)
+            Text(L(editor.phase)).font(.headline)
             ProgressView(value: Double(editor.receivedBytes), total: Double(max(1, editor.totalBytes)))
             HStack {
                 Text(bytes(editor.receivedBytes) + " / " + bytes(editor.totalBytes))
@@ -141,7 +141,7 @@ struct EditorSetupView: View {
             }
             Text("关闭此窗口后下载会继续；取消后可继续下载。").font(.caption).foregroundStyle(.secondary)
         case .confirmation:
-            Text("首次使用需要下载 Wallpaper Engine 并安装编辑器运行环境。").fixedSize(horizontal: false, vertical: true)
+            Text("首次使用需要下载编辑器运行组件和 Wallpaper Engine。").fixedSize(horizontal: false, vertical: true)
             Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 10) {
                 GridRow { Text("下载大小"); Text(bytes(editor.totalBytes)) }
                 GridRow { Text("预计安装占用"); Text(bytes(editor.installedBytes)) }
