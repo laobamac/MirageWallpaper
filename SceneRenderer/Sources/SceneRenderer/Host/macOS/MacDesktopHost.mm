@@ -423,7 +423,7 @@ bool WindowServerState(NSWindow* window, CGRect& bounds, bool& onscreen, double&
     return has_bounds;
 }
 
-bool NormalizeGeometry(MacDesktopHost* host) {
+bool NormalizeGeometry(MacDesktopHost* host, bool force = false) {
     if (host == nullptr || host->window == nil || host->surface_layer == nil) return false;
     NSScreen* screen = ResolveScreen(host->display_id);
     if (screen == nil || ScreenDisplayID(screen) != host->display_id) return false;
@@ -433,11 +433,25 @@ bool NormalizeGeometry(MacDesktopHost* host) {
         NSWidth(frame) <= 0.0 || NSHeight(frame) <= 0.0) {
         return false;
     }
+    NSView* content_view = host->window.contentView;
+    if (content_view == nil) return false;
+    // Both frame presentation and input polling reach this path. Once visible,
+    // leave unchanged geometry alone instead of submitting a CA transaction on
+    // every call. Compare live state so backing-scale changes and external
+    // window/layer adjustments still take the repair path.
+    if (! force && host->first_frame_presented.load() && host->activation_confirmed.load() &&
+        AppKitRectMatches(host->window.frame, frame) &&
+        ! content_view.needsLayout && ! content_view.needsDisplay &&
+        ! host->window.viewsNeedDisplay &&
+        NSEqualRects(host->surface_layer.frame, content_view.bounds) &&
+        host->surface_layer.contentsScale == screen.backingScaleFactor &&
+        CGSizeEqualToSize(host->surface_layer.drawableSize,
+                         [content_view convertRectToBacking:content_view.bounds].size)) {
+        return true;
+    }
     if (! AppKitRectMatches(host->window.frame, frame)) {
         [host->window setFrame:frame display:YES];
     }
-    NSView* content_view = host->window.contentView;
-    if (content_view == nil) return false;
     [content_view layoutSubtreeIfNeeded];
     const NSRect bounds = content_view.bounds;
     host->surface_layer.frame = bounds;
@@ -855,7 +869,7 @@ extern "C" void SceneRendererMacDesktopActivate(void* handle) {
     if (host == nullptr) return;
     auto activate = ^{
       if (host->window == nil) return;
-      if (! NormalizeGeometry(host)) return;
+      if (! NormalizeGeometry(host, true)) return;
       host->deactivation_requested.store(false);
       host->deactivation_confirmed.store(false);
       host->activation_confirmed.store(false);
