@@ -8,6 +8,11 @@ ColumnLayout {
     signal importRequested
     signal contextRequested
     spacing: 8
+    // 切回"已安装"时重新扫描一次：下载完成事件有可能因为服务重启等原因丢失，
+    // 只看内存状态会漏掉已经落盘的新壁纸。
+    onVisibleChanged: {
+        if (visible) controller.reloadWallpapers();
+    }
     RowLayout {
         Layout.fillWidth: true
         spacing: 8

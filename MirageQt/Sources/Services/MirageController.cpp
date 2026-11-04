@@ -1,4 +1,6 @@
 #include "Services/MirageController.h"
+
+#include <QDebug>
 #include "Services/WindowsProcessJob.h"
 
 #include "Services/Paths.h"
@@ -507,6 +509,13 @@ bool MirageController::positionYAvailable() const {
 
 void MirageController::reloadWallpapers() {
     m_allWallpapers = m_library.loadAll();
+    // 库内容的唯一权威快照：排查"下载完成但列表里没有"时，这一行就能区分是
+    // 扫描/解析问题还是界面筛选问题。
+    qInfo().noquote() << "[Library] loaded" << m_allWallpapers.size() << "wallpapers from"
+                      << m_library.sourceDirectories().join(QStringLiteral(", "));
+    for (const Wallpaper& item : m_allWallpapers)
+        qInfo().noquote() << "[Library]  " << item.id() << "|" << item.project.title << "|"
+                          << wallpaperKindKey(item.kind()) << "|valid=" << item.isValid();
     refreshWallpapersCache();
     // 选中 id 有效时直接以现有 id 重建选中缓存；无效时下方重置 id 后再建。
     // 两个分支各重建一次，避免分支 2 先用旧（无效）id 建一次再被覆盖。
