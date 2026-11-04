@@ -1,4 +1,6 @@
 module;
+#include <optional>
+#include <functional>
 
 export module sr.vulkan_render;
 import sr.types;
@@ -51,6 +53,7 @@ struct RenderInitInfo {
     ReDrawCB redraw_callback;
     MetalFrameCB metal_frame_callback;
     RenderFailureCB failure_callback;
+    std::function<void()> frame_presented_callback;
     // Hosts enabling this must request frames after activation, resize and capture.
     bool                              allow_on_demand { false };
     std::function<void(bool running)> frame_activity_callback;

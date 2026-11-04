@@ -13,7 +13,9 @@ static const voidp DESTROYED { ptr_::without_provenance_mut<void>(2) };
 namespace id
 {
 
-thread_local Option<ThreadId> ID    = None();
+// inline：clang 会为每个实例化该模块的 TU 各发一份定义，缺省链接（MSVC link.exe）会报
+// LNK2005 重复定义；inline 变量按 COMDAT 合并，语义不变（仍是同一个线程局部变量）。
+inline thread_local Option<ThreadId> ID = None();
 constexpr auto                CHEAP = true;
 
 auto get() -> Option<ThreadId> {

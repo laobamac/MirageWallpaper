@@ -1,4 +1,10 @@
 module;
+#include <optional>
+#include <memory>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 #include <rstd/macro.hpp>
 
@@ -50,19 +56,28 @@ std::string LowerPath(std::string_view p) {
 // dropping keeps producer and consumer consistent: both the keys stored from
 // the pkg header and the keys built from lookup paths go through here.
 std::string RootedComponentPath(RstdPath path) {
-    auto out        = rstd::path::PathBuf::from("/");
-    auto components = path.components();
+    std::vector<std::string> components;
+    auto                     cursor = path.components();
     while (true) {
-        auto component = components.next();
+        auto component = cursor.next();
         if (component.is_none()) break;
         if ((*component).is_root_dir() || (*component).is_cur_dir()) continue;
         if ((*component).is_parent_dir()) {
-            (void)out.pop();
+            if (! components.empty()) components.pop_back();
             continue;
         }
-        out.push(RstdPath((*component).as_os_str()));
+        components.push_back(ToStdString(RstdPath((*component).as_os_str())));
     }
-    return ToStdString(out.as_path());
+    // pkg 内的路径是 VFS 路径，分隔符固定为 '/'。不能借助 rstd::path::PathBuf：
+    // 它在 Windows 上按原生分隔符 '\' 拼接，会让同一条路径混用两种分隔符，
+    // 与 "/assets/..." 形式的查找路径和对外报告的资源名不一致。
+    std::string out;
+    for (const auto& part : components) {
+        out.push_back('/');
+        out.append(part);
+    }
+    if (out.empty()) out = "/";
+    return out;
 }
 
 std::string PkgLookupKey(RstdPath path) { return LowerPath(RootedComponentPath(path)); }

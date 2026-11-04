@@ -1,4 +1,5 @@
 module;
+#include <optional>
 
 export module sr.pkg.parse:wp_particle_parser;
 import rstd.cppstd;

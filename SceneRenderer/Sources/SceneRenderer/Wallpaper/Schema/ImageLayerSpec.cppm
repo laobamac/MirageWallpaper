@@ -1,3 +1,7 @@
+module;
+#include <optional>
+#include <unordered_map>
+
 export module sr.pkg.scene_obj:image_object;
 import sr.core;
 import rstd.cppstd;

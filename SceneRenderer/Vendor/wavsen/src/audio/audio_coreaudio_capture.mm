@@ -39,8 +39,8 @@ float clamp_unit(float v) {
 
 } // namespace
 
-struct wavsen_coreaudio_capture {
-    wavsen_coreaudio_capture_callback callback = nullptr;
+struct wavsen_native_capture {
+    wavsen_native_capture_callback callback = nullptr;
     void* user = nullptr;
 
     AudioObjectID tap = kAudioObjectUnknown;
@@ -271,21 +271,21 @@ struct wavsen_coreaudio_capture {
     }
 };
 
-static OSStatus wavsen_coreaudio_capture_io_proc(AudioObjectID /*device*/,
+static OSStatus wavsen_native_capture_io_proc(AudioObjectID /*device*/,
                                                  const AudioTimeStamp* /*now*/,
                                                  const AudioBufferList* input_data,
                                                  const AudioTimeStamp* /*input_time*/,
                                                  AudioBufferList* /*output_data*/,
                                                  const AudioTimeStamp* /*output_time*/,
                                                  void* user) {
-    auto* capture = static_cast<wavsen_coreaudio_capture*>(user);
+    auto* capture = static_cast<wavsen_native_capture*>(user);
     if (! capture || ! capture->running.load(std::memory_order_acquire)) return noErr;
     capture->process_input(input_data);
     return noErr;
 }
 
-bool wavsen_coreaudio_capture_create(wavsen_coreaudio_capture_callback callback, void* user,
-                                     wavsen_coreaudio_capture** out, int* out_status,
+bool wavsen_native_capture_create(wavsen_native_capture_callback callback, void* user,
+                                     wavsen_native_capture** out, int* out_status,
                                      std::uint32_t* out_source_channels,
                                      std::uint32_t* out_sample_rate) {
     if (out) *out = nullptr;
@@ -297,7 +297,7 @@ bool wavsen_coreaudio_capture_create(wavsen_coreaudio_capture_callback callback,
         return false;
     }
 
-    auto* capture = new wavsen_coreaudio_capture();
+    auto* capture = new wavsen_native_capture();
     capture->callback = callback;
     capture->user = user;
     capture->set_default_format();
@@ -320,7 +320,7 @@ bool wavsen_coreaudio_capture_create(wavsen_coreaudio_capture_callback callback,
         return false;
     }
 
-    st = AudioDeviceCreateIOProcID(capture->aggregate, wavsen_coreaudio_capture_io_proc,
+    st = AudioDeviceCreateIOProcID(capture->aggregate, wavsen_native_capture_io_proc,
                                   capture, &capture->io_proc);
     if (st != noErr || ! capture->io_proc) {
         if (out_status) *out_status = st;
@@ -347,7 +347,7 @@ bool wavsen_coreaudio_capture_create(wavsen_coreaudio_capture_callback callback,
     return true;
 }
 
-void wavsen_coreaudio_capture_destroy(wavsen_coreaudio_capture* capture) {
+void wavsen_native_capture_destroy(wavsen_native_capture* capture) {
     if (! capture) return;
     capture->running.store(false, std::memory_order_release);
     capture->destroy_io_proc();

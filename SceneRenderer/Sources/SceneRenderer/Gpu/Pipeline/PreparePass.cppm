@@ -1,4 +1,5 @@
 module;
+#include <optional>
 
 export module sr.vulkan_render:pre_pass;
 import sr.spec_texs;

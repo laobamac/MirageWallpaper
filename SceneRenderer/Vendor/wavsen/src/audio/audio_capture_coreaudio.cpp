@@ -68,7 +68,7 @@ public:
         int status = 0;
         std::uint32_t source_channels = kDefaultChannels;
         std::uint32_t sample_rate = kDefaultRate;
-        if (! wavsen_coreaudio_capture_create(&Impl::on_samples, this, &capture_, &status,
+        if (! wavsen_native_capture_create(&Impl::on_samples, this, &capture_, &status,
                                               &source_channels, &sample_rate)) {
             capture_ = nullptr;
             inited_.store(true, std::memory_order_release);
@@ -93,7 +93,7 @@ public:
     void uninit() {
         if (! inited_.exchange(false, std::memory_order_acq_rel)) return;
         loopback::unsubscribe();
-        wavsen_coreaudio_capture_destroy(capture_);
+        wavsen_native_capture_destroy(capture_);
         capture_ = nullptr;
         inited_.store(false, std::memory_order_release);
     }
@@ -191,7 +191,11 @@ private:
         dsp::fft_inplace(buf_left.data(), dsp::kFftSize);
         dsp::fft_inplace(buf_right.data(), dsp::kFftSize);
 
+#if defined(_WIN32)
+        const float norm = dsp::kFftAmplitudeNorm;
+#else
         const float norm = 2.0f / static_cast<float>(dsp::kFftSize);
+#endif
         const auto raw =
             dsp::analyze_stereo_spectrum(buf_left.data(), buf_right.data(), band_layout_, norm);
         const auto dt_sec = static_cast<float>(dsp::kHopSize) /
@@ -207,33 +211,18 @@ private:
         }
         out.publish_ms = now_ms();
 
-        seq_.fetch_add(1, std::memory_order_release);
-        std::memcpy(&published_, &out, sizeof(AudioSpectrum));
-        seq_.fetch_add(1, std::memory_order_release);
+        std::lock_guard lock(published_mu_);
+        published_ = out;
     }
 
     bool snapshot_tap(AudioSpectrum& out) const {
-        for (int attempt = 0; attempt < 16; ++attempt) {
-            const std::uint32_t s1 = seq_.load(std::memory_order_acquire);
-            if (s1 == 0) {
-                out.clear();
-                return false;
-            }
-            if (s1 & 1u) continue;
-            AudioSpectrum tmp;
-            std::memcpy(&tmp, &published_, sizeof(AudioSpectrum));
-            const std::uint32_t s2 = seq_.load(std::memory_order_acquire);
-            if (s1 == s2) {
-                out = tmp;
-                return true;
-            }
-        }
-        out.clear();
-        return false;
+        std::lock_guard lock(published_mu_);
+        out = published_;
+        return out.publish_ms != 0;
     }
 
     std::atomic<bool> inited_ { false };
-    wavsen_coreaudio_capture* capture_ { nullptr };
+    wavsen_native_capture* capture_ { nullptr };
 
     std::mutex                         dsp_mu_;
     std::atomic<std::uint32_t>         sample_rate_ { kDefaultRate };
@@ -245,7 +234,7 @@ private:
     dsp::BandLayout                    band_layout_ { dsp::make_we_layout(kDefaultRate) };
     dsp::SpectrumBands                 smoothed_ {};
 
-    mutable std::atomic<std::uint32_t> seq_ { 0 };
+    mutable std::mutex published_mu_;
     AudioSpectrum                       published_ {};
     mutable std::atomic<std::uint64_t>  snapshot_debug_count_ { 0 };
 };

@@ -1,4 +1,9 @@
 module;
+#include <variant>
+#include <optional>
+#include <functional>
+#include <unordered_map>
+#include <memory>
 
 export module sr.pkg.parse:scene_stages;
 import eigen;

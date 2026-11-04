@@ -1,4 +1,11 @@
 module;
+#include <optional>
+#include <functional>
+#include <unordered_map>
+
+#include <cstdint>
+#include <string>
+#include <variant>
 
 export module sr.script;
 import eigen;

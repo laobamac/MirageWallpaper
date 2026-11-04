@@ -22,6 +22,7 @@
 #include <span>
 #include <string_view>
 #include <vector>
+#include <optional>
 
 import sr.puppet;
 import eigen;

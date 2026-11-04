@@ -1,4 +1,5 @@
 module;
+#include <functional>
 
 export module sr.timer:thread_timer;
 import sr.core;

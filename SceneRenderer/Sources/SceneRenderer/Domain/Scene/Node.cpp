@@ -1,4 +1,5 @@
 module;
+#include <optional>
 
 module sr.scene;
 import eigen;

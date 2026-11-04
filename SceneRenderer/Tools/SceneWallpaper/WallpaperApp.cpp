@@ -1,8 +1,14 @@
-#include "../../Sources/SceneRenderer/Host/macOS/MacDesktopHost.h"
+#include "../../Sources/SceneRenderer/Host/DesktopHost.h"
+#include "../../Sources/SceneRenderer/Kernel/Support/include/Utils/PlatformFile.hpp"
 #include "ControlChannel.h"
 #include "SceneSnapshot.h"
+#include <utility>
 
+#if defined(_WIN32)
+#define VK_USE_PLATFORM_WIN32_KHR
+#else
 #define VK_USE_PLATFORM_METAL_EXT
+#endif
 #include <vulkan/vulkan.h>
 
 #include <algorithm>
@@ -14,7 +20,9 @@
 #include <csignal>
 #include <cstdlib>
 #include <cstring>
+#if !defined(_WIN32)
 #include <execinfo.h>
+#endif
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -24,12 +32,15 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <thread>
+#include <vector>
+#include <condition_variable>
+#if defined(__APPLE__)
 #include <sys/event.h>
 #include <sys/types.h>
-#include <thread>
 #include <unistd.h>
-#include <vector>
 #include <xlocale.h>
+#endif
 
 import sr.json;
 import rstd.cppstd;
@@ -37,6 +48,7 @@ import rstd.log;
 import sr.scene_wallpaper;
 import sr.utils;
 
+#if defined(__APPLE__)
 // Crash handler: print backtrace on fatal signals
 namespace {
 void CrashHandler(int sig) {
@@ -112,7 +124,7 @@ void StartParentDeathWatchdog() {
     std::thread([parent]() {
         ParentDeathWatchdogLoop(parent);
         std::cerr << "[SceneWallpaper] parent process exited; shutting down" << std::endl;
-        SceneRendererMacDesktopStop(nullptr);
+        sr::host::DesktopStop(nullptr);
         // The graceful path needs a running NSApp run loop, which may not have
         // started yet (the parent can die during Vulkan/scene init while the
         // main thread is still blocked). Give it a moment, then leave for real
@@ -122,6 +134,7 @@ void StartParentDeathWatchdog() {
     }).detach();
 }
 } // namespace
+#endif
 
 namespace
 {
@@ -157,12 +170,16 @@ struct Options {
     bool                      external_spectrum { false };
     bool                      load_from_memory { false };
     bool                      metalfx { false };
+    std::string               output_id;
 };
 
 struct AppState {
     sr::SceneWallpaper* wallpaper { nullptr };
     void*               desktop { nullptr };
     std::chrono::steady_clock::time_point started_at { std::chrono::steady_clock::now() };
+    const Options* options { nullptr };
+    bool runtime_started { false };
+    std::uint32_t render_width { 0 }, render_height { 0 };
 };
 
 std::mutex& LifecycleOutputMutex() {
@@ -205,6 +222,12 @@ std::string JsonEscaped(std::string_view text) {
         }
     }
     return out;
+}
+
+void EmitUnsupportedCommand(std::string_view command) {
+    std::lock_guard lock(LifecycleOutputMutex());
+    std::cout << "{\"event\":\"capability\",\"name\":\"command\",\"command\":\""
+              << JsonEscaped(command) << "\",\"supported\":false}\n" << std::flush;
 }
 
 void EmitUserShortcut(std::string_view name, std::string_view target) {
@@ -251,6 +274,8 @@ void PrintUsage(const char* argv0) {
         << "      --mouse-position X,Y    Initial normalized mouse position\n"
         << "      --input-hz N            Desktop mouse polling rate (default 60)\n"
         << "      --screen N              Screen index to cover (default 0 = main)\n"
+        << "      --output-id NAME        Windows display device name\n"
+        << "      --runtime FILE          Initial playback speed and script storage\n"
         << "      --display-id N          Core Graphics display ID to cover\n"
         << "      --muted                 Start with audio muted\n"
         << "      --control-stdin         Accept live JSON control commands on stdin\n"
@@ -281,17 +306,10 @@ bool ParseInt(std::string_view text, int& out) {
 
 bool ParseDouble(std::string_view text, double& out) {
     if (text.empty()) return false;
-    std::string value_text(text);
-    char*       parsed_end = nullptr;
-    static locale_t c_locale = newlocale(LC_NUMERIC_MASK, "C", nullptr);
-    errno = 0;
-    const double value = c_locale != nullptr
-                             ? strtod_l(value_text.c_str(), &parsed_end, c_locale)
-                             : std::strtod(value_text.c_str(), &parsed_end);
-    if (errno == ERANGE || parsed_end != value_text.data() + value_text.size() ||
-        ! std::isfinite(value)) {
+    double value = 0.0;
+    const auto result = std::from_chars(text.data(), text.data() + text.size(), value);
+    if (result.ec != std::errc{} || result.ptr != text.data() + text.size() || !std::isfinite(value))
         return false;
-    }
     out = value;
     return true;
 }
@@ -354,6 +372,10 @@ bool ParseArgs(int argc, char** argv, Options& out) {
         } else if (arg == "--screen") {
             const char* value = require_value(i, arg);
             if (value == nullptr || ! ParseUInt(value, out.screen)) return false;
+        } else if (arg == "--output-id") {
+            const char* value = require_value(i, arg);
+            if (!value) return false;
+            out.output_id = value;
         } else if (arg == "--display-id") {
             const char* value = require_value(i, arg);
             if (value == nullptr || ! ParseUInt(value, out.display_id) || out.display_id == 0) return false;
@@ -429,7 +451,7 @@ bool ParseArgs(int argc, char** argv, Options& out) {
 
 bool LoadUserProperties(const std::string& path, sr::SceneWallpaperConfig& config) {
     if (path.empty()) return true;
-    std::ifstream is(path);
+    std::ifstream is(sr::platform::NativePath(path));
     if (! is) {
         std::cerr << "--user-properties: cannot open '" << path << "'\n";
         return false;
@@ -500,17 +522,25 @@ std::uint32_t ClampRenderExtent(std::uint32_t value, std::uint32_t fallback) {
 
 } // namespace
 
-int main(int argc, char** argv) {
+int RunWallpaper(int argc, char** argv) {
     static rstd::log::EnvLogger logger;
     rstd::log::set_logger(logger);
     rstd::log::set_max_level(logger.filter());
 
+#if defined(__APPLE__)
     InstallCrashHandler();
+#endif
 
     Options options;
     if (! ParseArgs(argc, argv, options)) return 1;
+#if defined(_WIN32)
+    if (options.metalfx) EmitUnsupportedCommand("--metalfx");
+    if (options.display_id) EmitUnsupportedCommand("--display-id");
+#endif
 
+#if defined(__APPLE__)
     setenv("MVK_CONFIG_PRESENT_WITH_COMMAND_BUFFER", "1", /*overwrite=*/0);
+#endif
     // Keep MoltenVK's submission-thread policy at the driver default. In 1.4.2,
     // SYNCHRONOUS_QUEUE_SUBMITS defaults to 1 and encodes on the caller thread;
     // it does not wait for GPU completion. Fences govern resource reuse below.
@@ -518,23 +548,47 @@ int main(int argc, char** argv) {
     auto     wallpaper = std::make_unique<sr::SceneWallpaper>();
     AppState state;
     state.wallpaper = wallpaper.get();
+    state.options = &options;
 
-    SceneRendererMacDesktopConfig desktop_config {
+    sr::host::DesktopConfig desktop_config {
         .title        = "SceneRenderer Wallpaper",
         .input_hz     = options.input_hz,
         .screen_index = options.screen,
         .display_id   = options.display_id,
         .deferred_show = options.deferred_show,
+        .output_id = options.output_id,
     };
-    SceneRendererMacDesktopCallbacks callbacks {
+    sr::host::DesktopCallbacks callbacks {
         .mouse_move   = MouseMoveCallback,
         .mouse_button = MouseButtonCallback,
         .mouse_enter  = MouseEnterCallback,
+#if defined(_WIN32)
+        .closed       = [](void* userdata) {
+            auto* state = static_cast<AppState*>(userdata);
+            EmitLifecycleEvent(state, "renderer-error");
+        },
+#else
         .closed       = nullptr,
+#endif
         .redraw_requested =
             [](void* userdata) {
                 auto* state = static_cast<AppState*>(userdata);
-                if (state->wallpaper) state->wallpaper->requestFrame();
+                if (!state->wallpaper || !state->runtime_started) return;
+#if defined(_WIN32)
+                const auto& options = *state->options;
+                auto width = options.resolution ? options.resolution->width :
+                    static_cast<std::uint32_t>(std::lround(sr::host::DesktopPixelWidth(state->desktop) * options.render_scale));
+                auto height = options.resolution ? options.resolution->height :
+                    static_cast<std::uint32_t>(std::lround(sr::host::DesktopPixelHeight(state->desktop) * options.render_scale));
+                width = ClampRenderExtent(width, 1920);
+                height = ClampRenderExtent(height, 1080);
+                if (width != state->render_width || height != state->render_height) {
+                    state->render_width = width;
+                    state->render_height = height;
+                    state->wallpaper->setRenderExtent(width, height);
+                }
+#endif
+                state->wallpaper->requestFrame();
             },
         .first_frame_presented = FirstFramePresentedCallback,
         .activated             = ActivatedCallback,
@@ -542,19 +596,23 @@ int main(int argc, char** argv) {
         .deactivated           = DeactivatedCallback,
         .userdata              = &state,
     };
-    state.desktop = SceneRendererMacDesktopCreate(&desktop_config, callbacks);
+    state.desktop = sr::host::DesktopCreate(&desktop_config, callbacks);
     if (state.desktop == nullptr) {
-        std::cerr << "Failed to create macOS desktop wallpaper host\n";
+        std::cerr << "Failed to create desktop wallpaper host\n";
         return 1;
     }
 
     // From here on there is a window on screen; never let it outlive the
     // parent that owns it. Installed before the (long) Vulkan + scene init so
     // a parent that dies during startup is covered too.
+#if defined(__APPLE__)
     StartParentDeathWatchdog();
+#elif defined(_WIN32)
+    sr::host::DesktopStartParentGuard(state.desktop);
+#endif
 
-    std::uint32_t render_width  = SceneRendererMacDesktopPixelWidth(state.desktop);
-    std::uint32_t render_height = SceneRendererMacDesktopPixelHeight(state.desktop);
+    std::uint32_t render_width  = sr::host::DesktopPixelWidth(state.desktop);
+    std::uint32_t render_height = sr::host::DesktopPixelHeight(state.desktop);
     if (options.resolution) {
         render_width  = options.resolution->width;
         render_height = options.resolution->height;
@@ -569,7 +627,7 @@ int main(int argc, char** argv) {
         std::cerr << "Failed to initialize SceneWallpaper runtime\n";
         wallpaper.reset();
         state.wallpaper = nullptr;
-        SceneRendererMacDesktopDestroy(state.desktop);
+        sr::host::DesktopDestroy(state.desktop);
         return 1;
     }
 
@@ -589,31 +647,33 @@ int main(int argc, char** argv) {
         std::cout << "{\"event\":\"script-storage\",\"values\":" << snapshot << "}\n" << std::flush;
     };
     if (options.cache_dir.empty())
-        config.cache_dir = sr::platform::GetCachePath("SceneRenderer");
+        config.cache_dir = sr::platform::Utf8Path(sr::platform::GetCachePath("SceneRenderer"));
     else
         config.cache_dir = options.cache_dir;
 
     if (!options.runtime_settings.empty()) {
-        std::ifstream file(options.runtime_settings);
+        std::ifstream file(sr::platform::NativePath(options.runtime_settings));
         std::string source(std::istreambuf_iterator<char>(file), {});
         auto parsed = sr::ParseJson(source, { .allow_comments = false });
         if (!file || parsed.is_err()) {
             wallpaper.reset();
             state.wallpaper = nullptr;
-            SceneRendererMacDesktopDestroy(state.desktop);
+            sr::host::DesktopDestroy(state.desktop);
             return 1;
         }
         auto runtime = parsed.unwrap();
         if (!runtime.is_object()) {
             wallpaper.reset();
             state.wallpaper = nullptr;
-            SceneRendererMacDesktopDestroy(state.desktop);
+            sr::host::DesktopDestroy(state.desktop);
             return 1;
         }
         if (auto speed = runtime.get("speed"); speed.is_some())
             config.speed = static_cast<float>((*speed)->as_f64().unwrap_or(1.0));
         config.script_storage_snapshot = "{}";
+#if defined(__APPLE__)
         config.script_storage_callback = {};
+#endif
         if (auto storage = runtime.get("scriptStorage"); storage.is_some() && (*storage)->is_object())
             config.script_storage_snapshot = sr::Dump(**storage);
     }
@@ -621,17 +681,20 @@ int main(int argc, char** argv) {
     if (! LoadUserProperties(options.user_properties, config)) {
         wallpaper.reset();
         state.wallpaper = nullptr;
-        SceneRendererMacDesktopDestroy(state.desktop);
+        sr::host::DesktopDestroy(state.desktop);
         return 1;
     }
 
     sr::RenderInitInfo info;
     info.enable_valid_layer = options.valid_layer;
-    const bool use_metalfx = options.metalfx &&
-                             SceneRendererMacDesktopPrepareMetalFX(state.desktop);
+#if defined(__APPLE__)
+    const bool use_metalfx = options.metalfx && sr::host::DesktopPrepareMetalFX(state.desktop);
+#else
+    const bool use_metalfx = false;
+#endif
     info.offscreen          = use_metalfx;
     if (const char* directory = std::getenv("SCENERENDERER_DIAGNOSTICS_DIR")) {
-        std::ofstream mode(std::string(directory) + "/presentation.json");
+        std::ofstream mode(sr::platform::NativePath(directory) / "presentation.json");
         mode << "{\"metalfx_requested\":" << (options.metalfx ? "true" : "false")
              << ",\"metalfx_presenter\":" << (use_metalfx ? "true" : "false") << "}\n";
     }
@@ -639,30 +702,43 @@ int main(int argc, char** argv) {
     info.height             = ClampRenderExtent(render_height, 1080);
     info.msaa_samples       = options.msaa;
     info.allow_on_demand         = true;
+#if defined(__APPLE__)
     info.frame_activity_callback = [&state](bool running) {
-        SceneRendererMacDesktopSetPaused(state.desktop, ! running);
+        sr::host::DesktopSetPaused(state.desktop, ! running);
     };
+#endif
     info.redraw_callback    = [&state]() {
-        SceneRendererMacDesktopWake(state.desktop);
+        sr::host::DesktopWake(state.desktop);
     };
     info.failure_callback = [&state](VkResult) {
         EmitLifecycleEvent(&state, "renderer-error");
-        SceneRendererMacDesktopStop(state.desktop);
+        sr::host::DesktopStop(state.desktop);
     };
+#if defined(_WIN32)
+    sr::host::DesktopSurfaceInfo surface;
+    if (!sr::host::DesktopGetSurfaceInfo(state.desktop, surface)) {
+        wallpaper.reset();
+        sr::host::DesktopDestroy(state.desktop);
+        return 1;
+    }
+    info.surface_info.instanceExts = std::move(surface.instance_extensions);
+    info.surface_info.createSurfaceOp = std::move(surface.create_surface);
+    info.frame_presented_callback = [&state] { sr::host::DesktopFramePresented(state.desktop); };
+#else
     if (use_metalfx) {
         info.metal_frame_callback = [&state](void* texture, void* command_queue,
                                              std::uint32_t width,
                                              std::uint32_t height) {
-            SceneRendererMacDesktopPresentMetalFrame(state.desktop, texture, command_queue,
+            sr::host::DesktopPresentMetalFrame(state.desktop, texture, command_queue,
                                                       width, height);
         };
     } else {
-        void* metal_layer = SceneRendererMacDesktopMetalLayer(state.desktop);
+        void* metal_layer = sr::host::DesktopMetalLayer(state.desktop);
         if (metal_layer == nullptr) {
             std::cerr << "Failed to obtain CAMetalLayer for Vulkan surface\n";
             wallpaper.reset();
             state.wallpaper = nullptr;
-            SceneRendererMacDesktopDestroy(state.desktop);
+            sr::host::DesktopDestroy(state.desktop);
             return 1;
         }
         info.surface_info.instanceExts.emplace_back(VK_KHR_SURFACE_EXTENSION_NAME);
@@ -681,6 +757,7 @@ int main(int argc, char** argv) {
                 return create_surface(instance, &create_info, nullptr, surface);
             };
     }
+#endif
 
     wallpaper->setOnAudioDemand(EmitAudioDemand);
     wallpaper->setOnPositionAvailability([](bool x, bool y) {
@@ -690,20 +767,16 @@ int main(int argc, char** argv) {
     });
     wallpaper->setOnUserShortcut(EmitUserShortcut);
     wallpaper->configure(std::move(config));
+    state.render_width = info.width;
+    state.render_height = info.height;
     wallpaper->initVulkan(std::move(info));
+    state.runtime_started = true;
 
     if (options.mouse_position) {
         wallpaper->mouseEnter(true);
         wallpaper->mouseInput((*options.mouse_position)[0], (*options.mouse_position)[1]);
     }
 
-    if (options.run_seconds > 0) {
-        void* desktop = state.desktop;
-        std::thread([desktop, seconds = options.run_seconds]() {
-            std::this_thread::sleep_for(std::chrono::seconds(seconds));
-            SceneRendererMacDesktopStop(desktop);
-        }).detach();
-    }
 
     // Live control channel: Mirage.app pipes JSON commands on stdin to drive
     // property edits / pause / volume without restarting. EOF (parent died)
@@ -713,11 +786,20 @@ int main(int argc, char** argv) {
     // control thread — otherwise a race between RenderInit/LoadScene message
     // dispatch and a premature stdin EOF (triggering NSApp stop / cleanup) can
     // cause "Sender::acquire on null" panics in the mpsc channel layer.
-    if (! wallpaper->waitVulkanInited(30000)) {
+#if defined(_WIN32)
+    bool vulkan_ready = false;
+    const auto vulkan_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    while (std::chrono::steady_clock::now() < vulkan_deadline && sr::host::DesktopPumpPending(state.desktop)) {
+        if (wallpaper->waitVulkanInited(5)) { vulkan_ready = true; break; }
+    }
+#else
+    const bool vulkan_ready = wallpaper->waitVulkanInited(30000);
+#endif
+    if (!vulkan_ready) {
         std::cerr << "Vulkan initialization timed out\n";
         wallpaper.reset();
         state.wallpaper = nullptr;
-        SceneRendererMacDesktopDestroy(state.desktop);
+        sr::host::DesktopDestroy(state.desktop);
         return 1;
     }
     EmitLifecycleEvent(&state, "vulkan-ready");
@@ -725,6 +807,9 @@ int main(int argc, char** argv) {
         using clock   = std::chrono::steady_clock;
         auto deadline = clock::now() + std::chrono::seconds(30);
         while (clock::now() < deadline) {
+#if defined(_WIN32)
+            if (!sr::host::DesktopPumpPending(state.desktop)) break;
+#endif
             if (wallpaper->sceneReady()) break;
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
@@ -732,7 +817,7 @@ int main(int argc, char** argv) {
             std::cerr << "Scene load timed out\n";
             wallpaper.reset();
             state.wallpaper = nullptr;
-            SceneRendererMacDesktopDestroy(state.desktop);
+            sr::host::DesktopDestroy(state.desktop);
             return 1;
         }
     }
@@ -743,13 +828,13 @@ int main(int argc, char** argv) {
         control.emplace(
             *wallpaper,
             [desktop]() {
-                SceneRendererMacDesktopStop(desktop);
+                sr::host::DesktopStop(desktop);
             },
             [desktop]() {
-                SceneRendererMacDesktopActivate(desktop);
+                sr::host::DesktopActivate(desktop);
             },
             [desktop]() {
-                SceneRendererMacDesktopDeactivate(desktop);
+                sr::host::DesktopDeactivate(desktop);
             },
             [renderer = wallpaper.get()](const std::string& path, const std::string& token) {
                 const bool ok = ! path.empty() && mirage::WriteSceneSnapshot(path, 4.0, [renderer] {
@@ -763,11 +848,27 @@ int main(int argc, char** argv) {
                     std::cout << "{\"event\":\"script-storage\",\"token\":\"" << JsonEscaped(token)
                               << "\",\"values\":" << snapshot << "}\n" << std::flush;
                 });
-            });
+            }
+#if defined(_WIN32)
+            , [](const std::string& command) { EmitUnsupportedCommand(command); }
+#endif
+            );
         control->start();
     }
 
-    const int ok = SceneRendererMacDesktopRun(state.desktop);
+    std::jthread run_timer;
+    if (options.run_seconds > 0) {
+        run_timer = std::jthread([desktop = state.desktop, seconds = options.run_seconds](std::stop_token stop) {
+            std::mutex mutex;
+            std::condition_variable_any condition;
+            std::unique_lock lock(mutex);
+            condition.wait_for(lock, stop, std::chrono::seconds(seconds), [] { return false; });
+            if (!stop.stop_requested()) sr::host::DesktopStop(desktop);
+        });
+    }
+    const int ok = sr::host::DesktopRun(state.desktop);
+    run_timer.request_stop();
+    if (run_timer.joinable()) run_timer.join();
 
     if (control) {
         control->stop();
@@ -775,7 +876,27 @@ int main(int argc, char** argv) {
     }
     state.wallpaper = nullptr;
     wallpaper.reset();
-    SceneRendererMacDesktopDestroy(state.desktop);
+    sr::host::DesktopDestroy(state.desktop);
     state.desktop = nullptr;
     return ok ? 0 : 1;
 }
+
+#if defined(_WIN32)
+int wmain(int argc, wchar_t** argv) {
+    std::vector<std::string> arguments;
+    arguments.reserve(argc);
+    for (int i = 0; i < argc; ++i) {
+        const int count = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, argv[i], -1, nullptr, 0, nullptr, nullptr);
+        if (count <= 0) return 1;
+        std::string text(static_cast<std::size_t>(count), '\0');
+        if (!WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, argv[i], -1, text.data(), count, nullptr, nullptr)) return 1;
+        text.pop_back();
+        arguments.push_back(std::move(text));
+    }
+    std::vector<char*> pointers;
+    for (auto& argument : arguments) pointers.push_back(argument.data());
+    return RunWallpaper(argc, pointers.data());
+}
+#else
+int main(int argc, char** argv) { return RunWallpaper(argc, argv); }
+#endif

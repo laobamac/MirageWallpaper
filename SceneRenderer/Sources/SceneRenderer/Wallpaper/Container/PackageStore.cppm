@@ -1,4 +1,6 @@
 module;
+#include <optional>
+#include <unordered_map>
 
 export module sr.pkg_fs;
 import sr.core;

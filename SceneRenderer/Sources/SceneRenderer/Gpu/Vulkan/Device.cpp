@@ -9,7 +9,7 @@ module;
 #include <fstream>
 #include <iomanip>
 #include <sstream>
-#include <unistd.h>
+#include "Utils/PlatformFile.hpp"
 
 module sr.vulkan;
 import sr.core;
@@ -38,23 +38,29 @@ bool Device::initPipelineCache() {
     for (std::uint8_t byte : props.pipelineCacheUUID) identity << std::setw(2) << (unsigned)byte;
 
     std::error_code ec;
+#if defined(_WIN32)
+    const wchar_t* local = ::_wgetenv(L"LOCALAPPDATA");
+    auto cache_dir = local && local[0] ? std::filesystem::path(local) / "SceneRenderer/vulkan"
+                                       : std::filesystem::temp_directory_path() / "SceneRenderer/vulkan";
+#else
     const char* home = std::getenv("HOME");
     auto cache_dir = home != nullptr && home[0] != '\0'
                          ? std::filesystem::path(home) / "Library/Caches/SceneRenderer/vulkan"
                          : std::filesystem::temp_directory_path() / "SceneRenderer/vulkan";
+#endif
     const char* diagnostic_cache = std::getenv("SCENERENDERER_DIAGNOSTIC_CACHE");
-    if (diagnostic_cache != nullptr && diagnostic_cache[0] != '\0') cache_dir = diagnostic_cache;
+    if (diagnostic_cache != nullptr && diagnostic_cache[0] != '\0') cache_dir = sr::platform::NativePath(diagnostic_cache);
     std::filesystem::create_directories(cache_dir, ec);
     if (ec) {
         rstd_warn("pipeline cache directory unavailable: {}", ec.message());
         return false;
     }
     m_pipeline_cache_path =
-        (cache_dir / ("pipeline_v1_" + identity.str() + ".bin")).string();
+        sr::platform::Utf8Path(cache_dir / ("pipeline_v1_" + identity.str() + ".bin"));
 
     std::vector<std::uint8_t> initial_data;
     {
-        std::ifstream input(m_pipeline_cache_path, std::ios::binary | std::ios::ate);
+        std::ifstream input(sr::platform::NativePath(m_pipeline_cache_path), std::ios::binary | std::ios::ate);
         if (input) {
             const auto size = input.tellg();
             constexpr std::streamoff max_cache_size = 128 * 1024 * 1024;
@@ -101,24 +107,24 @@ void Device::savePipelineCache() {
     if (m_device.GetPipelineCacheData(m_pipeline_cache, &size, data.data()) != VK_SUCCESS) return;
     data.resize(size);
 
-    const auto target = std::filesystem::path(m_pipeline_cache_path);
+    const auto target = sr::platform::NativePath(m_pipeline_cache_path);
     // Multiple screens use separate renderer processes and may shut down at
     // nearly the same time. Give each writer its own staging file, then rely
     // on the same-directory rename for an atomic last-writer-wins update.
-    const auto temp = target.string() + "." + std::to_string(::getpid()) + "." +
+    const auto temp = sr::platform::Utf8Path(target) + "." + std::to_string(sr::platform::ProcessId()) + "." +
                       std::to_string(reinterpret_cast<std::uintptr_t>(this)) + ".tmp";
     {
-        std::ofstream output(temp, std::ios::binary | std::ios::trunc);
+        std::ofstream output(sr::platform::NativePath(temp), std::ios::binary | std::ios::trunc);
         if (! output.write(reinterpret_cast<const char*>(data.data()),
                            (std::streamsize)data.size())) {
             std::error_code ignored;
-            std::filesystem::remove(temp, ignored);
+            std::filesystem::remove(sr::platform::NativePath(temp), ignored);
             return;
         }
     }
     std::error_code ec;
-    std::filesystem::rename(temp, target, ec);
-    if (ec) std::filesystem::remove(temp, ec);
+    if (!sr::platform::PublishFile(sr::platform::NativePath(temp), target))
+        std::filesystem::remove(sr::platform::NativePath(temp), ec);
 }
 
 void Device::destroyPipelineCache() {

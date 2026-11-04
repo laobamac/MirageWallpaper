@@ -1,4 +1,7 @@
 module;
+#include <optional>
+#include <functional>
+#include <utility>
 
 #include <rstd/macro.hpp>
 #include "Utils/AutoDeletor.hpp"

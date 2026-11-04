@@ -1,4 +1,5 @@
 module;
+#include <optional>
 
 export module sr.pkg.parse:shader_lex;
 import rstd.cppstd;

@@ -1,8 +1,15 @@
 module;
+#include <optional>
+#include <functional>
+#include <unordered_map>
+#include <tuple>
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
 #include <sstream>
+#include <utility>
+#include <variant>
 
 #include <rstd/macro.hpp>
 

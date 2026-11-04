@@ -1,4 +1,5 @@
 module;
+#include <optional>
 module sr.vulkan_render;
 import sr.types;
 import rstd.cppstd;

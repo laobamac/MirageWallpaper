@@ -1,9 +1,12 @@
 module;
+#include <optional>
+#include <functional>
+#include <memory>
 
 #include <rstd/macro.hpp>
 #include <cstdio>
 #include <cstring>
-#include <unistd.h>
+#include "Support/include/Utils/PlatformFile.hpp"
 
 export module sr.fs;
 import sr.core;
@@ -285,15 +288,29 @@ public:
         rstd_assert(sizeStr < std::numeric_limits<int>::max());
         return std::fgets(buffer, (int)sizeStr, m_file);
     }
-    virtual idx   Tell() const override { return std::ftell(m_file); }
-    virtual bool  SeekSet(idx offset) override { return std::fseek(m_file, offset, SEEK_SET) == 0; }
-    virtual bool  SeekCur(idx offset) override { return std::fseek(m_file, offset, SEEK_CUR) == 0; }
-    virtual bool  SeekEnd(idx offset) override { return std::fseek(m_file, offset, SEEK_END) == 0; }
+    virtual idx Tell() const override {
+#if defined(_WIN32)
+        return ::_ftelli64(m_file);
+#else
+        return ::ftello(m_file);
+#endif
+    }
+    bool Seek(idx offset, int origin) {
+#if defined(_WIN32)
+        return ::_fseeki64(m_file, offset, origin) == 0;
+#else
+        return ::fseeko(m_file, offset, origin) == 0;
+#endif
+    }
+    virtual bool SeekSet(idx offset) override { return Seek(offset, SEEK_SET); }
+    virtual bool SeekCur(idx offset) override { return Seek(offset, SEEK_CUR); }
+    virtual bool SeekEnd(idx offset) override { return Seek(offset, SEEK_END); }
     virtual isize Size() const override {
-        idx cur = std::ftell(m_file);
-        std::fseek(m_file, 0, SEEK_END);
-        idx size = std::ftell(m_file);
-        std::fseek(m_file, cur, SEEK_SET);
+        auto* self = const_cast<CBinaryStream*>(this);
+        const idx cur = Tell();
+        if (cur < 0 || !self->SeekEnd(0)) return -1;
+        const idx size = Tell();
+        if (!self->SeekSet(cur)) return -1;
         return size;
     }
     virtual bool Flush() override { return std::fflush(m_file) == 0; }
@@ -309,11 +326,11 @@ inline std::shared_ptr<TBinaryStream> t_CreateCBinaryStream(std::string_view pat
     struct Shared : public CBinaryStream<TBinaryStream> {
         Shared(std::string_view path, std::FILE* file): CBinaryStream<TBinaryStream>(path, file) {};
     };
-    if (std::filesystem::is_directory(path)) {
+    if (std::filesystem::is_directory(sr::platform::NativePath(path))) {
         rstd_error("can't open: \'{}\', which is a directory", path);
         return nullptr;
     }
-    auto* file = std::fopen(std::string(path).c_str(), mode);
+    auto* file = sr::platform::OpenFile(path, mode);
     if (file == NULL) {
         rstd_error("can't open: {}", path);
         return nullptr;
@@ -652,7 +669,7 @@ inline std::string GetFileContent(VFS& vfs, std::string_view path) {
 
 class PhysicalFs : public Fs {
 public:
-    PhysicalFs(std::string_view physicalPath): m_path(physicalPath) {}
+    PhysicalFs(std::string_view physicalPath): m_path(sr::platform::NativePath(physicalPath)) {}
     virtual ~PhysicalFs() = default;
     using Fs::Contains;
     using Fs::Open;
@@ -661,7 +678,7 @@ public:
     bool Contains(RstdPath path) const override {
         auto fullpath = FullPath(path);
         if (! fullpath) return false;
-        return std::filesystem::exists(*fullpath);
+        return std::filesystem::exists(sr::platform::NativePath(*fullpath));
     }
     std::shared_ptr<IBinaryStream> Open(RstdPath path) override {
         auto fullpath = FullPath(path);
@@ -671,9 +688,9 @@ public:
     std::shared_ptr<IBinaryStreamW> OpenW(RstdPath path) override {
         auto fullpath = FullPath(path);
         if (! fullpath) return nullptr;
-        std::filesystem::path full_path { *fullpath };
+        std::filesystem::path full_path = sr::platform::NativePath(*fullpath);
         std::filesystem::create_directories(full_path.parent_path());
-        return CreateCBinaryStreamW(full_path.native());
+        return CreateCBinaryStreamW(sr::platform::Utf8Path(full_path));
     }
     std::optional<std::string> FindUniqueByBasename(std::string_view basename) const override {
         const auto root = NormalizedRoot();
@@ -687,9 +704,9 @@ public:
                 ec.clear();
                 continue;
             }
-            if (! iter->is_regular_file(ec) || iter->path().filename().native() != basename)
+            if (! iter->is_regular_file(ec) || sr::platform::Utf8Path(iter->path().filename()) != basename)
                 continue;
-            auto relative = iter->path().lexically_relative(root).generic_string();
+            auto relative = sr::platform::Utf8Path(iter->path().lexically_relative(root));
             if (relative.empty()) continue;
             if (result) return std::nullopt;
             result = "/" + relative;
@@ -700,27 +717,26 @@ public:
         auto target = FullPath(path);
         if (! target) return false;
 
-        std::filesystem::path target_path { *target };
+        std::filesystem::path target_path = sr::platform::NativePath(*target);
         std::error_code       ec;
         std::filesystem::create_directories(target_path.parent_path(), ec);
         if (ec) return false;
 
         static std::atomic<std::uint64_t> publication_sequence { 0 };
-        const auto temporary_path = target_path.string() + "." + std::to_string(::getpid()) +
+        const auto temporary_path = sr::platform::Utf8Path(target_path) + "." + std::to_string(sr::platform::ProcessId()) +
                                     "." + std::to_string(++publication_sequence) + ".tmp";
         auto stream = CreateCBinaryStreamW(temporary_path);
         if (! stream) return false;
         const bool written = writer(*stream) && stream->Flush();
         stream.reset();
         if (! written) {
-            std::filesystem::remove(temporary_path, ec);
+            std::filesystem::remove(sr::platform::NativePath(temporary_path), ec);
             return false;
         }
 
-        std::filesystem::rename(temporary_path, target_path, ec);
-        if (ec) {
+        if (!sr::platform::PublishFile(sr::platform::NativePath(temporary_path), target_path)) {
             std::error_code ignored;
-            std::filesystem::remove(temporary_path, ignored);
+            std::filesystem::remove(sr::platform::NativePath(temporary_path), ignored);
             return false;
         }
         return true;
@@ -793,8 +809,13 @@ private:
             auto stripped = path.strip_prefix(RstdPath("/"));
             if (stripped.is_some()) local_path = *stripped;
         }
-        const auto root     = NormalizedRoot();
-        const auto fullpath = (root / ToStdString(local_path)).lexically_normal();
+        const auto root = NormalizedRoot();
+        const auto native_local = sr::platform::NativePath(ToStdString(local_path));
+#if defined(_WIN32)
+        if (native_local.has_root_name() || native_local.has_root_directory() ||
+            ToStdString(local_path).find(':') != std::string::npos) return std::nullopt;
+#endif
+        const auto fullpath = (root / native_local).lexically_normal();
         // Gate 1, lexical. Catches "..", absolute paths and every other purely
         // textual escape, and has to stay first because it is the only gate
         // that works when the target does not exist yet (OpenW).
@@ -813,15 +834,15 @@ private:
             rstd_error("\"{}\" escapes the fs root through a symlink, refusing", path);
             return std::nullopt;
         }
-        return fullpath.string();
+        return sr::platform::Utf8Path(fullpath);
     }
     std::filesystem::path m_path;
 };
 
 inline std::unique_ptr<PhysicalFs> CreatePhysicalFs(std::string_view path, bool create = false) {
-    if (! std::filesystem::exists(path)) {
+    if (! std::filesystem::exists(sr::platform::NativePath(path))) {
         if (create) {
-            if (! std::filesystem::create_directories(path)) {
+            if (! std::filesystem::create_directories(sr::platform::NativePath(path))) {
                 rstd_error("mkdir \"{}\" failed", path);
                 return nullptr;
             }

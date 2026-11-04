@@ -1,3 +1,6 @@
+module;
+#include <optional>
+
 export module sr.pkg.parse:wp_scene_parser;
 import rstd.cppstd;
 import wavsen.audio;

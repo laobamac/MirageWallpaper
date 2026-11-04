@@ -1,4 +1,7 @@
 module;
+#include <optional>
+#include <functional>
+#include <utility>
 #include <rstd/macro.hpp>
 
 #include "vvk/macros.hpp"
@@ -10,7 +13,6 @@ module;
 #include <filesystem>
 #include <iomanip>
 #include "vk_mem_alloc.h"
-#include <unistd.h>
 #include <vulkan/vulkan.h>
 
 module sr.vulkan_render;
@@ -111,8 +113,10 @@ constexpr std::array base_inst_exts {
 constexpr std::array base_device_exts {
     Extension { false, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME },
     Extension { true, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME },
+#if defined(__APPLE__)
     Extension { true, "VK_KHR_portability_subset" },
     Extension { false, "VK_EXT_metal_objects" },
+#endif
     Extension { true, VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME },
     Extension { false, VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME },
 };
@@ -857,6 +861,7 @@ struct VulkanRender::Impl {
     ReDrawCB                 m_redraw_cb;
     MetalFrameCB m_metal_frame_cb;
     RenderFailureCB m_failure_cb;
+    std::function<void()> m_frame_presented_cb;
 
     std::unique_ptr<StagingBuffer> m_dyn_buf { nullptr };
     ShaderReflectionCache          m_shader_reflection_cache;
@@ -1076,6 +1081,7 @@ bool VulkanRender::Impl::init(RenderInitInfo info) {
     m_redraw_cb = info.redraw_callback;
     m_metal_frame_cb = std::move(info.metal_frame_callback);
     m_failure_cb = std::move(info.failure_callback);
+    m_frame_presented_cb = std::move(info.frame_presented_callback);
     VkExtent2D extent { info.width, info.height };
     if (extent.width * extent.height < 500 * 500) {
         rstd_error("too small swapchain image size: {}x{}", extent.width, extent.height);
@@ -1682,6 +1688,8 @@ bool VulkanRender::Impl::drawFrameSwapchain() {
             fail(res);
             return false;
         }
+        if ((res == VK_SUCCESS || res == VK_SUBOPTIMAL_KHR) && m_frame_presented_cb)
+            m_frame_presented_cb();
     }
     // Submitted successfully: the fence is now owned by the GPU and is awaited
     // at the head of the next frame, which is also where a pending swapchain
@@ -1815,6 +1823,7 @@ bool VulkanRender::Impl::onSwapchainReady(unsigned width, unsigned height) {
     m_rendering_resources.pending_upload_value = 0;
     std::fill(m_upload_cmd_values.begin(), m_upload_cmd_values.end(), 0);
     m_device->set_out_extent(VkExtent2D { width, height });
+    if (m_with_surface) m_swapchain_out_of_date = true;
     return true;
 }
 

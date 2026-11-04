@@ -1,4 +1,5 @@
 module;
+#include <optional>
 
 export module sr.scene_uniform_updater;
 import eigen;

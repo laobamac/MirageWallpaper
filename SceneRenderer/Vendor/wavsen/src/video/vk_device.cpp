@@ -58,7 +58,9 @@ Producer::~Producer() {
         if (owns_device_)         vkDestroyDevice(device_, nullptr);
     }
     if (owns_device_ && instance_) vkDestroyInstance(instance_, nullptr);
+#if !defined(_WIN32)
     if (drm_render_fd_ >= 0) rstd::sys::libc::close(drm_render_fd_);
+#endif
 }
 
 auto Producer::create(uint32_t width, uint32_t height)
@@ -113,6 +115,11 @@ auto Producer::from_external(ExternalDeviceInfo info)
 std::unique_ptr<Producer>
 Producer::build_(uint32_t width, uint32_t height,
                  const std::string* render_node_ptr, Error* err) {
+#if defined(_WIN32)
+    (void)width; (void)height; (void)render_node_ptr;
+    fail(err, "DMA-BUF producers require Linux; use from_external for native Vulkan video textures");
+    return nullptr;
+#else
     const std::string render_node = render_node_ptr ? *render_node_ptr : std::string{};
     if (width == 0 || height == 0) {
         fail(err, "Producer: width/height must be non-zero");
@@ -482,6 +489,7 @@ Producer::build_(uint32_t width, uint32_t height,
     }
 
     return self;
+#endif
 }
 
 auto Producer::upload_into(VkImage target, uint32_t target_w, uint32_t target_h,

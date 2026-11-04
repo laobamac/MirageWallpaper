@@ -1,4 +1,6 @@
 module;
+#include <optional>
+#include <functional>
 
 export module sr.vulkan_render:fin_pass;
 import sr.spec_texs;

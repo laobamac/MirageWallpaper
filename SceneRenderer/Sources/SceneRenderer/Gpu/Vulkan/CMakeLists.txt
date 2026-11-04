@@ -12,6 +12,9 @@ target_include_directories(SceneRendererShaderCompiler
   PUBLIC  ../.. ../../Kernel/Support/include
   PRIVATE ../../Kernel/Support ../../Kernel/Support/include/Utils .)
 target_compile_options(SceneRendererShaderCompiler PRIVATE -Wno-missing-field-initializers)
+if(WIN32)
+  target_link_libraries(SceneRendererShaderCompiler PRIVATE ole32)
+endif()
 set_property(TARGET SceneRendererShaderCompiler PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET SceneRendererShaderCompiler PROPERTY CXX_SCAN_FOR_MODULES ON)
 

@@ -1,3 +1,6 @@
+module;
+#include <optional>
+
 module sr.vulkan_render;
 import sr.core;
 import rstd.cppstd;

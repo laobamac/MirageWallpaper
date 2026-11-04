@@ -1,4 +1,5 @@
 module;
+#include <optional>
 
 #include "FrameGraph/Pass.hpp"
 

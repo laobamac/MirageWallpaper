@@ -1,6 +1,8 @@
 module;
 
 #include <rstd/macro.hpp>
+#include <cstdlib>
+#include <filesystem>
 
 // Sha.hpp stays classic — utils::genSha1 is consumed by impl units that
 // need to spill blobs to /tmp for post-mortem inspection (Vulkan/Shader.cpp).
@@ -117,7 +119,12 @@ namespace platform
 inline std::filesystem::path GetCachePath(std::string_view name) {
     using namespace std::filesystem;
 
-    path             p_cache;
+    path p_cache;
+#if defined(_WIN32)
+    if (const wchar_t* local = ::_wgetenv(L"LOCALAPPDATA")) p_cache = path(local);
+    if (p_cache.empty()) p_cache = temp_directory_path();
+    return p_cache / name;
+#else
     std::string_view home = sview_nullsafe(std::getenv("HOME"));
     if (! home.empty()) {
         std::string_view cache = sview_nullsafe(std::getenv("XDG_CACHE_HOME"));
@@ -127,6 +134,7 @@ inline std::filesystem::path GetCachePath(std::string_view name) {
             p_cache = path(cache);
     }
     return p_cache / name;
+#endif
 }
 } // namespace platform
 

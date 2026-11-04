@@ -1,4 +1,7 @@
 module;
+#include <optional>
+
+#include <array>
 
 #include <rstd/macro.hpp>
 

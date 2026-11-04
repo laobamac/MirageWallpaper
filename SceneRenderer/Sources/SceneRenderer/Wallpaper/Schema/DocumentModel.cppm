@@ -1,3 +1,8 @@
+module;
+#include <optional>
+#include <unordered_map>
+#include <array>
+
 export module sr.pkg.scene_obj:scene_document;
 import rstd.cppstd;
 import sr.fs;

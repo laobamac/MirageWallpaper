@@ -1,7 +1,12 @@
 module;
 
 #include <cstdio>
+#if defined(_WIN32)
+#include <windows.h>
+#include "../Support/include/Utils/PlatformFile.hpp"
+#else
 #include <dlfcn.h>
+#endif
 
 module sr.types;
 import rstd.cppstd;
@@ -59,18 +64,31 @@ DynamicLibrary& DynamicLibrary::operator=(DynamicLibrary&& o) noexcept {
     return *this;
 }
 bool DynamicLibrary::Open(const char* filename) {
+    Close();
+#if defined(_WIN32)
+    handle = reinterpret_cast<void*>(::LoadLibraryExW(sr::platform::NativePath(filename).c_str(), nullptr, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS));
+#else
     handle = dlopen(filename, RTLD_NOW);
+#endif
     return IsOpen();
 }
 bool DynamicLibrary::IsOpen() const { return handle != nullptr; }
 void DynamicLibrary::Close() {
     if (IsOpen()) {
+#if defined(_WIN32)
+        ::FreeLibrary(static_cast<HMODULE>(handle));
+#else
         dlclose(handle);
+#endif
         handle = nullptr;
     }
 }
 void* DynamicLibrary::GetSymbolAddr(const char* name) const {
+#if defined(_WIN32)
+    return reinterpret_cast<void*>(::GetProcAddress(static_cast<HMODULE>(handle), name));
+#else
     return reinterpret_cast<void*>(dlsym(handle, name));
+#endif
 }
 
 } // namespace utils

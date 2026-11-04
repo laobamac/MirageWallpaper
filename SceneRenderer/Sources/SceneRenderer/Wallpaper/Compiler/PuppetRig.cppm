@@ -1,5 +1,15 @@
 module;
 
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
+
 export module sr.pkg.puppet;
 import eigen;
 import sr.core;

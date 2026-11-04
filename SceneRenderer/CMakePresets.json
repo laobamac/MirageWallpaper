@@ -15,6 +15,27 @@
       }
     },
     {
+      "name": "windows-clang-release",
+      "displayName": "Windows clang-cl Release",
+      "inherits": "_clang-base",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang-cl",
+        "CMAKE_CXX_COMPILER": "clang-cl",
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_TARGET_TRIPLET": "x64-mirage-windows",
+        "VCPKG_HOST_TRIPLET": "x64-mirage-windows",
+        "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/../scripts/windows",
+        "VCPKG_OVERLAY_PORTS": "${sourceDir}/../scripts/windows/ports",
+        "VCPKG_MANIFEST_DIR": "${sourceDir}/../scripts/windows",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/../build/windows/vcpkg_installed",
+        "SCENERENDERER_BUILD_VIEWER": "OFF",
+        "SCENERENDERER_BUILD_WALLPAPER_HOST": "ON",
+        "SCENERENDERER_BUILD_TESTS": "ON",
+        "WAVSEN_BUILD_TESTS": "ON"
+      }
+    },
+    {
       "name": "macos-clang-release",
       "displayName": "macOS · Homebrew Clang · Release (x86_64)",
       "description": "SceneRenderer engine plus standalone viewer and macOS wallpaper tools (Intel).",
@@ -67,6 +88,7 @@
     }
   ],
   "buildPresets": [
+    { "name": "windows-clang-release", "configurePreset": "windows-clang-release" },
     { "name": "macos-clang-release",       "configurePreset": "macos-clang-release" },
     { "name": "macos-clang-debug",         "configurePreset": "macos-clang-debug" },
     { "name": "macos-arm64-clang-release", "configurePreset": "macos-arm64-clang-release" },

@@ -1,9 +1,15 @@
 module;
+#include <variant>
+#include <optional>
+#include <functional>
+#include <unordered_map>
+#include <utility>
 
 #include <rstd/macro.hpp>
 #include <rstd/enum.hpp>
 #include "quickjs.h"
 #include <filesystem>
+#include "Utils/PlatformFile.hpp"
 #include <limits>
 
 module sr.script;
@@ -1059,14 +1065,14 @@ void FlushLocalStorage(EngineHostState* host) {
     const auto temporary = host->ls_path + "." +
         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + "." +
         std::to_string(reinterpret_cast<std::uintptr_t>(host)) + ".tmp";
-    std::ofstream file(temporary, std::ios::binary);
+    std::ofstream file(sr::platform::NativePath(temporary), std::ios::binary);
     file << snapshot;
     file.close();
     std::error_code error;
-    if (file) std::filesystem::rename(temporary, host->ls_path, error);
-    if (!file || error) {
+    const bool published = file && sr::platform::PublishFile(sr::platform::NativePath(temporary), sr::platform::NativePath(host->ls_path));
+    if (!published) {
         rstd_warn("localStorage flush failed: {}", host->ls_path);
-        std::filesystem::remove(temporary, error);
+        std::filesystem::remove(sr::platform::NativePath(temporary), error);
     }
 }
 
@@ -1087,7 +1093,7 @@ void LoadLocalStorage(EngineHostState* host) {
     host->ls_data.clear();
     host->ls_bytes = 0;
     if (host->ls_path.empty()) return;
-    std::ifstream f(host->ls_path);
+    std::ifstream f(sr::platform::NativePath(host->ls_path));
     if (! f) return;
     std::string source(std::istreambuf_iterator<char>(f), {});
     auto        parsed = ParseJson(source);
@@ -1376,11 +1382,11 @@ CursorNodePoint ResolveCursorNode(EngineHostState* host, sr::SceneNode* n,
                     if (! local.allFinite() || std::abs(local.w()) < 1e-12) return std::nullopt;
                     return local.head<3>() / local.w();
                 };
-                auto near = unproject(-1.0);
-                auto far  = unproject(1.0);
-                if (near && far) {
-                    Eigen::Vector3d local = *near;
-                    Eigen::Vector3d ray   = *far - *near;
+                auto near_point = unproject(-1.0);
+                auto far_point  = unproject(1.0);
+                if (near_point && far_point) {
+                    Eigen::Vector3d local = *near_point;
+                    Eigen::Vector3d ray   = *far_point - *near_point;
                     if (std::abs(ray.z()) > 1e-12) local += ray * (-local.z() / ray.z());
                     Eigen::Vector4d world =
                         projection->model * Eigen::Vector4d { local.x(), local.y(), 0.0, 1.0 };

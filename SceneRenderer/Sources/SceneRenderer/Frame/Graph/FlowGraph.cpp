@@ -1,4 +1,5 @@
 module;
+#include <functional>
 
 module sr.rgraph;
 import sr.core;

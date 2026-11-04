@@ -57,13 +57,15 @@ public:
                         std::function<void()> on_deactivate = {},
                         std::function<void(const std::string&, const std::string&)>
                             on_snapshot = {},
-                        std::function<void(const std::string&)> on_storage = {})
+                        std::function<void(const std::string&)> on_storage = {},
+                        std::function<void(const std::string&)> on_unsupported = {})
         : m_wallpaper(wallpaper),
           m_on_quit(std::move(on_quit)),
           m_on_activate(std::move(on_activate)),
           m_on_deactivate(std::move(on_deactivate)),
           m_on_snapshot(std::move(on_snapshot)),
-          m_on_storage(std::move(on_storage)) {}
+          m_on_storage(std::move(on_storage)),
+          m_on_unsupported(std::move(on_unsupported)) {}
 
     ~SceneControlChannel() { stop(); }
 
@@ -83,7 +85,12 @@ private:
     std::function<void()> m_on_deactivate;
     std::function<void(const std::string&, const std::string&)> m_on_snapshot;
     std::function<void(const std::string&)> m_on_storage;
-    int                                                         m_wake_fds[2] { -1, -1 };
+    std::function<void(const std::string&)> m_on_unsupported;
+#if defined(_WIN32)
+    void* m_wake_event { nullptr };
+#else
+    int m_wake_fds[2] { -1, -1 };
+#endif
     std::atomic<bool>     m_running { false };
     std::thread           m_thread;
 };

@@ -13,6 +13,7 @@ module;
 
 // c++11
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <bitset>
 #include <chrono>
@@ -501,7 +502,9 @@ export using std::allocator;
 export using std::allocator_traits;
 export using std::default_delete;
 export using std::enable_shared_from_this;
-export using std::make_shared;
+// MSVC STL 的 shared_ptr 以 friend 声明 _STD make_shared，clang 21 在实例化该类模板时会把
+// 该 friend 解析到这个 using 声明并报 "cannot befriend target of using declaration"，故
+// 不重导出；使用方直接包含 <memory>。
 export using std::shared_ptr;
 export using std::unique_ptr;
 export using std::weak_ptr;
@@ -528,7 +531,8 @@ export using std::placeholders::_5;
 } // namespace placeholders
 
 // <tuple>
-export using std::get;
+// std::tuple/std::pair 同样以 friend 声明 _STD get，无法重导出；需要 get（含结构化
+// 绑定）的 TU 直接包含 <utility>/<tuple>。
 export using std::ignore;
 export using std::make_tuple;
 export using std::tie;
@@ -541,7 +545,7 @@ export using std::forward;
 export using std::move;
 export using std::pair;
 export using std::make_pair;
-export using std::swap;
+// 标准库多个类模板以 friend 声明 swap，同样无法重导出。
 
 // <iterator>
 export using std::advance;

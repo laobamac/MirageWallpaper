@@ -1,4 +1,7 @@
 module;
+#include <optional>
+#include <unordered_map>
+#include <utility>
 
 #include <rstd/macro.hpp>
 

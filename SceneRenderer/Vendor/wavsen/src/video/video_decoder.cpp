@@ -1,3 +1,6 @@
+module;
+#include <optional>
+
 module wavsen.video;
 
 import rstd.cppstd;
@@ -443,7 +446,7 @@ int avio_read_shim(void* opaque, uint8_t* buf, int buf_size) {
     auto* s = static_cast<IInputStream*>(opaque);
     int n = s->read(buf, buf_size);
     if (n == 0) return AVERROR_EOF;
-    if (n < 0)  return AVERROR(rstd::sys::libc::EIO);
+    if (n < 0)  return AVERROR(EIO);
     return n;
 }
 int64_t avio_seek_shim(void* opaque, int64_t offset, int whence) {
@@ -972,7 +975,7 @@ int VideoDecoder::next_vk_frame_(VkFrameView& out, Error* err) {
             }
             return 1;
         }
-        if (rc != AVERROR(rstd::sys::libc::EAGAIN)) {
+        if (rc != AVERROR(EAGAIN)) {
             fail(err, "avcodec_receive_frame: " + av_err_str(rc));
             return -1;
         }
@@ -994,7 +997,7 @@ int VideoDecoder::next_vk_frame_(VkFrameView& out, Error* err) {
         }
         rc = avcodec_send_packet(st.cctx.get(), st.pkt.get());
         av_packet_unref(st.pkt.get());
-        if (rc < 0 && rc != AVERROR(rstd::sys::libc::EAGAIN)) {
+        if (rc < 0 && rc != AVERROR(EAGAIN)) {
             fail(err, "avcodec_send_packet: " + av_err_str(rc));
             return -1;
         }
@@ -1051,7 +1054,7 @@ int VideoDecoder::next_metal_frame_(MetalFrameView& out, Error* err) {
             }
             return 1;
         }
-        if (rc != AVERROR(rstd::sys::libc::EAGAIN)) {
+        if (rc != AVERROR(EAGAIN)) {
             fail(err, "avcodec_receive_frame: " + av_err_str(rc));
             return -1;
         }
@@ -1073,11 +1076,20 @@ int VideoDecoder::next_metal_frame_(MetalFrameView& out, Error* err) {
         }
         rc = avcodec_send_packet(st.cctx.get(), st.pkt.get());
         av_packet_unref(st.pkt.get());
-        if (rc < 0 && rc != AVERROR(rstd::sys::libc::EAGAIN)) {
+        if (rc < 0 && rc != AVERROR(EAGAIN)) {
             fail(err, "avcodec_send_packet: " + av_err_str(rc));
             return -1;
         }
     }
+}
+#endif
+
+#if ! defined(__APPLE__)
+// Metal / VideoToolbox 帧只在 macOS 上存在；其它平台保留同一入口，统一返回错误，
+// 使调用方（next_metal_frame）无需按平台分支。
+int VideoDecoder::next_metal_frame_(MetalFrameView&, Error* err) {
+    fail(err, "Metal-backed frames require macOS; native Vulkan and software frames are used on this platform");
+    return -1;
 }
 #endif
 
@@ -1168,7 +1180,7 @@ int VideoDecoder::next_drm_frame_(DrmFrameView& out, Error* err) {
             }
             return 1;
         }
-        if (rc != AVERROR(rstd::sys::libc::EAGAIN)) {
+        if (rc != AVERROR(EAGAIN)) {
             fail(err, "avcodec_receive_frame: " + av_err_str(rc));
             return -1;
         }
@@ -1190,7 +1202,7 @@ int VideoDecoder::next_drm_frame_(DrmFrameView& out, Error* err) {
         }
         rc = avcodec_send_packet(st.cctx.get(), st.pkt.get());
         av_packet_unref(st.pkt.get());
-        if (rc < 0 && rc != AVERROR(rstd::sys::libc::EAGAIN)) {
+        if (rc < 0 && rc != AVERROR(EAGAIN)) {
             fail(err, "avcodec_send_packet: " + av_err_str(rc));
             return -1;
         }
@@ -1275,7 +1287,7 @@ int VideoDecoder::next_frame_(Nv12Frame& out, Error* err) {
             }
             return 1;
         }
-        if (rc != AVERROR(rstd::sys::libc::EAGAIN)) {
+        if (rc != AVERROR(EAGAIN)) {
             fail(err, "avcodec_receive_frame: " + av_err_str(rc));
             return -1;
         }
@@ -1298,7 +1310,7 @@ int VideoDecoder::next_frame_(Nv12Frame& out, Error* err) {
         }
         rc = avcodec_send_packet(st.cctx.get(), st.pkt.get());
         av_packet_unref(st.pkt.get());
-        if (rc < 0 && rc != AVERROR(rstd::sys::libc::EAGAIN)) {
+        if (rc < 0 && rc != AVERROR(EAGAIN)) {
             fail(err, "avcodec_send_packet: " + av_err_str(rc));
             return -1;
         }
@@ -1336,7 +1348,7 @@ int VideoDecoder::discard_frame_(double& pts_seconds, Error* err) {
             }
             return 1;
         }
-        if (rc != AVERROR(rstd::sys::libc::EAGAIN)) {
+        if (rc != AVERROR(EAGAIN)) {
             fail(err, "avcodec_receive_frame: " + av_err_str(rc));
             return -1;
         }
@@ -1358,7 +1370,7 @@ int VideoDecoder::discard_frame_(double& pts_seconds, Error* err) {
         }
         rc = avcodec_send_packet(st.cctx.get(), st.pkt.get());
         av_packet_unref(st.pkt.get());
-        if (rc < 0 && rc != AVERROR(rstd::sys::libc::EAGAIN)) {
+        if (rc < 0 && rc != AVERROR(EAGAIN)) {
             fail(err, "avcodec_send_packet: " + av_err_str(rc));
             return -1;
         }

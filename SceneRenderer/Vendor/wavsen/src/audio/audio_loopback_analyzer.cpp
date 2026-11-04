@@ -57,7 +57,11 @@ public:
         dsp::fft_inplace(buf_left.data(), dsp::kFftSize);
         dsp::fft_inplace(buf_right.data(), dsp::kFftSize);
 
+#if defined(_WIN32)
+        const float norm = dsp::kFftAmplitudeNorm;
+#else
         const float norm = 2.0f / static_cast<float>(dsp::kFftSize);
+#endif
         const auto raw =
             dsp::analyze_stereo_spectrum(buf_left.data(), buf_right.data(), band_layout_, norm);
         const auto dt_sec =
@@ -74,29 +78,13 @@ public:
                              std::chrono::steady_clock::now().time_since_epoch())
                              .count();
 
-        seq_.fetch_add(1, std::memory_order_release);
-        std::memcpy(&published_, &out, sizeof(SpectrumSnapshot));
-        seq_.fetch_add(1, std::memory_order_release);
+        published_ = out;
     }
 
     bool snapshot(SpectrumSnapshot& out) const {
-        for (int attempt = 0; attempt < 16; ++attempt) {
-            const std::uint32_t s1 = seq_.load(std::memory_order_acquire);
-            if (s1 == 0) {
-                out.clear();
-                return false;
-            }
-            if (s1 & 1u) continue;
-            SpectrumSnapshot tmp;
-            std::memcpy(&tmp, &published_, sizeof(SpectrumSnapshot));
-            const std::uint32_t s2 = seq_.load(std::memory_order_acquire);
-            if (s1 == s2) {
-                out = tmp;
-                return true;
-            }
-        }
-        out.clear();
-        return false;
+        std::lock_guard lock(mu_);
+        out = published_;
+        return out.publish_ms != 0;
     }
 
 private:
@@ -122,7 +110,6 @@ private:
     dsp::BandLayout                  band_layout_ { dsp::make_we_layout(kFallbackRate) };
     dsp::SpectrumBands               smoothed_ {};
 
-    mutable std::atomic<std::uint32_t> seq_ { 0 };
     SpectrumSnapshot                   published_ {};
 };
 

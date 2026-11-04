@@ -1,4 +1,5 @@
 module;
+#include <optional>
 
 export module sr.vulkan_render:buffer_resolver;
 import sr.core;

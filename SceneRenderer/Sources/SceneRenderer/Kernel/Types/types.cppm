@@ -1,6 +1,10 @@
 module;
+#include <optional>
+#include <functional>
+#include <unordered_map>
 
 #include <atomic>
+#include <array>
 #include <algorithm>
 #include <cmath>
 

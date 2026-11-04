@@ -4,9 +4,16 @@ cmake_minimum_required(VERSION 3.20)
 # Uses native WKWebView instead of CEF (no off-screen render, no Vulkan blit,
 # no external deps — only Apple frameworks).
 
-project(WebRenderer
-    VERSION 0.1.0
-    LANGUAGES CXX OBJC OBJCXX)
+project(WebRenderer VERSION 0.1.0 LANGUAGES CXX)
+if(APPLE)
+    enable_language(OBJC OBJCXX)
+elseif(WIN32)
+    set(CMAKE_AUTOMOC ON)
+    find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Widgets WebEngineCore WebEngineWidgets WebChannel)
+    find_package(Threads REQUIRED)
+else()
+    message(FATAL_ERROR "This branch supports macOS and Windows WebRenderer hosts")
+endif()
 
 set(WEBRENDERER_VERSION 0.1.0)
 
@@ -23,6 +30,7 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
 endif()
 
+if(APPLE)
 # All ObjC/ObjC++ sources are written for ARC.
 add_compile_options($<$<COMPILE_LANGUAGE:OBJC>:-fobjc-arc>
                     $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
@@ -51,6 +59,7 @@ set(WR_FRAMEWORKS
     ${IMAGEIO_FRAMEWORK}
     ${UNIFORMTYPEIDENTIFIERS_FRAMEWORK}
     ${FOUNDATION_FRAMEWORK})
+endif()
 
 add_subdirectory(Sources/WebRenderer)
 
@@ -62,10 +71,13 @@ if(WEBRENDERER_BUILD_VIEWER)
 endif()
 if(WEBRENDERER_BUILD_WALLPAPER)
     add_subdirectory(Tools/WebWallpaper)
-    add_subdirectory(Tools/WebBaker)
+    if(APPLE)
+        add_subdirectory(Tools/WebBaker)
+    endif()
 endif()
 
 include(CTest)
-if(BUILD_TESTING)
+option(WEBRENDERER_BUILD_TESTS "Build WebRenderer integration and compatibility tests" ${BUILD_TESTING})
+if(BUILD_TESTING AND WEBRENDERER_BUILD_TESTS)
     add_subdirectory(Tests)
 endif()

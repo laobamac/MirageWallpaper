@@ -11,10 +11,10 @@ set(SCENERENDERER_VERSION 0.1.8)
 
 project(SceneRenderer VERSION ${SCENERENDERER_VERSION})
 
-# SceneRenderer engine build for macOS.
-# MoltenVK is used as the Vulkan ICD and wavsen is forced onto Core Audio
-# when building on Darwin. The repository is intentionally laid out as an
-# embeddable engine plus a small standalone tool, not as the final app shell.
+# SceneRenderer is an embeddable engine with platform-specific standalone hosts.
+# macOS uses MoltenVK and Core Audio; Windows uses Vulkan Win32 surfaces and WASAPI.
+# The repository is intentionally laid out as an embeddable engine plus a small
+# standalone tool, not as the final app shell.
 if(APPLE)
     set(WAVSEN_AUDIO_BACKEND "coreaudio" CACHE STRING "Core Audio backend on macOS" FORCE)
     # MoltenVK as the Vulkan ICD. Hint Vulkan::Vulkan to the brew loader.
@@ -48,7 +48,13 @@ if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND NOT SR_ALLOW_NONCLANG)
 endif()
 
 
-find_package(PkgConfig REQUIRED)
+if(WIN32)
+    set(WAVSEN_AUDIO_BACKEND "wasapi" CACHE STRING "Windows WASAPI 音频后端" FORCE)
+    add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
+    add_compile_options("$<$<COMPILE_LANG_AND_ID:CXX,Clang>:/clang:-fsized-deallocation>")
+else()
+    find_package(PkgConfig REQUIRED)
+endif()
 find_package(Threads REQUIRED)
 
 if(CMAKE_USE_PTHREADS_INIT)
@@ -64,7 +70,9 @@ option(SCENERENDERER_BUILD_ENGINE "Build the SceneRenderer engine libraries" ON)
 
 add_subdirectory(Sources/SceneRenderer)
 
-pkg_check_modules(GLFW IMPORTED_TARGET glfw3)
+if(NOT WIN32)
+    pkg_check_modules(GLFW IMPORTED_TARGET glfw3)
+endif()
 option(SCENERENDERER_BUILD_VIEWER "Build the standalone SceneViewer tool" ${GLFW_FOUND})
 if(SCENERENDERER_BUILD_ENGINE AND SCENERENDERER_BUILD_VIEWER)
     if(NOT GLFW_FOUND)
@@ -75,16 +83,30 @@ if(SCENERENDERER_BUILD_ENGINE AND SCENERENDERER_BUILD_VIEWER)
     add_subdirectory(Tools/SceneViewer)
 endif()
 
-option(SCENERENDERER_BUILD_WALLPAPER_HOST "Build the native macOS desktop wallpaper host" ${APPLE})
-if(SCENERENDERER_BUILD_ENGINE AND APPLE AND SCENERENDERER_BUILD_WALLPAPER_HOST)
+option(SCENERENDERER_BUILD_WALLPAPER_HOST "Build the native desktop wallpaper host" ON)
+if(SCENERENDERER_BUILD_ENGINE AND SCENERENDERER_BUILD_WALLPAPER_HOST)
     add_subdirectory(Tools/SceneWallpaper)
-    add_subdirectory(Tools/SceneScreenSaver)
-    add_subdirectory(Tools/SceneBaker)
+    if(APPLE)
+        add_subdirectory(Tools/SceneScreenSaver)
+        add_subdirectory(Tools/SceneBaker)
+    endif()
 endif()
 
 option(SCENERENDERER_BUILD_TESTS "Build SceneRenderer regression tests" OFF)
 if(SCENERENDERER_BUILD_ENGINE AND SCENERENDERER_BUILD_TESTS)
     enable_testing()
+    if(WIN32)
+        add_executable(SceneRendererWindowsPortabilityTests Tests/WindowsPortabilityRegression.cpp)
+        target_link_libraries(SceneRendererWindowsPortabilityTests PRIVATE SceneRenderer::Types)
+        set_property(TARGET SceneRendererWindowsPortabilityTests PROPERTY CXX_SCAN_FOR_MODULES ON)
+        add_test(NAME SceneRendererWindowsPortability COMMAND SceneRendererWindowsPortabilityTests)
+        set_tests_properties(SceneRendererWindowsPortability PROPERTIES TIMEOUT 15)
+        add_executable(SceneRendererWasapiTests Tests/WindowsWasapiRegression.cpp
+            Vendor/wavsen/src/audio/audio_wasapi.cpp)
+        target_link_libraries(SceneRendererWasapiTests PRIVATE ole32 uuid)
+        add_test(NAME SceneRendererWasapi COMMAND SceneRendererWasapiTests)
+        set_tests_properties(SceneRendererWasapi PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 15)
+    endif()
     add_executable(SceneRendererPerformanceTests Tests/PerformanceRegression.cpp
         Tools/SceneWallpaper/ControlChannel.cpp)
     target_link_libraries(SceneRendererPerformanceTests PRIVATE SceneRenderer::Engine)
@@ -97,7 +119,11 @@ if(SCENERENDERER_BUILD_ENGINE AND SCENERENDERER_BUILD_TESTS)
     add_test(NAME SceneRendererTextGeometry COMMAND SceneRendererTextGeometryTests)
 
     find_package(Freetype REQUIRED)
-    pkg_check_modules(FONTCONFIG REQUIRED IMPORTED_TARGET fontconfig)
+    if(WIN32)
+        find_package(Fontconfig REQUIRED)
+    else()
+        pkg_check_modules(FONTCONFIG REQUIRED IMPORTED_TARGET fontconfig)
+    endif()
     add_executable(SceneRendererTextFontFallbackTests Tests/TextFontFallbackRegression.cpp)
     target_link_libraries(SceneRendererTextFontFallbackTests
         PRIVATE SceneRenderer::Import Freetype::Freetype PkgConfig::FONTCONFIG)

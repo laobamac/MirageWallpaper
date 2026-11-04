@@ -154,6 +154,11 @@ public:
         return rstd::lexicographical_compare_three_way(
             a.begin(), a.end(), b.vec.begin(), b.vec.end());
     }
+    // clang 21 的重载决议不会回退到重写出的 operator<=> 候选，`String == String` 只能命中
+    // 下面两个需要隐式转换的友元而产生二义性，因此显式提供同类型比较。
+    friend constexpr bool operator==(const String& a, const String& b) noexcept {
+        return a.size() == b.size() && rstd::mem::memcmp(a.begin(), b.begin(), a.size()) == 0;
+    }
     friend constexpr bool operator==(const String& a, ref<str> b) noexcept {
         return a.size() == b.size() && rstd::mem::memcmp(a.begin(), b.begin(), a.size()) == 0;
     }

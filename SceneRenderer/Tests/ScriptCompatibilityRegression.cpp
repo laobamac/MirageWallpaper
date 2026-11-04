@@ -11,6 +11,9 @@
 #include <string_view>
 #include <variant>
 #include <vector>
+#include <memory>
+#include <utility>
+#include <optional>
 
 import sr.json;
 import sr.pkg.parse;
@@ -75,8 +78,13 @@ void TestStorageSnapshots() {
         }
         saver.PublishStorageSnapshot();
         Check(saver.StorageSnapshot() != snapshot, "isolated script writes stay available in memory");
-        std::ifstream file(path);
-        const std::string persisted(std::istreambuf_iterator<char>(file), {});
+        // Windows 上无法替换仍被打开（未共享删除位）的文件，因此每次快照读取都在
+        // 独立作用域内完成，读取句柄不会跨越后续的原子写入。
+        const auto read_file = [&path] {
+            std::ifstream file(path);
+            return std::string(std::istreambuf_iterator<char>(file), {});
+        };
+        const std::string persisted = read_file();
         Check(persisted == original, "saver writes never overwrite desktop storage");
         sr::script::JsRuntime other;
         other.SetStorageSnapshot(snapshot);
@@ -85,8 +93,7 @@ void TestStorageSnapshots() {
         Check(Parse(other.StorageSnapshot()) == Parse(original), "different instances do not share storage");
         desktop.ResetLocalStorage();
         Check(Parse(published) == Parse("{}"), "desktop reset publishes an empty snapshot");
-        std::ifstream resetFile(path);
-        const std::string reset(std::istreambuf_iterator<char>(resetFile), {});
+        const std::string reset = read_file();
         Check(Parse(reset) == Parse("{}"), "desktop reset persists atomically");
     }
     std::filesystem::remove_all(directory);

@@ -9,7 +9,7 @@ add_library(wavsen::ffi::vulkan ALIAS wavsen_ffi_vulkan)
 
 target_compile_features(wavsen_ffi_vulkan PUBLIC cxx_std_20)
 target_compile_options(wavsen_ffi_vulkan PRIVATE
-    -Wall -Wextra -Wpedantic -Wno-missing-field-initializers
+    ${WAVSEN_WARNING_OPTIONS}
 )
 
 target_sources(wavsen_ffi_vulkan

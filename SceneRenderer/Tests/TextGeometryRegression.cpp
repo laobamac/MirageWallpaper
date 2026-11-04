@@ -9,6 +9,7 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+#include <optional>
 
 import sr.text;
 import sr.scene;
@@ -88,8 +89,11 @@ int main() {
     const auto package_path = root / "scene.pkg";
     std::error_code ec;
     std::filesystem::remove_all(root, ec);
-    ok &= Check(WriteFile(shared_root / "fonts" / "library" / "三极萌萌简体.ttf", "shared"),
-                "write shared font fixture");
+    // 非 ASCII 文件名必须显式按 UTF-8 构造 path：Windows 上 path 的窄字符串
+    // 构造会按系统 ANSI 代码页解码，UTF-8 字节在 GBK 环境下会抛异常。
+    const std::filesystem::path shared_font_path =
+        shared_root / "fonts" / "library" / std::filesystem::path(u8"三极萌萌简体.ttf");
+    ok &= Check(WriteFile(shared_font_path, "shared"), "write shared font fixture");
     ok &= Check(WritePackage(package_path,
                              { { "fonts/exact.ttf", "exact" },
                                { "fonts/workshop/example/三极萌萌简体.ttf", "package" },

@@ -31,7 +31,10 @@ set(QJS_ENABLE_INSTALL      OFF CACHE INTERNAL "")
 # glslang — trim to library targets only; we don't ship its tools or tests.
 # ENABLE_OPT=OFF skips the spirv-opt dependency on SPIRV-Tools (glslang's
 # External/ submodules aren't fetched in our setup).
-set(ENABLE_GLSLANG_BINARIES OFF CACHE INTERNAL "")
+set(ENABLE_GLSLANG_BINARIES ${WIN32} CACHE INTERNAL "")
+if(WIN32)
+    set(GLSLANG_ENABLE_INSTALL OFF CACHE INTERNAL "")
+endif()
 set(ENABLE_HLSL             ON  CACHE INTERNAL "")
 set(ENABLE_OPT              OFF CACHE INTERNAL "")
 set(ENABLE_CTEST            OFF CACHE INTERNAL "")
@@ -40,9 +43,9 @@ set(GLSLANG_TESTS           OFF CACHE INTERNAL "")
 set(BUILD_TESTING           OFF CACHE INTERNAL "")
 
 add_subdirectory(rstd)
+add_subdirectory(glslang)
 add_subdirectory(wavsen)
 add_subdirectory(spirv_reflect)
-add_subdirectory(glslang)
 add_subdirectory(argparse)
 add_subdirectory(quickjs)
 

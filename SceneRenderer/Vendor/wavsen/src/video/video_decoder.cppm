@@ -1,3 +1,8 @@
+module;
+#include <optional>
+#include <functional>
+#include <utility>
+
 export module wavsen.video:video_decoder;
 
 import rstd.cppstd;

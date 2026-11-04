@@ -9,6 +9,9 @@
 #include <span>
 #include <string_view>
 #include <vector>
+#include <utility>
+#include <variant>
+#include <optional>
 
 import sr.scene;
 import sr.scene_wallpaper;

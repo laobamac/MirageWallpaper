@@ -20,8 +20,8 @@
 
 namespace mirage {
 
-// Returns true when `path` was written (HEIC, falling back to JPEG on Macs with
-// no HEVC encoder). request_frame runs after the capture callback is installed,
+// Returns true when `path` was written (PNG on Windows/Linux; HEIC or JPEG on
+// macOS). request_frame runs after the capture callback is installed,
 // allowing paused and on-demand scenes to supply one frame without resuming.
 bool WriteSceneSnapshot(const std::string& path, double timeout_seconds = 4.0,
                         std::function<void()> request_frame = {});

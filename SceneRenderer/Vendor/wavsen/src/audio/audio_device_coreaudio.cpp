@@ -63,9 +63,9 @@ public:
         std::uint32_t channels = kDefaultChannels;
         std::uint32_t sample_rate = kDefaultRate;
         int status = 0;
-        if (! wavsen_coreaudio_output_create(&Impl::on_output, this, &output_, &status, &channels,
+        if (! wavsen_native_output_create(&Impl::on_output, this, &output_, &status, &channels,
                                              &sample_rate)) {
-            rstd::log::error("wavsen::audio: coreaudio output init failed ({})", status);
+            rstd::log::error("wavsen::audio: native output init failed ({})", status);
             output_ = nullptr;
             return false;
         }
@@ -80,11 +80,11 @@ public:
         }
 
         if (audio_debug_enabled()) {
-            std::fprintf(stderr, "wavsen-audio-debug: coreaudio output init %u ch @ %u Hz\n",
+            std::fprintf(stderr, "wavsen-audio-debug: native output init %u ch @ %u Hz\n",
                          desc_.channels, desc_.sample_rate);
         }
         inited_.store(true, std::memory_order_release);
-        rstd::log::info("wavsen::audio: coreaudio output inited ({} ch @ {} Hz)",
+        rstd::log::info("wavsen::audio: native output inited ({} ch @ {} Hz)",
                         desc_.channels, desc_.sample_rate);
         return true;
     }
@@ -92,7 +92,7 @@ public:
     void uninit() {
         if (! is_inited()) return;
         stop();
-        wavsen_coreaudio_output_destroy(output_);
+        wavsen_native_output_destroy(output_);
         output_ = nullptr;
         inited_.store(false, std::memory_order_release);
     }
@@ -116,11 +116,11 @@ public:
                          static_cast<unsigned long long>(base));
         }
         int status = 0;
-        if (! wavsen_coreaudio_output_start(output_, &status)) {
+        if (! wavsen_native_output_start(output_, &status)) {
             started_.store(false, std::memory_order_release);
             position_frames_.store(base, std::memory_order_relaxed);
             rendered_frames_.store(base, std::memory_order_relaxed);
-            rstd::log::error("wavsen::audio: coreaudio output start failed ({})", status);
+            rstd::log::error("wavsen::audio: native output start failed ({})", status);
         }
     }
 
@@ -128,7 +128,7 @@ public:
         if (! output_) return;
         if (! started_.exchange(false, std::memory_order_acq_rel)) return;
         const auto pos = current_position_frames();
-        wavsen_coreaudio_output_stop(output_);
+        wavsen_native_output_stop(output_);
         position_frames_.store(pos, std::memory_order_relaxed);
         rendered_frames_.store(pos, std::memory_order_relaxed);
     }
@@ -333,7 +333,7 @@ private:
     std::atomic<bool> inited_ { false };
     std::atomic<bool> started_ { false };
 
-    wavsen_coreaudio_output* output_ { nullptr };
+    wavsen_native_output* output_ { nullptr };
     DeviceDesc               desc_ { kDefaultChannels, kDefaultRate };
 
     std::mutex                                 channels_mu_;

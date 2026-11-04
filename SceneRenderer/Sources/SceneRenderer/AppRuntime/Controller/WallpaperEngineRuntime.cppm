@@ -1,4 +1,6 @@
 module;
+#include <optional>
+#include <functional>
 #include <cmath>
 #include <vulkan/vulkan.h>
 
@@ -93,6 +95,7 @@ public:
     void pause();
     void pause(uint32_t fade_ms);
     void requestFrame();
+    void setRenderExtent(unsigned width, unsigned height);
     void renderOfflineFrame(double time, double step, uint32_t audio_frames,
                             std::function<void(int, std::vector<float>)> callback);
     void mouseInput(double x, double y);

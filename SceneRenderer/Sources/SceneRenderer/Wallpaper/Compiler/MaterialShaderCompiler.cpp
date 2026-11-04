@@ -1,4 +1,7 @@
 module;
+#include <optional>
+#include <memory>
+#include <utility>
 
 #include <rstd/macro.hpp>
 #include "Utils/StringUtil.h"

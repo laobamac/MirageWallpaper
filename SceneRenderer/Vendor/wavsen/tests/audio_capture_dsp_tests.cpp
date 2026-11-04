@@ -11,6 +11,11 @@ namespace
 {
 
 constexpr float kSampleRate = 48000.0f;
+#if defined(_WIN32)
+constexpr float kTestNorm = wavsen::audio::dsp::kFftAmplitudeNorm;
+#else
+constexpr float kTestNorm = 2.0f / static_cast<float>(wavsen::audio::dsp::kFftSize);
+#endif
 
 using Buffer = std::array<std::complex<float>, wavsen::audio::dsp::kFftSize>;
 
@@ -78,7 +83,7 @@ bool test_frequency_mapping_matches_we_response_samples() {
         Buffer right{};
         fill_sine(left, right, tone.hz, 0.25f, 0.25f);
         const auto raw = wavsen::audio::dsp::analyze_stereo_spectrum(
-            left.data(), right.data(), layout, 2.0f / static_cast<float>(left.size()));
+            left.data(), right.data(), layout, kTestNorm);
         const auto actual = peak_band(raw.average);
         const float actual_x = band_center_x(actual);
         if (std::abs(actual_x - tone.expected_x) > tone.tolerance) {
@@ -102,7 +107,7 @@ bool test_channel_split_and_average() {
     Buffer right{};
     fill_sine(left, right, 1000.0f, 1.0f, 0.0f);
     const auto raw = wavsen::audio::dsp::analyze_stereo_spectrum(
-        left.data(), right.data(), layout, 2.0f / static_cast<float>(left.size()));
+        left.data(), right.data(), layout, kTestNorm);
     const auto band = peak_band(raw.left);
 
     if (raw.left[band] <= 0.0f || raw.left[band] > wavsen::audio::dsp::kResponseCeil) {
@@ -128,7 +133,7 @@ bool test_response_cap() {
     Buffer right{};
     fill_sine(left, right, 1000.0f, 4.0f, 4.0f);
     const auto raw = wavsen::audio::dsp::analyze_stereo_spectrum(
-        left.data(), right.data(), layout, 2.0f / static_cast<float>(left.size()));
+        left.data(), right.data(), layout, kTestNorm);
     for (float v : raw.average) {
         if (v > wavsen::audio::dsp::kResponseCeil) {
             std::cerr << "response exceeded cap: " << v << "\n";
@@ -174,7 +179,7 @@ bool test_short_neighbor_bars_survive_response() {
     Buffer right{};
     fill_sine(left, right, 500.0f, 0.25f, 0.25f);
     const auto raw = wavsen::audio::dsp::analyze_stereo_spectrum(
-        left.data(), right.data(), layout, 2.0f / static_cast<float>(left.size()));
+        left.data(), right.data(), layout, kTestNorm);
     const auto band = peak_band(raw.average);
     if (band == 0) {
         std::cerr << "500 Hz peak has no left neighbor\n";

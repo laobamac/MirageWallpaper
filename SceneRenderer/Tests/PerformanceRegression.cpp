@@ -12,7 +12,11 @@
 #include <memory>
 #include <mutex>
 #include <thread>
+#if defined(_WIN32)
+#include <windows.h>
+#else
 #include <unistd.h>
+#endif
 
 #include "../Tools/SceneWallpaper/ControlChannel.h"
 #include "../Vendor/wavsen/src/audio/audio_loopback_analyzer.hpp"
@@ -198,6 +202,15 @@ void TestOnDemandEligibility() {
 }
 
 void TestControlShutdown() {
+#if defined(_WIN32)
+    const HANDLE original_stdin = GetStdHandle(STD_INPUT_HANDLE);
+    HANDLE input[2] {};
+    if (!CreatePipe(&input[0], &input[1], nullptr, 0)) {
+        Check(false, "create control fixture pipe");
+        return;
+    }
+    SetStdHandle(STD_INPUT_HANDLE, input[0]);
+#else
     const int original_stdin = ::dup(STDIN_FILENO);
     int       input[2];
     if (::pipe(input) != 0) {
@@ -206,6 +219,7 @@ void TestControlShutdown() {
     }
     ::dup2(input[0], STDIN_FILENO);
     ::close(input[0]);
+#endif
     {
         sr::SceneWallpaper          wallpaper;
         mirage::SceneControlChannel channel(wallpaper, [] {
@@ -216,12 +230,18 @@ void TestControlShutdown() {
         channel.start();
         channel.stop();
     }
+#if defined(_WIN32)
+    SetStdHandle(STD_INPUT_HANDLE, original_stdin);
+    CloseHandle(input[0]);
+    CloseHandle(input[1]);
+#else
     if (original_stdin >= 0) {
         ::dup2(original_stdin, STDIN_FILENO);
         ::close(original_stdin);
     } else
         ::close(STDIN_FILENO);
     ::close(input[1]);
+#endif
 }
 } // namespace
 

@@ -1,3 +1,10 @@
+module;
+#include <variant>
+#include <optional>
+#include <functional>
+#include <memory>
+#include <utility>
+
 module sr.scene;
 import eigen;
 import rstd;

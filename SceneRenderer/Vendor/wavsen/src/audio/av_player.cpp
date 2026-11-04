@@ -1,3 +1,6 @@
+module;
+#include <functional>
+
 module wavsen.audio;
 
 import rstd.cppstd;

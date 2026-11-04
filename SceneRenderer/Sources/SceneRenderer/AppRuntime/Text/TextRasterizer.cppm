@@ -1,4 +1,5 @@
 module;
+#include <functional>
 
 export module sr.text;
 import sr.types;

@@ -1,4 +1,9 @@
 module;
+#include <variant>
+#include <optional>
+#include <functional>
+#include <memory>
+#include <utility>
 
 #include <rstd/macro.hpp>
 
@@ -7,6 +12,7 @@ module;
 #include <chrono>
 #include <ctime>
 #include <filesystem>
+#include "Utils/PlatformFile.hpp"
 #include <mutex>
 
 module sr.scene_wallpaper;
@@ -2058,19 +2064,19 @@ void SceneRuntimeController::loadScene() {
             return;
         }
     }
-    std::filesystem::path pkgPath_fs { m_config.source_pkg_path };
+    std::filesystem::path pkgPath_fs = sr::platform::NativePath(m_config.source_pkg_path);
     pkgPath_fs.replace_extension("pkg");
-    std::string pkgPath  = pkgPath_fs.native();
-    std::string pkgEntry = pkgPath_fs.filename().replace_extension("json").native();
-    std::string pkgDir   = pkgPath_fs.parent_path().native();
-    std::string scene_id = pkgPath_fs.parent_path().filename().native();
+    std::string pkgPath  = sr::platform::Utf8Path(pkgPath_fs);
+    std::string pkgEntry = sr::platform::Utf8Path(pkgPath_fs.filename().replace_extension("json"));
+    std::string pkgDir   = sr::platform::Utf8Path(pkgPath_fs.parent_path());
+    std::string scene_id = sr::platform::Utf8Path(pkgPath_fs.parent_path().filename());
     MergeProjectUserProperties(pkgPath_fs.parent_path(), m_user_properties);
 
     m_scene_parser.SetScriptStorageSnapshot(m_config.script_storage_snapshot);
     if (!m_config.script_storage_snapshot) {
     std::filesystem::path script_storage_dir;
     if (! m_config.script_storage_dir.empty()) {
-        script_storage_dir = m_config.script_storage_dir;
+        script_storage_dir = sr::platform::NativePath(m_config.script_storage_dir);
     } else {
 #if defined(__APPLE__)
         const char* home = std::getenv("HOME");
@@ -2079,12 +2085,12 @@ void SceneRuntimeController::loadScene() {
                                  "Library/Application Support/Mirage/SceneStorage";
 #endif
         if (script_storage_dir.empty())
-            script_storage_dir = std::filesystem::path(m_config.cache_dir) / "script_localstorage";
+            script_storage_dir = sr::platform::NativePath(m_config.cache_dir) / "script_localstorage";
     }
     std::error_code storage_ec;
     std::filesystem::create_directories(script_storage_dir, storage_ec);
     const auto script_storage_file = script_storage_dir / (scene_id + ".json");
-    const auto legacy_storage_file = std::filesystem::path(m_config.cache_dir) /
+    const auto legacy_storage_file = sr::platform::NativePath(m_config.cache_dir) /
                                      "script_localstorage" / (scene_id + ".json");
     if (! std::filesystem::exists(script_storage_file) &&
         legacy_storage_file != script_storage_file &&
@@ -2094,7 +2100,7 @@ void SceneRuntimeController::loadScene() {
                                     std::filesystem::copy_options::skip_existing,
                                     storage_ec);
     }
-    m_scene_parser.SetScriptPersistencePath(script_storage_file.native());
+    m_scene_parser.SetScriptPersistencePath(sr::platform::Utf8Path(script_storage_file));
     } else {
         m_scene_parser.SetScriptPersistencePath({});
     }
@@ -2289,6 +2295,11 @@ void SceneWallpaper::pause(uint32_t fade_ms) {
 }
 void SceneWallpaper::requestFrame() {
     (void)m_runtime->renderSender().send(RenderMsg { RenderRequestFrame {} });
+}
+
+void SceneWallpaper::setRenderExtent(unsigned width, unsigned height) {
+    if (width == 0 || height == 0) return;
+    (void)m_runtime->renderSender().send(RenderMsg { RenderSwapchainReady { true, width, height } });
 }
 
 void SceneWallpaper::renderOfflineFrame(double time, double step, uint32_t audio_frames,

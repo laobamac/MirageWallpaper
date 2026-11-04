@@ -1,3 +1,7 @@
+module;
+#include <unordered_map>
+#include <utility>
+
 export module sr.pkg.parse:wp_uniform;
 import rstd.cppstd;
 import sr.fs;

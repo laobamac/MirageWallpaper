@@ -1,4 +1,5 @@
 module;
+#include <memory>
 
 #include <sys/types.h>
 #include <cmath>

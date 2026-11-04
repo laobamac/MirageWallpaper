@@ -1,4 +1,7 @@
 module;
+#include <variant>
+#include <optional>
+#include <utility>
 
 #include <rstd/macro.hpp>
 #include "FrameGraph/Pass.hpp"

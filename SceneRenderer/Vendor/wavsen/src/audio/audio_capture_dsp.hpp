@@ -17,6 +17,8 @@ inline constexpr std::size_t kFftSize = 4096;
 inline constexpr std::size_t kNumBins = 64;
 inline constexpr std::size_t kHalfFft = kFftSize / 2;
 inline constexpr std::size_t kHopSize = 1024;
+// 单边频谱补偿 Hann 窗 0.5 的相干增益，与 Linux 标定保持一致。
+inline constexpr float kFftAmplitudeNorm = 4.0f / static_cast<float>(kFftSize);
 inline constexpr float kMinFrequencyHz = 10.0f;
 inline constexpr float kMaxFrequencyHz = 16000.0f;
 inline constexpr float kTiltPivotHz = 1000.0f;

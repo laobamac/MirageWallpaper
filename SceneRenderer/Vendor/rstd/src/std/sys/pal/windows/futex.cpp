@@ -29,7 +29,11 @@ void wake_by_address_all(const void* address) {
 
 template<typename T>
 bool futex_wait(const Atomic<T>* futex, T expected, Option<Duration> timeout) {
-    DWORD timeout_ms = timeout ? static_cast<DWORD>(timeout->as_millis()) : M_INFINITE;
+    DWORD timeout_ms = M_INFINITE;
+    if (timeout) {
+        const auto milliseconds = timeout->as_millis();
+        timeout_ms = milliseconds >= M_INFINITE ? M_INFINITE - 1 : static_cast<DWORD>(milliseconds);
+    }
 
     bool result = wait_on_address(futex, &expected, sizeof(T), timeout_ms);
     return result || GetLastError() != M_ERROR_TIMEOUT;

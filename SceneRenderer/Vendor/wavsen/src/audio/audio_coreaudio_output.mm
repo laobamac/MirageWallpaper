@@ -27,8 +27,8 @@ bool audio_debug_enabled() {
 
 } // namespace
 
-struct wavsen_coreaudio_output {
-    wavsen_coreaudio_output_callback callback = nullptr;
+struct wavsen_native_output {
+    wavsen_native_output_callback callback = nullptr;
     void* user = nullptr;
     AudioQueueRef queue = nullptr;
     std::array<AudioQueueBufferRef, kBufferCount> buffers {};
@@ -48,15 +48,15 @@ struct wavsen_coreaudio_output {
     }
 };
 
-static void wavsen_coreaudio_output_cb(void* user, AudioQueueRef /*queue*/,
+static void wavsen_native_output_cb(void* user, AudioQueueRef /*queue*/,
                                        AudioQueueBufferRef buffer) {
-    auto* output = static_cast<wavsen_coreaudio_output*>(user);
+    auto* output = static_cast<wavsen_native_output*>(user);
     if (! output || ! output->started.load(std::memory_order_acquire)) return;
     output->fill_and_enqueue(buffer);
 }
 
-bool wavsen_coreaudio_output_create(wavsen_coreaudio_output_callback callback, void* user,
-                                    wavsen_coreaudio_output** out, int* out_status,
+bool wavsen_native_output_create(wavsen_native_output_callback callback, void* user,
+                                    wavsen_native_output** out, int* out_status,
                                     std::uint32_t* out_channels, std::uint32_t* out_sample_rate) {
     if (out) *out = nullptr;
     if (out_status) *out_status = noErr;
@@ -67,7 +67,7 @@ bool wavsen_coreaudio_output_create(wavsen_coreaudio_output_callback callback, v
         return false;
     }
 
-    auto* output = new wavsen_coreaudio_output();
+    auto* output = new wavsen_native_output();
     output->callback = callback;
     output->user = user;
     output->format.mSampleRate = static_cast<Float64>(kDefaultRate);
@@ -80,7 +80,7 @@ bool wavsen_coreaudio_output_create(wavsen_coreaudio_output_callback callback, v
     output->format.mChannelsPerFrame = kDefaultChannels;
     output->format.mBitsPerChannel = 32;
 
-    OSStatus st = AudioQueueNewOutput(&output->format, wavsen_coreaudio_output_cb, output, nullptr,
+    OSStatus st = AudioQueueNewOutput(&output->format, wavsen_native_output_cb, output, nullptr,
                                       nullptr, 0, &output->queue);
     if (st != noErr || ! output->queue) {
         if (out_status) *out_status = st;
@@ -93,7 +93,7 @@ bool wavsen_coreaudio_output_create(wavsen_coreaudio_output_callback callback, v
         st = AudioQueueAllocateBuffer(output->queue, buffer_bytes, &buffer);
         if (st != noErr || ! buffer) {
             if (out_status) *out_status = st;
-            wavsen_coreaudio_output_destroy(output);
+            wavsen_native_output_destroy(output);
             return false;
         }
     }
@@ -106,9 +106,9 @@ bool wavsen_coreaudio_output_create(wavsen_coreaudio_output_callback callback, v
     return true;
 }
 
-void wavsen_coreaudio_output_destroy(wavsen_coreaudio_output* output) {
+void wavsen_native_output_destroy(wavsen_native_output* output) {
     if (! output) return;
-    wavsen_coreaudio_output_stop(output);
+    wavsen_native_output_stop(output);
     if (output->queue) {
         AudioQueueDispose(output->queue, true);
         output->queue = nullptr;
@@ -116,7 +116,7 @@ void wavsen_coreaudio_output_destroy(wavsen_coreaudio_output* output) {
     delete output;
 }
 
-bool wavsen_coreaudio_output_start(wavsen_coreaudio_output* output, int* out_status) {
+bool wavsen_native_output_start(wavsen_native_output* output, int* out_status) {
     if (out_status) *out_status = noErr;
     if (! output || ! output->queue) {
         if (out_status) *out_status = kParamErr;
@@ -146,7 +146,7 @@ bool wavsen_coreaudio_output_start(wavsen_coreaudio_output* output, int* out_sta
     return true;
 }
 
-void wavsen_coreaudio_output_stop(wavsen_coreaudio_output* output) {
+void wavsen_native_output_stop(wavsen_native_output* output) {
     if (! output || ! output->queue) return;
     if (! output->started.exchange(false, std::memory_order_acq_rel)) return;
     AudioQueueStop(output->queue, true);

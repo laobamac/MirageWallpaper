@@ -1,4 +1,5 @@
 module;
+#include <unordered_map>
 
 export module sr.vulkan_render:shader_reflection_cache;
 import sr.core;

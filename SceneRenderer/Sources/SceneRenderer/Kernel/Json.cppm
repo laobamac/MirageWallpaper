@@ -1,3 +1,12 @@
+module;
+
+#include <cstddef>
+#include <optional>
+#include <source_location>
+#include <string>
+#include <string_view>
+#include <type_traits>
+
 export module sr.json;
 import rstd.cppstd;
 export import rstd.json;

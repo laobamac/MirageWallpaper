@@ -2,12 +2,17 @@
 
 #include <cerrno>
 #include <array>
+#include <algorithm>
 #include <cstdio>
 #include <iostream>
+#include <string>
+#if defined(_WIN32)
+#include <windows.h>
+#else
 #include <poll.h>
 #include <fcntl.h>
-#include <string>
 #include <unistd.h>
+#endif
 
 import sr.json;
 import rstd.cppstd;
@@ -39,18 +44,34 @@ bool ParseFillMode(const std::string& s, sr::FillMode& out) {
 
 void SceneControlChannel::start() {
     if (m_running.exchange(true)) return;
+#if defined(_WIN32)
+    m_wake_event = ::CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (!m_wake_event) {
+        m_running.store(false);
+        if (m_on_quit) m_on_quit();
+        return;
+    }
+#else
     if (::pipe(m_wake_fds) != 0) {
         m_running.store(false);
         if (m_on_quit) m_on_quit();
         return;
     }
     for (int fd : m_wake_fds) ::fcntl(fd, F_SETFD, FD_CLOEXEC);
+#endif
     m_thread = std::thread([this] {
         readLoop();
     });
 }
 
 void SceneControlChannel::stop() {
+#if defined(_WIN32)
+    m_running.store(false);
+    if (m_wake_event) ::SetEvent(static_cast<HANDLE>(m_wake_event));
+    if (m_thread.joinable()) m_thread.join();
+    if (m_wake_event) ::CloseHandle(static_cast<HANDLE>(m_wake_event));
+    m_wake_event = nullptr;
+#else
     if (m_running.exchange(false) && m_wake_fds[1] >= 0) {
         const char wake = 1;
         while (::write(m_wake_fds[1], &wake, 1) < 0 && errno == EINTR) {
@@ -61,6 +82,7 @@ void SceneControlChannel::stop() {
         if (fd >= 0) ::close(fd);
         fd = -1;
     }
+#endif
 }
 
 void SceneControlChannel::dispatchLine(const char* line) {
@@ -266,6 +288,8 @@ void SceneControlChannel::dispatchLine(const char* line) {
     } else if (cmd == "quit") {
         m_running.store(false);
         if (m_on_quit) m_on_quit();
+    } else if (m_on_unsupported) {
+        m_on_unsupported(cmd);
     }
 }
 
@@ -273,6 +297,24 @@ void SceneControlChannel::readLoop() {
     std::string pending;
     char        buffer[4096];
     while (m_running.load()) {
+#if defined(_WIN32)
+        HANDLE input = ::GetStdHandle(STD_INPUT_HANDLE);
+        if (!input || input == INVALID_HANDLE_VALUE) break;
+        DWORD available = 0;
+        if (!::PeekNamedPipe(input, nullptr, 0, nullptr, &available, nullptr)) {
+            if (!pending.empty()) dispatchLine(pending.c_str());
+            break;
+        }
+        if (available == 0) {
+            if (::WaitForSingleObject(static_cast<HANDLE>(m_wake_event), 20) != WAIT_TIMEOUT) break;
+            continue;
+        }
+        DWORD count = 0;
+        if (!::ReadFile(input, buffer, std::min<DWORD>(available, sizeof(buffer)), &count, nullptr) || count == 0) {
+            if (!pending.empty()) dispatchLine(pending.c_str());
+            break;
+        }
+#else
         pollfd inputs[2] {
             { .fd = STDIN_FILENO, .events = POLLIN | POLLHUP, .revents = 0 },
             { .fd = m_wake_fds[0], .events = POLLIN, .revents = 0 },
@@ -295,6 +337,7 @@ void SceneControlChannel::readLoop() {
             if (! pending.empty()) dispatchLine(pending.c_str());
             break;
         }
+#endif
         pending.append(buffer, (std::size_t)count);
         for (std::size_t newline; (newline = pending.find('\n')) != std::string::npos;) {
             std::string line = pending.substr(0, newline);

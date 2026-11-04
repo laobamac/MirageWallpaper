@@ -1,3 +1,6 @@
+module;
+#include <unordered_map>
+
 export module sr.pkg.scene_obj:material;
 import rstd.cppstd;
 import sr.fs;

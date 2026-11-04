@@ -1,4 +1,6 @@
 module;
+#include <optional>
+#include <functional>
 
 export module sr.vulkan_render:custom_shader_pass;
 import sr.core;

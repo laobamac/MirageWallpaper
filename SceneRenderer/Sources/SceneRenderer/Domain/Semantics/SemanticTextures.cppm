@@ -1,4 +1,5 @@
 module;
+#include <optional>
 
 #include "Utils/StringUtil.h" // STRTONUM macro (uses __SHORT_FILE__)
 

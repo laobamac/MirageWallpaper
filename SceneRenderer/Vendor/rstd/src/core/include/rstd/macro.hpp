@@ -2,6 +2,9 @@
 
 #if defined(_WIN32)
 #define RSTD_OS_WINDOWS 1
+#define RSTD_NO_UNIQUE_ADDRESS [[msvc::no_unique_address]]
+#else
+#define RSTD_NO_UNIQUE_ADDRESS [[no_unique_address]]
 #endif
 
 #if defined(__linux__)

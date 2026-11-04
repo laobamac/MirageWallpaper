@@ -25,6 +25,32 @@ class Usage(ctypes.Structure):
 
 
 def idle_sample(pid):
+    if os.name == "nt":
+        from ctypes import wintypes
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel.OpenProcess.restype = wintypes.HANDLE
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
+        handle = kernel.OpenProcess(0x1000, False, pid)
+        if not handle:
+            return None
+        def cpu_ticks():
+            times = [wintypes.FILETIME() for _ in range(4)]
+            if not kernel.GetProcessTimes(handle, *[ctypes.byref(value) for value in times]):
+                return None
+            return sum((value.dwHighDateTime << 32) | value.dwLowDateTime for value in times[2:])
+        try:
+            before = cpu_ticks()
+            started = time.monotonic()
+            time.sleep(2)
+            after = cpu_ticks()
+            if before is None or after is None:
+                return None
+            return {"seconds": round(time.monotonic() - started, 3),
+                    "cpu_seconds": (after - before) / 10_000_000}
+        finally:
+            kernel.CloseHandle(handle)
     libproc = ctypes.CDLL("/usr/lib/libproc.dylib")
     libproc.proc_pid_rusage.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
     before, after = Usage(), Usage()
@@ -51,7 +77,7 @@ def run(binary, assets, workspace, metalfx):
     env = os.environ.copy()
     env["SCENERENDERER_DIAGNOSTIC_CACHE"] = str(workspace / "pipeline-cache")
     process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                               stderr=subprocess.STDOUT, text=True, env=env)
+                               stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace", env=env)
     lines = []
     events = queue.Queue()
 
@@ -66,14 +92,14 @@ def run(binary, assets, workspace, metalfx):
     reader = threading.Thread(target=read, daemon=True)
     reader.start()
 
-    def wait_event(name, timeout=12):
+    def wait_event(name, timeout=12, token=None):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             try:
                 event = events.get(timeout=max(0.01, deadline - time.monotonic()))
             except queue.Empty:
                 break
-            if event.get("event") == name:
+            if event.get("event") == name and (token is None or event.get("token") == token):
                 return event
         raise RuntimeError(f"{mode}: missing {name}; exit={process.poll()}")
 
@@ -87,11 +113,26 @@ def run(binary, assets, workspace, metalfx):
         usage = idle_sample(process.pid)
         send({"cmd": "pause"})
         time.sleep(0.2)
-        snapshot = workspace / f"{mode}.heic"
+        snapshot = workspace / (f"{mode}.png" if os.name == "nt" else f"{mode}.heic")
         send({"cmd": "snapshot", "path": str(snapshot), "token": mode})
         event = wait_event("snapshot-done", 6)
         if not event.get("ok") or not snapshot.exists() or not snapshot.stat().st_size:
             raise RuntimeError(f"{mode}: paused snapshot failed: {event}")
+        if os.name == "nt":
+            send({"cmd": "unsupported-regression"})
+            capability = wait_event("capability", 6)
+            if capability.get("command") != "unsupported-regression" or capability.get("supported") is not False:
+                raise RuntimeError(f"{mode}: unsupported command was not reported")
+            if snapshot.read_bytes()[:8] != b"\x89PNG\r\n\x1a\n":
+                raise RuntimeError(f"{mode}: snapshot is not PNG")
+            send({"cmd": "exportScriptStorage", "token": "storage-regression"})
+            storage = wait_event("script-storage", 6, "storage-regression")
+            if not isinstance(storage.get("values"), dict):
+                raise RuntimeError(f"{mode}: malformed script-storage reply")
+            send({"cmd": "activate"})
+            wait_event("activated", 6)
+            send({"cmd": "deactivate"})
+            wait_event("deactivated", 6)
         send({"cmd": "quit"})
         process.wait(timeout=5)
         if process.returncode:
@@ -128,7 +169,7 @@ def main():
         (workspace / "scene.json").write_text(json.dumps(scene))
         try:
             results = [run(args.binary.resolve(), args.assets.resolve(), workspace, mode)
-                       for mode in (False, True)]
+                       for mode in ((False,) if os.name == "nt" else (False, True))]
             print(json.dumps(results, indent=2))
         except Exception:
             for log in workspace.glob("*.log"):

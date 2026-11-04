@@ -1,8 +1,39 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(VideoRenderer
-    VERSION 0.1.0
-    LANGUAGES CXX OBJCXX)
+if(APPLE)
+    project(VideoRenderer VERSION 0.1.0 LANGUAGES CXX OBJCXX)
+else()
+    project(VideoRenderer VERSION 0.1.0 LANGUAGES CXX)
+endif()
+
+if(WIN32)
+    set(CMAKE_CXX_STANDARD 20)
+    set(CMAKE_CXX_STANDARD_REQUIRED ON)
+    set(CMAKE_CXX_EXTENSIONS OFF)
+    find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui OpenGL)
+    set(MPV_ROOT "" CACHE PATH "Windows libmpv development package")
+    find_path(MPV_INCLUDE_DIR mpv/client.h HINTS "${MPV_ROOT}/include" REQUIRED)
+    find_library(MPV_LIBRARY NAMES mpv libmpv libmpv-2 mpv-2 HINTS "${MPV_ROOT}/lib" "${MPV_ROOT}" REQUIRED)
+    find_file(MPV_RUNTIME NAMES libmpv-2.dll mpv-2.dll libmpv.dll HINTS "${MPV_ROOT}/bin" "${MPV_ROOT}")
+    add_library(MirageMpv UNKNOWN IMPORTED)
+    set_target_properties(MirageMpv PROPERTIES IMPORTED_LOCATION "${MPV_LIBRARY}"
+        INTERFACE_INCLUDE_DIRECTORIES "${MPV_INCLUDE_DIR}")
+    if(MSVC)
+        add_compile_options(/utf-8 /Zc:__cplusplus)
+    endif()
+    add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN)
+    add_subdirectory(Sources/VideoRenderer)
+    option(VIDEORENDERER_BUILD_WALLPAPER "Build the VideoWallpaper desktop host" ON)
+    if(VIDEORENDERER_BUILD_WALLPAPER)
+        add_subdirectory(Tools/VideoWallpaper)
+    endif()
+    option(VIDEORENDERER_BUILD_TESTS "Build Windows video regression tests" OFF)
+    if(VIDEORENDERER_BUILD_TESTS)
+        enable_testing()
+        add_subdirectory(Tests)
+    endif()
+    return()
+endif()
 
 set(VIDEORENDERER_VERSION 0.1.0)
 

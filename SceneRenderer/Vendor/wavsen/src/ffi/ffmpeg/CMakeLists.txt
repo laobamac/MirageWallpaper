@@ -6,7 +6,7 @@ add_library(wavsen::ffi::ffmpeg ALIAS wavsen_ffi_ffmpeg)
 
 target_compile_features(wavsen_ffi_ffmpeg PUBLIC cxx_std_20)
 target_compile_options(wavsen_ffi_ffmpeg PRIVATE
-    -Wall -Wextra -Wpedantic -Wno-missing-field-initializers
+    ${WAVSEN_WARNING_OPTIONS}
 )
 
 target_sources(wavsen_ffi_ffmpeg
@@ -17,18 +17,20 @@ target_sources(wavsen_ffi_ffmpeg
         swscale.cppm
 )
 
-target_link_libraries(wavsen_ffi_ffmpeg
-    PUBLIC
+if(WIN32)
+    target_include_directories(wavsen_ffi_ffmpeg PUBLIC ${FFMPEG_INCLUDE_DIRS})
+    # 聚合链携带静态依赖及 debug/optimized 选择，避免 Debug 错链 Release 单库。
+    target_link_libraries(wavsen_ffi_ffmpeg PUBLIC ${FFMPEG_LIBRARIES})
+else()
+    target_link_libraries(wavsen_ffi_ffmpeg PUBLIC
         PkgConfig::WAVSEN_AVFORMAT
         PkgConfig::WAVSEN_AVCODEC
         PkgConfig::WAVSEN_AVUTIL
-        PkgConfig::WAVSEN_SWSCALE
-    PRIVATE
-        # avutil.cppm GMF #includes <vulkan/vulkan.h> for hwcontext_vulkan.h.
-        # Consumers that touch AVVulkanDeviceContext-bearing fields need to
-        # link wavsen::ffi::vulkan separately (or include vulkan.h themselves).
-        Vulkan::Vulkan
-)
+        PkgConfig::WAVSEN_SWSCALE)
+endif()
+
+# avutil.cppm 包含 hwcontext_vulkan.h，模块本身需要 Vulkan 声明。
+target_link_libraries(wavsen_ffi_ffmpeg PRIVATE Vulkan::Vulkan)
 
 # swresample is optional at the workspace level (only audio targets need it).
 # Add the swresample module + link only when the parent scope found it.
@@ -37,7 +39,9 @@ if(WAVSEN_SWRESAMPLE_FOUND)
         PUBLIC FILE_SET CXX_MODULES FILES
             swresample.cppm
     )
-    target_link_libraries(wavsen_ffi_ffmpeg PUBLIC PkgConfig::WAVSEN_SWRESAMPLE)
+    if(NOT WIN32)
+        target_link_libraries(wavsen_ffi_ffmpeg PUBLIC PkgConfig::WAVSEN_SWRESAMPLE)
+    endif()
 endif()
 
 # VAAPI: avutil.cppm conditionally exposes hwcontext_vaapi.h when both

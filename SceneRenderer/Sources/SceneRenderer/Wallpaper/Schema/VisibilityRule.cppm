@@ -1,3 +1,9 @@
+module;
+
+#include <limits>
+#include <string>
+#include <string_view>
+
 export module sr.pkg.scene_obj:visibility_binding;
 import rstd.cppstd;
 import sr.json;

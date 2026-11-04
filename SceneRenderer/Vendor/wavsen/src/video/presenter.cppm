@@ -1,3 +1,6 @@
+module;
+#include <functional>
+
 export module wavsen.video:presenter;
 
 import rstd.cppstd;

@@ -1,6 +1,17 @@
 # Native macOS desktop wallpaper host.
 
-if(NOT APPLE)
+if(WIN32)
+    find_package(Vulkan REQUIRED)
+    find_package(PNG REQUIRED)
+    add_executable(SceneWallpaper WallpaperApp.cpp ControlChannel.cpp SceneSnapshot.cpp
+        ../../Sources/SceneRenderer/Host/WinDesktopHost.cpp)
+    target_link_libraries(SceneWallpaper PRIVATE SceneRenderer::Engine Vulkan::Vulkan
+        PNG::PNG Threads::Threads user32 shell32 ole32)
+    target_compile_features(SceneWallpaper PRIVATE cxx_std_20)
+    set_target_properties(SceneWallpaper PROPERTIES CXX_SCAN_FOR_MODULES ON)
+    install(TARGETS SceneWallpaper RUNTIME DESTINATION .)
+    return()
+elseif(NOT APPLE)
     return()
 endif()
 

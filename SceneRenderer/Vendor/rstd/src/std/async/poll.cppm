@@ -456,6 +456,8 @@ struct PollWakeState {
     explicit PollWakeState(sys::fd::OwnedFd fd): fd(rstd::move(fd)) {}
 };
 
+export class Poll;
+
 export class PollWake {
     sync::Arc<PollWakeState> m_state;
 
@@ -578,12 +580,14 @@ export class Poll {
 #endif
     }
 
+#if RSTD_OS_LINUX
     static auto duration_to_timespec(time::Duration duration) noexcept -> libc::timespec_t {
         return libc::timespec_t {
             .tv_sec  = static_cast<libc::time_t>(duration.as_secs()),
             .tv_nsec = static_cast<long>(duration.subsec_nanos()),
         };
     }
+#endif
 
     static auto backend_interest(Interest interest) noexcept -> u32 {
         auto events = u32 {};

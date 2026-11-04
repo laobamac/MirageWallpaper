@@ -1,6 +1,12 @@
 module;
+#include <optional>
+#include <functional>
+#include <unordered_map>
+#include <memory>
+#include <utility>
 
 #include <rstd/macro.hpp>
+#include "Utils/PlatformFile.hpp"
 
 #include <ft2build.h>
 #include FT_FREETYPE_H
@@ -190,6 +196,47 @@ bool LoadRenderableGlyph(FT_Face face, std::uint32_t codepoint) {
     }
 }
 
+std::vector<std::filesystem::path> SystemFontRoots() {
+#if defined(_WIN32)
+    std::vector<std::filesystem::path> roots;
+    wchar_t windows[MAX_PATH] {};
+    if (::GetWindowsDirectoryW(windows, MAX_PATH)) roots.emplace_back(std::filesystem::path(windows) / L"Fonts");
+    if (const wchar_t* local = ::_wgetenv(L"LOCALAPPDATA"))
+        roots.emplace_back(std::filesystem::path(local) / L"Microsoft/Windows/Fonts");
+    return roots;
+#elif defined(__APPLE__)
+    std::vector<std::filesystem::path> roots {
+        "/System/Library/Fonts", "/System/Library/Fonts/Supplemental", "/Library/Fonts"
+    };
+    if (const char* home = std::getenv("HOME")) roots.emplace_back(std::filesystem::path(home) / "Library/Fonts");
+    return roots;
+#else
+    std::vector<std::filesystem::path> roots { "/usr/share/fonts", "/usr/local/share/fonts" };
+    if (const char* home = std::getenv("HOME")) roots.emplace_back(std::filesystem::path(home) / ".local/share/fonts");
+    return roots;
+#endif
+}
+
+bool EnsureFontconfig() {
+#if defined(_WIN32)
+    static const bool initialized = [] {
+        FcConfig* config = FcConfigCreate();
+        if (!config) return false;
+        bool added = false;
+        for (const auto& root : SystemFontRoots()) {
+            const auto path = sr::platform::Utf8Path(root);
+            added = FcConfigAppFontAddDir(config, reinterpret_cast<const FcChar8*>(path.c_str())) || added;
+        }
+        const bool ok = added && FcConfigBuildFonts(config) && FcConfigSetCurrent(config);
+        FcConfigDestroy(config);
+        return ok;
+    }();
+    return initialized;
+#else
+    return FcInit();
+#endif
+}
+
 std::vector<FontCandidate> FontconfigCandidates(FcPattern*                   pattern,
                                                 std::optional<std::uint32_t> codepoint = {}) {
     FcConfigSubstitute(nullptr, pattern, FcMatchPattern);
@@ -211,8 +258,8 @@ std::vector<FontCandidate> FontconfigCandidates(FcPattern*                   pat
         if (FcPatternGetString(font, FC_FILE, 0, &file) != FcResultMatch || file == nullptr)
             continue;
         (void)FcPatternGetInteger(font, FC_INDEX, 0, &index);
-        std::filesystem::path path(reinterpret_cast<const char*>(file));
-        if (index < 0 || IsLastResortName(path.stem().string())) continue;
+        std::filesystem::path path = sr::platform::NativePath(reinterpret_cast<const char*>(file));
+        if (index < 0 || IsLastResortName(sr::platform::Utf8Path(path.stem()))) continue;
         candidates.push_back({ std::move(path), index });
     }
     FcFontSetDestroy(fonts);
@@ -220,7 +267,7 @@ std::vector<FontCandidate> FontconfigCandidates(FcPattern*                   pat
 }
 
 std::vector<FontCandidate> ResolveFontconfigCodepoint(std::uint32_t codepoint) {
-    if (! FcInit()) return {};
+    if (! EnsureFontconfig()) return {};
 
     FcPattern* pat = FcPatternCreate();
     if (pat == nullptr) return {};
@@ -337,7 +384,7 @@ struct FontFace::Impl {
         if (fallback_misses.count(codepoint) != 0) return nullptr;
 
         for (const auto& candidate : ResolveFontconfigCodepoint(codepoint)) {
-            const auto path     = candidate.path.string();
+            const auto path     = sr::platform::Utf8Path(candidate.path);
             const auto key      = path + '\0' + std::to_string(candidate.face_index);
             auto [it, inserted] = fallback_faces.try_emplace(key);
             if (inserted) {
@@ -613,7 +660,7 @@ FontCache* SceneFontCache(sr::Scene& scene) noexcept {
 static std::vector<FontCandidate> ResolveViaFontconfig(std::string_view name) {
     constexpr std::string_view kPrefix = "systemfont_";
     // Match on the basename — scenes occasionally prefix a dir.
-    std::string base = std::filesystem::path(name).filename().native();
+    std::string base = sr::platform::Utf8Path(sr::platform::NativePath(name).filename());
     if (base.size() <= kPrefix.size() ||
         std::string_view(base).substr(0, kPrefix.size()) != kPrefix) {
         return {};
@@ -622,7 +669,7 @@ static std::vector<FontCandidate> ResolveViaFontconfig(std::string_view name) {
     if (family.empty()) return {};
     family[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(family[0])));
 
-    if (! FcInit()) return {};
+    if (! EnsureFontconfig()) return {};
     FcPattern* pat = FcNameParse(reinterpret_cast<const FcChar8*>(family.c_str()));
     if (pat == nullptr) return {};
     auto candidates = FontconfigCandidates(pat);
@@ -648,28 +695,19 @@ FontCache::ResolvedBlob FontCache::ResolveSystemFont(std::string_view name, bool
         const bool usable = ! IsLastResortFace(face);
         FT_Done_Face(face);
         if (! usable) return { nullptr, {} };
-        return { std::move(bytes), p.string(), face_index };
+        return { std::move(bytes), sr::platform::Utf8Path(p), face_index };
     };
 
     if (! name.empty()) {
         // Direct path?
-        if (auto rb = try_load(fs::path(name)); rb.bytes) return rb;
+        if (auto rb = try_load(sr::platform::NativePath(name)); rb.bytes) return rb;
         // WE's systemfont_<family> alias → fontconfig.
         for (const auto& candidate : ResolveViaFontconfig(name)) {
             if (auto rb = try_load(candidate.path, candidate.face_index); rb.bytes) return rb;
         }
         // Bare filename: search common roots.
-        // macOS system font directories. /Library/Fonts is user-installed,
-        // /System/Library/Fonts is the OS font set.
-        std::vector<fs::path> roots {
-            "/System/Library/Fonts",
-            "/System/Library/Fonts/Supplemental",
-            "/Library/Fonts",
-        };
-        if (auto* home = std::getenv("HOME"); home != nullptr) {
-            roots.emplace_back(fs::path(home) / "Library/Fonts");
-        }
-        std::string           base    = fs::path(name).filename().string();
+        const auto roots = SystemFontRoots();
+        const auto base = sr::platform::NativePath(name).filename();
         std::size_t           scanned = 0;
         constexpr std::size_t kCap    = 8192;
         for (const auto& root : roots) {
@@ -700,14 +738,7 @@ FontCache::ResolvedBlob FontCache::ResolveSystemFont(std::string_view name, bool
     }
 
     // Last-resort fallback: any .ttf/.otf in the system roots.
-    std::vector<fs::path> roots {
-        "/System/Library/Fonts",
-        "/System/Library/Fonts/Supplemental",
-        "/Library/Fonts",
-    };
-    if (auto* home = std::getenv("HOME"); home != nullptr) {
-        roots.emplace_back(fs::path(home) / "Library/Fonts");
-    }
+    const auto roots = SystemFontRoots();
     std::size_t           scanned = 0;
     constexpr std::size_t kCap    = 4096;
     for (const auto& root : roots) {
@@ -754,11 +785,14 @@ FontCache::ResolvedBlob FontCache::ResolveFont(sr::fs::VFS& vfs, std::string_vie
         normalized_relative.remove_prefix(7);
     while (normalized_relative.starts_with('/')) normalized_relative.remove_prefix(1);
 
-    const std::string basename = std::filesystem::path(normalized_relative).filename().native();
+    const std::string basename = sr::platform::Utf8Path(sr::platform::NativePath(normalized_relative).filename());
     if (basename.starts_with("systemfont_"))
         return ResolveSystemFont(name, fallback_to_any);
 
-    std::string exact = name.starts_with('/') ? std::string(name) : "/assets/" + std::string(name);
+    // 用规范化后的名字拼候选路径：Windows 的 VFS 接受 '\\' 作为分隔符，直接用原始
+    // 名字会命中并把这个未规范化的路径当成 source 返回，和 POSIX 行为不一致。
+    std::string exact = normalized_name.starts_with('/') ? normalized_name
+                                                         : "/assets/" + normalized_name;
     if (auto resolved = load_vfs(exact); resolved.bytes) return resolved;
 
     const std::string normalized = sr::fs::ResolveAssetPath(normalized_relative);

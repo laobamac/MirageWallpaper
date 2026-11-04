@@ -1,4 +1,5 @@
 module;
+#include <memory>
 
 export module sr.pkg.scene_obj:animation_layer;
 import rstd.cppstd;

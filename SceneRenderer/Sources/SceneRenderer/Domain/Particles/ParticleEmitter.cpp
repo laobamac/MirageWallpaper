@@ -1,3 +1,8 @@
+module;
+#include <functional>
+#include <tuple>
+#include <utility>
+
 module sr.scene;
 import eigen;
 import sr.core;

@@ -1,4 +1,6 @@
 module;
+#include <functional>
+#include <deque>
 
 export module sr.timer:frame_timer;
 import sr.core;

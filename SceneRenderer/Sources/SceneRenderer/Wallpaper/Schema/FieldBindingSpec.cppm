@@ -1,3 +1,12 @@
+module;
+
+#include <cstddef>
+#include <cstdint>
+#include <string>
+#include <string_view>
+#include <unordered_map>
+#include <vector>
+
 export module sr.pkg.scene_obj:field_binding;
 import rstd.cppstd;
 import sr.json;

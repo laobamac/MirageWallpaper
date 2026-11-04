@@ -1,3 +1,16 @@
+if(WIN32)
+    add_library(VideoRendererEngine STATIC
+        Common/VideoRendererTypes.cpp
+        Windows/VideoManifest.cpp
+        Windows/VideoRendererEngine.cpp)
+    target_include_directories(VideoRendererEngine PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/Common" "${CMAKE_CURRENT_SOURCE_DIR}/Windows"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../../SceneRenderer/Vendor/nlohmann_json/include")
+    target_link_libraries(VideoRendererEngine PUBLIC Qt6::Core Qt6::Gui Qt6::OpenGL MirageMpv)
+    target_compile_features(VideoRendererEngine PUBLIC cxx_std_20)
+    return()
+endif()
+
 add_library(VideoRendererEngine STATIC
     VideoManifest.h
     VideoManifest.mm

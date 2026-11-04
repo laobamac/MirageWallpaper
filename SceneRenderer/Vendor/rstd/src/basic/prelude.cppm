@@ -3,6 +3,7 @@ module;
 #include <cstdint>
 #include <cstddef>
 #include <limits>
+#include <new>
 #include <tuple>
 #include <source_location>
 export module rstd.basic:prelude;
@@ -18,7 +19,8 @@ export using std::tuple_size;
 /// Provides the type of the I-th element in a tuple-like type.
 export using std::tuple_element;
 /// Extracts the I-th element from a tuple-like type.
-export using std::get;
+/// 不再重导出：MSVC STL 的 tuple/pair 以 friend 声明 _STD get，clang 21 在实例化该类模板
+/// 时会把 friend 解析到此 using 声明并报错。需要 std::get 的 TU 直接包含 <tuple>/<utility>。
 /// A totally ordered comparison result type.
 export using std::strong_ordering;
 export using std::compare_three_way;

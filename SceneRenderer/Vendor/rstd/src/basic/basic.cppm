@@ -118,6 +118,19 @@ void swap(T& a, T& b) noexcept(mtp::noex_copy<T>) {
     b = t;
 }
 
+/// Pointer overload of `swap`.
+///
+/// 任何以 rstd 类型为基类/模板实参的类型都会让 `rstd` 进入 ADL 关联命名空间；MSVC STL 的
+/// 容器搬迁代码写的是 `swap(p, q)`（注释为 intentional ADL），此时与本文件上面的通用
+/// `swap` 与 `std::swap` 同为候选且难分优劣，会被判为二义调用。指针重载更特化，能稳定
+/// 胜出，从而让这类 ADL 调用保持无歧义。
+export template<typename T>
+void swap(T*& a, T*& b) noexcept {
+    T* temporary = a;
+    a            = b;
+    b            = temporary;
+}
+
 /// Returns the smaller of two values.
 export template<typename T>
 constexpr auto min(T a, T b) noexcept -> T {

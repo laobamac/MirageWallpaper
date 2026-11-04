@@ -9,6 +9,14 @@ module;
 #include <process.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <errno.h>
+
+inline constexpr auto _RSTD_SEEK_SET = SEEK_SET;
+inline constexpr auto _RSTD_SEEK_CUR = SEEK_CUR;
+inline constexpr auto _RSTD_SEEK_END = SEEK_END;
+#undef SEEK_SET
+#undef SEEK_CUR
+#undef SEEK_END
 
 inline constexpr auto _ERROR_FILE_NOT_FOUND             = ERROR_FILE_NOT_FOUND;
 inline constexpr auto _ERROR_PATH_NOT_FOUND             = ERROR_PATH_NOT_FOUND;
@@ -174,6 +182,9 @@ using ::GetCurrentThread;
 using ::SetThreadDescription;
 
 // ── IO ───────────────────────────────────────────────────────────────────
+inline constexpr auto SEEK_SET = _RSTD_SEEK_SET;
+inline constexpr auto SEEK_CUR = _RSTD_SEEK_CUR;
+inline constexpr auto SEEK_END = _RSTD_SEEK_END;
 using ::GetStdHandle;
 using ::WriteFile;
 using ::ReadFile;
@@ -192,6 +203,7 @@ using ::GetEnvironmentVariableA;
 using ::SetEnvironmentVariableA;
 
 using ::_putenv_s;
+inline auto get_errno() noexcept -> int& { return *::_errno(); }
 
 } // namespace rstd::sys::libc
 #endif

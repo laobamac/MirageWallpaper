@@ -1,4 +1,7 @@
 module;
+#include <optional>
+#include <memory>
+#include <utility>
 
 #include <rstd/macro.hpp>
 #include <lz4.h>
@@ -404,13 +407,29 @@ std::optional<std::string> PercentDecode(std::string_view raw) {
     return out;
 }
 
+// 媒体封面由宿主以"本机绝对路径"传入：POSIX 是 "/…"，Windows 是 "C:\…/"
+// "C:/…" 或 UNC "\\server\share"。这些都不能当成 pkg 内的相对资源名去查
+// /assets/materials/<name>.tex，否则 Windows 上永远命中不了。
+bool IsAbsoluteNativePath(std::string_view name) {
+    if (name.empty()) return false;
+    if (name[0] == '/') return true;
+#if defined(_WIN32)
+    if (name[0] == '\\') return true;
+    if (name.size() >= 3 && name[1] == ':' && (name[2] == '\\' || name[2] == '/')) {
+        const auto drive = static_cast<unsigned char>(name[0]);
+        return (drive >= 'A' && drive <= 'Z') || (drive >= 'a' && drive <= 'z');
+    }
+#endif
+    return false;
+}
+
 std::optional<std::string> ResolveExternalImagePath(std::string_view name) {
     std::string path;
     if (name.starts_with("file://localhost/")) {
         path = "/" + std::string(name.substr(std::string_view("file://localhost/").size()));
     } else if (name.starts_with("file:///")) {
         path = std::string(name.substr(std::string_view("file://").size()));
-    } else if (! name.empty() && name[0] == '/') {
+    } else if (IsAbsoluteNativePath(name)) {
         path = std::string(name);
     } else {
         return std::nullopt;

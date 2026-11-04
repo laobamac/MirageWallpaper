@@ -1,4 +1,8 @@
 module;
+#include <optional>
+#include <functional>
+#include <memory>
+#include <utility>
 #include <rstd/macro.hpp>
 
 module sr.pkg.parse;

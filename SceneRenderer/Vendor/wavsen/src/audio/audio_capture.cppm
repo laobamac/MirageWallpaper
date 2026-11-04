@@ -1,3 +1,7 @@
+module;
+
+#include <array>
+
 export module wavsen.audio:capture;
 
 import rstd.cppstd;
@@ -29,7 +33,7 @@ struct AudioSpectrum {
 // Taps the system default sink's monitor source, runs a 4096-point
 // Hann-windowed FFT per stereo channel on the audio thread, merges
 // magnitudes into 64 calibrated WE-style bands, EMA-smooths, and publishes a
-// lock-free snapshot for renderers.
+// thread-safe snapshot for renderers.
 class AudioCapture {
 public:
     AudioCapture();
@@ -41,7 +45,7 @@ public:
     void uninit();
     auto is_inited() const -> bool;
 
-    // Lock-free read. Returns true if at least one capture buffer has
+    // Thread-safe read. Returns true if at least one capture buffer has
     // been processed; out is zero-filled until then.
     bool snapshot(AudioSpectrum& out) const;
 

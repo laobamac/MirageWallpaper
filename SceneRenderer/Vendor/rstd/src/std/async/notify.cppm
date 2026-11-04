@@ -6,6 +6,7 @@ export import :async.forward;
 export import :async.reactor;
 export import :io;
 import :sys.fd;
+import :sys.io;
 import :sys.libc;
 import :sync;
 
@@ -34,7 +35,7 @@ struct NotifyState {
     auto operator=(NotifyState&&) noexcept -> NotifyState& = default;
 
     static auto last_os_error() noexcept -> io::Error {
-        return io::Error::from_raw_os_error(libc::get_errno());
+        return io::Error::from_raw_os_error(sys::io::last_os_error());
     }
 
     auto drain() -> io::Result<bool> {

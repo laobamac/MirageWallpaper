@@ -1,4 +1,5 @@
 module;
+#include <utility>
 
 /* convert_drm_prime_ touches a wide slice of Vulkan: external memory FD
  * import, image plane memory binding, DRM modifier image creation. The
@@ -1239,6 +1240,11 @@ int YuvToRgba::convert_av_vk_frame_(const VkFrameImports& im, VkImage dst, uint3
 int YuvToRgba::convert_drm_prime_(const DrmFrameView& drm, VkImage dst, uint32_t dst_w,
                                   uint32_t dst_h, const ColorMatrix& cm, ConvertTarget target,
                                   Error* err) {
+#if defined(_WIN32)
+    (void)drm; (void)dst; (void)dst_w; (void)dst_h; (void)cm; (void)target;
+    fail(err, "DRM_PRIME imports require Linux; native Vulkan and software frames are supported on Windows");
+    return -1;
+#else
     if (dst == VK_NULL_HANDLE) {
         fail(err, "convert_drm_prime: dst null");
         return -1;
@@ -1669,6 +1675,7 @@ int YuvToRgba::convert_drm_prime_(const DrmFrameView& drm, VkImage dst, uint32_t
     last_drm_memories_[0]  = plane_mem[0];
     last_drm_memories_[1]  = plane_mem[1];
     return sync_fd;
+#endif
 }
 
 // ---------------------------------------------------------------------------

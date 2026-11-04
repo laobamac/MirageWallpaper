@@ -1,19 +1,24 @@
 
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(WAVSEN_AVFORMAT    REQUIRED IMPORTED_TARGET libavformat>=58)
-pkg_check_modules(WAVSEN_AVCODEC     REQUIRED IMPORTED_TARGET libavcodec>=58)
-pkg_check_modules(WAVSEN_AVUTIL      REQUIRED IMPORTED_TARGET libavutil>=56)
-pkg_check_modules(WAVSEN_SWSCALE     REQUIRED IMPORTED_TARGET libswscale>=5)
-pkg_check_modules(WAVSEN_SWRESAMPLE           IMPORTED_TARGET libswresample>=3)
+if(WIN32)
+    find_package(FFMPEG REQUIRED)
+    set(WAVSEN_SWRESAMPLE_FOUND TRUE)
+else()
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(WAVSEN_AVFORMAT    REQUIRED IMPORTED_TARGET libavformat>=58)
+    pkg_check_modules(WAVSEN_AVCODEC     REQUIRED IMPORTED_TARGET libavcodec>=58)
+    pkg_check_modules(WAVSEN_AVUTIL      REQUIRED IMPORTED_TARGET libavutil>=56)
+    pkg_check_modules(WAVSEN_SWSCALE     REQUIRED IMPORTED_TARGET libswscale>=5)
+    pkg_check_modules(WAVSEN_SWRESAMPLE           IMPORTED_TARGET libswresample>=3)
+endif()
 # Optional: VAAPI hardware decode for non-Apple builds. macOS uses the
 # Core Audio path and should not probe Linux DRM/VAAPI pkg-config modules.
-if(NOT APPLE)
+if(UNIX AND NOT APPLE)
     pkg_check_modules(WAVSEN_LIBVA            IMPORTED_TARGET libva libva-drm)
 endif()
 
 set(WAVSEN_AUDIO_BACKEND "pulse" CACHE STRING
-    "Audio backend for wavsen::audio (pulse|pipewire|coreaudio|stub)")
-set_property(CACHE WAVSEN_AUDIO_BACKEND PROPERTY STRINGS pulse pipewire coreaudio stub)
+    "Audio backend for wavsen::audio (pulse|pipewire|coreaudio|wasapi|stub)")
+set_property(CACHE WAVSEN_AUDIO_BACKEND PROPERTY STRINGS pulse pipewire coreaudio wasapi stub)
 
 if(WAVSEN_AUDIO_BACKEND STREQUAL "pulse")
     pkg_check_modules(WAVSEN_LIBPULSE REQUIRED IMPORTED_TARGET libpulse>=14.0)
@@ -31,6 +36,10 @@ elseif(WAVSEN_AUDIO_BACKEND STREQUAL "coreaudio")
     find_library(WAVSEN_COREAUDIO_FRAMEWORK CoreAudio REQUIRED)
     find_library(WAVSEN_AUDIOTOOLBOX_FRAMEWORK AudioToolbox REQUIRED)
     find_library(WAVSEN_FOUNDATION_FRAMEWORK Foundation REQUIRED)
+elseif(WAVSEN_AUDIO_BACKEND STREQUAL "wasapi")
+    if(NOT WIN32)
+        message(FATAL_ERROR "WASAPI 仅适用于 Windows")
+    endif()
 elseif(WAVSEN_AUDIO_BACKEND STREQUAL "stub")
     # No external audio backend. Uses audio_device_stub.cpp +
     # audio_capture_stub.cpp to satisfy the AudioDevice/AudioCapture APIs
@@ -38,10 +47,14 @@ elseif(WAVSEN_AUDIO_BACKEND STREQUAL "stub")
     # without audio and audio-responsive effects see a zero spectrum.
 else()
     message(FATAL_ERROR
-        "WAVSEN_AUDIO_BACKEND='${WAVSEN_AUDIO_BACKEND}' is not one of: pulse pipewire coreaudio stub")
+        "WAVSEN_AUDIO_BACKEND='${WAVSEN_AUDIO_BACKEND}' is not one of: pulse pipewire coreaudio wasapi stub")
 endif()
 
 find_package(Vulkan REQUIRED)
+set(WAVSEN_WARNING_OPTIONS -Wall -Wextra -Wpedantic -Wno-missing-field-initializers)
+if(CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    set(WAVSEN_WARNING_OPTIONS /clang:-Wall /clang:-Wextra /clang:-Wpedantic /clang:-Wno-missing-field-initializers)
+endif()
 
 
 # ---------------------------------------------------------------------------
@@ -63,7 +76,7 @@ add_library(wavsen::decode ALIAS wavsen_decode)
 
 target_compile_features(wavsen_decode PUBLIC cxx_std_20)
 target_compile_options(wavsen_decode PRIVATE
-    -Wall -Wextra -Wpedantic -Wno-missing-field-initializers
+    ${WAVSEN_WARNING_OPTIONS}
 )
 
 target_sources(wavsen_decode
@@ -83,9 +96,14 @@ target_link_libraries(wavsen_decode
 set_target_properties(wavsen_decode PROPERTIES CXX_SCAN_FOR_MODULES ON)
 
 
-find_program(GLSLANG_VALIDATOR
-    NAMES glslangValidator
-    DOC   "GLSL → SPIR-V compiler used to bake wavsen::video shaders")
+if(WIN32 AND TARGET glslang-standalone)
+    set(GLSLANG_VALIDATOR "$<TARGET_FILE:glslang-standalone>")
+    set(_wavsen_shader_compiler_dependency glslang-standalone)
+else()
+    find_program(GLSLANG_VALIDATOR
+        NAMES glslangValidator
+        DOC "GLSL → SPIR-V compiler used to bake wavsen::video shaders")
+endif()
 if(NOT GLSLANG_VALIDATOR)
     message(FATAL_ERROR
         "wavsen: glslangValidator not found in PATH — required to build "
@@ -100,7 +118,7 @@ add_custom_command(
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/generated
     COMMAND ${GLSLANG_VALIDATOR} -V --vn nv12_to_rgba_spv
             -o ${_wavsen_shader_hdr} ${_wavsen_shader_src}
-    DEPENDS ${_wavsen_shader_src}
+    DEPENDS ${_wavsen_shader_src} ${_wavsen_shader_compiler_dependency}
     COMMENT "wavsen: compiling NV12→RGBA compute shader"
     VERBATIM
 )
@@ -112,7 +130,7 @@ add_library(wavsen::video ALIAS wavsen_video)
 
 target_compile_features(wavsen_video PUBLIC cxx_std_20)
 target_compile_options(wavsen_video PRIVATE
-    -Wall -Wextra -Wpedantic -Wno-missing-field-initializers
+    ${WAVSEN_WARNING_OPTIONS}
 )
 target_include_directories(wavsen_video
     PRIVATE
@@ -166,7 +184,7 @@ add_library(wavsen::audio ALIAS wavsen_audio)
 
 target_compile_features(wavsen_audio PUBLIC cxx_std_20)
 target_compile_options(wavsen_audio PRIVATE
-    -Wall -Wextra -Wpedantic -Wno-missing-field-initializers
+    ${WAVSEN_WARNING_OPTIONS}
 )
 
 target_sources(wavsen_audio
@@ -218,6 +236,13 @@ elseif(WAVSEN_AUDIO_BACKEND STREQUAL "coreaudio")
         ${WAVSEN_AUDIOTOOLBOX_FRAMEWORK}
         ${WAVSEN_FOUNDATION_FRAMEWORK}
     )
+elseif(WAVSEN_AUDIO_BACKEND STREQUAL "wasapi")
+    target_sources(wavsen_audio PRIVATE
+        src/audio/audio_device_coreaudio.cpp
+        src/audio/audio_capture_coreaudio.cpp
+        src/audio/audio_wasapi.cpp
+        src/audio/audio_loopback_analyzer.cpp)
+    set(_wavsen_audio_backend_target ole32 uuid avrt)
 else()  # stub
     target_sources(wavsen_audio PRIVATE
         src/audio/audio_device_stub.cpp
@@ -245,7 +270,7 @@ if(WAVSEN_BUILD_TESTS)
     )
     target_compile_features(wavsen_audio_capture_dsp_tests PRIVATE cxx_std_20)
     target_compile_options(wavsen_audio_capture_dsp_tests PRIVATE
-        -Wall -Wextra -Wpedantic -Wno-missing-field-initializers
+        ${WAVSEN_WARNING_OPTIONS}
     )
     target_include_directories(wavsen_audio_capture_dsp_tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src/audio

@@ -16,7 +16,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <thread>
-#include <unistd.h>
+#include "../Sources/SceneRenderer/Kernel/Support/include/Utils/PlatformFile.hpp"
 
 import sr.scene_wallpaper;
 import rstd.log;
@@ -253,7 +253,7 @@ int main() {
     const char* assets = std::getenv("SCENERENDERER_ASSETS_DIR");
     if (assets == nullptr || assets[0] == '\0') return 77;
     const auto directory = std::filesystem::temp_directory_path() /
-        ("mirage-position-render-" + std::to_string(getpid()));
+        ("mirage-position-render-" + std::to_string(sr::platform::ProcessId()));
     try {
         Run(assets, directory / "horizontal", false);
         Run(assets, directory / "vertical", true);

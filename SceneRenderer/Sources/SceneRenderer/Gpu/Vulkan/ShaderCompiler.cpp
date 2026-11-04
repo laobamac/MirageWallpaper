@@ -10,7 +10,12 @@ module;
 #include <cstdio>
 #include <cstdlib>
 #include <fcntl.h>
+#include "Utils/PlatformFile.hpp"
+#if defined(_WIN32)
+#include <objbase.h>
+#else
 #include <unistd.h>
+#endif
 
 #include "Utils/Sha.hpp"
 module sr.shader_compile;
@@ -34,11 +39,7 @@ namespace
 // arbitrary-file overwrite with attacker-chosen content (CWE-59 / CWE-377).
 // O_EXCL | O_NOFOLLOW makes both cases a clean failure instead.
 std::FILE* openDumpFileExclusive(const std::string& path) {
-    int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
-    if (fd < 0) return nullptr;
-    std::FILE* file = ::fdopen(fd, "wb");
-    if (file == nullptr) ::close(fd);
-    return file;
+    return sr::platform::OpenExclusiveFile(sr::platform::NativePath(path));
 }
 
 // Spill a payload to <tmp>/<sha1> for post-mortem inspection. Returns the
@@ -46,7 +47,7 @@ std::FILE* openDumpFileExclusive(const std::string& path) {
 std::string logToTmpfileWithSha1(std::span<const char> in) {
     std::string           name   = utils::genSha1(in);
     std::filesystem::path fspath = std::filesystem::temp_directory_path() / name;
-    std::string           path   = fspath.native();
+    std::string           path   = sr::platform::Utf8Path(fspath);
     // An existing entry is never overwritten. The name is a content hash, so
     // a dump this process already wrote holds exactly the same bytes; anything
     // else at that path is not ours to clobber.
@@ -67,12 +68,23 @@ std::string logToTmpfileWithSha1(std::span<const char> in) {
 // dumping for this run.
 const std::string& spirvDumpDir() {
     static const std::string dir = []() -> std::string {
+#if defined(_WIN32)
+        GUID id {};
+        if (FAILED(::CoCreateGuid(&id))) return {};
+        wchar_t name[40] {};
+        if (!::StringFromGUID2(id, name, 40)) return {};
+        auto path = std::filesystem::temp_directory_path() / (std::wstring(L"sr_spirv_dump_") + name);
+        std::error_code error;
+        if (!std::filesystem::create_directory(path, error)) return {};
+        return sr::platform::Utf8Path(path);
+#else
         std::string tmpl =
             (std::filesystem::temp_directory_path() / "sr_spirv_dump_XXXXXX").native();
         std::vector<char> buf(tmpl.begin(), tmpl.end());
         buf.push_back('\0');
         if (::mkdtemp(buf.data()) == nullptr) return {};
         return std::string(buf.data());
+#endif
     }();
     return dir;
 }

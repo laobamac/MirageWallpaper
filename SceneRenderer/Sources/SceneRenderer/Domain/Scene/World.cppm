@@ -1,4 +1,10 @@
 module;
+#include <variant>
+#include <optional>
+#include <functional>
+#include <unordered_map>
+#include <memory>
+#include <utility>
 
 #include <atomic>
 #include <climits>
