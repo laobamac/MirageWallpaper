@@ -37,12 +37,19 @@ class MainWindowController: NSWindowController, NSWindowDelegate {
             ).environment(AppDelegate.shared.globalSettingsViewModel)
         )
         hostingView.sizingOptions = []
-        self.window.contentView = hostingView
+        self.window.contentView = MainWindowBackgroundView(
+            hostedView: hostingView,
+            blurEnabled: AppDelegate.shared.globalSettingsViewModel.settings.shouldBlurMainWindow
+        )
         enforceMinimumSize()
     }
     
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    func setBackgroundBlurEnabled(_ enabled: Bool) {
+        (window?.contentView as? MainWindowBackgroundView)?.setBlurEnabled(enabled)
     }
     
     override func windowDidLoad() {

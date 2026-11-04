@@ -269,6 +269,8 @@
 "复制脱敏日志" = "Copy Redacted Log";
 "复古" = "Retro";
 "外观" = "Appearance";
+"主窗口毛玻璃" = "Frosted main window";
+"透过主窗口背景显示桌面或后方窗口的模糊画面。系统开启“减少透明度”时暂停此效果。" = "Show a blurred view of the desktop or windows behind the main window. This effect is suspended while Reduce Transparency is enabled in system settings.";
 "大图标" = "Large Icons";
 "太空" = "Space";
 "失败" = "Failed";

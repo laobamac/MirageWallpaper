@@ -1,0 +1,50 @@
+#
+#  feature_request.yml
+#  Mirage Wallpaper
+#
+#  Created on 2026/11/05.
+#  Copyright © 2026 王孝慈. All rights reserved.
+#
+
+name: "功能建议 / Feature request"
+description: "提出新功能或现有功能的改进建议 / Suggest a new feature or an improvement"
+title: "[建议] "
+labels: ["feature request"]
+body:
+  - type: checkboxes
+    id: preparation
+    attributes:
+      label: "提交前确认 / Before submitting"
+      options:
+        - label: "我已搜索现有 Issue，确认没有相同或高度相似的建议。 / I searched existing issues for similar requests."
+          required: true
+        - label: "我不会提交密码、API Key、Cookie 或其他敏感信息。 / I will not include passwords, API keys, cookies, or other secrets."
+          required: true
+
+  - type: textarea
+    id: use-case
+    attributes:
+      label: "使用场景 / Use case"
+      description: "你想完成什么？当前的操作流程有哪些不便？ / What are you trying to do, and what is difficult about the current workflow?"
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: "功能建议 / Proposed feature"
+      description: "描述期望的功能和使用效果。 / Describe the feature and how you expect it to work."
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: "替代方案 / Alternatives"
+      description: "你考虑过或正在使用哪些替代方案？ / What alternatives have you considered or used?"
+
+  - type: textarea
+    id: context
+    attributes:
+      label: "补充信息 / Additional context"
+      description: "可提供参考截图、链接，以及与建议有关的 Mirage 版本、macOS 版本或 Mac 型号。 / Add reference images, links, or relevant Mirage, macOS, and Mac model information."

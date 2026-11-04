@@ -220,6 +220,14 @@ struct GeneralPage: SettingsPage {
                     Text("跟随系统").tag(GSAppearance.followSystem)
                 }
 
+                Toggle("主窗口毛玻璃", isOn: Binding(
+                    get: { viewModel.settings.shouldBlurMainWindow },
+                    set: { viewModel.settings.blurMainWindow = $0 }
+                ))
+                Text("透过主窗口背景显示桌面或后方窗口的模糊画面。系统开启“减少透明度”时暂停此效果。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
                 Toggle("覆盖壁纸", isOn: Binding(
                     get: { viewModel.settings.shouldOverrideWallpaper },
                     set: { viewModel.settings.overrideWallpaper = $0 }

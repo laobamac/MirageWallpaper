@@ -179,6 +179,11 @@ struct GlobalSettings: Codable, Equatable {
 
     // MARK: Appearance
     var appearance = GSAppearance.followSystem
+    var blurMainWindow: Bool? = false
+
+    var shouldBlurMainWindow: Bool {
+        blurMainWindow ?? false
+    }
     
     // MARK: Audio
     var audioOutput = true
@@ -282,6 +287,7 @@ class GlobalSettingsViewModel {
     var didChangeDeveloperModeCancellable: Cancellable?
     var didChangeOverrideWallpaperCancellable: Cancellable?
     var didChangeWallpaperCacheCleaningCancellable: Cancellable?
+    var didChangeWindowBackgroundCancellable: Cancellable?
     var playbackPolicySettingsCancellable: Cancellable?
     
     // In-memory snapshot of what is persisted, so the settings UI can tell
@@ -306,6 +312,7 @@ class GlobalSettingsViewModel {
             initial.steamAPIEndpoint = .official
         }
         initial.animatedPreviewPlayback = initial.animatedPreviewPlayback ?? .hover
+        initial.blurMainWindow = initial.shouldBlurMainWindow
         initial.windowCoverageThreshold = initial.normalizedWindowCoverageThreshold
         if initial.shouldPauseWhenWindowCoverageExceeds {
             initial.otherApplicationFocused = .keepRunning
@@ -341,6 +348,7 @@ class GlobalSettingsViewModel {
         didChangeDeveloperModeCancellable?.cancel()
         didChangeOverrideWallpaperCancellable?.cancel()
         didChangeWallpaperCacheCleaningCancellable?.cancel()
+        didChangeWindowBackgroundCancellable?.cancel()
         playbackPolicySettingsCancellable?.cancel()
         playbackEvalTimer?.invalidate()
         playbackAudioMonitor?.stop()
@@ -400,6 +408,11 @@ class GlobalSettingsViewModel {
             }
             .map { $0.shouldAutomaticallyCleanWallpaperCache }
             .sink { DesktopOverrideService.shared.didChangeCacheCleaningEnabled($0) }
+
+        didChangeWindowBackgroundCancellable = settingsChanges
+            .map { $0.shouldBlurMainWindow }
+            .removeDuplicates()
+            .sink { AppDelegate.shared.mainWindowController?.setBackgroundBlurEnabled($0) }
 
         let lifecycleNotifications: [(Notification.Name, PlaybackLifecycleEvent)] = [
             (NSWorkspace.willSleepNotification, .systemSleep),
@@ -957,6 +970,7 @@ class GlobalSettingsViewModel {
             ?? Data()))
         ?? GlobalSettings()
         restored.animatedPreviewPlayback = restored.animatedPreviewPlayback ?? .hover
+        restored.blurMainWindow = restored.shouldBlurMainWindow
         if settings != restored {
             settings = restored
         }
