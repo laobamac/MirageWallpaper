@@ -24,7 +24,7 @@ struct WidgetFilterSidebar: View {
                     }
                     .buttonStyle(.borderedProminent)
 
-                    FilterSection("加载类型", alignment: .leading) {
+                    FilterSection("加载类型", id: "widget.loadType", alignment: .leading) {
                         if viewModel.availableLoadTypes.isEmpty {
                             Text("暂无").foregroundStyle(.secondary)
                         }
@@ -39,7 +39,7 @@ struct WidgetFilterSidebar: View {
                         }
                     }
 
-                    FilterSection("版本", alignment: .leading) {
+                    FilterSection("版本", id: "widget.version", alignment: .leading) {
                         if viewModel.availableVersions.isEmpty {
                             Text("暂无").foregroundStyle(.secondary)
                         }

@@ -133,10 +133,10 @@ struct ContentView: View {
                                               wallpaperViewModel: wallpaperViewModel)
                         }
                     }
+                    .padding()
                 }
-                .padding()
 
-                    if workshopViewModel.showCreatorProfile,
+                if workshopViewModel.showCreatorProfile,
                        let creator = workshopViewModel.selectedCreator {
                         CreatorProfileView(
                             creator: creator,
