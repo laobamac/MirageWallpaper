@@ -1,0 +1,17 @@
+---
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+import Landing from '../components/Landing.astro';
+---
+
+<StarlightPage
+  frontmatter={{
+    title: 'MirageLinuxDisplay — Linux 桌面显示集成层',
+    description: '为 MirageWallpaper 打造的 Linux 桌面环境显示集成层：mirage-display-v1 协议、C ABI 消费/生产库与路由核心。',
+    template: 'splash',
+    tableOfContents: false,
+    pagefind: false,
+    hero: { tagline: '', actions: [] },
+  }}
+>
+  <Landing />
+</StarlightPage>
