@@ -220,6 +220,13 @@ std::vector<std::filesystem::path> SystemFontRoots() {
 bool EnsureFontconfig() {
 #if defined(_WIN32)
     static const bool initialized = [] {
+        // 当前配置里已经有应用字体，说明调用方（宿主或测试）显式注册过字体集合，
+        // 此时必须沿用，不能换成新的空配置，否则字体回退看不到那些字体。
+        if (const FcConfig* current = FcConfigGetCurrent(); current != nullptr) {
+            const FcFontSet* existing = FcConfigGetFonts(
+                const_cast<FcConfig*>(current), FcSetApplication);
+            if (existing != nullptr && existing->nfont > 0) return true;
+        }
         FcConfig* config = FcConfigCreate();
         if (!config) return false;
         bool added = false;

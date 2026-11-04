@@ -22,6 +22,8 @@
 #include <string>
 #include <vector>
 
+#include "../Sources/SceneRenderer/Kernel/Support/include/Utils/PlatformFile.hpp"
+
 import sr.text;
 
 namespace
@@ -104,13 +106,18 @@ bool SameGlyph(sr::text::FontFace* actual, sr::text::FontFace* expected, std::ui
 }
 
 struct FontConfig {
+#if ! defined(_WIN32)
     FcConfig* saved { FcConfigReference(FcConfigGetCurrent()) };
+#else
+    // Windows 版 fontconfig 没有系统默认配置，不保存/恢复全局配置。
+    FcConfig* saved { nullptr };
+#endif
     FcConfig* isolated { FcConfigCreate() };
 
     ~FontConfig() {
-        FcConfigSetCurrent(saved);
+        if (saved) FcConfigSetCurrent(saved);
         FcConfigDestroy(isolated);
-        FcConfigDestroy(saved);
+        if (saved) FcConfigDestroy(saved);
     }
 };
 
@@ -122,21 +129,69 @@ struct TemporaryDirectory {
     }
 };
 
+// fontconfig 只接受 UTF-8；Windows 上 path::c_str() 是 wchar_t*，必须显式转换。
+std::string FcPath(const std::filesystem::path& path) {
+    return sr::platform::Utf8Path(path);
+}
+
 bool AddFont(FcConfig* config, const std::filesystem::path& path) {
-    return FcConfigAppFontAddFile(config, reinterpret_cast<const FcChar8*>(path.c_str())) == FcTrue;
+    if (path.empty()) return false;
+    const auto encoded = FcPath(path);
+    return FcConfigAppFontAddFile(config, reinterpret_cast<const FcChar8*>(encoded.c_str())) ==
+           FcTrue;
+}
+
+// 每个平台的字体夹具，以及 fontconfig 里对应的家族名。
+struct FontFixtures {
+    std::filesystem::path symbols;
+    std::filesystem::path last_resort;
+    std::filesystem::path emoji;
+    std::filesystem::path cjk;
+    std::string           symbols_family;
+    // 只存在于彩色字体里的码位：Segoe UI Symbol 也覆盖旧版 emoji，只有较新的
+    // emoji 才会真正落到彩色字体上。
+    std::uint32_t         emoji_codepoint { 0x1F3B5 };
+};
+
+FontFixtures PlatformFixtures() {
+    FontFixtures fixtures;
+#if defined(__APPLE__)
+    fixtures.symbols        = "/System/Library/Fonts/Apple Symbols.ttf";
+    fixtures.last_resort    = "/System/Library/Fonts/LastResort.otf";
+    fixtures.emoji          = "/System/Library/Fonts/Apple Color Emoji.ttc";
+    fixtures.cjk            = "/System/Library/Fonts/Supplemental/Arial Unicode.ttf";
+    fixtures.symbols_family = "systemfont_apple symbols";
+#elif defined(_WIN32)
+    // Windows 没有 .LastResort 占位字体，依赖它的断言在该平台上跳过；其余夹具用
+    // 系统自带字体：Segoe UI Symbol 覆盖 U+1D11E，Segoe UI Emoji 提供彩色字形，
+    // 微软雅黑提供中文字形。
+    wchar_t windows_dir[MAX_PATH] {};
+    const std::filesystem::path fonts =
+        ::GetWindowsDirectoryW(windows_dir, MAX_PATH) != 0
+            ? std::filesystem::path(windows_dir) / L"Fonts"
+            : std::filesystem::path(L"C:/Windows/Fonts");
+    fixtures.symbols        = fonts / L"seguisym.ttf";
+    fixtures.emoji          = fonts / L"seguiemj.ttf";
+    fixtures.cjk            = fonts / L"msyh.ttc";
+    fixtures.symbols_family = "systemfont_segoe ui symbol";
+    fixtures.emoji_codepoint = 0x1F9D1;
+#else
+    fixtures.symbols_family = "";
+#endif
+    return fixtures;
 }
 
 } // namespace
 
 int main(int argc, char** argv) {
     if (argc != 2) return 77;
-    const auto primary     = Read(std::filesystem::path(argv[1]) / "Monofur-PK7og.ttf");
-    const auto symbols     = Read("/System/Library/Fonts/Apple Symbols.ttf");
-    const auto last_resort = Read("/System/Library/Fonts/LastResort.otf");
-    const auto emoji       = Read("/System/Library/Fonts/Apple Color Emoji.ttc");
-    const std::filesystem::path cjk_path = "/System/Library/Fonts/Supplemental/Arial Unicode.ttf";
-    const auto                  cjk      = Read(cjk_path);
-    if (! primary || ! symbols || ! last_resort || ! emoji || ! cjk) {
+    const auto  fixtures   = PlatformFixtures();
+    const auto  primary    = Read(std::filesystem::path(argv[1]) / "Monofur-PK7og.ttf");
+    const auto  symbols    = Read(fixtures.symbols);
+    const auto  last_resort = Read(fixtures.last_resort);
+    const auto  emoji      = Read(fixtures.emoji);
+    const auto  cjk        = Read(fixtures.cjk);
+    if (! primary || ! symbols || ! emoji || ! cjk) {
         std::cerr << "font fixtures unavailable\n";
         return 77;
     }
@@ -154,31 +209,55 @@ int main(int argc, char** argv) {
         if (! output) return 1;
     }
 
+#if defined(_WIN32)
+    // Windows 上的 fontconfig 不带默认 fonts.conf，FcInit() 必然失败；本用例只需要
+    // 下面的隔离配置，直接跳过全局初始化。
+#else
     if (! FcInit()) return 1;
-    FontConfig            config;
-    constexpr const char* rules =
-        R"(<fontconfig><match target="pattern"><edit name="family" mode="prepend" binding="strong"><string>Mirage Broken</string><string>.LastResort</string></edit></match></fontconfig>)";
-    if (! config.isolated ||
-        ! FcConfigParseAndLoadFromMemory(
-            config.isolated, reinterpret_cast<const FcChar8*>(rules), FcTrue) ||
-        ! AddFont(config.isolated, "/System/Library/Fonts/LastResort.otf") ||
-        ! AddFont(config.isolated, collection_path) || ! FcConfigSetCurrent(config.isolated))
+#endif
+    FontConfig config;
+    // 隔离配置里声明一个可写缓存目录，避免 Windows 上 fontconfig 反复报告
+    // "No writable cache directories"。
+    std::string rules = "<fontconfig><cachedir>" + FcPath(temporary.path) +
+                        "</cachedir><match target=\"pattern\"><edit name=\"family\" "
+                        "mode=\"prepend\" binding=\"strong\"><string>Mirage Broken</string>";
+    if (! fixtures.last_resort.empty()) rules += "<string>.LastResort</string>";
+    rules += "</edit></match></fontconfig>";
+    if (! config.isolated) {
+        std::cerr << "fontconfig config creation failed\n";
         return 1;
+    }
+    if (! FcConfigParseAndLoadFromMemory(
+            config.isolated, reinterpret_cast<const FcChar8*>(rules.c_str()), FcTrue)) {
+        std::cerr << "fontconfig rule parsing failed\n";
+        return 1;
+    }
+    if (! fixtures.last_resort.empty() && ! AddFont(config.isolated, fixtures.last_resort)) {
+        std::cerr << "placeholder font registration failed\n";
+        return 1;
+    }
+    if (! AddFont(config.isolated, collection_path) || ! FcConfigSetCurrent(config.isolated)) {
+        std::cerr << "collection registration failed\n";
+        return 1;
+    }
 
-    bool       ok = true;
-    FcPattern* pattern =
-        FcNameParse(reinterpret_cast<const FcChar8*>(":charset=1d11e:scalable=true"));
-    FcConfigSubstitute(nullptr, pattern, FcMatchPattern);
-    FcDefaultSubstitute(pattern);
-    FcResult   result;
-    FcPattern* match        = FcFontMatch(nullptr, pattern, &result);
-    FcChar8*   matched_file = nullptr;
-    ok &= Check(
-        match && FcPatternGetString(match, FC_FILE, 0, &matched_file) == FcResultMatch &&
-            std::string(reinterpret_cast<const char*>(matched_file)).ends_with("LastResort.otf"),
-        "fixture reproduces the placeholder being the first font match");
-    if (match) FcPatternDestroy(match);
-    FcPatternDestroy(pattern);
+    bool ok = true;
+    // 占位字体断言只在提供 .LastResort 的平台上成立。
+    if (! fixtures.last_resort.empty()) {
+        FcPattern* pattern =
+            FcNameParse(reinterpret_cast<const FcChar8*>(":charset=1d11e:scalable=true"));
+        FcConfigSubstitute(nullptr, pattern, FcMatchPattern);
+        FcDefaultSubstitute(pattern);
+        FcResult   result;
+        FcPattern* match        = FcFontMatch(nullptr, pattern, &result);
+        FcChar8*   matched_file = nullptr;
+        ok &= Check(
+            match && FcPatternGetString(match, FC_FILE, 0, &matched_file) == FcResultMatch &&
+                std::string(reinterpret_cast<const char*>(matched_file)).ends_with("LastResort.otf"),
+            "fixture reproduces the placeholder being the first font match");
+        if (match) FcPatternDestroy(match);
+        FcPatternDestroy(pattern);
+    }
 
     sr::text::FontCache cache;
     auto*               face   = cache.GetFace(primary, 20);
@@ -190,11 +269,14 @@ int main(int argc, char** argv) {
     ok &= Check(SameGlyph(face, second, 0x1D11E),
                 "missing music symbol uses the real glyph in collection face one");
     ok &= Check(SameGlyph(face, first, 'A'), "primary Latin glyph remains unchanged");
-    ok &= Check(cache.GetFace(last_resort, 20) == nullptr,
-                "placeholder is rejected as a primary font");
+    if (last_resort) {
+        ok &= Check(cache.GetFace(last_resort, 20) == nullptr,
+                    "placeholder is rejected as a primary font");
+    }
 
-    const auto resolved = sr::text::FontCache::ResolveSystemFont("systemfont_apple symbols", false);
-    ok &= Check(resolved.bytes && resolved.source == collection_path.string() &&
+    const auto resolved =
+        sr::text::FontCache::ResolveSystemFont(fixtures.symbols_family, false);
+    ok &= Check(resolved.bytes && resolved.source == FcPath(collection_path) &&
                     resolved.face_index == 1,
                 "system font resolution retains the collection face index");
     ok &= Check(SameGlyph(cache.GetFace(resolved.bytes, 20, resolved.face_index), second, 0x1D11E),
@@ -216,9 +298,8 @@ int main(int argc, char** argv) {
     FcCharSet* charset = FcCharSetCreate();
     FcCharSetAddChar(charset, 0x1D11E);
     FcPatternAddString(broken, FC_FAMILY, reinterpret_cast<const FcChar8*>("Mirage Broken"));
-    FcPatternAddString(broken,
-                       FC_FILE,
-                       reinterpret_cast<const FcChar8*>((temporary.path / "missing.ttf").c_str()));
+    const auto missing_path = FcPath(temporary.path / "missing.ttf");
+    FcPatternAddString(broken, FC_FILE, reinterpret_cast<const FcChar8*>(missing_path.c_str()));
     FcPatternAddInteger(broken, FC_INDEX, 0);
     FcPatternAddBool(broken, FC_SCALABLE, FcTrue);
     FcPatternAddCharSet(broken, FC_CHARSET, charset);
@@ -227,17 +308,16 @@ int main(int argc, char** argv) {
     ok &= Check(SameGlyph(cache.GetFace(primary, 21), cache.GetFace(symbols, 21), 0x1D11E),
                 "unreadable candidate does not prevent later glyph fallback");
 
-    ok &= Check(AddFont(config.isolated, cjk_path), "register CJK font fixture");
+    ok &= Check(AddFont(config.isolated, fixtures.cjk), "register CJK font fixture");
     for (const auto codepoint : { 0x4E2Du, 0x97F3u, 0x4E50u }) {
         ok &= Check(SameGlyph(cache.GetFace(primary, 19), cache.GetFace(cjk, 19), codepoint),
                     "Chinese text uses real CJK glyphs");
     }
 
-    ok &= Check(AddFont(config.isolated, "/System/Library/Fonts/Apple Color Emoji.ttc"),
-                "register bitmap font fixture");
+    ok &= Check(AddFont(config.isolated, fixtures.emoji), "register bitmap font fixture");
     auto* emoji_face = cache.GetFace(primary, 10);
     if (emoji_face) {
-        const std::array<std::uint32_t, 1> notes { 0x1F3B5 };
+        const std::array<std::uint32_t, 1> notes { fixtures.emoji_codepoint };
         emoji_face->Populate(notes);
         FT_Library library   = nullptr;
         FT_Face    reference = nullptr;
