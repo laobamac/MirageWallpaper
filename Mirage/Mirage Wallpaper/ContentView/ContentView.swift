@@ -225,15 +225,6 @@ struct ContentView: View {
                     .layoutPriority(1)
                 }
             }
-            .opacity(viewModel.isStaging ? 1 : 0)
-            .blur(radius: viewModel.isStaging ? 0 : 2.0)
-
-            if !viewModel.isStaging {
-                HStack(spacing: 20) {
-                    Text("省电模式，休眠中…")
-                        .font(.largeTitle)
-                }
-            }
         }
         .confirmationDialog("删除壁纸",
                             isPresented: $viewModel.isUnsubscribeConfirming) {

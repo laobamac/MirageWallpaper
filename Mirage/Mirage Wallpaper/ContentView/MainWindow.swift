@@ -51,6 +51,30 @@ class MainWindowController: NSWindowController, NSWindowDelegate {
     func setBackgroundBlurEnabled(_ enabled: Bool) {
         (window?.contentView as? MainWindowBackgroundView)?.setBlurEnabled(enabled)
     }
+
+    func prepareForPresentation() {
+        AppDelegate.shared.contentViewModel.isStaging = true
+    }
+
+    func synchronizeVisibility(refreshDisplay: Bool = false) {
+        let viewModel = AppDelegate.shared.contentViewModel
+        let wasVisible = viewModel.isWindowVisible
+        let visible = viewModel.isStaging && !NSApp.isHidden && window?.isVisible == true &&
+            window?.isMiniaturized == false && window?.occlusionState.contains(.visible) == true
+        viewModel.isWindowVisible = visible
+
+        if visible && (!wasVisible || refreshDisplay), let contentView = window?.contentView {
+            contentView.needsLayout = true
+            invalidateDisplay(in: contentView)
+        }
+    }
+
+    private func invalidateDisplay(in view: NSView) {
+        view.needsDisplay = true
+        for subview in view.subviews {
+            invalidateDisplay(in: subview)
+        }
+    }
     
     override func windowDidLoad() {
         super.windowDidLoad()
@@ -99,16 +123,11 @@ class MainWindowController: NSWindowController, NSWindowDelegate {
     func windowDidResignMain(_ notification: Notification) { }
     
     func windowDidBecomeKey(_ notification: Notification) {
-        DispatchQueue.main.async {
-            AppDelegate.shared.contentViewModel.isStaging = true
-            AppDelegate.shared.contentViewModel.isWindowVisible = true
-        }
+        synchronizeVisibility(refreshDisplay: true)
     }
 
     func windowDidChangeOcclusionState(_ notification: Notification) {
-        guard let window else { return }
-        AppDelegate.shared.contentViewModel.isWindowVisible = window.isVisible &&
-            !window.isMiniaturized && window.occlusionState.contains(.visible)
+        synchronizeVisibility()
     }
 
     func windowDidMiniaturize(_ notification: Notification) {
@@ -116,7 +135,7 @@ class MainWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func windowDidDeminiaturize(_ notification: Notification) {
-        windowDidChangeOcclusionState(notification)
+        synchronizeVisibility(refreshDisplay: true)
     }
 
     func refreshLocalizedTitle() {

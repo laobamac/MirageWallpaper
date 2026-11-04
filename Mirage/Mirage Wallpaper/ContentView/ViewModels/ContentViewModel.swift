@@ -152,7 +152,7 @@ class ContentViewModel: DropDelegate {
     
     var importAlertPresented = false
     var isStaging = false
-    var isWindowVisible = true
+    var isWindowVisible = false
     
     struct LibrarySnapshot {
         let items: [WEWallpaper]

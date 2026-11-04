@@ -243,13 +243,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
+        mainWindowController?.synchronizeVisibility(refreshDisplay: true)
         DispatchQueue.main.async { [weak self] in
             self?.globalSettingsViewModel.refreshLoginItemStatus(persist: true)
         }
     }
 
+    func applicationDidHide(_ notification: Notification) {
+        mainWindowController?.synchronizeVisibility()
+    }
+
+    func applicationDidUnhide(_ notification: Notification) {
+        mainWindowController?.synchronizeVisibility(refreshDisplay: true)
+    }
+
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if !self.mainWindowController.window.isVisible {
+        if !self.mainWindowController.window.isVisible || self.mainWindowController.window.isMiniaturized {
             openMainWindow()
         }
         return true
@@ -332,14 +341,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func openMainWindow() {
+        mainWindowController.prepareForPresentation()
         NSApp.setActivationPolicy(.regular)
         NSApp.unhide(nil)
         if !self.mainWindowController.window.isVisible,
            UserDefaults.standard.string(forKey: "NSWindow Frame MainWindow") == nil {
             self.mainWindowController.window.center()
         }
+        if mainWindowController.window.isMiniaturized {
+            mainWindowController.window.deminiaturize(nil)
+        }
         self.mainWindowController.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        mainWindowController.synchronizeVisibility(refreshDisplay: true)
     }
 
     func restoreMainWindowFocus() {
