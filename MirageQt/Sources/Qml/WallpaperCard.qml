@@ -84,7 +84,7 @@ Item {
             anchors.margins: 7
             name: "heart"
             color: "#ff4f70"
-            visible: Store.favorites.includes(card.wallpaper.id)
+            visible: (Store.favorites || []).includes((card.wallpaper || {}).id)
         }
     }
     Repeater {
