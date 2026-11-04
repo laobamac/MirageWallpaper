@@ -4,6 +4,11 @@ import QtQuick.Layouts
 
 ColumnLayout {
     spacing: 22
+    // 关于页的平台描述跟随实际构建平台，不再写死 Linux。
+    readonly property string platformTagline:
+        Qt.platform.os === "windows" ? "Windows 动态壁纸引擎"
+        : Qt.platform.os === "osx" ? "macOS 动态壁纸引擎"
+        : "Linux 动态壁纸引擎"
     RowLayout {
         Layout.alignment: Qt.AlignHCenter
         spacing: 22
@@ -25,7 +30,7 @@ ColumnLayout {
                 font.bold: true
             }
             MText {
-                text: Theme.t("Linux 动态壁纸引擎")
+                text: Theme.t(platformTagline)
                 color: Theme.secondary
             }
             MText {

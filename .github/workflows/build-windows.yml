@@ -16,7 +16,7 @@ on:
       - 'scripts/windows/**'
       - '.github/workflows/build-windows.yml'
   push:
-    branches: [main, windows-qt-linux-parity]
+    branches: [main, windows-qt-linux-parity, winnt]
     paths:
       - 'MirageQt/**'
       - 'Platform/Windows/**'
