@@ -1,0 +1,17 @@
+{
+  "name": "mirage-windows-dependencies",
+  "version-string": "0.1.0",
+  "builtin-baseline": "9eec002df1cd109f8f104cd966a763daf9751489",
+  "dependencies": [
+    {"name": "freetype", "default-features": false},
+    "lz4",
+    "libpng",
+    {"name": "ffmpeg", "default-features": false, "features": ["avcodec", "avformat", "swresample", "swscale", "vulkan"]},
+    {"name": "fontconfig", "default-features": false},
+    "vulkan-headers",
+    "vulkan-loader"
+  ],
+  "overrides": [
+    {"name": "gperf", "version": "3.1", "port-version": 7}
+  ]
+}

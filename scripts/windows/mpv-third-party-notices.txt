@@ -1,0 +1,23 @@
+Mirage Windows libmpv third-party notices — INCOMPLETE / DISTRIBUTION BLOCKED
+
+DISTRIBUTION BLOCKER
+Do not distribute any package containing the pinned libmpv-2.dll until a complete, version-specific third-party license and source audit is supplied for every statically linked dependency. The pinned Windows build-recipe repository does not provide a bundled license/NOTICE/SPDX aggregate, and the current dependency lock identifies exact source commits only for mpv and FFmpeg, not for the full static dependency graph. The license texts and component list below are partial notices only; they are not a complete license package and do not clear this release for distribution.
+
+This project elects to distribute mpv under GPL version 3, relying on mpv's GPL-2.0-or-later grant. The pinned FFmpeg build enables --enable-gpl and --enable-version3 and is subject to GPL version 3 terms. The GPL-3.0 text included beside this notice is the selected mpv license version and the relevant FFmpeg GPL text. This selection does not replace or satisfy the separate license and notice obligations of FFmpeg's external libraries or other statically linked components.
+
+Pinned build and source provenance
+- Windows build recipe: shinchiro/mpv-winbuild-cmake commit 1f8d2e76255abc48f0456d9be99b4cab9c6566e6.
+- mpv source: mpv-player/mpv commit e471496c56f0f49c133bd88b50aed62b845f1909.
+- FFmpeg source: FFmpeg/FFmpeg commit 9a861e9687d30e657d59521817cad18405995983.
+- The exact mpv-dev-x86_64 binary archive containing libmpv-2.dll, headers, and import library is identified by URL and SHA-256 in dependencies.lock.json.
+
+Known licensing facts and limits
+- mpv is licensed GPL-2.0-or-later. This redistribution selects GPL-3.0 under that later-version grant.
+- FFmpeg's source describes its baseline as LGPL-2.1-or-later and documents GPL components and external-library license interactions in LICENSE.md. Its pinned build recipe enables --enable-gpl and --enable-version3, so the resulting FFmpeg build is distributed under GPL version 3 terms.
+- The recipe enables numerous external projects, including (but not limited to) ANGLE, aom, dav1d, davs2, FFmpeg, fontconfig, freetype2, fribidi, harfbuzz, lame, lcms2, libarchive, libaribcaption, libass, libbluray, libbs2b, libdovi, libdvdcss, libdvdnav, libdvdread, libjpeg, libjxl, libmodplug, libmysofa, libplacebo, libpng, libsdl2, libsoxr, libsrt, libssh, libudfread, libunibreak, libva, libvpl, libvpx, libwebp, libxml2, libzimg, libzvbi, luajit, mujs, ogg, openal-soft, OpenSSL, opus, rubberband, shaderc, SPIR-V components, speex, svtav1, uavs3d, uchardet, vapoursynth, vorbis, Vulkan components, x264, x265, xvidcore, xz, zlib, zstd, bzip2, curl, and supporting libraries.
+- The recipe tree at the pinned commit has no license, copyright, NOTICE, SPDX, or license-aggregation file. It contains per-package build recipes, but this repository has not audited and locked each built dependency's exact source revision and corresponding license text for this archive.
+- GPL-3.0, LGPL-2.1, and Apache-2.0 texts staged next to this notice are useful partial license references only. They do not establish which exact dependency versions/licenses are present and are not a substitute for each component's required notices.
+- The build-recipe repository has no license file at the pinned commit. No build-recipe source code is redistributed here; its commit is listed only as binary provenance.
+
+Corresponding source status
+The lock records immutable mpv and FFmpeg source commits and the build-recipe commit. It does not yet identify the immutable source revisions or checksums for every statically linked third-party dependency, nor provide the complete corresponding source/offer and notices for the exact binary. This is part of the distribution blocker above. Do not treat the source references here as a complete corresponding-source offer.

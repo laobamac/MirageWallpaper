@@ -34,3 +34,7 @@ cmake-build-debug
 .secrets/
 xcuserdata
 .reasonix
+/aqtinstall.log
+__pycache__/
+/SteamService/Tests/bin/
+/SteamService/Tests/obj/

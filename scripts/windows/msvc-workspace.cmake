@@ -1,0 +1,6 @@
+set(CMAKE_SYSTEM_NAME Windows)
+set(CMAKE_SYSTEM_PROCESSOR AMD64)
+set(CMAKE_C_COMPILER "$ENV{VCToolsInstallDir}/bin/Hostx64/x64/cl.exe" CACHE FILEPATH "")
+set(CMAKE_CXX_COMPILER "$ENV{VCToolsInstallDir}/bin/Hostx64/x64/cl.exe" CACHE FILEPATH "")
+set(CMAKE_RC_COMPILER "$ENV{WindowsSdkDir}/bin/$ENV{UCRTVersion}/x64/rc.exe" CACHE FILEPATH "")
+set(CMAKE_MT "$ENV{WindowsSdkDir}/bin/$ENV{UCRTVersion}/x64/mt.exe" CACHE FILEPATH "")

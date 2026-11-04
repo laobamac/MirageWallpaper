@@ -1,0 +1,127 @@
+name: Build Windows Qt player
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'MirageQt/**'
+      - 'Platform/Windows/**'
+      - 'SceneRenderer/**'
+      - 'WebRenderer/**'
+      - 'VideoRenderer/**'
+      - 'SteamService/**'
+      - 'Tests/Windows/**'
+      - 'assets/**'
+      - 'scripts/*windows.py'
+      - 'scripts/windows/**'
+      - '.github/workflows/build-windows.yml'
+  push:
+    branches: [main, windows-qt-linux-parity]
+    paths:
+      - 'MirageQt/**'
+      - 'Platform/Windows/**'
+      - 'SceneRenderer/**'
+      - 'WebRenderer/**'
+      - 'VideoRenderer/**'
+      - 'SteamService/**'
+      - 'Tests/Windows/**'
+      - 'assets/**'
+      - 'scripts/*windows.py'
+      - 'scripts/windows/**'
+      - '.github/workflows/build-windows.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 180
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Cache pinned dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/tools
+            build/deps/Qt
+            build/deps/downloads
+            build/deps/microsoft.windows.sdk.cpp
+            build/deps/microsoft.windows.sdk.cpp.x64
+            build/deps/dotnet10
+            build/deps/mpv
+            build/deps/vcpkg
+            build/deps/nuget
+          key: windows-x64-${{ hashFiles('scripts/windows/dependencies.lock.json', 'scripts/windows/vcpkg.json', 'scripts/windows/*.cmake', 'SteamService/packages.lock.json') }}
+      - name: Bootstrap workspace tools
+        run: |
+          python scripts/bootstrap_windows.py python
+          $env:PYTHONPATH = "$pwd/build/tools/python"
+          python scripts/bootstrap_windows.py llvm vcpkg qt sdk dotnet mpv
+      - name: Build and test
+        run: |
+          $env:PYTHONPATH = "$pwd/build/tools/python"
+          python scripts/build_all_windows.py --jobs 4 --tests
+      - name: Verify staged deployment
+        run: python scripts/build_all_windows.py --verify-only
+      - name: Test desktop renderers
+        run: |
+          $appDir = (Resolve-Path 'dist/Mirage-Windows-x64').Path
+          $testOutput = Join-Path $env:RUNNER_TEMP 'mirage-renderer-tests'
+          New-Item -ItemType Directory -Force -Path $testOutput | Out-Null
+          $env:PATH = "$appDir;$env:PATH"
+          $env:QT_PLUGIN_PATH = $appDir
+          $env:QT_QPA_PLATFORM_PLUGIN_PATH = Join-Path $appDir 'platforms'
+          $env:QTWEBENGINE_PROCESS_PATH = Join-Path $appDir 'QtWebEngineProcess.exe'
+          $env:QTWEBENGINE_RESOURCES_PATH = Join-Path $appDir 'resources'
+          $env:QTWEBENGINE_LOCALES_PATH = Join-Path $appDir 'translations/qtwebengine_locales'
+          python Tests/Windows/PlaybackIntegration.py --bin-dir $appDir --assets-dir assets --output-dir $testOutput --kind web
+          if ($LASTEXITCODE -ne 0) { throw "Web desktop integration failed with exit code $LASTEXITCODE" }
+          python Tests/Windows/PlaybackIntegration.py --bin-dir $appDir --assets-dir assets --output-dir $testOutput --kind video
+          if ($LASTEXITCODE -ne 0) { throw "Video desktop integration failed with exit code $LASTEXITCODE" }
+      - name: Test MirageQt core logic
+        run: |
+          $testRoot = Join-Path $env:RUNNER_TEMP 'mirageqt-self-test'
+          $appData = Join-Path $testRoot 'appdata'
+          $localAppData = Join-Path $testRoot 'local-appdata'
+          New-Item -ItemType Directory -Force -Path $appData, $localAppData | Out-Null
+          $env:TEMP = $testRoot
+          $env:TMP = $testRoot
+          $env:APPDATA = $appData
+          $env:LOCALAPPDATA = $localAppData
+          $appDir = (Resolve-Path 'dist/Mirage-Windows-x64').Path
+          $env:PATH = "$appDir;$env:PATH"
+          Push-Location $appDir
+          try {
+            & "$appDir/MirageQt.exe" --self-test
+            if ($LASTEXITCODE -ne 0) { throw "MirageQt self-test failed with exit code $LASTEXITCODE" }
+          } finally {
+            Pop-Location
+          }
+      - name: Test Steam offline safety suite
+        run: |
+          $service = "$pwd/dist/Mirage-Windows-x64/SteamService/win-x64/MirageSteamService.exe"
+          & $service --self-test
+          if ($LASTEXITCODE -ne 0) { throw "Steam offline self-tests failed with exit code $LASTEXITCODE" }
+      - name: Test Steam IPC
+        run: |
+          $service = "$pwd/dist/Mirage-Windows-x64/SteamService/win-x64/MirageSteamService.exe"
+          $commands = '{"command":"hello","requestId":"hello-ci"}', '{"command":"ping","requestId":"ping-ci"}', '{"command":"shutdown","requestId":"shutdown-ci"}'
+          $responses = $commands | & $service
+          if ($LASTEXITCODE -ne 0) { throw 'Steam service failed' }
+          $events = @($responses | ForEach-Object { $_ | ConvertFrom-Json })
+          if ($events.Count -ne 3 -or $events[0].type -ne 'hello' -or $events[1].type -ne 'pong' -or $events[2].requestId -ne 'shutdown-ci') { throw 'Steam IPC responses invalid' }

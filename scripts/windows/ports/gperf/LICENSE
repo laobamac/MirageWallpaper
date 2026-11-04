@@ -1,0 +1,5 @@
+GNU gperf 3.1 upstream source is licensed under GNU GPL version 3 or any later version (SPDX: GPL-3.0-or-later).
+
+The pinned upstream archive contains the complete license text in COPYING; the port installs that file as share/gperf/copyright.
+
+The CMake port recipe, CMakeLists.txt, config.h.in, and compatibility patch are derived from the Microsoft/vcpkg gperf 3.1#7 port, whose repository is MIT-licensed. The recipe does not relicense the upstream gperf source.

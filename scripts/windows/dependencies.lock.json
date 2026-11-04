@@ -1,0 +1,54 @@
+{
+  "schema": 1,
+  "python": "3.13",
+  "python_packages": ["cmake==4.4.4", "ninja==1.13.2", "aqtinstall==3.3.0", "py7zr==1.1.4", "requests==2.34.2"],
+  "qt": {"version": "6.8.3", "arch": "win64_msvc2022_64", "directory": "msvc2022_64", "modules": ["qtwebengine", "qtwebchannel", "qtpositioning", "qtserialport", "qtimageformats"]},
+  "llvm": {
+    "version": "21.1.8",
+    "url": "https://github.com/llvm/llvm-project/releases/download/llvmorg-21.1.8/clang+llvm-21.1.8-x86_64-pc-windows-msvc.tar.xz",
+    "sha256": "749d22f565fcd5718dbed06512572d0e5353b502c03fe1f7f17ee8b8aca21a47"
+  },
+  "vcpkg": {
+    "version": "2026.10.16",
+    "repository": "https://github.com/microsoft/vcpkg.git",
+    "baseline": "9eec002df1cd109f8f104cd966a763daf9751489",
+    "tool_version": "2026-09-26",
+    "tool_url": "https://github.com/microsoft/vcpkg-tool/releases/download/2026-09-26/vcpkg.exe",
+    "tool_sha256": "2a4ae1467b9e797964c60c919d057b9e5dc1ec03f4b9632c1150026db25201f2"
+  },
+  "sevenzip": {
+    "version": "26.04",
+    "url": "https://github.com/ip7z/7zip/releases/download/26.04/7zr.exe",
+    "sha256": "256feca8e274e5da655e2a284fabafd9f554365eb164862089dacd4e8276d282"
+  },
+  "windows_sdk": {"package_version": "10.0.28000.2705", "version": "10.0.28000.0"},
+  "sdk_cpp": {
+    "directory": "microsoft.windows.sdk.cpp",
+    "url": "https://api.nuget.org/v3-flatcontainer/microsoft.windows.sdk.cpp/10.0.28000.2705/microsoft.windows.sdk.cpp.10.0.28000.2705.nupkg",
+    "sha256": "a74ca8f9af98bd61925d9e2932ad98f746306123167b8f0bba99cd9ea9f03807"
+  },
+  "sdk_x64": {
+    "directory": "microsoft.windows.sdk.cpp.x64",
+    "url": "https://api.nuget.org/v3-flatcontainer/microsoft.windows.sdk.cpp.x64/10.0.28000.2705/microsoft.windows.sdk.cpp.x64.10.0.28000.2705.nupkg",
+    "sha256": "bf892c1048059984850a1ed79bb81c0243478c6d7472d637c90565ab5c836013"
+  },
+  "dotnet": {
+    "version": "10.0.403",
+    "directory": "dotnet10",
+    "url": "https://builds.dotnet.microsoft.com/dotnet/Sdk/10.0.403/dotnet-sdk-10.0.403-win-x64.zip",
+    "sha256": "f398979a9cac2dba760771c4e01f16e431dcd6bcfb2213e3e8f5b3d354095cc0",
+    "sha512": "7a114c318fa7f1d9822991b534b2814d0e78386ceda816b371f5141acefe741d87ccb606ede06cadac8f9ac5070e32b708a67bbd1619ff5e5a7858a27874ef48"
+  },
+  "mpv": {
+    "version": "20261021-e471496c56",
+    "directory": "mpv",
+    "build_recipe_commit": "1f8d2e76255abc48f0456d9be99b4cab9c6566e6",
+    "mpv_source_commit": "e471496c56f0f49c133bd88b50aed62b845f1909",
+    "ffmpeg_source_commit": "9a861e9687d30e657d59521817cad18405995983",
+    "license": "mpv: GPL-2.0-or-later, this distribution elects GPL-3.0; FFmpeg: GPL-3.0",
+    "distribution_status": "blocked-incomplete-third-party-license-and-corresponding-source-audit",
+    "format": "7z",
+    "url": "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20261021/mpv-dev-x86_64-20261021-git-e471496c56.7z",
+    "sha256": "efc719eff3dc5954b4a5efc800632808bcec01cc9034940dd14e5eb7fe9ea633"
+  }
+}
