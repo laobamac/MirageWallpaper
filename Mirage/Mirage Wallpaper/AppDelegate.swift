@@ -24,6 +24,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var importOpenPanel: NSOpenPanel!
     private var developerLogWindowController: DeveloperLogWindowController?
     private var developerLogWindowWasOpened = false
+    private var isPreparingToTerminate = false
     private var localizationObserver: NSObjectProtocol?
     private var openWindowObserver: NSObjectProtocol?
     private var dynamicLockScreenSessionObservers: [NSObjectProtocol] = []
@@ -254,6 +255,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !isPreparingToTerminate else { return .terminateLater }
+        isPreparingToTerminate = true
+        WallpaperFollowService.shared.stop()
+        PlaylistManager.shared.stopAllRotators()
+        ScreenSaverManager.shared.flushConfigurationUpdates()
+        DynamicLockScreenManager.shared.flushConfigurationUpdates()
+        ScreenSaverDynamicLockScreenManager.shared.applicationWillTerminate()
+        DesktopOverrideService.shared.finalizeForApplicationTermination()
+        DesktopOverrideService.shared.prepareForApplicationTermination {
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         WallpaperFollowService.shared.stop()
         WallpaperBakeService.shared.cancelAll()
@@ -265,8 +281,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         wallpaperViewModel.flushPendingSaves()
         ScreenSaverManager.shared.flushConfigurationUpdates()
         DynamicLockScreenManager.shared.flushConfigurationUpdates()
-        ScreenSaverDynamicLockScreenManager.shared.applicationWillTerminate()
-        DesktopOverrideService.shared.finalizeForApplicationTermination()
+        if !isPreparingToTerminate {
+            ScreenSaverDynamicLockScreenManager.shared.applicationWillTerminate()
+            DesktopOverrideService.shared.finalizeForApplicationTermination()
+            DesktopOverrideService.shared.prepareForApplicationTermination {}
+        }
         // This method returns directly into process exit, so the renderers must
         // be reaped here and now. Anything deferred would never run and a hung
         // renderer would outlive the app as an orphan still drawing on the
@@ -275,11 +294,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         SteamServiceManager.shared.shutdown()
         mobileDevicesViewModel.stopPairing()
-
-        // Same constraint: a transient override is one Mirage only took for
-        // tint consistency, so the user's own picture goes back synchronously
-        // before this returns. A persistent override is left in place.
-        DesktopOverrideService.shared.restoreIfTransient()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
