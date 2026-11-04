@@ -10,6 +10,12 @@ using MirageSteamService;
 using SteamKit2;
 using SteamKit2.Authentication;
 
+if (args is ["--self-test"])
+{
+    Environment.ExitCode = WorkshopSelfTests.Run();
+    return;
+}
+
 var writer = new ProtocolWriter();
 await using var session = new SteamSession(writer);
 var downloader = new WorkshopDownloader(session, writer);

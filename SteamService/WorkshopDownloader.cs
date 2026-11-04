@@ -17,6 +17,7 @@ internal sealed class WorkshopDownloader
     internal sealed record DownloadResult(long TotalBytes, string OutputPath);
 
     private static readonly SemaphoreSlim GlobalChunkSlots = new(8, 8);
+    private static readonly ConcurrentDictionary<string, byte> ActiveInstallations = new(WorkshopStorage.PathComparer);
     private readonly SteamSession session;
     private readonly ProtocolWriter writer;
 
@@ -28,30 +29,39 @@ internal sealed class WorkshopDownloader
 
     public async Task<DownloadResult> DownloadAsync(string taskId, ulong workshopId, string outputRoot, CancellationToken cancellationToken)
     {
-        const int maxAttempts = 4;
-        for (var attempt = 1; ; attempt++)
+        var final = Path.Combine(Path.GetFullPath(outputRoot), workshopId.ToString());
+        if (!ActiveInstallations.TryAdd(final, 0)) throw new ServiceException("DUPLICATE_DOWNLOAD", "This Workshop installation already has an active download.");
+        try
         {
-            try
+            const int maxAttempts = 4;
+            for (var attempt = 1; ; attempt++)
             {
-                await session.WaitForOnlineAsync(cancellationToken).ConfigureAwait(false);
-                return await DownloadOnceAsync(taskId, workshopId, outputRoot, cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    await session.WaitForOnlineAsync(cancellationToken).ConfigureAwait(false);
+                    return await DownloadOnceAsync(taskId, workshopId, outputRoot, cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception error) when (attempt < maxAttempts && IsRetryable(error))
+                {
+                    writer.DownloadState(taskId, "resolving", message: "Retrying Steam download request.", errorCode: "DOWNLOAD_RETRYING");
+                    await session.WaitForOnlineAsync(cancellationToken).ConfigureAwait(false);
+                    await Task.Delay(TimeSpan.FromMilliseconds(500 * attempt * attempt), cancellationToken).ConfigureAwait(false);
+                }
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception error) when (attempt < maxAttempts && IsRetryable(error))
-            {
-                writer.DownloadState(taskId, "resolving", message: "Retrying Steam download request.", errorCode: "DOWNLOAD_RETRYING");
-                await session.WaitForOnlineAsync(cancellationToken).ConfigureAwait(false);
-                await Task.Delay(TimeSpan.FromMilliseconds(500 * attempt * attempt), cancellationToken).ConfigureAwait(false);
-            }
+        }
+        finally
+        {
+            ActiveInstallations.TryRemove(final, out _);
         }
     }
 
     private async Task<DownloadResult> DownloadOnceAsync(string taskId, ulong workshopId, string outputRoot, CancellationToken cancellationToken)
     {
-        if (!OperatingSystem.IsMacOS()) throw new PlatformNotSupportedException();
+        if (!(OperatingSystem.IsMacOS() || OperatingSystem.IsLinux() || OperatingSystem.IsWindows())) throw new PlatformNotSupportedException();
         writer.DownloadState(taskId, "resolving");
         var detailsRequest = new CPublishedFile_GetDetails_Request { appid = SteamSession.AppId, includechildren = true };
         detailsRequest.publishedfileids.Add(workshopId);
@@ -101,28 +111,14 @@ internal sealed class WorkshopDownloader
         if (manifest.Files == null || manifest.Files.Count == 0) throw new ServiceException("EMPTY_MANIFEST", "The Workshop content manifest is empty.");
 
         var root = Path.GetFullPath(outputRoot);
-        Directory.CreateDirectory(root);
-        var stagingParent = Path.Combine(root, ".staging");
-        var staging = Path.Combine(stagingParent, workshopId.ToString());
-        var final = Path.Combine(root, workshopId.ToString());
-        var backup = final + ".previous";
-        Directory.CreateDirectory(stagingParent);
-        cancellationToken.ThrowIfCancellationRequested();
-        if (!Directory.Exists(final) && Directory.Exists(backup)) Directory.Move(backup, final);
-        if (!Directory.Exists(staging))
-        {
-            if (Directory.Exists(final)) CopyDirectory(final, staging, cancellationToken);
-            else Directory.CreateDirectory(staging);
-        }
-        ValidateNoLinks(staging, cancellationToken);
-
+        var stagingPath = Path.Combine(root, ".staging", workshopId.ToString());
+        var manifestPaths = WorkshopStorage.ResolveManifestPaths(stagingPath, manifest.Files);
         var files = manifest.Files.Where(file => !file.Flags.HasFlag(EDepotFileFlag.Directory)).ToArray();
-        var resolvedFiles = new List<(DepotManifest.FileData File, string Path)>();
-        foreach (var file in files)
-        {
-            if (file.Flags.HasFlag(EDepotFileFlag.Symlink)) throw new ServiceException("UNSUPPORTED_SYMLINK", "The content manifest contains a symbolic link.");
-            resolvedFiles.Add((file, ResolveContainedPath(staging, file.FileName)));
-        }
+        foreach (var file in files) ValidateChunkLayout(file);
+        var paths = WorkshopStorage.Prepare(root, workshopId, cancellationToken);
+        var staging = paths.Staging;
+        var final = paths.Final;
+        var resolvedFiles = files.Select(file => (File: file, Path: manifestPaths[file.FileName])).ToArray();
 
         var needed = new ConcurrentQueue<(DepotManifest.FileData File, DepotManifest.ChunkData Chunk, string Path)>();
         long totalCompressed = 0;
@@ -130,7 +126,11 @@ internal sealed class WorkshopDownloader
         foreach (var entry in resolvedFiles)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            Directory.CreateDirectory(Path.GetDirectoryName(entry.Path)!);
+            WorkshopStorage.CreateDirectory(Path.GetDirectoryName(entry.Path)!);
+            WorkshopStorage.ValidateAncestors(entry.Path);
+            // Truncating or extending a pre-existing name must never touch a
+            // second directory entry that shares the same file content.
+            if (File.Exists(entry.Path)) WorkshopStorage.ValidatePathIsNotLink(entry.Path);
             var existingLength = File.Exists(entry.Path) ? new FileInfo(entry.Path).Length : -1;
             if (existingLength != (long)entry.File.TotalSize)
             {
@@ -155,26 +155,18 @@ internal sealed class WorkshopDownloader
         progress.Stop();
 
         writer.DownloadState(taskId, "validating", totalCompressed, totalCompressed);
-        ValidateNoLinks(staging, cancellationToken);
+        WorkshopStorage.ValidateNoLinks(staging, cancellationToken);
         foreach (var entry in resolvedFiles)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            using var stream = new FileStream(entry.Path, FileMode.Open, FileAccess.Read, FileShare.Read);
-            foreach (var chunk in entry.File.Chunks)
-            {
-                if (!IsChunkValid(stream, chunk)) throw new ServiceException("VALIDATION_FAILED", entry.File.FileName);
-            }
-            if (entry.File.Flags.HasFlag(EDepotFileFlag.Executable))
-            {
-                var mode = File.GetUnixFileMode(entry.Path);
-                File.SetUnixFileMode(entry.Path, mode | UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute);
-            }
+            ValidateFile(entry.File, entry.Path, cancellationToken);
+            ApplyExecutableMode(entry.File, entry.Path);
         }
 
-        RemoveUnlistedFiles(staging, resolvedFiles.Select(item => item.Path).ToHashSet(StringComparer.Ordinal));
+        WorkshopStorage.RemoveUnlistedFiles(staging, resolvedFiles.Select(item => item.Path).ToHashSet(WorkshopStorage.PathComparer), cancellationToken);
         var project = Path.Combine(staging, "project.json");
         if (!File.Exists(project)) throw new ServiceException("PROJECT_JSON_MISSING", "Downloaded content does not contain project.json.");
-        Install(staging, final, cancellationToken);
+        WorkshopStorage.Install(staging, final, cancellationToken);
         return new DownloadResult(totalCompressed, final);
     }
 
@@ -201,6 +193,8 @@ internal sealed class WorkshopDownloader
                         try
                         {
                             var written = await cdn.DownloadDepotChunkAsync(depotId, work.Chunk, server.Server, buffer, depotKey, cdnAuthToken: server.Token).WaitAsync(cancellationToken).ConfigureAwait(false);
+                            if (written != work.Chunk.UncompressedLength) throw new ServiceException("VALIDATION_FAILED", work.File.FileName);
+                            WorkshopStorage.ValidateAncestors(work.Path);
                             using var handle = File.OpenHandle(work.Path, FileMode.Open, FileAccess.Write, FileShare.ReadWrite, FileOptions.Asynchronous | FileOptions.RandomAccess);
                             await RandomAccess.WriteAsync(handle, buffer.AsMemory(0, written), (long)work.Chunk.Offset, cancellationToken).ConfigureAwait(false);
                             transfer.Complete();
@@ -246,7 +240,8 @@ internal sealed class WorkshopDownloader
     private static bool IsChunkValid(FileStream stream, DepotManifest.ChunkData chunk)
     {
         if (chunk.UncompressedLength == 0) return true;
-        if ((ulong)stream.Length < chunk.Offset + chunk.UncompressedLength) return false;
+        var length = (ulong)stream.Length;
+        if (chunk.Offset > length || chunk.UncompressedLength > length - chunk.Offset) return false;
         var buffer = new byte[chunk.UncompressedLength];
         stream.Position = (long)chunk.Offset;
         var read = 0;
@@ -259,98 +254,52 @@ internal sealed class WorkshopDownloader
         return DepotChunk.AdlerHash(buffer) == chunk.Checksum;
     }
 
-    private static string ResolveContainedPath(string root, string relative)
+    internal static void ValidateChunkLayout(DepotManifest.FileData file)
     {
-        var normalized = relative.Replace('\\', Path.DirectorySeparatorChar).Replace('/', Path.DirectorySeparatorChar);
-        if (Path.IsPathRooted(normalized)) throw new ServiceException("UNSAFE_PATH", "The content manifest contains an absolute path.");
-        var path = Path.GetFullPath(Path.Combine(root, normalized));
-        var prefix = Path.GetFullPath(root) + Path.DirectorySeparatorChar;
-        if (!path.StartsWith(prefix, StringComparison.Ordinal)) throw new ServiceException("UNSAFE_PATH", "The content manifest contains a path outside the staging directory.");
-        return path;
+        if (file.TotalSize > long.MaxValue) throw new ServiceException("INVALID_MANIFEST", "The content manifest contains an oversized file.");
+        ulong offset = 0;
+        foreach (var chunk in file.Chunks.OrderBy(chunk => chunk.Offset))
+        {
+            if (chunk.Offset != offset || chunk.UncompressedLength > int.MaxValue || chunk.UncompressedLength > file.TotalSize - offset)
+                throw new ServiceException("INVALID_MANIFEST", "The content manifest contains invalid chunk ranges.");
+            offset += chunk.UncompressedLength;
+        }
+        if (offset != file.TotalSize) throw new ServiceException("INVALID_MANIFEST", "The content manifest does not cover the complete file.");
     }
 
-    private static void CopyDirectory(string source, string destination, CancellationToken cancellationToken)
-    {
-        ValidatePathIsNotLink(source);
-        Directory.CreateDirectory(destination);
-        var pending = new Stack<(string Source, string Destination)>();
-        pending.Push((source, destination));
-        while (pending.TryPop(out var current))
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            foreach (var entry in Directory.EnumerateFileSystemEntries(current.Source))
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                ValidatePathIsNotLink(entry);
-                var target = Path.Combine(current.Destination, Path.GetFileName(entry));
-                if (Directory.Exists(entry))
-                {
-                    Directory.CreateDirectory(target);
-                    pending.Push((entry, target));
-                }
-                else
-                {
-                    File.Copy(entry, target, true);
-                }
-            }
-        }
-    }
-
-    private static void ValidateNoLinks(string root, CancellationToken cancellationToken)
-    {
-        ValidatePathIsNotLink(root);
-        var pending = new Stack<string>();
-        pending.Push(root);
-        while (pending.TryPop(out var directory))
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            foreach (var entry in Directory.EnumerateFileSystemEntries(directory))
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                ValidatePathIsNotLink(entry);
-                if (Directory.Exists(entry)) pending.Push(entry);
-            }
-        }
-    }
-
-    private static void ValidatePathIsNotLink(string path)
-    {
-        if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
-        {
-            throw new ServiceException("UNSAFE_PATH", "The content directory contains a symbolic link.");
-        }
-    }
-
-    private static void RemoveUnlistedFiles(string root, HashSet<string> allowed)
-    {
-        foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
-        {
-            if (!allowed.Contains(Path.GetFullPath(file))) File.Delete(file);
-        }
-        foreach (var directory in Directory.EnumerateDirectories(root, "*", SearchOption.AllDirectories).OrderByDescending(path => path.Length))
-        {
-            if (!Directory.EnumerateFileSystemEntries(directory).Any()) Directory.Delete(directory);
-        }
-    }
-
-    private static void Install(string staging, string final, CancellationToken cancellationToken)
+    internal static void ValidateFile(DepotManifest.FileData file, string path, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var backup = final + ".previous";
-        if (Directory.Exists(backup)) Directory.Delete(backup, true);
-        if (Directory.Exists(final)) Directory.Move(final, backup);
-        try
+        WorkshopStorage.ValidateAncestors(path);
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        if ((ulong)stream.Length != file.TotalSize) throw new ServiceException("VALIDATION_FAILED", file.FileName);
+        foreach (var chunk in file.Chunks)
         {
-            Directory.Move(staging, final);
-            if (Directory.Exists(backup))
-            {
-                try { Directory.Delete(backup, true); } catch { }
-            }
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!IsChunkValid(stream, chunk)) throw new ServiceException("VALIDATION_FAILED", file.FileName);
         }
-        catch
+        if (file.FileHash is { Length: > 0 })
         {
-            if (!Directory.Exists(final) && Directory.Exists(backup)) Directory.Move(backup, final);
-            throw;
+            stream.Position = 0;
+            using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA1);
+            var buffer = new byte[64 * 1024];
+            int read;
+            while ((read = stream.Read(buffer)) != 0)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                hash.AppendData(buffer.AsSpan(0, read));
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!hash.GetHashAndReset().AsSpan().SequenceEqual(file.FileHash)) throw new ServiceException("VALIDATION_FAILED", file.FileName);
+        }
+    }
+
+    internal static void ApplyExecutableMode(DepotManifest.FileData file, string path)
+    {
+        if (!OperatingSystem.IsWindows() && file.Flags.HasFlag(EDepotFileFlag.Executable))
+        {
+            var mode = File.GetUnixFileMode(path);
+            File.SetUnixFileMode(path, mode | UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute);
         }
     }
 }
