@@ -14,6 +14,11 @@ foreach (filepath ${H_FILES})
     list(APPEND sources_files ${filename})
 endforeach (filepath)
 
+# Windows 可执行文件图标（资源管理器/任务栏显示用）
+if (WIN32)
+    list(APPEND sources_files MirageQt.rc MirageQt.ico)
+endif ()
+
 #遍历所有qml文件
 set(SINGLETON_FILES "Theme.qml" "FilterData.qml" "Store.qml")
 file(GLOB_RECURSE QML_PATHS Qml/*.qml Qml/*.js qmldir)

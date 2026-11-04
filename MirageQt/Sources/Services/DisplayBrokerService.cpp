@@ -110,9 +110,17 @@ void DisplayBrokerService::pollWindowState() {
         }
     }
     const QString fullscreenDevice = fullscreen ? QString::fromWCharArray(monitorInfo.szDevice) : QString();
+    // 被最大化的前台窗口整块盖住时也算“看不见”：与全屏一样降到背景帧率，
+    // 否则壁纸会在其它应用后面继续按前台帧率抢 GPU。
+    const bool maximized = focusedApplication && IsZoomed(foreground) != FALSE;
+    const QString coveredDevice = (fullscreen || maximized)
+                                      ? QString::fromWCharArray(monitorInfo.szDevice)
+                                      : QString();
     for (auto it = m_screens.constBegin(); it != m_screens.constEnd(); ++it) {
         quint32 flags = focusedApplication ? 0x2u : 0u;
         if (fullscreen && fullscreenOutputMatchesStableId(it.value(), fullscreenDevice)) flags |= 0x8u;
+        if ((fullscreen || maximized) && fullscreenOutputMatchesStableId(it.value(), coveredDevice))
+            flags |= 0x10u;
         if (m_windowFlags.contains(it.value()) && m_windowFlags.value(it.value()) == flags) continue;
         m_windowFlags.insert(it.value(), flags);
         emit windowStateChanged(it.value(), flags);

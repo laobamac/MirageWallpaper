@@ -1,0 +1,3 @@
+// Windows 可执行文件图标资源。CMake 在 WIN32 下把本文件加入 MirageQt 目标，
+// MSVC/rc 会把它编译进 exe；没有它时资源管理器只能显示默认图标。
+IDI_ICON1 ICON "MirageQt.ico"

@@ -343,6 +343,9 @@ void PlaybackController::muteWallpapers() {
 namespace {
 constexpr quint32 kWindowFocusLost = 0x2u;
 constexpr quint32 kWindowFullscreen = 0x8u;
+constexpr quint32 kWindowCovered    = 0x10u;
+// 背景遮挡时的帧率上限：画面不可见，没必要按前台帧率出图。
+constexpr int     kBackgroundFps    = 10;
 } // namespace
 
 PlaybackController::PlaybackAction PlaybackController::strongestActionForRules(
@@ -378,13 +381,14 @@ PlaybackController::PlaybackAction PlaybackController::actionForWindowState(quin
 
 void PlaybackController::recomputePlaybackActions() {
     for (const int screen : enabledDisplayScreens()) {
-        applyWindowAction(screen, actionForWindowState(m_lastWindowFlags.value(screen, 0u)));
+        const quint32 flags = m_lastWindowFlags.value(screen, 0u);
+        applyWindowAction(screen, actionForWindowState(flags), flags);
     }
 }
 
 // 策略 stop 只记录并恢复此前仍在运行的屏幕；手动停止或显式应用会清除此
 // 记录，后续设置/系统状态重算因此不会自动复活用户停止的壁纸。
-void PlaybackController::applyWindowAction(int screen, PlaybackAction action) {
+void PlaybackController::applyWindowAction(int screen, PlaybackAction action, quint32 flags) {
     if (action == PlaybackAction::Stop) {
         if (!m_windowStoppedScreens.contains(screen) && m_renderer->isRunningOnScreen(screen)) {
             m_windowStoppedScreens.insert(screen);
@@ -400,6 +404,11 @@ void PlaybackController::applyWindowAction(int screen, PlaybackAction action) {
             m_renderer->render(item, screen, renderOptionsFor(item), &error);
         }
     }
+
+    const int configuredFps = m_settings->settings().fps;
+    m_renderer->setFps((flags & kWindowCovered) != 0u ? qMin(configuredFps, kBackgroundFps)
+                                                      : configuredFps,
+                       screen);
 
     const bool windowPaused = action == PlaybackAction::Pause;
     const bool windowMuted = action == PlaybackAction::Mute;
@@ -425,7 +434,7 @@ void PlaybackController::handleWindowState(const QString& stableId, quint32 flag
     if (screen < 0) return;
 
     m_lastWindowFlags.insert(screen, flags);
-    applyWindowAction(screen, actionForWindowState(flags));
+    applyWindowAction(screen, actionForWindowState(flags), flags);
 }
 
 // Unknown system samples retain the last known value so transient API failures

@@ -90,7 +90,7 @@ private:
     void flushPropertyCommands();
     PlaybackAction actionForWindowState(quint32 flags) const;
     void recomputePlaybackActions();
-    void applyWindowAction(int screen, PlaybackAction action);
+    void applyWindowAction(int screen, PlaybackAction action, quint32 flags);
 
     GlobalSettingsService* m_settings;
     RendererController* m_renderer;
