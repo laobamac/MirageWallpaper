@@ -197,7 +197,15 @@ void SteamServiceManager::handleFinished(int /*exitCode*/, QProcess::ExitStatus 
         }
     }
     m_pendingRequests.clear();
+    // 服务进程退出后，进行中的下载不可能再收到任何进度事件。必须在这里显式
+    // 标成失败，否则 UI 会永远停在"下载中"，只剩一个空进度条。
+    const QStringList orphanedDownloads = m_downloadHandlers.keys();
     m_downloadHandlers.clear();
+    for (const QString& taskId : orphanedDownloads) {
+        emit downloadStateChanged(taskId, DownloadStateKind::Failed, 0, 0, 0.0, QString(),
+                                  m_stopping ? QStringLiteral("下载已取消")
+                                             : QStringLiteral("Steam 服务已退出，下载中断"));
+    }
     if (m_stopping) {
         emit serviceStateChanged(ServiceState::Stopped);
         return;
@@ -389,6 +397,11 @@ void SteamServiceManager::handleDownloadEvent(const QJsonObject& event) {
         result.kind = DownloadStateKind::Downloading;
     } else if (state == QLatin1String("resolving")) {
         result.kind = DownloadStateKind::Resolving;
+    } else if (state == QLatin1String("validating")) {
+        // 校验阶段仍然是同一个下载任务在占用槽位；落到默认的 Queued 会让
+        // UI 显示"等待可用下载槽"，也会让队列误判该任务已经结束。
+        result.kind   = DownloadStateKind::Downloading;
+        result.percent = 100.0;
     } else if (state == QLatin1String("completed")) {
         result.kind = DownloadStateKind::Completed;
         m_downloadHandlers.erase(it);

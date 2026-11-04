@@ -7,7 +7,7 @@ import QtQuick.Shapes
 Item {
     id: card
     required property var wallpaper
-    property bool selected: Store.selectedId === wallpaper.id
+    property bool selected: Store.selectedId === (wallpaper ? wallpaper.id : "")
     property bool showTitle: true
     property bool workshop: false
     signal contextRequested(real x, real y)
@@ -20,7 +20,7 @@ Item {
         clip: true
         Image {
             anchors.fill: parent
-            source: card.wallpaper.preview || ""
+            source: (card.wallpaper || {}).preview || ""
             fillMode: card.workshop ? Image.PreserveAspectCrop : Image.PreserveAspectFit
             asynchronous: true
             visible: !animation.visible
@@ -28,7 +28,7 @@ Item {
         AnimatedImage {
             id: animation
             anchors.fill: parent
-            source: String(card.wallpaper.preview || "").toLowerCase().endsWith(".gif") ? card.wallpaper.preview : ""
+            source: String((card.wallpaper || {}).preview || "").toLowerCase().endsWith(".gif") ? card.wallpaper.preview : ""
             fillMode: card.workshop ? Image.PreserveAspectCrop : Image.PreserveAspectFit
             visible: source.toString() !== ""
             playing: visible && (hover.hovered || card.selected || Store.preferences.animated === 1)
@@ -38,9 +38,9 @@ Item {
             anchors.centerIn: parent
             width: 32
             height: 32
-            name: card.wallpaper.type === "video" ? "play" : "image"
+            name: (card.wallpaper || {}).type === "video" ? "play" : "image"
             color: Theme.secondary
-            visible: !card.wallpaper.preview
+            visible: !(card.wallpaper || {}).preview
         }
         Rectangle {
             anchors.left: parent.left

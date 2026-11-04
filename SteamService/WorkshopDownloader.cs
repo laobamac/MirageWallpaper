@@ -18,6 +18,11 @@ internal sealed class WorkshopDownloader
 
     private static readonly SemaphoreSlim GlobalChunkSlots = new(8, 8);
     private static readonly ConcurrentDictionary<string, byte> ActiveInstallations = new(WorkshopStorage.PathComparer);
+    // 单个 CDN 请求必须有上限：内容服务器被墙/不可达时连接会一直挂着，
+    // 下载任务就会永远停在“下载中、0%”。超时走既有重试路径，最终给出明确失败。
+    private static readonly TimeSpan ChunkTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan ManifestTimeout = TimeSpan.FromSeconds(90);
+    private static readonly TimeSpan ServerTimeout = TimeSpan.FromSeconds(30);
     private readonly SteamSession session;
     private readonly ProtocolWriter writer;
 
@@ -90,9 +95,11 @@ internal sealed class WorkshopDownloader
             string? serverHost = null;
             try
             {
-                var serverInfo = await session.GetDownloadServerAsync(depotId, attempt, cancellationToken).ConfigureAwait(false);
+                var serverInfo = await session.GetDownloadServerAsync(depotId, attempt, cancellationToken)
+                    .WaitAsync(ServerTimeout, cancellationToken).ConfigureAwait(false);
                 serverHost = serverInfo.Server.Host;
-                manifest = await cdn.DownloadManifestAsync(depotId, details.hcontent_file, requestCode, serverInfo.Server, depotKeyResult.DepotKey, cdnAuthToken: serverInfo.Token).WaitAsync(cancellationToken).ConfigureAwait(false);
+                manifest = await cdn.DownloadManifestAsync(depotId, details.hcontent_file, requestCode, serverInfo.Server, depotKeyResult.DepotKey, cdnAuthToken: serverInfo.Token)
+                    .WaitAsync(ManifestTimeout, cancellationToken).ConfigureAwait(false);
                 session.ReportDownloadServerSuccess(serverHost);
                 break;
             }
@@ -185,14 +192,16 @@ internal sealed class WorkshopDownloader
                     string? serverHost = null;
                     try
                     {
-                        var server = await session.GetDownloadServerAsync(depotId, workerIndex + attempt, cancellationToken).ConfigureAwait(false);
+                        var server = await session.GetDownloadServerAsync(depotId, workerIndex + attempt, cancellationToken)
+                            .WaitAsync(ServerTimeout, cancellationToken).ConfigureAwait(false);
                         serverHost = server.Server.Host;
                         var buffer = new byte[work.Chunk.UncompressedLength];
                         using var transfer = progress.BeginTransfer(work.Chunk.CompressedLength);
                         DownloadContext.Current.Value = transfer;
                         try
                         {
-                            var written = await cdn.DownloadDepotChunkAsync(depotId, work.Chunk, server.Server, buffer, depotKey, cdnAuthToken: server.Token).WaitAsync(cancellationToken).ConfigureAwait(false);
+                            var written = await cdn.DownloadDepotChunkAsync(depotId, work.Chunk, server.Server, buffer, depotKey, cdnAuthToken: server.Token)
+                                .WaitAsync(ChunkTimeout, cancellationToken).ConfigureAwait(false);
                             if (written != work.Chunk.UncompressedLength) throw new ServiceException("VALIDATION_FAILED", work.File.FileName);
                             WorkshopStorage.ValidateAncestors(work.Path);
                             using var handle = File.OpenHandle(work.Path, FileMode.Open, FileAccess.Write, FileShare.ReadWrite, FileOptions.Asynchronous | FileOptions.RandomAccess);

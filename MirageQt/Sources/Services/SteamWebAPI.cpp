@@ -298,7 +298,10 @@ QVector<WorkshopItem> SteamWebAPI::parsePublishedFiles(const QJsonObject& respon
             const QString tag = tagName(tagValue);
             const QString lower = tag.toLower();
             if (lower == "scene" || lower == "web" || lower == "video") {
-                item.wallpaperType = tag;
+                // Steam 返回的 tag 是首字母大写的（"Scene"/"Video"/"Web"），
+                // 而 UI 侧按小写 key 查类型标签，这里统一归一化，避免所有卡片
+                // 都退回"应用程序"兜底。
+                item.wallpaperType = lower;
             } else if (lower == "everyone" || lower == "questionable" || lower == "mature") {
                 item.ageRating = tag;
             } else if (!tag.isEmpty() &&

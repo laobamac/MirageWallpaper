@@ -1,5 +1,7 @@
 #include "Services/WorkshopViewModel.h"
 
+#include <QDebug>
+
 #include "Services/Paths.h"
 #include "Services/SteamServiceManager.h"
 
@@ -511,6 +513,15 @@ void WorkshopViewModel::processDownloadQueue() {
 
     for (WorkshopDownloadTask& task : m_downloadQueue) {
         if (task.state.kind != DownloadStateKind::Queued) continue;
+        // 服务端的所有下载命令都要求已认证会话。没登录就发过去只会收到
+        // NOT_AUTHENTICATED，所以这里直接给出可操作的提示，而不是让任务挂住。
+        if (m_steamService == nullptr || ! m_steamService->isLoggedIn()) {
+            task.state = DownloadState();
+            task.state.kind = DownloadStateKind::Failed;
+            task.state.message = QStringLiteral("请先登录 Steam 账号后再下载");
+            emit downloadQueueChanged();
+            continue;
+        }
         task.state.kind = DownloadStateKind::Starting;
         task.state.message = QStringLiteral("正在连接 Steam 服务…");
         task.startedAt = QDateTime::currentDateTime();
@@ -537,6 +548,11 @@ void WorkshopViewModel::handleDownloadState(const QString& workshopId, DownloadS
     if (totalBytes > 0) {
         state.percent = static_cast<double>(receivedBytes) * 100.0 / static_cast<double>(totalBytes);
     }
+    // 下载卡住时唯一可靠的证据就是这条状态流：记录下来，便于用户反馈后定位到
+    // 是停在解析、授权还是内容服务器。
+    qInfo().noquote() << "[Download]" << workshopId << "kind=" << int(kind) << "bytes="
+                      << receivedBytes << "/" << totalBytes << "bps=" << qint64(bytesPerSecond)
+                      << message;
     for (int i = 0; i < m_downloadQueue.size(); ++i) {
         WorkshopDownloadTask& task = m_downloadQueue[i];
         if (task.workshopItem.publishedFileId != workshopId) continue;

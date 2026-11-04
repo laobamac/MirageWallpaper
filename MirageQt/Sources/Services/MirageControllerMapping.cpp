@@ -245,7 +245,7 @@ QVariantMap MirageController::workshopItemMap(const WorkshopItem& item) const {
         {QStringLiteral("description"), item.description},
         {QStringLiteral("preview"), item.previewImageUrl},
         {QStringLiteral("tags"), item.tags},
-        {QStringLiteral("type"), item.isPreset() ? QStringLiteral("preset") : item.wallpaperType},
+        {QStringLiteral("type"), item.isPreset() ? QStringLiteral("preset") : item.wallpaperType.toLower()},
         {QStringLiteral("typeLabel"), item.displayTypeName()},
         {QStringLiteral("rating"), item.ageRating},
         {QStringLiteral("subscriptions"), item.formattedSubscriptions()},

@@ -29,6 +29,55 @@
 #include <QQmlContext>
 #include <QtWebEngineQuick/qtwebenginequickglobal.h>
 
+#include <QDateTime>
+#include <QFile>
+#include <QMutex>
+#include <QTextStream>
+#include <cstdio>
+
+namespace {
+
+// GUI 子系统没有控制台，Qt 与渲染器/Steam 服务的诊断信息默认无处可去。
+// 统一落一份日志到缓存目录，便于用户反馈问题时定位（也覆盖服务进程的
+// stderr 与渲染器崩溃前的最后一条诊断）。
+void InstallFileLogger() {
+    static QMutex mutex;
+    static QFile* file = nullptr;
+    static QString path;
+    path = Mirage::Paths::cacheDir() + QStringLiteral("/mirageqt.log");
+    file = new QFile(path);
+    if (! file->open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
+        qWarning().noquote() << "[Log] Cannot open log file:" << path;
+        delete file;
+        file = nullptr;
+        return;
+    }
+    qInstallMessageHandler([](QtMsgType type, const QMessageLogContext& context, const QString& message) {
+        const char* level = "info";
+        switch (type) {
+        case QtDebugMsg: level = "debug"; break;
+        case QtInfoMsg: level = "info"; break;
+        case QtWarningMsg: level = "warning"; break;
+        case QtCriticalMsg: level = "critical"; break;
+        case QtFatalMsg: level = "fatal"; break;
+        }
+        const QString line = QStringLiteral("%1 [%2] %3%4\n")
+                                 .arg(QDateTime::currentDateTime().toString(Qt::ISODateWithMs), QLatin1String(level),
+                                      context.category ? QStringLiteral("%1: ").arg(QLatin1String(context.category))
+                                                       : QString(),
+                                      message);
+        QMutexLocker lock(&mutex);
+        if (file != nullptr) {
+            file->write(line.toUtf8());
+            file->flush();
+        }
+        std::fputs(line.toLocal8Bit().constData(), stderr);
+    });
+    qInfo().noquote() << "[Log] Writing diagnostics to" << path;
+}
+
+} // namespace
+
 int main(int argc, char** argv) {
     for (int index = 1; index < argc; ++index) {
         if (std::strcmp(argv[index], "--self-test") == 0) {
@@ -75,6 +124,7 @@ int main(int argc, char** argv) {
         Mirage::Paths::setTestRoot(testDirectory->path());
         QTimer::singleShot(runMilliseconds, &app, &QCoreApplication::quit);
     }
+    InstallFileLogger();
     QQuickStyle::setStyle(QStringLiteral("Basic"));
     app.setWindowIcon(QIcon(QStringLiteral(
         ":/MirageQt/Resources/Assets.xcassets/AppIcon.appiconset/icon_1024.png")));
