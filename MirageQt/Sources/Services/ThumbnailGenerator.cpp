@@ -2,6 +2,7 @@
 
 #include <QDir>
 #include <QFileInfo>
+#include <QGuiApplication>
 #include <QFont>
 #include <QImage>
 #include <QPainter>
@@ -51,6 +52,10 @@ bool ThumbnailGenerator::writePlaceholder(const QString& destinationJpeg, const 
     QImage image(QSize(960, 540), QImage::Format_RGB32);
     image.fill(QColor(34, 37, 43));
 
+    // 文本绘制依赖 GUI 应用的字体引擎；无 QGuiApplication（自测/命令行）时
+    // 只画渐变底图，避免直接崩溃。
+    const bool canDrawText = qobject_cast<QGuiApplication*>(QCoreApplication::instance()) != nullptr;
+
     QPainter painter(&image);
     painter.setRenderHints(QPainter::Antialiasing | QPainter::TextAntialiasing);
 
@@ -59,6 +64,11 @@ bool ThumbnailGenerator::writePlaceholder(const QString& destinationJpeg, const 
     gradient.setColorAt(0.55, QColor(56, 67, 78));
     gradient.setColorAt(1.0, QColor(115, 78, 58));
     painter.fillRect(image.rect(), gradient);
+
+    if (! canDrawText) {
+        painter.end();
+        return image.save(destinationJpeg, "JPG", 88);
+    }
 
     painter.setPen(QColor(255, 255, 255, 235));
     QFont titleFont = painter.font();

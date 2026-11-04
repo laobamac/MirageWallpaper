@@ -12,6 +12,7 @@
 #include <QFileInfo>
 #include <QEventLoop>
 #include <QTimer>
+#include <QImageWriter>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJSEngine>
@@ -117,6 +118,44 @@ int runSelfTests() {
     check(write(circularPath + QStringLiteral("/project.json"), QJsonDocument(circularJson).toJson()) &&
           library.loadWallpaper(circularPath).presetStatus == PresetStatus::CircularDependency,
           QStringLiteral("循环预设依赖"));
+
+    // 导入功能：外部目录/视频要能被复制进库目录，并能被再次扫描到。
+    const QString external = temporary.path() + QStringLiteral("/外部 壁纸");
+    check(write(external + QStringLiteral("/project.json"), QJsonDocument(baseJson).toJson()) &&
+          write(external + QStringLiteral("/scene.json"), QByteArrayLiteral("{}")),
+          QStringLiteral("准备导入用外部壁纸"));
+    WallpaperLibrary importLibrary(nullptr);
+    const QString importedFolder = importLibrary.importWallpaperFolder(external);
+    const Wallpaper importedWallpaper = importLibrary.loadWallpaper(importedFolder);
+    bool importedListed = false;
+    for (const Wallpaper& item : importLibrary.loadAll())
+        importedListed = importedListed || item.id() == importedWallpaper.id();
+    check(!importedFolder.isEmpty() && importedWallpaper.isValid() &&
+          importedWallpaper.kind() == WallpaperKind::Scene &&
+          QFileInfo::exists(importedFolder + QStringLiteral("/scene.json")) && importedListed,
+          QStringLiteral("从文件夹导入壁纸"));
+
+    const QString notVideo = temporary.path() + QStringLiteral("/说明.txt");
+    check(write(notVideo, QByteArrayLiteral("not a video")) &&
+          importLibrary.importAny(notVideo).isEmpty(),
+          QStringLiteral("导入拒绝非视频文件"));
+
+    // 视频导入：复制媒体、生成（或占位生成）预览图并写出 project.json。
+    const QString videoFile = temporary.path() + QStringLiteral("/导入 视频.mp4");
+    QFile videoSource(QStringLiteral(":/MirageQt/Resources/WallpaperNotFound.mp4"));
+    if (videoSource.open(QIODevice::ReadOnly)) {
+        QFile videoTarget(videoFile);
+        if (videoTarget.open(QIODevice::WriteOnly)) videoTarget.write(videoSource.readAll());
+    }
+    const QString videoFolder = importLibrary.importAny(videoFile);
+    const Wallpaper importedVideo = importLibrary.loadWallpaper(videoFolder);
+    // JPEG 编码依赖 qjpeg 插件；没有插件的环境（例如只跑 build 目录的自测）
+    // 只校验导入结果，不把插件缺失算成导入失败。
+    const bool jpegAvailable = QImageWriter::supportedImageFormats().contains("jpg");
+    check(!videoFolder.isEmpty() && importedVideo.isValid() &&
+          importedVideo.kind() == WallpaperKind::Video &&
+          (!jpegAvailable || QFileInfo::exists(videoFolder + QStringLiteral("/preview.jpg"))),
+          QStringLiteral("导入视频并生成预览"));
 
     WallpaperRuntimeStore runtime;
     check(runtime.effectiveProperties(preset).value(QStringLiteral("texture")).stringValue() ==
