@@ -29,7 +29,11 @@ QtObject {
     property bool busy: false
     property var conditions: ({})
     signal trustConfirmationRequested()
-    readonly property var library: controller.wallpapers.filter(item => !hiddenWallpapers.includes(item.id))
+    // 启动瞬间 controller.wallpapers 可能还是 undefined，历史版本里 hiddenWallpapers
+    // 也可能以非数组形式落盘；这里统一收敛成数组，避免下游 includes/filter 连续抛
+    // TypeError（收藏角标、右键菜单、详情页都依赖这两个属性）。
+    readonly property var hiddenIds: Array.isArray(hiddenWallpapers) ? hiddenWallpapers : []
+    readonly property var library: (controller.wallpapers || []).filter(item => !hiddenIds.includes(item.id))
     readonly property bool rendererConnected: controller.displays.length > 0
     readonly property bool steamConnected: controller.steamLoggedIn
     readonly property bool networkBusy: controller.workshopLoading || controller.discoverLoading || controller.subscriptionsLoading
