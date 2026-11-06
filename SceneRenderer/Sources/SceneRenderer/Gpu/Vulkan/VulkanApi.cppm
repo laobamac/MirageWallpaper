@@ -400,6 +400,7 @@ public:
     std::optional<ImageParameters> Query(std::string_view key, TextureKey content_hash,
                                          bool persist = false);
 
+    void SetTransientTextureAliasing(bool enabled) { m_allow_transient_aliasing = enabled; }
     void MarkShareReady(std::string_view key);
 
     void RecGenerateMipmaps(vvk::CommandBuffer& cmd, const ImageParameters& image) const;
@@ -469,13 +470,13 @@ private:
     std::vector<PendingImageUpload> m_recorded_uploads;
 
     struct QueryTex {
-        idx                index { 0 };
+        std::size_t        binding_count { 0 };
         bool               share_ready { false };
         bool               persist { false };
         TexHash            content_hash;
         VmaImageParameters image;
-        Set<std::string>   query_keys;
     };
+    bool                                 m_allow_transient_aliasing { false };
     std::vector<std::unique_ptr<QueryTex>> m_query_texs;
     Map<std::string, QueryTex*>            m_query_map;
 };

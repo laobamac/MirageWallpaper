@@ -223,8 +223,8 @@ struct RenderProgram {
     }
 
     void buildFromGraph(sr::rg::RenderGraph& graph) {
-        auto nodes             = graph.topologicalOrder();
-        auto node_release_texs = graph.getLastReadTextures(nodes);
+        auto nodes        = graph.topologicalOrder();
+        auto release_keys = graph.getTextureReleaseKeys(nodes);
 
         clear();
         pass_records.reserve(nodes.size());
@@ -237,15 +237,13 @@ struct RenderProgram {
             auto  state = graph.passState(id);
 
             PreparedPassRecord record {
-                .kind       = PreparedPassKind::Graph,
-                .graph_node = id,
-                .pass_name  = state ? state->name : std::string {},
-                .pass_type  = state ? std::optional(state->type) : std::nullopt,
-                .pass       = vpass,
+                .kind             = PreparedPassKind::Graph,
+                .graph_node       = id,
+                .pass_name        = state ? state->name : std::string {},
+                .pass_type        = state ? std::optional(state->type) : std::nullopt,
+                .pass             = vpass,
+                .release_textures = std::move(release_keys[i]),
             };
-            for (const auto& tex : node_release_texs[i]) {
-                record.release_textures.push_back(tex.desc.key);
-            }
             record.applyReleaseTextures();
             pass_records.push_back(std::move(record));
         }
@@ -1947,8 +1945,11 @@ void VulkanRender::Impl::compileRenderGraph(Scene& scene, rg::RenderGraph& rg,
     m_program.finalizeRenderTargetSizes(
         scene, m_device->out_extent(), max_framebuffer_extent, m_msaa_samples);
     m_program.finalizeResourceRequests(scene);
-    m_device->tex_cache().BeginVideoTextureActivity();
+    auto& textures = m_device->tex_cache();
+    textures.BeginVideoTextureActivity();
+    textures.SetTransientTextureAliasing(true);
     m_program.prepare(scene, *m_device, m_rendering_resources, render_scene);
+    textures.SetTransientTextureAliasing(false);
     m_program.rebuildScopes();
 
     (void)commitPreparedUploads();

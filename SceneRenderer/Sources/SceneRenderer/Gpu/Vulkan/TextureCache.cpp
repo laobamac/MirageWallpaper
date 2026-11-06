@@ -1441,60 +1441,47 @@ std::optional<ImageParameters> TextureCache::Query(std::string_view key, Texture
     if (auto it = m_query_map.find(query_key); it != m_query_map.end()) {
         auto& query = *(it->second);
 
-        if (query.content_hash != tex_hash) {
-            query.query_keys.erase(query_key);
-            m_query_map.erase(it);
-            if (query.query_keys.empty()) {
-                query.persist     = false;
-                query.share_ready = true;
-            }
-        } else {
+        if (query.content_hash == tex_hash && (! persist || query.binding_count == 1)) {
             query.share_ready = false;
             query.persist     = query.persist || persist;
-            query.query_keys.insert(query_key);
-
             return ToImageParameters(query.image);
+        }
+        m_query_map.erase(it);
+        if (--query.binding_count == 0) {
+            query.persist     = false;
+            query.share_ready = true;
         }
     }
 
     if (! persist) {
         for (auto& query : m_query_texs) {
-            if (! (query->share_ready)) continue;
-            if (query->persist) continue;
-            if (query->content_hash != tex_hash) continue;
+            const bool available = query->binding_count == 0 ||
+                                   (m_allow_transient_aliasing && query->share_ready);
+            if (! available || query->persist || query->content_hash != tex_hash) continue;
 
             query->share_ready = false;
-            query->query_keys.insert(query_key);
-
-            m_query_map[query_key] = &(*query);
+            ++query->binding_count;
+            m_query_map[std::move(query_key)] = query.get();
 
             return ToImageParameters(query->image);
         }
     }
 
-    m_query_texs.emplace_back(std::make_unique<QueryTex>());
-    auto& query            = *m_query_texs.back();
-    m_query_map[query_key] = &query;
-
-    query.index        = (idx)m_query_texs.size() - 1;
-    query.content_hash = tex_hash;
-    query.query_keys.insert(std::move(query_key));
-    query.persist = persist;
-    if (auto opt = CreateTex(content_hash); opt.has_value()) {
-        query.image = std::move(opt.value());
-        return ToImageParameters(query.image);
-    }
-    return std::nullopt;
+    auto image = CreateTex(content_hash);
+    if (! image) return std::nullopt;
+    auto& query = *m_query_texs.emplace_back(std::make_unique<QueryTex>());
+    query.binding_count = 1;
+    query.content_hash  = tex_hash;
+    query.persist      = persist;
+    query.image        = std::move(*image);
+    m_query_map[std::move(query_key)] = &query;
+    return ToImageParameters(query.image);
 }
 
 void TextureCache::MarkShareReady(std::string_view key) {
+    if (! m_allow_transient_aliasing) return;
     auto it = m_query_map.find(key);
-    if (it != m_query_map.end()) {
-        auto* query = it->second;
-        if (query->persist) return;
-        query->query_keys.erase(std::string(key));
-        query->share_ready = query->query_keys.empty();
-    }
+    if (it != m_query_map.end() && ! it->second->persist) it->second->share_ready = true;
 }
 
 void TextureCache::RecGenerateMipmaps(vvk::CommandBuffer& cmd, const ImageParameters& image) const {

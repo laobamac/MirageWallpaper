@@ -76,8 +76,8 @@ public:
     bool                            readTexture(NodeID pass_node_id, TextureNodeRef texture);
 
     // all render pass
-    std::vector<NodeID>                        topologicalOrder() const;
-    std::vector<std::vector<TextureNodeState>> getLastReadTextures(std::span<const NodeID>) const;
+    std::vector<NodeID>                   topologicalOrder() const;
+    std::vector<std::vector<std::string>> getTextureReleaseKeys(std::span<const NodeID>) const;
 
     void ToGraphviz(std::string_view path) const;
 

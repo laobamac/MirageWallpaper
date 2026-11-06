@@ -428,39 +428,28 @@ bool RenderGraph::textureHasWriter(TextureNodeRef ref) const {
 
 const PassNode& RenderGraphBuilder::workPassNode() const { return *m_passnode_wip; }
 
-std::vector<std::vector<TextureNodeState>>
-RenderGraph::getLastReadTextures(std::span<const NodeID> nodes) const {
-    std::vector<std::vector<TextureNodeState>> res;
-    std::vector<Set<NodeID>>                   nodes_ids;
-    // get in
-    std::transform(
-        nodes.begin(), nodes.end(), std::back_inserter(nodes_ids), [this, &nodes_ids](auto& n) {
-            Set<NodeID> sets;
-            const auto& ids = m_dg.GetNodeIn(n);
-            for (const auto& id : ids) sets.insert(id);
-            return sets;
-        });
-    // get last in
-    {
-        Set<NodeID> sets;
-        std::for_each(std::rbegin(nodes_ids), std::rend(nodes_ids), [&sets](auto& ids) {
-            std::vector<NodeID> copy { ids.begin(), ids.end() };
-            std::for_each(copy.begin(), copy.end(), [&sets, &ids](auto& id) {
-                if (exists(sets, id))
-                    ids.erase(id);
-                else
-                    sets.insert(id);
-            });
-        });
+std::vector<std::vector<std::string>>
+RenderGraph::getTextureReleaseKeys(std::span<const NodeID> nodes) const {
+    std::vector<std::size_t> pass_indices(m_dg.NodeNum(), nodes.size());
+    for (std::size_t i = 0; i < nodes.size(); ++i) pass_indices[nodes[i]] = i;
+
+    std::unordered_map<std::string_view, std::size_t> last_uses;
+    auto recordUse = [&](std::string_view key, NodeID pass_id) {
+        const auto index = pass_indices[pass_id];
+        if (index == nodes.size()) return;
+        auto& last = last_uses[key];
+        last      = std::max(last, index);
+    };
+
+    for (NodeID id = 0; id < m_dg.NodeNum(); ++id) {
+        if (isPassNode(id)) continue;
+        const auto* texture = static_cast<const TexNode*>(m_dg.GetNode(id));
+        if (texture->type() != TexNode::TexType::Temp) continue;
+        if (auto* writer = texture->writer()) recordUse(texture->key(), writer->ID());
+        for (auto reader : m_dg.GetNodeOut(id)) recordUse(texture->key(), reader);
     }
-    // to tex node
-    std::transform(nodes_ids.begin(), nodes_ids.end(), std::back_inserter(res), [this](auto& ids) {
-        std::vector<TextureNodeState> texs;
-        for (auto& id : ids) {
-            auto state = textureState(TextureNodeRef { .id = id });
-            if (state.has_value()) texs.push_back(*state);
-        }
-        return texs;
-    });
-    return res;
+
+    std::vector<std::vector<std::string>> release_keys(nodes.size());
+    for (const auto& [key, index] : last_uses) release_keys[index].emplace_back(key);
+    return release_keys;
 }
