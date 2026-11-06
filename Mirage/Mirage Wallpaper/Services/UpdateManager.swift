@@ -19,7 +19,9 @@ final class UpdateManager: NSObject, ObservableObject, SPUUpdaterDelegate, @prec
         case checking
         case available(String)
         case downloading(String)
-        case readyToInstall(String)
+        case downloaded(String)
+        case installing(String)
+        case installOnQuit(String)
         case current(Date)
         case noCompatibleUpdate(Date)
         case failed(String)
@@ -43,7 +45,6 @@ final class UpdateManager: NSObject, ObservableObject, SPUUpdaterDelegate, @prec
         guard !hasStarted else { return }
         let enabled = AppDelegate.shared.globalSettingsViewModel.settings.shouldAutomaticallyUpdate
         updaterController.updater.automaticallyChecksForUpdates = enabled
-        updaterController.updater.automaticallyDownloadsUpdates = enabled
         status = enabled ? .idle(updaterController.updater.lastUpdateCheckDate) : .disabled
         do {
             try updaterController.updater.start()
@@ -59,22 +60,17 @@ final class UpdateManager: NSObject, ObservableObject, SPUUpdaterDelegate, @prec
     }
 
     @objc func checkForUpdates(_ sender: Any?) {
-        status = .checking
+        if !updaterController.updater.sessionInProgress {
+            status = .checking
+        }
         updaterController.checkForUpdates(sender)
     }
 
     func applyAutomaticUpdatePreference() {
         let enabled = AppDelegate.shared.globalSettingsViewModel.settings.shouldAutomaticallyUpdate
         updaterController.updater.automaticallyChecksForUpdates = enabled
-        updaterController.updater.automaticallyDownloadsUpdates = enabled
-        guard hasStarted else { return }
-        if enabled {
-            guard updaterController.updater.canCheckForUpdates else { return }
-            status = .checking
-            updaterController.updater.checkForUpdatesInBackground()
-        } else {
-            status = .disabled
-        }
+        guard hasStarted, !updaterController.updater.sessionInProgress else { return }
+        status = enabled ? .idle(updaterController.updater.lastUpdateCheckDate) : .disabled
     }
 
     func applyUpdateChannelPreference() {
@@ -92,11 +88,11 @@ final class UpdateManager: NSObject, ObservableObject, SPUUpdaterDelegate, @prec
             return "clock"
         case .disabled:
             return "pause.circle"
-        case .checking, .downloading:
+        case .checking, .downloading, .installing:
             return "arrow.triangle.2.circlepath"
         case .available:
             return "arrow.down.circle"
-        case .readyToInstall:
+        case .downloaded, .installOnQuit:
             return "checkmark.circle.fill"
         case .current, .noCompatibleUpdate:
             return "checkmark.circle"
@@ -111,14 +107,18 @@ final class UpdateManager: NSObject, ObservableObject, SPUUpdaterDelegate, @prec
             guard let date else { return L("尚未检查更新") }
             return L("上次检查：%@", formatted(date))
         case .disabled:
-            return L("自动更新已关闭")
+            return L("自动检查更新已关闭")
         case .checking:
             return L("正在检查更新…")
         case .available(let version):
             return L("发现新版本 %@", version)
         case .downloading(let version):
             return L("正在下载版本 %@…", version)
-        case .readyToInstall(let version):
+        case .downloaded(let version):
+            return L("版本 %@ 已下载", version)
+        case .installing(let version):
+            return L("正在安装版本 %@…", version)
+        case .installOnQuit(let version):
             return L("版本 %@ 已就绪，将在退出 Mirage 后安装", version)
         case .current(let date):
             return L("已是最新版本 · %@", formatted(date))
@@ -163,11 +163,15 @@ final class UpdateManager: NSObject, ObservableObject, SPUUpdaterDelegate, @prec
     }
 
     func updater(_ updater: SPUUpdater, didDownloadUpdate item: SUAppcastItem) {
-        status = .readyToInstall(item.displayVersionString)
+        status = .downloaded(item.displayVersionString)
     }
 
     func updater(_ updater: SPUUpdater, failedToDownloadUpdate item: SUAppcastItem, error: Error) {
         status = .failed(error.localizedDescription)
+    }
+
+    func updater(_ updater: SPUUpdater, willInstallUpdate item: SUAppcastItem) {
+        status = .installing(item.displayVersionString)
     }
 
     func updater(
@@ -175,7 +179,7 @@ final class UpdateManager: NSObject, ObservableObject, SPUUpdaterDelegate, @prec
         willInstallUpdateOnQuit item: SUAppcastItem,
         immediateInstallationBlock immediateInstallHandler: @escaping () -> Void
     ) -> Bool {
-        status = .readyToInstall(item.displayVersionString)
+        status = .installOnQuit(item.displayVersionString)
         return false
     }
 
@@ -217,8 +221,10 @@ final class UpdateManager: NSObject, ObservableObject, SPUUpdaterDelegate, @prec
         state: SPUUserUpdateState
     ) {
         switch state.stage {
-        case .downloaded, .installing:
-            status = .readyToInstall(update.displayVersionString)
+        case .downloaded:
+            status = .downloaded(update.displayVersionString)
+        case .installing:
+            status = .installing(update.displayVersionString)
         case .notDownloaded:
             status = .available(update.displayVersionString)
         @unknown default:

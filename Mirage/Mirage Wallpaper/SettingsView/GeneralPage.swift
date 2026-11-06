@@ -165,7 +165,7 @@ struct GeneralPage: SettingsPage {
             }
 
             Section {
-                Toggle("自动检查并下载更新", isOn: Binding(
+                Toggle("自动检查更新", isOn: Binding(
                     get: { viewModel.settings.shouldAutomaticallyUpdate },
                     set: { viewModel.settings.automaticUpdatesEnabled = $0 }
                 ))
@@ -195,7 +195,7 @@ struct GeneralPage: SettingsPage {
                     updateManager.checkForUpdates(nil)
                 }
                 .disabled(updateManager.isChecking)
-                Text("开启自动更新后，Mirage 会在启动时检查，并在后台定期检查和下载更新；关闭后仍可手动检查。开启测试版后，Mirage 也会检查测试版更新。")
+                Text("开启后，Mirage 会在启动时及后台定期检查更新，发现新版本时提示，由你确认后下载和安装；关闭后仍可手动检查。开启测试版后，Mirage 也会检查测试版更新。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } header: {
