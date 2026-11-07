@@ -1,0 +1,68 @@
+name: PR regressions
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-regressions-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  regressions:
+    name: Regression tests (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    env:
+      CI: "true"
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: "10.0.x"
+      - name: Select stable Xcode
+        shell: bash
+        run: |
+          set -euo pipefail
+          selected="$(find /Applications -maxdepth 1 -name 'Xcode*.app' | sed '/[Bb]eta/d' | sort -V | tail -1)"
+          test -n "$selected"
+          export DEVELOPER_DIR="$selected/Contents/Developer"
+          xcodebuild -version
+          sdk="$(xcrun --sdk macosx --show-sdk-version)"
+          if (( ${sdk%%.*} < 26 )); then
+            echo '::error::A stable Xcode with macOS 26 SDK or later is required.'
+            exit 1
+          fi
+          echo "DEVELOPER_DIR=$DEVELOPER_DIR" >> "$GITHUB_ENV"
+      - name: App and playback regressions
+        run: python3 Mirage/Tests/run_ui_responsiveness.py --derived-data "$RUNNER_TEMP/MirageRegressionBuild" --headless
+      - name: Additional stability regressions in this revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Each fix brings its runner; the full suite above is always required.
+          for runner in run_log_safety run_desktop_restore run_mobile_pairing run_steam_packaging; do
+            if [[ -f "Mirage/Tests/$runner.py" ]]; then
+              python3 "Mirage/Tests/$runner.py"
+            fi
+          done
+          for source in PlaylistIdentityRegression PlaybackUIRegression; do
+            if [[ -f "Mirage/Tests/$source.swift" ]]; then
+              python3 Mirage/Tests/run_ui_responsiveness.py --derived-data "$RUNNER_TEMP/MirageRegressionBuild" --skip-build --test-source "$source"
+            fi
+          done
+      - name: Web compatibility regressions
+        run: node --test WebRenderer/Tests/live2d-compatibility.test.mjs
