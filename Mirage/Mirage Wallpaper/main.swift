@@ -23,5 +23,13 @@ if let bundleID = Bundle.main.bundleIdentifier,
     exit(0)
 }
 
+// Capture initialization and migration failures when logging was already
+// enabled. Opening the log window still follows the existing launch flow.
+if let data = UserDefaults.standard.data(forKey: "GlobalSettings"),
+   let settings = try? JSONDecoder().decode(GlobalSettings.self, from: data),
+   settings.isDeveloperModeEnabled {
+    MirageLogService.shared.start()
+}
+
 NSApplication.shared.delegate = AppDelegate.shared
 NSApplication.shared.run()
