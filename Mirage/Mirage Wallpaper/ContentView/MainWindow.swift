@@ -22,12 +22,13 @@ class MainWindowController: NSWindowController, NSWindowDelegate {
     override init(window: NSWindow?) {
         super.init(window: NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1100, height: 640),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered, defer: false))
         self.window.delegate = self
         self.window.isReleasedWhenClosed = false
         refreshLocalizedTitle()
         self.window.titlebarAppearsTransparent = true
+        self.window.titlebarSeparatorStyle = .none
         self.window.setFrameAutosaveName("MainWindow")
         self.window.isMovableByWindowBackground = false
         let hostingView = NSHostingView(rootView: ContentView(
@@ -37,6 +38,7 @@ class MainWindowController: NSWindowController, NSWindowDelegate {
             ).environment(AppDelegate.shared.globalSettingsViewModel)
         )
         hostingView.sizingOptions = []
+        hostingView.safeAreaRegions = []
         self.window.contentView = MainWindowBackgroundView(
             hostedView: hostingView,
             blurEnabled: AppDelegate.shared.globalSettingsViewModel.settings.shouldBlurMainWindow
@@ -82,9 +84,7 @@ class MainWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
-        let minimumFrameSize = sender.frameRect(
-            forContentRect: NSRect(origin: .zero, size: minimumContentSize)
-        ).size
+        let minimumFrameSize = minimumFrameSize(for: sender)
         return NSSize(
             width: max(frameSize.width, minimumFrameSize.width),
             height: max(frameSize.height, minimumFrameSize.height)
@@ -95,17 +95,35 @@ class MainWindowController: NSWindowController, NSWindowDelegate {
         enforceMinimumSize()
     }
 
+    func windowDidEnterFullScreen(_ notification: Notification) {
+        enforceMinimumSize()
+    }
+
+    func windowDidExitFullScreen(_ notification: Notification) {
+        enforceMinimumSize()
+    }
+
+    private func minimumFrameSize(for window: NSWindow) -> NSSize {
+        let layoutSize = window.contentLayoutRect.size
+        return NSSize(
+            width: minimumContentSize.width + max(0, window.frame.width - layoutSize.width),
+            height: minimumContentSize.height + max(0, window.frame.height - layoutSize.height)
+        )
+    }
+
     private func enforceMinimumSize() {
         guard let window else { return }
-        window.contentMinSize = minimumContentSize
-        window.minSize = window.frameRect(
-            forContentRect: NSRect(origin: .zero, size: minimumContentSize)
+        let minimumFrameSize = minimumFrameSize(for: window)
+        let minimumWindowContentSize = window.contentRect(
+            forFrameRect: NSRect(origin: .zero, size: minimumFrameSize)
         ).size
+        window.contentMinSize = minimumWindowContentSize
+        window.minSize = minimumFrameSize
 
         let currentContentSize = window.contentRect(forFrameRect: window.frame).size
         let clampedSize = NSSize(
-            width: max(currentContentSize.width, minimumContentSize.width),
-            height: max(currentContentSize.height, minimumContentSize.height)
+            width: max(currentContentSize.width, minimumWindowContentSize.width),
+            height: max(currentContentSize.height, minimumWindowContentSize.height)
         )
         if currentContentSize != clampedSize {
             window.setContentSize(clampedSize)
