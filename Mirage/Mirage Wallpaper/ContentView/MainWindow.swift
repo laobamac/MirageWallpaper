@@ -39,10 +39,12 @@ class MainWindowController: NSWindowController, NSWindowDelegate {
         )
         hostingView.sizingOptions = []
         hostingView.safeAreaRegions = []
-        self.window.contentView = MainWindowBackgroundView(
+        let backgroundView = MainWindowBackgroundView(
             hostedView: hostingView,
             blurEnabled: AppDelegate.shared.globalSettingsViewModel.settings.shouldBlurMainWindow
         )
+        self.window.contentView = backgroundView
+        backgroundView.applyBackground()
         enforceMinimumSize()
     }
     

@@ -58,7 +58,6 @@ final class MainWindowBackgroundView: NSView {
             NSLayoutConstraint.activate(contentConstraints)
         }
         appliedBlurEnabled = nil
-        applyBackground()
     }
 
     func setBlurEnabled(_ enabled: Bool) {
@@ -67,7 +66,7 @@ final class MainWindowBackgroundView: NSView {
         applyBackground()
     }
 
-    private func applyBackground() {
+    func applyBackground() {
         guard let window else { return }
         let enabled = blurEnabled && !NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
         guard appliedBlurEnabled != enabled else { return }
