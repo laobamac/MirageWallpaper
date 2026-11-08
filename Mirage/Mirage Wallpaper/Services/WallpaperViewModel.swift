@@ -233,8 +233,8 @@ class WallpaperViewModel: PlaylistPlayback {
             self.positionAvailabilityGeneration &+= 1
         }
         NotificationCenter.default.addObserver(
-            self, selector: #selector(displayTopologyChanged),
-            name: NSApplication.didChangeScreenParametersNotification, object: nil)
+            self, selector: #selector(displayTopologyChanged(_:)),
+            name: DisplayRegistry.didChangeNotification, object: DisplayRegistry.shared)
         persistStates()
     }
 
@@ -1024,9 +1024,14 @@ class WallpaperViewModel: PlaylistPlayback {
 
     // MARK: 拓扑变化
 
-    @objc private func displayTopologyChanged() {
-        DisplayRegistry.shared.invalidate()
-        let connected = DisplayRegistry.shared.connected
+    @objc private func displayTopologyChanged(_ notification: Notification) {
+        guard let change = DisplayRegistry.Change.from(notification) else { return }
+        let connected = change.connected
+        guard change.topologyChanged else {
+            rebuildCurrentByScreen(connected)
+            syncStatusItems()
+            return
+        }
         let connectedIDs = Set(connected.map(\.displayID))
         let connectedKeys = Set(connected.map(\.key))
 
@@ -1076,12 +1081,7 @@ class WallpaperViewModel: PlaylistPlayback {
         }
         if seeded { persistStates() }
 
-        var rebuilt: [Int: WEWallpaper] = [:]
-        for info in connected {
-            guard let wallpaper = renderer.currentWallpaper(onDisplay: info.displayID) else { continue }
-            rebuilt[info.index] = wallpaper
-        }
-        currentByScreen = rebuilt
+        rebuildCurrentByScreen(connected)
 
         DesktopOverrideService.shared.scheduleCaptureForAllScreens()
         stoppedByPlaybackPolicy = stoppedByPlaybackPolicy.intersection(connectedKeys)
@@ -1089,6 +1089,15 @@ class WallpaperViewModel: PlaylistPlayback {
             AppDelegate.shared.globalSettingsViewModel.effectivePlaybackActions,
             force: true)
         syncStatusItems()
+    }
+
+    private func rebuildCurrentByScreen(_ connected: [DisplayInfo]) {
+        var rebuilt: [Int: WEWallpaper] = [:]
+        for info in connected {
+            guard let wallpaper = renderer.currentWallpaper(onDisplay: info.displayID) else { continue }
+            rebuilt[info.index] = wallpaper
+        }
+        currentByScreen = rebuilt
     }
 
     // MARK: 运行时状态持久化
