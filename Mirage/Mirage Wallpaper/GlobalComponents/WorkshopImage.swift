@@ -423,6 +423,15 @@ final class WorkshopImageLoader {
 }
 
 struct WorkshopImage: View {
+    private struct LoadRequest: Equatable {
+        let source: WorkshopImageLoader.Source?
+        let pixels: Int
+        let contentActive: Bool
+        let isLoadingEnabled: Bool
+        let preloadsWhenInactive: Bool
+        let isAnimating: Bool
+    }
+
     private let source: WorkshopImageLoader.Source?
     var contentMode: ContentMode
     var isAnimating: Bool
@@ -435,10 +444,10 @@ struct WorkshopImage: View {
     @State private var image: NSImage?
     @State private var animation: NSImage?
     @State private var failed = false
-    @State private var pixelSize = 0
     @State private var requestID: UUID?
     @State private var loadToken: UInt64 = 0
     @State private var loadedKey: String?
+    @State private var loadedSource: WorkshopImageLoader.Source?
 
     init(url: URL?, contentMode: ContentMode = .fill, isAnimating: Bool = false,
          isLoadingEnabled: Bool = true, preloadsWhenInactive: Bool = false,
@@ -468,7 +477,7 @@ struct WorkshopImage: View {
         Rectangle()
             .fill(Color.secondary.opacity(0.10))
             .overlay {
-                if let image {
+                if loadedSource == source, let image {
                     Image(nsImage: image)
                         .resizable()
                         .interpolation(.high)
@@ -476,7 +485,7 @@ struct WorkshopImage: View {
                     if contentActive && isLoadingEnabled && isAnimating, let animation, let source {
                         WorkshopAnimatedImage(image: animation, identity: source.key, contentMode: contentMode)
                     }
-                } else if failed {
+                } else if loadedSource == source && failed {
                     Image(systemName: "photo")
                         .font(.title2)
                         .foregroundStyle(.tertiary)
@@ -493,29 +502,17 @@ struct WorkshopImage: View {
                 GeometryReader { proxy in
                     let pixels = proxy.size.width > 1 && proxy.size.height > 1
                         ? WorkshopImageLoader.pixels(for: proxy.size, scale: displayScale) : 0
+                    let request = LoadRequest(
+                        source: source, pixels: pixels, contentActive: contentActive,
+                        isLoadingEnabled: isLoadingEnabled, preloadsWhenInactive: preloadsWhenInactive,
+                        isAnimating: isAnimating)
                     Color.clear
-                        .task(id: pixels) {
-                            pixelSize = pixels
-                            load()
+                        .task(id: request) {
+                            guard !Task.isCancelled else { return }
+                            load(request)
                         }
                 }
             )
-            .onChange(of: source) { _, _ in
-                cancel()
-                image = nil
-                animation = nil
-                failed = false
-                load()
-            }
-            .onChange(of: isLoadingEnabled) { _, _ in load() }
-            .onChange(of: contentActive) { _, active in
-                if !active { animation = nil }
-                load()
-            }
-            .onChange(of: isAnimating) { _, active in
-                if !active { animation = nil }
-                load()
-            }
             .onDisappear {
                 cancel()
                 image = nil
@@ -530,24 +527,32 @@ struct WorkshopImage: View {
         loadedKey = nil
     }
 
-    private func load() {
-        guard pixelSize > 0 else { return }
-        guard let source else {
+    private func load(_ request: LoadRequest) {
+        if loadedSource != request.source {
+            cancel()
+            loadedSource = request.source
+            image = nil
+            animation = nil
+            failed = false
+        }
+        guard let source = request.source else {
             failed = true
             return
         }
-        guard contentActive && (isLoadingEnabled || preloadsWhenInactive) else {
+        guard request.pixels > 0, request.contentActive &&
+                (request.isLoadingEnabled || request.preloadsWhenInactive) else {
             cancel()
             animation = nil
             return
         }
         let variant = WorkshopImageLoader.Variant(
-            pixels: pixelSize,
-            animated: isAnimating && isLoadingEnabled)
+            pixels: request.pixels,
+            animated: request.isAnimating && request.isLoadingEnabled)
+        if !variant.animated { animation = nil }
         let key = "\(source.key)#\(variant.pixels)#\(variant.animated)"
         if loadedKey == key {
             if let requestID {
-                WorkshopImageLoader.shared.promote(requestID, priority: isLoadingEnabled ? 1 : 0)
+                WorkshopImageLoader.shared.promote(requestID, priority: request.isLoadingEnabled ? 1 : 0)
             }
             return
         }
@@ -561,7 +566,7 @@ struct WorkshopImage: View {
         }
         let token = loadToken
         requestID = WorkshopImageLoader.shared.load(source: source, variant: variant,
-                                                     priority: isLoadingEnabled ? 1 : 0) { result in
+                                                     priority: request.isLoadingEnabled ? 1 : 0) { result in
             guard loadToken == token else { return }
             requestID = nil
             if let result {
