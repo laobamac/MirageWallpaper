@@ -349,17 +349,14 @@ struct WallpaperPreview: SubviewOfContentView {
 
             HStack {
                 Spacer()
+                Text(L("选择壁纸后自动应用到 %@", wallpaperViewModel.selectedDisplayName))
+                    .font(.caption).foregroundStyle(.secondary)
                 Button {
                     AppDelegate.shared.mainWindowController.close()
                 } label: {
-                    Text("确定").frame(width: 50)
+                    Text("关闭")
                 }
                 .buttonStyle(.borderedProminent)
-                Button { 
-                    AppDelegate.shared.mainWindowController.close()
-                } label: {
-                    Text("取消").frame(width: 50)
-                }
             }
             .padding()
         }
