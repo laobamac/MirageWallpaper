@@ -18,6 +18,10 @@
 </p>
 
 <p align="center">
+<a href="https://trendshift.io/repositories/119636?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-119636" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/119636/daily?language=C%2B%2B" alt="laobamac%2FMirageWallpaper | Trendshift" width="250" height="55"/></a>
+</p>
+
+<p align="center">
   <a href="https://github.com/laobamac/MirageWallpaper/actions/workflows/build-macos.yml"><img alt="Build macOS App" src="https://github.com/laobamac/MirageWallpaper/actions/workflows/build-macos.yml/badge.svg"></a>
   <img alt="macOS" src="https://img.shields.io/badge/macOS-14.2%2B-000000?logo=apple&logoColor=white">
   <img alt="Architecture" src="https://img.shields.io/badge/architecture-x86__64%20%7C%20arm64-blue">
