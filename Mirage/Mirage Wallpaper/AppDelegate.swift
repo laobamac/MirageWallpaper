@@ -198,6 +198,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // restart WallpaperAgent: undoes an override the previous run died
         // holding, and clears the pre-2026-08 staticWP_ placeholder cache.
         DesktopOverrideService.shared.recoverAtLaunch()
+        WorkshopImageLoader.shared.startCacheMaintenance()
 
         DispatchQueue.main.async {
             self.contentViewModel.refresh()

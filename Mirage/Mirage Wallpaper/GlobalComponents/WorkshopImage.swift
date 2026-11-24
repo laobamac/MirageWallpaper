@@ -20,6 +20,272 @@ extension EnvironmentValues {
     }
 }
 
+private final class WorkshopImageDiskCache {
+    struct Policy {
+        var maximumBytes: Int64 = 512 * 1024 * 1024
+        var preferredBytes: Int64 = 384 * 1024 * 1024
+        var maximumAge: TimeInterval = 30 * 24 * 60 * 60
+    }
+
+    private struct Entry {
+        let size: Int64
+        var lastUse: Date
+    }
+
+    private let directory: URL
+    private let policy: Policy
+    private let queue = DispatchQueue(label: "cn.laobamac.Mirage.workshopImage.disk", qos: .utility)
+    private var entries: [String: Entry] = [:]
+    private var totalBytes: Int64 = 0
+    private var indexed = false
+    private var pendingUsage: Set<String> = []
+    private var usageFlushScheduled = false
+    private var timer: DispatchSourceTimer?
+
+    init(directory: URL, policy: Policy = Policy()) {
+        self.directory = directory
+        self.policy = policy
+    }
+
+    deinit {
+        timer?.cancel()
+    }
+
+    func startMaintenance() {
+        queue.async { [weak self] in
+            guard let self, self.timer == nil else { return }
+            self.ensureIndex()
+            let timer = DispatchSource.makeTimerSource(queue: self.queue)
+            timer.schedule(deadline: .now() + 3600, repeating: 3600, leeway: .seconds(60))
+            timer.setEventHandler { [weak self] in self?.maintain() }
+            self.timer = timer
+            timer.resume()
+        }
+    }
+
+    func read(for url: URL, completion: @escaping (Data?) -> Void) {
+        queue.async { [self] in
+            ensureIndex()
+            let name = name(for: url)
+            guard isCacheDirectory, refreshEntry(name), let entry = entries[name] else {
+                completion(nil)
+                return
+            }
+            let now = Date()
+            guard entry.size > 0, now.timeIntervalSince(entry.lastUse) < policy.maximumAge else {
+                remove(name)
+                completion(nil)
+                return
+            }
+            guard let data = try? Data(contentsOf: fileURL(name)), !data.isEmpty else {
+                refreshEntry(name)
+                completion(nil)
+                return
+            }
+            recordUsage(name, at: now)
+            completion(data)
+        }
+    }
+
+    func recordUsage(for url: URL) {
+        queue.async { [self] in
+            ensureIndex()
+            recordUsage(name(for: url), at: Date())
+        }
+    }
+
+    func store(_ data: Data, for url: URL, shouldStore: @escaping () -> Bool) {
+        queue.async { [self] in
+            guard shouldStore(), !data.isEmpty, Int64(data.count) <= policy.maximumBytes else { return }
+            ensureIndex()
+            do {
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                guard isCacheDirectory else { return }
+                let name = name(for: url)
+                do {
+                    guard let entry = try entry(at: fileURL(name)) else { return }
+                    update(name, with: entry)
+                } catch {
+                    guard isMissingFile(error) else { return }
+                    forget(name)
+                }
+                trim(incomingBytes: Int64(data.count), replacing: name)
+                guard shouldStore(), projectedBytes(incomingBytes: Int64(data.count), replacing: name)
+                    <= policy.maximumBytes else { return }
+                try data.write(to: fileURL(name), options: .atomic)
+                pendingUsage.remove(name)
+                update(name, with: Entry(size: Int64(data.count), lastUse: Date()))
+            } catch {}
+        }
+    }
+
+    func discard(_ data: Data, for url: URL, shouldDiscard: @escaping () -> Bool) {
+        queue.async { [self] in
+            guard shouldDiscard() else { return }
+            ensureIndex()
+            let name = name(for: url)
+            guard isCacheDirectory, refreshEntry(name),
+                  let stored = try? Data(contentsOf: fileURL(name)), stored == data else { return }
+            remove(name)
+        }
+    }
+
+    private var isCacheDirectory: Bool {
+        let attributes = try? FileManager.default.attributesOfItem(atPath: directory.path)
+        return attributes?[.type] as? FileAttributeType == .typeDirectory
+    }
+
+    private func name(for url: URL) -> String {
+        SHA256.hash(data: Data(url.absoluteString.utf8))
+            .map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func fileURL(_ name: String) -> URL {
+        directory.appending(path: name)
+    }
+
+    private func isMissingFile(_ error: Error) -> Bool {
+        let error = error as NSError
+        return error.domain == NSCocoaErrorDomain
+            && (error.code == NSFileNoSuchFileError || error.code == NSFileReadNoSuchFileError)
+    }
+
+    private func entry(at url: URL) throws -> Entry? {
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        guard attributes[.type] as? FileAttributeType == .typeRegular,
+              let size = attributes[.size] as? NSNumber else { return nil }
+        return Entry(size: size.int64Value, lastUse: attributes[.modificationDate] as? Date ?? .distantPast)
+    }
+
+    @discardableResult
+    private func refreshEntry(_ name: String) -> Bool {
+        do {
+            guard let entry = try entry(at: fileURL(name)) else {
+                forget(name)
+                return false
+            }
+            update(name, with: entry)
+            return true
+        } catch {
+            if isMissingFile(error) { forget(name) }
+            return false
+        }
+    }
+
+    private func update(_ name: String, with entry: Entry) {
+        var entry = entry
+        if let previous = entries[name] {
+            totalBytes -= previous.size
+            entry.lastUse = max(entry.lastUse, previous.lastUse)
+        }
+        entries[name] = entry
+        totalBytes += entry.size
+    }
+
+    private func forget(_ name: String) {
+        if let entry = entries.removeValue(forKey: name) { totalBytes -= entry.size }
+        pendingUsage.remove(name)
+    }
+
+    @discardableResult
+    private func remove(_ name: String) -> Bool {
+        guard isCacheDirectory, refreshEntry(name) else { return entries[name] == nil }
+        do {
+            try FileManager.default.removeItem(at: fileURL(name))
+            forget(name)
+            return true
+        } catch {
+            if isMissingFile(error) {
+                forget(name)
+                return true
+            }
+            return false
+        }
+    }
+
+    private func recordUsage(_ name: String, at date: Date) {
+        guard var entry = entries[name] else { return }
+        entry.lastUse = date
+        entries[name] = entry
+        pendingUsage.insert(name)
+        guard !usageFlushScheduled else { return }
+        usageFlushScheduled = true
+        queue.asyncAfter(deadline: .now() + 60) { [weak self] in
+            guard let self else { return }
+            self.usageFlushScheduled = false
+            self.flushUsage()
+        }
+    }
+
+    private func flushUsage() {
+        guard isCacheDirectory else { return }
+        for name in pendingUsage {
+            guard refreshEntry(name), let entry = entries[name] else { continue }
+            do {
+                try FileManager.default.setAttributes([.modificationDate: entry.lastUse],
+                                                      ofItemAtPath: fileURL(name).path)
+                pendingUsage.remove(name)
+            } catch {}
+        }
+    }
+
+    private func ensureIndex() {
+        guard !indexed else { return }
+        indexed = true
+        maintain()
+    }
+
+    private func maintain() {
+        flushUsage()
+        guard isCacheDirectory else {
+            entries.removeAll()
+            totalBytes = 0
+            pendingUsage.removeAll()
+            return
+        }
+        guard let files = try? FileManager.default.contentsOfDirectory(at: directory,
+                                                                      includingPropertiesForKeys: nil) else { return }
+        var found: [String: Entry] = [:]
+        for file in files {
+            let name = file.lastPathComponent
+            guard name.utf8.count == 64, name.utf8.allSatisfy({
+                (48...57).contains($0) || (97...102).contains($0)
+            }) else { continue }
+            do {
+                guard var entry = try entry(at: file) else { continue }
+                if let previous = entries[name] { entry.lastUse = max(entry.lastUse, previous.lastUse) }
+                found[name] = entry
+            } catch {
+                if !isMissingFile(error), let previous = entries[name] { found[name] = previous }
+            }
+        }
+        entries = found
+        totalBytes = entries.values.reduce(0) { $0 + $1.size }
+        pendingUsage.formIntersection(entries.keys)
+        let now = Date()
+        for (name, entry) in entries where entry.size == 0
+            || now.timeIntervalSince(entry.lastUse) >= policy.maximumAge {
+            remove(name)
+        }
+        trim()
+    }
+
+    private func projectedBytes(incomingBytes: Int64, replacing name: String?) -> Int64 {
+        totalBytes - (name.flatMap { entries[$0]?.size } ?? 0) + incomingBytes
+    }
+
+    private func trim(incomingBytes: Int64 = 0, replacing name: String? = nil) {
+        guard projectedBytes(incomingBytes: incomingBytes, replacing: name) > policy.maximumBytes else { return }
+        let oldest = entries.filter { $0.key != name }.sorted {
+            $0.value.lastUse == $1.value.lastUse ? $0.key < $1.key : $0.value.lastUse < $1.value.lastUse
+        }
+        for (candidate, _) in oldest {
+            guard projectedBytes(incomingBytes: incomingBytes, replacing: name) > policy.preferredBytes else { break }
+            remove(candidate)
+        }
+    }
+}
+
 final class WorkshopImageLoader {
     static let shared = WorkshopImageLoader()
 
@@ -110,7 +376,7 @@ final class WorkshopImageLoader {
     private let ioQueue = DispatchQueue(label: "cn.laobamac.Mirage.workshopImage",
                                         qos: .userInitiated, attributes: .concurrent)
     private let session: URLSession
-    private let diskDirectory: URL
+    private let diskCache: WorkshopImageDiskCache
 
     init(session: URLSession? = nil, cacheDirectory: URL? = nil) {
         if let session {
@@ -120,10 +386,12 @@ final class WorkshopImageLoader {
             configuration.timeoutIntervalForRequest = 20
             configuration.timeoutIntervalForResource = 40
             configuration.httpMaximumConnectionsPerHost = 4
+            configuration.urlCache = nil
             self.session = URLSession(configuration: configuration)
         }
-        diskDirectory = cacheDirectory ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        let directory = cacheDirectory ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appending(path: "Mirage/WorkshopImageCache")
+        diskCache = WorkshopImageDiskCache(directory: directory)
     }
 
     private var requests: [String: Request] = [:]
@@ -140,14 +408,14 @@ final class WorkshopImageLoader {
         "\(source.key)#\(variant.pixels)#\(variant.animated)" as NSString
     }
 
-    private func diskURL(for source: Source) -> URL {
-        let digest = SHA256.hash(data: Data(source.url.absoluteString.utf8))
-            .map { String(format: "%02x", $0) }.joined()
-        return diskDirectory.appending(path: digest)
+    func startCacheMaintenance() {
+        diskCache.startMaintenance()
     }
 
     func cachedImage(source: Source, variant: Variant) -> Result? {
-        memory.object(forKey: memoryKey(source, variant))
+        guard let cached = memory.object(forKey: memoryKey(source, variant)) else { return nil }
+        if !source.url.isFileURL { diskCache.recordUsage(for: source.url) }
+        return cached
     }
 
     @discardableResult
@@ -205,13 +473,13 @@ final class WorkshopImageLoader {
 
     private func fetch(_ request: Request) {
         let source = request.source
-        let disk = diskURL(for: source)
         ioQueue.async { [self] in
             guard !request.isCancelled, let url = source.resolvedURL() else {
                 DispatchQueue.main.async { self.fail(request) }
                 return
             }
             if let cached = dataMemory.object(forKey: source.key as NSString) {
+                if !url.isFileURL { diskCache.recordUsage(for: source.url) }
                 DispatchQueue.main.async { self.receive(cached as Data, for: request) }
                 return
             }
@@ -220,20 +488,22 @@ final class WorkshopImageLoader {
                 DispatchQueue.main.async { self.receive(data, for: request) }
                 return
             }
-            if let data = try? Data(contentsOf: disk), !data.isEmpty {
-                DispatchQueue.main.async { self.receive(data, for: request) }
-                return
-            }
-            DispatchQueue.main.async {
-                guard !request.isCancelled else { self.finish(request); return }
-                request.task = self.session.dataTask(with: url) { [self] data, response, _ in
-                    let valid = (response as? HTTPURLResponse).map { (200..<300).contains($0.statusCode) } ?? true
-                    DispatchQueue.main.async {
-                        request.cachesToDisk = true
-                        self.receive(valid ? data : nil, for: request)
+            diskCache.read(for: source.url) { data in
+                DispatchQueue.main.async {
+                    guard !request.isCancelled else { self.finish(request); return }
+                    if let data {
+                        self.receive(data, for: request)
+                        return
                     }
+                    request.task = self.session.dataTask(with: url) { [self] data, response, _ in
+                        let valid = (response as? HTTPURLResponse).map { (200..<300).contains($0.statusCode) } ?? true
+                        DispatchQueue.main.async {
+                            request.cachesToDisk = true
+                            self.receive(valid ? data : nil, for: request)
+                        }
+                    }
+                    request.task?.resume()
                 }
-                request.task?.resume()
             }
         }
     }
@@ -251,7 +521,6 @@ final class WorkshopImageLoader {
         request.decoding = true
         let variants = Set(request.consumers.values.map(\.variant))
         let cachesToDisk = request.cachesToDisk
-        let disk = diskURL(for: request.source)
         ioQueue.async { [self] in
             var results: [Variant: Result] = [:]
             for variant in variants {
@@ -276,11 +545,11 @@ final class WorkshopImageLoader {
             if !request.isCancelled {
                 if results.isEmpty {
                     dataMemory.removeObject(forKey: request.source.key as NSString)
-                    if !request.source.url.isFileURL { try? FileManager.default.removeItem(at: disk) }
+                    if !request.source.url.isFileURL {
+                        diskCache.discard(data, for: request.source.url) { !request.isCancelled }
+                    }
                 } else if cachesToDisk {
-                    try? FileManager.default.createDirectory(at: disk.deletingLastPathComponent(),
-                                                             withIntermediateDirectories: true)
-                    try? data.write(to: disk, options: .atomic)
+                    diskCache.store(data, for: request.source.url) { !request.isCancelled }
                 }
             }
             DispatchQueue.main.async {
