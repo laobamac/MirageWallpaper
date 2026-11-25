@@ -200,9 +200,19 @@ final class MirageLockRenderer {
                 }
             }
             guard !Task.isCancelled else { return }
+            let item = AVPlayerItem(asset: asset)
+            let colored = await withCheckedContinuation { continuation in
+                WallpaperVideoColor.apply(configuration.colorAdjustment ?? .init(), to: item, hdr: tracks.contains { $0.hasMediaCharacteristic(.containsHDRVideo) }) {
+                    continuation.resume(returning: $0)
+                }
+            }
+            guard !Task.isCancelled else { return }
+            guard colored else {
+                self?.reportFailure("Video color composition failed")
+                return
+            }
             await MainActor.run {
                 guard let self, self.videoLoadID == loadID else { return }
-                let item = AVPlayerItem(asset: asset)
                 let player = AVQueuePlayer()
                 player.automaticallyWaitsToMinimizeStalling = true
                 player.isMuted = true
@@ -253,7 +263,8 @@ final class MirageLockRenderer {
         setenv("VK_DRIVER_FILES", icdURL.path, 1)
         let properties = configuration.rawProperties.mapValues { $0.foundationValue }
         let runtimeData = try? JSONSerialization.data(withJSONObject: [
-            "speed": configuration.playbackSpeed, "scriptStorage": configuration.scriptStorage ?? [:]
+            "speed": configuration.playbackSpeed, "scriptStorage": configuration.scriptStorage ?? [:],
+            "colorAdjustment": (configuration.colorAdjustment ?? .init()).dictionary
         ], options: .sortedKeys)
         let runtimeJSON = runtimeData.flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
         guard let data = try? JSONSerialization.data(withJSONObject: properties, options: .sortedKeys),

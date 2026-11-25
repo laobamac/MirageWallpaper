@@ -110,6 +110,7 @@ enum WallpaperPropertyEncoding {
 struct WallpaperRenderSnapshot: Codable, Equatable, Sendable {
     static let configurationSession = UUID().uuidString
     var rawProperties: [String: AnyCodableValue]
+    var colorAdjustment: WallpaperColorAdjustment?
     var fillMode: String
     var position: WallpaperPosition
     var speed: Float
@@ -118,6 +119,7 @@ struct WallpaperRenderSnapshot: Codable, Equatable, Sendable {
     init(runtime: WallpaperRuntimeState, properties: [String: WEProjectProperty],
          scriptStorage: [String: String]? = nil) {
         rawProperties = WallpaperPropertyEncoding.values(properties).mapValues(AnyCodableValue.init)
+        colorAdjustment = runtime.colorAdjustment
         fillMode = runtime.fillMode.rawValue
         position = runtime.position
         speed = runtime.speed.isFinite && runtime.speed > 0 ? runtime.speed : 1
@@ -149,6 +151,7 @@ struct WallpaperRenderSnapshot: Codable, Equatable, Sendable {
             "rawProperties": rawProperties.mapValues(\.foundationValue),
             "fillMode": fillMode, "position": position.dictionary, "speed": speed
         ]
+        result["colorAdjustment"] = (colorAdjustment ?? .init()).dictionary
         if let scriptStorage { result["scriptStorage"] = scriptStorage }
         return result
     }

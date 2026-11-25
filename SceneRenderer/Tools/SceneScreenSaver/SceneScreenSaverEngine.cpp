@@ -162,6 +162,13 @@ void* CreateInstance(void* host, const char* assets_dir, const char* scene_pkg,
             config.speed = static_cast<float>((*speed)->as_f64().unwrap_or(1.0));
             if (!sr::IsValidScenePlaybackSpeed(config.speed)) config.speed = 1.0f;
         }
+        if (auto colors = runtime.get("colorAdjustment"); colors.is_some() && (*colors)->is_object()) {
+            constexpr std::array<const char*, 3> keys { "brightness", "contrast", "saturation" };
+            for (std::size_t i = 0; i < keys.size(); ++i) {
+                if (auto number = (*colors)->get(keys[i]); number.is_some())
+                    config.color_adjustment[i] = static_cast<float>((*number)->as_f64().unwrap_or(1.0));
+            }
+        }
         if (auto storage = runtime.get("scriptStorage"); storage.is_some() && (*storage)->is_object())
             config.script_storage_snapshot = sr::Dump(**storage);
     }

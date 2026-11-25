@@ -30,6 +30,7 @@ struct WallpaperArgs {
     BOOL muted = NO;
     int runSeconds = 0;
     VRVideoFillMode fillMode = VRVideoFillModeCover;
+    VRColorAdjustment colorAdjustment { 1, 1, 1 };
     double positionX = 0.5;
     double positionY = 0.5;
     BOOL controlStdin = NO;
@@ -217,6 +218,15 @@ static BOOL ParseArgs(int argc, char **argv, WallpaperArgs &out) {
             out.displayID = (CGDirectDisplayID)value;
         } else if (strcmp(arg, "--volume") == 0) {
             const char *v = take(i, arg); if (!v) return NO; out.volume = strtof(v, nullptr);
+        } else if (strcmp(arg, "--brightness") == 0 || strcmp(arg, "--contrast") == 0 || strcmp(arg, "--saturation") == 0) {
+            const char *v = take(i, arg); if (!v) return NO;
+            char *end = nullptr;
+            float value = strtof(v, &end);
+            if (end == v || *end != '\0' || !std::isfinite(value)) return NO;
+            value = fminf(2, fmaxf(0, value));
+            if (strcmp(arg, "--brightness") == 0) out.colorAdjustment.brightness = value;
+            else if (strcmp(arg, "--contrast") == 0) out.colorAdjustment.contrast = value;
+            else out.colorAdjustment.saturation = value;
         } else if (strcmp(arg, "--shared-host") == 0) {
             out.sharedHost = YES;
         } else if (strcmp(arg, "--muted") == 0) {
@@ -577,8 +587,9 @@ static BOOL MirageWindowServerState(NSWindow *window, CGRect *bounds,
 }
 - (NSString *)keyForEndpoint:(MirageSharedVideoEndpoint *)endpoint {
     VRVideoEngineConfig c = endpoint.config;
-    return [NSString stringWithFormat:@"%d/%a/%d/%a/%d", c.loadFromMemory,
-        (double)endpoint.speed, endpoint.paused, (double)c.initialVolume, c.muted];
+    return [NSString stringWithFormat:@"%d/%a/%d/%a/%d/%a/%a/%a", c.loadFromMemory,
+        (double)endpoint.speed, endpoint.paused, (double)c.initialVolume, c.muted,
+        (double)c.colorAdjustment.brightness, (double)c.colorAdjustment.contrast, (double)c.colorAdjustment.saturation];
 }
 - (void)refreshSessions {
     for (MirageSharedVideoSession *session in self.sessions.copy) {
@@ -648,7 +659,8 @@ static BOOL MirageWindowServerState(NSWindow *window, CGRect *bounds,
     session.config = endpoint.config;
     session.speed = endpoint.speed;
     session.paused = endpoint.paused;
-    session.seekComplete = YES;
+    CMTime previousTime = endpoint.displayedSession.engine.player.currentTime;
+    session.seekComplete = !CMTIME_IS_NUMERIC(previousTime) || CMTimeGetSeconds(previousTime) <= 0;
     VRVideoEngineConfig config = endpoint.config;
     config.muted = YES;
     config.autoplay = YES;
@@ -660,6 +672,16 @@ static BOOL MirageWindowServerState(NSWindow *window, CGRect *bounds,
         MirageSharedVideoSession *s = weakSession;
         s.decoded = YES;
         s.ready = s.seekComplete;
+        if (!s.seekComplete) {
+            [s.engine.player seekToTime:previousTime toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero
+                completionHandler:^(BOOL finished) {
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        MirageSharedVideoSession *current = weakSession;
+                        current.seekComplete = YES;
+                        current.ready = current.decoded;
+                    });
+                }];
+        }
     };
     session.engine.videoDidEndBlock = ^{
         [weakSelf broadcast:@{ @"event": @"video-did-end" } session:weakSession activeOnly:YES];
@@ -679,22 +701,11 @@ static BOOL MirageWindowServerState(NSWindow *window, CGRect *bounds,
     };
     NSError *error = nil;
     // Register the endpoint before open: failures can be delivered synchronously.
-    CMTime previousTime = endpoint.displayedSession.engine.player.currentTime;
     endpoint.session = session;
     if (![session.engine openWallpaper:self.manifest error:&error]) {
         session.failed = YES;
         [self emit:@{ @"event": @"video-error", @"message": error.localizedDescription ?: @"video could not be opened" }
               token:endpoint.token];
-    } else if (CMTIME_IS_NUMERIC(previousTime) && CMTimeGetSeconds(previousTime) > 0) {
-        session.seekComplete = NO;
-        [session.engine.player seekToTime:previousTime toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero
-                       completionHandler:^(BOOL finished) {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                MirageSharedVideoSession *s = weakSession;
-                s.seekComplete = YES;
-                s.ready = s.decoded;
-            });
-        }];
     }
     return session;
 }
@@ -763,6 +774,7 @@ static BOOL MirageWindowServerState(NSWindow *window, CGRect *bounds,
     config.initialVolume = [command[@"volume"] floatValue];
     config.muted = [command[@"muted"] boolValue];
     config.loadFromMemory = [command[@"memory"] boolValue];
+    config.colorAdjustment = VRColorAdjustmentFromDictionary(command[@"colorAdjustment"]);
     config.hdrEnabled = [command[@"hdr"] boolValue];
     if ([command[@"fill"] isKindOfClass:NSString.class]) ParseFillMode([command[@"fill"] UTF8String], config.fillMode);
     config.positionX = [command[@"x"] doubleValue];
@@ -845,6 +857,7 @@ static BOOL MirageWindowServerState(NSWindow *window, CGRect *bounds,
     else if ([name isEqual:@"muted"] && [value isKindOfClass:NSNumber.class]) config.muted = [value boolValue];
     else if ([name isEqual:@"fillmode"] && [value isKindOfClass:NSString.class]) ParseFillMode([value UTF8String], config.fillMode);
     else if ([name isEqual:@"position"]) { config.positionX = [command[@"x"] doubleValue]; config.positionY = [command[@"y"] doubleValue]; }
+    else if ([name isEqual:@"colorAdjustment"]) config.colorAdjustment = VRColorAdjustmentFromDictionary(value);
     else if ([name isEqual:@"hdr"] && [value isKindOfClass:NSNumber.class]) config.hdrEnabled = [value boolValue];
     else if ([name isEqual:@"snapshot"]) {
         NSString *path = command[@"path"], *request = command[@"token"];
@@ -864,6 +877,19 @@ static BOOL MirageWindowServerState(NSWindow *window, CGRect *bounds,
         return;
     }
     endpoint.config = config;
+    if ([name isEqual:@"colorAdjustment"] && endpoint.session) {
+        BOOL exclusive = YES;
+        for (MirageSharedVideoEndpoint *other in self.endpoints.allValues)
+            if (other != endpoint && (other.session == endpoint.session || other.displayedSession == endpoint.session)) exclusive = NO;
+        NSString *desiredKey = [self keyForEndpoint:endpoint];
+        for (MirageSharedVideoSession *other in self.sessions)
+            if (other != endpoint.session && !other.failed && [other.key isEqualToString:desiredKey]) exclusive = NO;
+        if (exclusive) {
+            endpoint.session.config = config;
+            endpoint.session.key = [self keyForEndpoint:endpoint];
+            [endpoint.session.engine setColorAdjustment:config.colorAdjustment];
+        }
+    }
     VRVideoRendererEngine *views[] = { endpoint.presentation.engine, endpoint.pendingView };
     for (VRVideoRendererEngine *view : views) {
         if (!view) continue;
@@ -930,6 +956,7 @@ int main(int argc, char *argv[]) {
 
         VRVideoEngineConfig config = [VRVideoRendererEngine defaultConfig];
         config.fillMode = args.fillMode;
+        config.colorAdjustment = args.colorAdjustment;
         config.positionX = args.positionX;
         config.positionY = args.positionY;
         config.initialVolume = args.volume;
@@ -1047,6 +1074,8 @@ int main(int argc, char *argv[]) {
                             VRVideoFillMode mode;
                             if (ParseFillMode([value UTF8String], mode)) [eng setFillMode:mode];
                         }
+                    } else if ([name isEqualToString:@"colorAdjustment"]) {
+                        [eng setColorAdjustment:VRColorAdjustmentFromDictionary(value)];
                     } else if ([name isEqualToString:@"hdr"]) {
                         if ([value isKindOfClass:[NSNumber class]]) [eng setHDREnabled:[value boolValue]];
                     } else if ([name isEqualToString:@"snapshot"]) {

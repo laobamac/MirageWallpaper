@@ -156,6 +156,16 @@ void SceneControlChannel::dispatchLine(const char* line) {
                 m_wallpaper.setFillMode(mode);
             }
         }
+    } else if (cmd == "colorAdjustment") {
+        auto value = msg.get("value");
+        if (value.is_none() || !(*value)->is_object()) return;
+        std::array<float, 3> adjustment { 1.0f, 1.0f, 1.0f };
+        constexpr std::array<const char*, 3> keys { "brightness", "contrast", "saturation" };
+        for (std::size_t i = 0; i < keys.size(); ++i) {
+            auto number = (*value)->get(keys[i]);
+            if (number.is_some()) adjustment[i] = static_cast<float>((*number)->as_f64().unwrap_or(1.0));
+        }
+        m_wallpaper.setColorAdjustment(adjustment);
     } else if (cmd == "position") {
         auto x = msg.get("x");
         auto y = msg.get("y");

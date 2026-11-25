@@ -29,6 +29,7 @@ import sr.pkg_fs;
 import sr.rgraph;
 import sr.script;
 import sr.vulkan_render;
+import sr.shader_compile;
 
 using namespace sr;
 
@@ -49,6 +50,7 @@ struct RenderSetFillMode {
 struct RenderSetPosition {
     WallpaperPosition position;
 };
+struct RenderSetColorAdjustment { std::array<float, 3> value; };
 struct RenderSetSpeed {
     float speed;
 };
@@ -94,7 +96,7 @@ struct RenderExportScriptStorage {
 // calls don't fall into ADL ambiguity with std::addressof when the element
 // type sits in namespace std.
 struct RenderMsg {
-    std::variant<RenderInit, RenderSetScene, RenderSetFillMode, RenderSetPosition, RenderSetSpeed,
+    std::variant<RenderInit, RenderSetScene, RenderSetFillMode, RenderSetPosition, RenderSetColorAdjustment, RenderSetSpeed,
                  RenderSetFps, RenderSetAudioCapture, RenderSetUserProperty, RenderSetMediaStatus,
                  RenderStop, RenderDraw, RenderOfflineFrame, RenderRequestFrame, RenderSwapchainReady,
                  RenderRequestPreparedPassDiagnostics, RenderResetScriptStorage,
@@ -139,6 +141,7 @@ struct MainSetPosition {
 struct MainPositionAvailability {
     std::array<bool, 2> axes;
 };
+struct MainSetColorAdjustment { std::array<float, 3> value; };
 struct MainSetSpeed {
     float speed { 1.0f };
 };
@@ -168,7 +171,7 @@ struct MainPreparedPassDiagnostics {
 struct MainMsg {
     std::variant<MainLoadScene, MainConfigure, MainSetFps, MainSetVolume, MainSetVolumeScale,
                  MainSetMuted, MainSetFillMode, MainSetPosition, MainPositionAvailability,
-                 MainSetSpeed, MainSetUserProperty,
+                 MainSetSpeed, MainSetColorAdjustment, MainSetUserProperty,
                  MainSetFirstFrameCallback, MainSetUserPropertyDiagnosticCallback,
                  MainUserPropertyDiagnostics, MainSceneClearColorChanged,
                  MainPreparedPassDiagnostics, MainStop, MainPauseAudio, MainFirstFrame>
@@ -1079,7 +1082,9 @@ bool SceneCanRenderOnDemand(const Scene& scene) {
         scene.shaderValueUpdater->RequiresContinuousFrames() ||
         (scene.paritileSys && ! scene.paritileSys->subsystems.empty()) ||
         ! scene.camera_paths.empty() || ! scene.transform_updaters.empty() ||
-        ! scene.post_processes.empty() || scene.HasViewportScaleAnimation())
+        std::any_of(scene.post_processes.begin(), scene.post_processes.end(), [](const auto& pass) {
+            return pass && pass->name != "__mirage_color_adjustment";
+        }) || scene.HasViewportScaleAnimation())
         return false;
     for (const auto& [name, target] : scene.renderTargets)
         if (name != SpecTex_Default && name != WE_MIP_MAPPED_FRAME_BUFFER) return false;
@@ -1119,6 +1124,7 @@ public:
     void on(MainSetPosition&&);
     void on(MainPositionAvailability&&);
     void on(MainSetSpeed&&);
+    void on(MainSetColorAdjustment&&);
     void on(MainSetUserProperty&&);
     void on(MainSetFirstFrameCallback&&);
     void on(MainSetUserPropertyDiagnosticCallback&&);
@@ -1183,6 +1189,10 @@ public:
     void updatePosition();
     void redrawStoppedFrame();
     void on(RenderSetSpeed&&);
+    void on(RenderSetColorAdjustment&&);
+    bool updateColorAdjustment();
+    std::array<float, 3> m_color_adjustment { 1.0f, 1.0f, 1.0f };
+    std::shared_ptr<ScenePostProcess> m_color_pass;
     void on(RenderSetAudioCapture&& m) { configureAudioCapture(m.enabled, m.external); }
     void on(RenderSetFps&& m) {
         frame_timer.SetRequiredFps(static_cast<uint16_t>(std::clamp(m.fps, 5u, 240u)));
@@ -1670,9 +1680,98 @@ void SceneRenderController::on(RenderSetScene&& m) {
     m_scene_ready.store(false, std::memory_order_release);
     m_scene = std::move(m.scene);
     m_last_render_time.reset();
+    m_color_pass.reset();
+    updateColorAdjustment();
     rebuildRenderGraph(vulkan::RenderGraphResourceRetention::ReleaseSceneTextures, true);
     if (m_scene && m_media_status) applyMediaStatus(*m_media_status);
     m_scene_ready.store(m_scene != nullptr && m_render->readyToDraw(), std::memory_order_release);
+}
+
+bool SceneRenderController::updateColorAdjustment() {
+    if (!m_scene) return false;
+    const bool enabled = m_color_adjustment != std::array { 1.0f, 1.0f, 1.0f };
+    bool changed = false;
+    if (enabled && !m_color_pass) {
+        const std::array units {
+            vulkan::ShaderCompUnit { .stage = ShaderType::VERTEX, .src = R"glsl(#version 450
+layout(location=0) in vec3 a_Position;
+layout(location=1) in vec2 a_TexCoord;
+layout(location=0) out vec2 uv;
+void main() { gl_Position=vec4(a_Position.x,-a_Position.y,0,1); uv=a_TexCoord; }
+)glsl", .entry_point = "main" },
+            vulkan::ShaderCompUnit { .stage = ShaderType::FRAGMENT, .src = R"glsl(#version 450
+layout(location=0) in vec2 uv;
+layout(location=0) out vec4 result;
+layout(set=0,binding=1) uniform sampler2D g_Texture0;
+layout(set=0,binding=0,std140) uniform ColorSettings { vec4 g_MirageColor; };
+vec3 limitColor(vec3 c) { return g_MirageColor.w>0.5 ? max(c,vec3(0)) : clamp(c,0,1); }
+void main() {
+    vec4 source=texture(g_Texture0,uv);
+    vec3 c=source.a>0.0 ? source.rgb/source.a : vec3(0);
+    float gray=dot(c,vec3(0.213,0.715,0.072));
+    c=limitColor(mix(vec3(gray),c,g_MirageColor.z));
+    c=limitColor((c-0.5)*g_MirageColor.y+0.5);
+    c=limitColor(c*g_MirageColor.x);
+    result=vec4(c*source.a,source.a);
+}
+)glsl", .entry_point = "main" }
+        };
+        std::vector<vulkan::Uni_ShaderSpv> spvs;
+        if (!vulkan::CompileAndLinkShaderUnits(units, {}, spvs)) {
+            rstd_error("Mirage color adjustment shader compilation failed");
+            return false;
+        }
+        auto shader = std::make_shared<SceneShader>();
+        shader->id = 0x4d434f4c;
+        shader->name = "MirageColorAdjustment";
+        shader->attrs = { { "a_Position", 0 }, { "a_TexCoord", 1 } };
+        for (auto& spv : spvs) shader->codes.push_back(std::move(spv->spirv));
+        SceneMaterial material;
+        material.name = "MirageColorAdjustment";
+        material.textures = { std::string(SpecTex_Default) };
+        material.customShader.shader = std::move(shader);
+        material.blenmode = BlendMode::Disable;
+        material.depth_test = false;
+        material.depth_write = false;
+        material.cull_mode = CullMode::None;
+        auto mesh = std::make_shared<SceneMesh>();
+        mesh->ChangeMeshDataFrom(m_scene->default_effect_mesh);
+        mesh->AddMaterial(std::move(material));
+        auto node = rstd::sync::Arc<SceneNode>::make();
+        node->SetCamera("effect");
+        node->AddMesh(mesh);
+        std::string target = "_rt_mirage_color_adjustment";
+        while (m_scene->renderTargets.contains(target)) target += "_";
+        auto rt = m_scene->renderTargets.at(std::string(SpecTex_Default));
+        rt.sample_count = 1;
+        rt.mipmap_level = 1;
+        rt.allowReuse = true;
+        rt.withDepth = false;
+        m_scene->renderTargets[target] = rt;
+        m_color_pass = std::make_shared<ScenePostProcess>();
+        m_color_pass->name = "__mirage_color_adjustment";
+        m_color_pass->steps.emplace_back(ScenePostProcessPass { .node = rstd::move(node), .output = target });
+        m_color_pass->steps.emplace_back(ScenePostProcessCopy { .src = target, .dst = std::string(SpecTex_Default) });
+        m_scene->post_processes.push_back(m_color_pass);
+        changed = true;
+    }
+    if (!m_color_pass) return false;
+    changed |= m_color_pass->enabled != enabled;
+    m_color_pass->enabled = enabled;
+    auto& pass = std::get<ScenePostProcessPass>(m_color_pass->steps.front());
+    const std::array values { m_color_adjustment[0], m_color_adjustment[1], m_color_adjustment[2],
+                             m_scene->hdr_render_targets ? 1.0f : 0.0f };
+    pass.node->Mesh()->Material()->SetShaderValue("g_MirageColor", ShaderValue(values));
+    return changed;
+}
+
+void SceneRenderController::on(RenderSetColorAdjustment&& message) {
+    if (m_color_adjustment == message.value) return;
+    m_color_adjustment = message.value;
+    wakeIdleFrame();
+    if (updateColorAdjustment() && renderInited())
+        rebuildRenderGraph(vulkan::RenderGraphResourceRetention::KeepSceneTextures, false);
+    redrawStoppedFrame();
 }
 
 void SceneRenderController::on(RenderSetSpeed&& m) {
@@ -1899,6 +1998,7 @@ void SceneRuntimeController::on(MainConfigure&& m) {
     on(MainSetMuted { m_config.muted });
     on(MainSetFillMode { m_config.fill_mode });
     on(MainSetPosition { m_config.position });
+    on(MainSetColorAdjustment { m_config.color_adjustment });
     on(MainSetSpeed { m_config.speed });
 
     // MainConfigure and RenderInit run on separate message loops. Start the
@@ -1938,6 +2038,12 @@ void SceneRuntimeController::on(MainSetPosition&& m) {
 
 void SceneRuntimeController::on(MainPositionAvailability&& m) {
     if (m_position_cb) m_position_cb(m.axes[0], m.axes[1]);
+}
+
+void SceneRuntimeController::on(MainSetColorAdjustment&& m) {
+    for (auto& value : m.value) value = std::isfinite(value) ? std::clamp(value, 0.0f, 2.0f) : 1.0f;
+    m_config.color_adjustment = m.value;
+    (void)m_render_loop.sender().send(RenderMsg { RenderSetColorAdjustment { m.value } });
 }
 
 void SceneRuntimeController::on(MainSetSpeed&& m) {
@@ -2337,6 +2443,10 @@ void SceneWallpaper::setFillMode(FillMode mode) {
 
 void SceneWallpaper::setPosition(WallpaperPosition position) {
     (void)m_runtime->mainSender().send(MainMsg { MainSetPosition { position.Normalized() } });
+}
+
+void SceneWallpaper::setColorAdjustment(std::array<float, 3> adjustment) {
+    (void)m_runtime->mainSender().send(MainMsg { MainSetColorAdjustment { adjustment } });
 }
 
 void SceneWallpaper::setSpeed(float speed) {

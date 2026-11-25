@@ -51,6 +51,7 @@ struct DynamicLockScreenDisplayConfiguration: Codable {
     var renderedPreviewPath: String? = nil
     var displayKey: String? = nil
     var speed: Float? = nil
+    var colorAdjustment: WallpaperColorAdjustment? = nil
     var scriptStorage: [String: String]? = nil
     var runtimeRevision: UUID? = nil
 }
@@ -418,6 +419,7 @@ final class DynamicLockScreenManager: ObservableObject {
                   display.fillMode == (snapshot.runtime?.fillMode ?? fillMode.rawValue),
                   (snapshot.runtimeRevision == nil || display.runtimeRevision == snapshot.runtimeRevision),
                   (display.position ?? .center) == snapshot.position,
+                  (display.colorAdjustment ?? .init()) == (snapshot.runtime?.colorAdjustment ?? .init()),
                   display.renderedPreviewPath == url.path,
                   URL(fileURLWithPath: display.renderDirectory).deletingLastPathComponent().standardizedFileURL
                     == deployment.standardizedFileURL else { continue }
@@ -446,6 +448,7 @@ final class DynamicLockScreenManager: ObservableObject {
                     options.fillMode = display.runtime.flatMap { FillMode(rawValue: $0.fillMode) } ?? runtime.fillMode
                     options.position = display.position
                     options.speed = display.runtime?.speed ?? runtime.speed
+                    options.colorAdjustment = display.runtime?.colorAdjustment ?? runtime.colorAdjustment
                     options.scriptStorage = display.runtime?.scriptStorage
                     options.loadFromMemory = loadFromMemory
                     options.userProperties = display.runtime?.properties(for: wallpaper) ?? properties
@@ -455,6 +458,7 @@ final class DynamicLockScreenManager: ObservableObject {
                        active.runtime.position == options.position,
                        active.runtime.fillMode == options.fillMode,
                        active.runtime.speed == options.speed,
+                       active.runtime.colorAdjustment == options.colorAdjustment,
                        WallpaperPropertyEncoding.values(AppDelegate.shared.wallpaperViewModel.effectiveProperties(
                         for: wallpaper, runtime: active.runtime)).mapValues(AnyCodableValue.init)
                         == WallpaperPropertyEncoding.values(options.userProperties).mapValues(AnyCodableValue.init) {
@@ -587,6 +591,7 @@ final class DynamicLockScreenManager: ObservableObject {
                     renderedPreviewPath: deployedPath(previewURL.path),
                     displayKey: display.displayKey,
                     speed: snapshot.speed,
+                    colorAdjustment: snapshot.colorAdjustment,
                     scriptStorage: snapshot.scriptStorage ?? storedStorage,
                     runtimeRevision: revision
                 )
@@ -641,11 +646,13 @@ final class DynamicLockScreenManager: ObservableObject {
         let storage = snapshot.scriptStorage ?? WallpaperRenderSnapshot.storedScriptStorage(for: wallpaper)
         guard properties != display.rawProperties || display.fillMode != snapshot.fillMode ||
             (display.position ?? .center) != snapshot.position || (display.speed ?? 1) != snapshot.speed ||
+            (display.colorAdjustment ?? .init()) != (snapshot.colorAdjustment ?? .init()) ||
             display.scriptStorage != storage else { return nil }
         display.rawProperties = properties
         display.fillMode = snapshot.fillMode
         display.position = snapshot.position
         display.speed = snapshot.speed
+        display.colorAdjustment = snapshot.colorAdjustment
         display.scriptStorage = storage
         display.displayKey = displayKey
         display.runtimeRevision = UUID()
@@ -665,6 +672,7 @@ final class DynamicLockScreenManager: ObservableObject {
             runtime.fillMode = record.fillMode
             runtime.position = record.position ?? .center
             runtime.speed = record.speed ?? 1
+            runtime.colorAdjustment = record.colorAdjustment
             return DisplaySnapshot(displayID: record.displayID, fallbackSource: nil, systemFallbackSource: nil,
                                    position: runtime.position, displayKey: record.displayKey, runtime: runtime,
                                    runtimeRevision: record.runtimeRevision)

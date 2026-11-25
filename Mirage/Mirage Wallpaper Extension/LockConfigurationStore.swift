@@ -65,6 +65,7 @@ struct MirageLockDisplayConfiguration: Codable, Equatable {
     var renderedPreviewPath: String? = nil
     var displayKey: String? = nil
     var speed: Float? = nil
+    var colorAdjustment: WallpaperColorAdjustment? = nil
     var scriptStorage: [String: String]? = nil
     var runtimeRevision: UUID? = nil
 

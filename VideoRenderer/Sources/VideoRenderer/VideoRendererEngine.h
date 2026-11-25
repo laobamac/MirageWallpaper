@@ -16,6 +16,15 @@ typedef NS_ENUM(NSInteger, VRVideoFillMode) {
 };
 
 typedef struct {
+    float brightness;
+    float contrast;
+    float saturation;
+} VRColorAdjustment;
+
+FOUNDATION_EXPORT VRColorAdjustment VRColorAdjustmentFromDictionary(NSDictionary * _Nullable dictionary);
+
+typedef struct {
+    VRColorAdjustment colorAdjustment;
     VRVideoFillMode fillMode;
     double positionX;
     double positionY;
@@ -45,6 +54,7 @@ typedef struct {
 - (void)setPlaybackRate:(float)playbackRate;
 - (void)setVolume:(float)volume;
 - (void)setMuted:(BOOL)muted;
+- (void)setColorAdjustment:(VRColorAdjustment)adjustment;
 - (void)setFillMode:(VRVideoFillMode)fillMode;
 - (void)setPositionX:(double)x y:(double)y;
 - (void)setHDREnabled:(BOOL)enabled;

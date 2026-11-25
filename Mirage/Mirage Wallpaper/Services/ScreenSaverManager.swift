@@ -463,6 +463,7 @@ final class ScreenSaverManager {
             "entryPath": wallpaper.resolvedEntryURL.path,
             "playableEntryPath": playableVideoCacheURL(for: wallpaper.resolvedEntryURL).path,
             "rawProperties": sourceSnapshot?.rawProperties.mapValues(\.foundationValue) ?? rawPropertyValues,
+            "colorAdjustment": (sourceSnapshot?.colorAdjustment ?? runtime.colorAdjustment).dictionary,
             "speed": sourceSnapshot?.speed ?? (runtime.speed.isFinite && runtime.speed > 0 ? runtime.speed : 1),
             "scriptStorage": sourceSnapshot?.scriptStorage ?? storedStorage,
             "runtimeByDisplay": runtimes.mapValues(\.dictionary),
@@ -483,7 +484,7 @@ final class ScreenSaverManager {
             if let source = existing["sourceDisplayKey"] as? String {
                 object["sourceDisplayKey"] = source
                 if source != context.sourceDisplayKey {
-                    for key in ["rawProperties", "fillMode", "position", "speed", "scriptStorage"] {
+                    for key in ["rawProperties", "fillMode", "position", "speed", "scriptStorage", "colorAdjustment"] {
                         object[key] = existing[key]
                     }
                 }

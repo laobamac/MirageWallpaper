@@ -27,6 +27,9 @@ typedef struct {
     BOOL enableAudioSpectrum;        // start WRAudioTap for wallpaperRegisterAudioListener
     BOOL enableAudioPlayback;        // allow media autoplay with sound
     BOOL initiallySuspendsMediaPlayback; // host barrier completed before first navigation
+    float brightness;
+    float contrast;
+    float saturation;
     float initialVolume;             // master volume 0..1 (applied via "audio" property)
     int  frameRate;                  // target fps (0 or ≥60 ⇒ no throttle)
     BOOL loadFromMemory;             // cache wallpaper resource bytes for process lifetime
@@ -84,6 +87,7 @@ typedef struct {
 // Injects a requestAnimationFrame throttle shim when fps < 60 (no native
 // equivalent of CEF's SetWindowlessFrameRate).
 - (void)setFrameRate:(int)fps;
+- (void)setColorAdjustment:(NSDictionary *)adjustment;
 
 - (void)startAudioSpectrum;
 - (void)stopAudioSpectrum;

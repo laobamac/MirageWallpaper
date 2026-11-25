@@ -12,12 +12,14 @@ final class WallpaperControlState {
     private(set) var speed: Float = 1
     private(set) var fillMode: FillMode = .cover
     private(set) var position = WallpaperPosition.center
+    private(set) var colorAdjustment = WallpaperColorAdjustment()
 
     func update(_ runtime: WallpaperRuntimeState) {
         if volume != runtime.volume { volume = runtime.volume }
         if speed != runtime.speed { speed = runtime.speed }
         if fillMode != runtime.fillMode { fillMode = runtime.fillMode }
         if position != runtime.position { position = runtime.position }
+        if colorAdjustment != runtime.colorAdjustment { colorAdjustment = runtime.colorAdjustment }
     }
 }
 

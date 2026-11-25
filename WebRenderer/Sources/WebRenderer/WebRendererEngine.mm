@@ -644,6 +644,49 @@ static NSString *WRStringValue(id value) {
 }
 @end
 
+static WKContentWorld *WRColorWorld() {
+    return [WKContentWorld worldWithName:@"MirageColorAdjustment"];
+}
+
+static NSString *WRColorScript(NSDictionary *value) {
+    NSString *source = [NSString stringWithUTF8String:R"mirage((() => {
+    let root = null, original = '', priority = '', applied = '', values = [1, 1, 1];
+    const observe = () => observer.observe(document, {subtree:true, childList:true, characterData:true, attributes:true, attributeFilter:['style','class','href','media','disabled']});
+    const render = () => {
+        const next = document.documentElement;
+        if (!next) return;
+        observer.disconnect();
+        if (next !== root) { root=next; original=root.style.getPropertyValue('filter'); priority=root.style.getPropertyPriority('filter'); applied=''; }
+        const current=root.style.getPropertyValue('filter');
+        if ((applied && current !== applied) || (!applied && current !== original)) { original=current; priority=root.style.getPropertyPriority('filter'); }
+        if (original) root.style.setProperty('filter',original,priority); else root.style.removeProperty('filter');
+        const base=getComputedStyle(root).filter;
+        applied='';
+        if (values.some(v => v !== 1)) {
+            applied=(base && base !== 'none' ? base+' ' : '')+`saturate(${values[2]}) contrast(${values[1]}) brightness(${values[0]})`;
+            root.style.setProperty('filter',applied,'important');
+        }
+        observe();
+    };
+    const observer=new MutationObserver(records => {
+        if (document.documentElement !== root || records.some(r =>
+            r.target === root || r.target.parentElement?.tagName === 'STYLE' || (r.target.nodeType === 1 && ['STYLE','LINK'].includes(r.target.tagName)) ||
+            [...r.addedNodes,...r.removedNodes].some(n => n.nodeType===1 && (['STYLE','LINK'].includes(n.tagName) || n.querySelector('style,link'))))) render();
+    });
+    globalThis.__mirageSetColor = value => {
+        values=['brightness','contrast','saturation'].map(key => {
+            const n=Number(value[key]); return Number.isFinite(n) ? Math.min(2,Math.max(0,n)) : 1;
+        });
+        render();
+    };
+    observe();
+})();
+)mirage"];
+    NSData *data = [NSJSONSerialization dataWithJSONObject:value options:0 error:nil];
+    NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    return [source stringByAppendingFormat:@"\n__mirageSetColor(%@);", json ?: @"{}"];
+}
+
 @interface WebRendererEngine () <WKScriptMessageHandler>
 @property (nonatomic, strong) WKWebView *webView;
 @property (nonatomic, strong) WKUserContentController *userContentController;
@@ -685,6 +728,8 @@ static NSString *WRStringValue(id value) {
 
 @implementation WebRendererEngine {
     WREngineConfig _config;
+    NSDictionary *_colorAdjustment;
+    WKUserScript *_colorScript;
 }
 
 + (WREngineConfig)defaultConfig {
@@ -694,6 +739,7 @@ static NSString *WRStringValue(id value) {
     c.enableAudioPlayback = YES;
     c.initiallySuspendsMediaPlayback = NO;
     c.initialVolume = 1.0f;
+    c.brightness = 1.0f; c.contrast = 1.0f; c.saturation = 1.0f;
     c.frameRate = 60;
     c.loadFromMemory = NO;
     c.networkPolicy = WRNetworkPolicyObserve;
@@ -706,6 +752,7 @@ static NSString *WRStringValue(id value) {
     self = [super init];
     if (self) {
         _config = config;
+        _colorAdjustment = @{ @"brightness": @(config.brightness), @"contrast": @(config.contrast), @"saturation": @(config.saturation) };
         _pendingJS = [NSMutableArray array];
         _volume = config.initialVolume;
         _muted = (config.initialVolume <= 0.0f);
@@ -723,6 +770,9 @@ static NSString *WRStringValue(id value) {
 - (void)setupWebViewWithFrame:(NSRect)frame {
     WKWebViewConfiguration *cfg = [WKWebViewConfiguration new];
     WKUserContentController *ucc = [WKUserContentController new];
+    _colorScript = [[WKUserScript alloc] initWithSource:WRColorScript(_colorAdjustment)
+        injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:YES inContentWorld:WRColorWorld()];
+    [ucc addUserScript:_colorScript];
     WKUserScript *audioGuard = [[WKUserScript alloc]
         initWithSource:WRStrictAudioGuardScript(
             _muted || _config.initiallySuspendsMediaPlayback)
@@ -1253,9 +1303,38 @@ static NSString *WRStringValue(id value) {
     }];
 }
 
+- (void)setColorAdjustment:(NSDictionary *)adjustment {
+    NSMutableDictionary *value = [NSMutableDictionary dictionary];
+    for (NSString *key in @[@"brightness", @"contrast", @"saturation"]) {
+        id raw = adjustment[key];
+        float number = [raw isKindOfClass:NSNumber.class] ? [raw floatValue] : 1.0f;
+        value[key] = @(isfinite(number) ? fminf(2, fmaxf(0, number)) : 1.0f);
+    }
+    if (![_colorAdjustment isEqualToDictionary:value]) {
+        WKUserContentController *controller = _userContentController;
+        NSMutableArray<WKUserScript *> *scripts = [NSMutableArray array];
+        [scripts addObjectsFromArray:controller.userScripts];
+        NSString *previousSource = _colorScript.source;
+        _colorScript = [[WKUserScript alloc] initWithSource:WRColorScript(value)
+            injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:YES inContentWorld:WRColorWorld()];
+        [controller removeAllUserScripts];
+        for (WKUserScript *script in scripts)
+            [controller addUserScript:[script.source isEqualToString:previousSource] ? _colorScript : script];
+    }
+    _colorAdjustment = value;
+    NSData *data = [NSJSONSerialization dataWithJSONObject:value options:0 error:nil];
+    NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    [_webView evaluateJavaScript:[NSString stringWithFormat:@"__mirageSetColor(%@);", json]
+        inFrame:nil inContentWorld:WRColorWorld() completionHandler:^(id result, NSError *error) {
+            if (error != nil && self.didFinishLoad)
+                fprintf(stderr, "WebRenderer: color adjustment failed: %s\n", error.localizedDescription.UTF8String);
+        }];
+}
+
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
     (void)navigation;
     _didFinishLoad = YES;
+    [self setColorAdjustment:_colorAdjustment];
     fprintf(stderr, "WebRenderer: navigation finished url=%s; injecting user properties\n",
             webView.URL.absoluteString.UTF8String ?: "unknown");
 

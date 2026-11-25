@@ -46,6 +46,9 @@ struct WallpaperArgs {
     const char *workshop = nullptr;
     int   fps = 60;
     float volume = 1.0f;
+    float brightness = 1.0f;
+    float contrast = 1.0f;
+    float saturation = 1.0f;
     BOOL  spectrum = YES;
     BOOL  externalSpectrum = NO;
     int   screen = 0;
@@ -222,6 +225,15 @@ static BOOL ParseArgs(int argc, char **argv, WallpaperArgs &out) {
             const char *v = take(i, arg); if (!v) return false; out.fps = atoi(v);
         } else if (strcmp(arg, "--volume") == 0) {
             const char *v = take(i, arg); if (!v) return false; out.volume = strtof(v, nullptr);
+        } else if (strcmp(arg, "--brightness") == 0 || strcmp(arg, "--contrast") == 0 || strcmp(arg, "--saturation") == 0) {
+            const char *v = take(i, arg); if (!v) return NO;
+            char *end = nullptr;
+            float value = strtof(v, &end);
+            if (end == v || *end != '\0' || !std::isfinite(value)) return NO;
+            value = fminf(2, fmaxf(0, value));
+            if (strcmp(arg, "--brightness") == 0) out.brightness = value;
+            else if (strcmp(arg, "--contrast") == 0) out.contrast = value;
+            else out.saturation = value;
         } else if (strcmp(arg, "--no-spectrum") == 0) {
             out.spectrum = NO;
         } else if (strcmp(arg, "--external-spectrum") == 0) {
@@ -588,6 +600,9 @@ int main(int argc, char *argv[]) {
         cfg.initiallySuspendsMediaPlayback = NO;
         cfg.initialVolume = args.deferredShow ? 0.0f : args.volume;
         cfg.frameRate = args.fps;
+        cfg.brightness = args.brightness;
+        cfg.contrast = args.contrast;
+        cfg.saturation = args.saturation;
         cfg.loadFromMemory = args.loadFromMemory;
         cfg.networkPolicy = args.networkPolicy;
         NSMutableArray<NSString *> *assetOverlays = [NSMutableArray arrayWithCapacity:args.assetOverlays.size()];
@@ -736,6 +751,8 @@ int main(int argc, char *argv[]) {
                             delegate.playbackMuted = [value boolValue];
                             [delegate applyPlaybackState];
                         }
+                    } else if ([name isEqualToString:@"colorAdjustment"]) {
+                        if ([value isKindOfClass:NSDictionary.class]) [eng setColorAdjustment:value];
                     } else if ([name isEqualToString:@"fps"]) {
                         if ([value isKindOfClass:[NSNumber class]]) [eng setFrameRate:[value intValue]];
                     } else if ([name isEqualToString:@"audioSpectrum"]) {

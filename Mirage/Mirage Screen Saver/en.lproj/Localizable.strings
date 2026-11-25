@@ -6,3 +6,5 @@
 "场景屏保资源不完整" = "Scene screen saver resources are incomplete";
 "请先在 Mirage 设置中选择屏保壁纸" = "Choose a screen saver wallpaper in Mirage settings first";
 "此视频格式无法播放，请先在 Mirage 中播放一次以完成转换" = "This video format cannot be played. Play it once in Mirage to convert it first.";
+
+"视频壁纸加载失败" = "Failed to load video wallpaper";

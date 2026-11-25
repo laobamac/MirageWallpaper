@@ -69,6 +69,7 @@ final class RendererProcess {
     var desiredSpeed: Float
     var desiredFillMode: FillMode
     var desiredPosition: WallpaperPosition
+    var desiredColorAdjustment: WallpaperColorAdjustment
     var positionAvailability = WallpaperPositionAvailability()
     var desiredHDRVideo: Bool
     var desiredUserProperties: [String: WEProjectProperty]
@@ -144,6 +145,7 @@ final class RendererProcess {
         self.desiredSpeed = options.speed
         self.desiredFillMode = options.fillMode
         self.desiredPosition = options.position
+        self.desiredColorAdjustment = options.colorAdjustment
         self.desiredHDRVideo = options.enableHDRVideo
         self.desiredUserProperties = options.userProperties
         self.spectrumEnabled = spectrumEnabled
@@ -537,6 +539,7 @@ struct RenderOptions: Equatable {
     var speed: Float = 1.0
     var fillMode: FillMode = .cover
     var position: WallpaperPosition = .center
+    var colorAdjustment = WallpaperColorAdjustment()
     var enableSpectrum: Bool = true
     var renderScale: Double = 1.0
     var enableMetalFX: Bool = false
@@ -639,7 +642,8 @@ final class SharedVideoProcess {
               "speed": options.speed, "paused": options.powerState == .pause,
               "volume": options.volume, "muted": options.muted,
               "memory": options.loadFromMemory, "hdr": options.enableHDRVideo,
-              "fill": options.fillMode.rawValue, "x": options.position.x, "y": options.position.y],
+              "fill": options.fillMode.rawValue, "x": options.position.x, "y": options.position.y,
+              "colorAdjustment": options.colorAdjustment.dictionary],
              endpoint: handle.endpointID)
     }
 
@@ -1011,6 +1015,7 @@ final class RendererController {
                              "--fill", options.fillMode.rawValue,
                              "--position-x", String(options.position.x), "--position-y", String(options.position.y),
                              "--run-seconds", String(Int(Self.preparationTimeout) + 2)]
+            arguments += Self.colorArguments(options.colorAdjustment)
             var environment = ProcessInfo.processInfo.environment
             if options.loadFromMemory { arguments.append("--load-from-memory") }
             if wallpaper.kind == .scene {
@@ -1478,7 +1483,7 @@ final class RendererController {
         let proc = Process()
         proc.executableURL = binary
 
-        var args: [String] = []
+        var args: [String] = Self.colorArguments(options.colorAdjustment)
         var env = ProcessInfo.processInfo.environment
         if options.developerModeEnabled {
             env["WR_DEBUG"] = "1"
@@ -1738,6 +1743,7 @@ final class RendererController {
             launched.enableMetalFX == options.enableMetalFX &&
             launched.msaaSamples == options.msaaSamples &&
             launched.loadFromMemory == options.loadFromMemory &&
+            candidate.desiredColorAdjustment == options.colorAdjustment &&
             candidate.desiredUserProperties == options.userProperties
     }
 
@@ -1754,6 +1760,7 @@ final class RendererController {
         handle.desiredSpeed = options.speed
         handle.desiredFillMode = options.fillMode
         handle.desiredPosition = options.position
+        handle.desiredColorAdjustment = options.colorAdjustment
         handle.desiredHDRVideo = options.enableHDRVideo
         handle.desiredUserProperties = options.userProperties
     }
@@ -2006,6 +2013,7 @@ final class RendererController {
         candidate.send(["cmd": "fps", "value": candidate.desiredFps])
         candidate.send(["cmd": "fillmode", "value": candidate.desiredFillMode.rawValue])
         sendPosition(candidate.desiredPosition, to: candidate)
+        candidate.send(Self.colorCommand(candidate.desiredColorAdjustment))
         candidate.send(["cmd": "speed", "value": candidate.desiredSpeed])
         if candidate.wallpaper.kind == .video {
             candidate.send(["cmd": "hdr", "value": candidate.desiredHDRVideo])
@@ -2218,6 +2226,7 @@ final class RendererController {
         handle.send(["cmd": "fps", "value": handle.desiredFps])
         handle.send(["cmd": "fillmode", "value": handle.desiredFillMode.rawValue])
         sendPosition(handle.desiredPosition, to: handle)
+        handle.send(Self.colorCommand(handle.desiredColorAdjustment))
         handle.send(["cmd": "speed", "value": handle.desiredSpeed])
         if handle.wallpaper.kind == .video {
             handle.send(["cmd": "hdr", "value": handle.desiredHDRVideo])
@@ -3055,6 +3064,7 @@ final class RendererController {
         target.speed = source.speed
         target.fillMode = source.fillMode
         target.position = source.position
+        target.colorAdjustment = source.colorAdjustment
         target.userProperties = source.userProperties
         target.powerState = source.powerState
         target.powerFps = source.powerFps
@@ -3067,6 +3077,7 @@ final class RendererController {
         handle.send(["cmd": "fps", "value": options.fps])
         handle.send(["cmd": "fillmode", "value": options.fillMode.rawValue])
         sendPosition(options.position, to: handle)
+        handle.send(Self.colorCommand(options.colorAdjustment))
         handle.send(["cmd": "speed", "value": options.speed])
         if handle.wallpaper.kind == .video {
             handle.send(["cmd": "hdr", "value": options.enableHDRVideo])
@@ -3340,6 +3351,33 @@ final class RendererController {
         let snapshot = readSnapshot()
         guard snapshot.wallpapers[displayID]?.id == wallpaperID else { return .init() }
         return snapshot.positions[displayID] ?? .init()
+    }
+
+    private static func colorArguments(_ adjustment: WallpaperColorAdjustment) -> [String] {
+        let value = adjustment.normalized
+        return ["--brightness", String(value.brightness), "--contrast", String(value.contrast),
+                "--saturation", String(value.saturation)]
+    }
+
+    private static func colorCommand(_ adjustment: WallpaperColorAdjustment) -> [String: Any] {
+        ["cmd": "colorAdjustment", "value": adjustment.dictionary]
+    }
+
+    func setColorAdjustment(_ adjustment: WallpaperColorAdjustment, onDisplay displayID: CGDirectDisplayID,
+                            assignmentID: UUID) {
+        if !isOnCommandQueue {
+            commandQueue.async { [self] in setColorAdjustment(adjustment, onDisplay: displayID, assignmentID: assignmentID) }
+            return
+        }
+        let value = adjustment.normalized
+        let actives: [RendererProcess] = queue.sync {
+            targetsLocked(displayID, includeCandidates: true, assignmentID: assignmentID).forEach {
+                $0.desiredColorAdjustment = value
+            }
+            updatePendingOptionsLocked(displayID, assignmentID: assignmentID) { $0.colorAdjustment = value }
+            return liveRunningTargetsLocked(displayID, assignmentID: assignmentID)
+        }
+        actives.forEach { $0.send(Self.colorCommand(value)) }
     }
 
     private func sendPosition(_ position: WallpaperPosition, to handle: RendererProcess) {

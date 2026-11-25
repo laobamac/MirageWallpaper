@@ -144,6 +144,7 @@ struct Options {
     std::uint32_t             msaa { 1 };
     double                    render_scale { 1.0 };
     sr::WallpaperPosition     position;
+    std::array<float, 3>       color_adjustment { 1.0f, 1.0f, 1.0f };
     sr::FillMode              fill_mode { sr::FillMode::ASPECTCROP };
     std::uint32_t             screen { 0 };
     std::uint32_t             display_id { 0 };
@@ -374,6 +375,12 @@ bool ParseArgs(int argc, char** argv, Options& out) {
             double coordinate = 0.5;
             if (value == nullptr || !ParseDouble(value, coordinate)) return false;
             (arg == "--position-x" ? out.position.x : out.position.y) = std::clamp(coordinate, 0.0, 1.0);
+        } else if (arg == "--brightness" || arg == "--contrast" || arg == "--saturation") {
+            const char* value = require_value(i, arg);
+            double number = 1.0;
+            if (value == nullptr || !ParseDouble(value, number)) return false;
+            const std::size_t index = arg == "--brightness" ? 0 : (arg == "--contrast" ? 1 : 2);
+            out.color_adjustment[index] = static_cast<float>(std::clamp(number, 0.0, 2.0));
         } else if (arg == "--fill") {
             const char* value = require_value(i, arg);
             if (value == nullptr) return false;
@@ -579,6 +586,7 @@ int main(int argc, char** argv) {
     config.graphviz        = options.graphviz;
     config.fps             = options.fps;
     config.position        = options.position;
+    config.color_adjustment = options.color_adjustment;
     config.fill_mode       = options.fill_mode;
     config.muted           = options.muted;
     config.spectrum_enabled = options.spectrum_enabled;
@@ -614,6 +622,13 @@ int main(int argc, char** argv) {
             config.speed = static_cast<float>((*speed)->as_f64().unwrap_or(1.0));
         config.script_storage_snapshot = "{}";
         config.script_storage_callback = {};
+        if (auto colors = runtime.get("colorAdjustment"); colors.is_some() && (*colors)->is_object()) {
+            constexpr std::array<const char*, 3> keys { "brightness", "contrast", "saturation" };
+            for (std::size_t i = 0; i < keys.size(); ++i) {
+                if (auto number = (*colors)->get(keys[i]); number.is_some())
+                    config.color_adjustment[i] = static_cast<float>((*number)->as_f64().unwrap_or(1.0));
+            }
+        }
         if (auto storage = runtime.get("scriptStorage"); storage.is_some() && (*storage)->is_object())
             config.script_storage_snapshot = sr::Dump(**storage);
     }

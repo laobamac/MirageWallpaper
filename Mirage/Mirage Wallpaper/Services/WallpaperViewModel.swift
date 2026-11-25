@@ -15,6 +15,7 @@ struct WallpaperRuntimeState: Codable, Equatable {
     var muted: Bool = false
     var fillMode: FillMode = .cover
     var position: WallpaperPosition = .center
+    var colorAdjustment = WallpaperColorAdjustment()
     var propertyOverrides: [String: WEPropertyValue] = [:]
 
     init() {}
@@ -26,6 +27,7 @@ struct WallpaperRuntimeState: Codable, Equatable {
         muted = try values.decodeIfPresent(Bool.self, forKey: .muted) ?? false
         fillMode = try values.decodeIfPresent(FillMode.self, forKey: .fillMode) ?? .cover
         position = try values.decodeIfPresent(WallpaperPosition.self, forKey: .position) ?? .center
+        colorAdjustment = try values.decodeIfPresent(WallpaperColorAdjustment.self, forKey: .colorAdjustment) ?? .init()
         propertyOverrides = try values.decodeIfPresent([String: WEPropertyValue].self,
                                                         forKey: .propertyOverrides) ?? [:]
     }
@@ -118,6 +120,7 @@ class WallpaperViewModel: PlaylistPlayback {
     private static let legacyWallpaperDefaultsKey = "CurrentWallpaper"
     private static let runtimeKeyPrefix = "Runtime_"
     private static let positionDefaultsKey = "WallpaperPositionsByDisplay"
+    private static let colorDefaultsKey = "WallpaperColorsByDisplay"
     private static let sessionPauseRepairDefaultsKey = "DidRepairSessionPausedRuntimes"
 
     private(set) var displayStates: [DisplayKey: DisplayWallpaperState] = [:] {
@@ -163,6 +166,12 @@ class WallpaperViewModel: PlaylistPlayback {
     @ObservationIgnored private let playbackCommands = LatestValueThrottler<DisplayKey>()
     @ObservationIgnored private let propertyCommands = LatestValueThrottler<DisplayKey>()
     @ObservationIgnored private let positionCommands = LatestValueThrottler<DisplayKey>()
+    @ObservationIgnored private let colorCommands = LatestValueThrottler<DisplayKey>()
+    private var colorsByDisplay: [String: [String: WallpaperColorAdjustment]] = {
+        guard let data = UserDefaults.standard.data(forKey: WallpaperViewModel.colorDefaultsKey),
+              let colors = try? JSONDecoder().decode([String: [String: WallpaperColorAdjustment]].self, from: data) else { return [:] }
+        return colors
+    }()
     private var positionCaptureWorkItems: [DisplayKey: DispatchWorkItem] = [:]
     private var positionsByDisplay: [String: [String: WallpaperPosition]] = {
         guard let data = UserDefaults.standard.data(forKey: WallpaperViewModel.positionDefaultsKey),
@@ -996,6 +1005,7 @@ class WallpaperViewModel: PlaylistPlayback {
         opts.speed = state.speed
         opts.fillMode = state.fillMode
         opts.position = state.position
+        opts.colorAdjustment = state.colorAdjustment
         opts.userProperties = Self.propertyValues(for: w, runtime: state)
         opts.developerModeEnabled = settings.isDeveloperModeEnabled
         let throttledFps = AppDelegate.shared.globalSettingsViewModel
@@ -1200,6 +1210,7 @@ class WallpaperViewModel: PlaylistPlayback {
         }
         var state = savedRuntimeSnapshots[w.id] ?? Self.loadPersistedRuntime(for: w)
         state.position = positionsByDisplay[selectedDisplayKey.rawValue]?[w.id] ?? .center
+        state.colorAdjustment = colorsByDisplay[selectedDisplayKey.rawValue]?[w.id] ?? state.colorAdjustment
         return state
     }
 
@@ -1239,6 +1250,13 @@ class WallpaperViewModel: PlaylistPlayback {
         guard persistsChanges, wallpaper.presentationIsValid else { return }
         let normalized = Self.normalizedRuntime(state, for: wallpaper)
         positionsByDisplay[key.rawValue, default: [:]][wallpaper.id] = normalized.position
+        colorsByDisplay[key.rawValue, default: [:]][wallpaper.id] = normalized.colorAdjustment
+        let storedColors = colorsByDisplay
+        persistenceQueue.submit(key: "colors") {
+            if let data = try? JSONEncoder().encode(storedColors) {
+                UserDefaults.standard.set(data, forKey: Self.colorDefaultsKey)
+            }
+        }
         let storedPositions = positionsByDisplay
         persistenceQueue.submit(key: "positions") {
             if let data = try? JSONEncoder().encode(storedPositions) {
@@ -1441,6 +1459,7 @@ class WallpaperViewModel: PlaylistPlayback {
     private static func normalizedRuntime(_ source: WallpaperRuntimeState,
                                           for wallpaper: WEWallpaper) -> WallpaperRuntimeState {
         var result = source
+        result.colorAdjustment = source.colorAdjustment.normalized
         let properties = wallpaper.project.general?.properties?.items ?? [:]
         for (key, value) in result.propertyOverrides {
             guard let property = properties[key] else { continue }
@@ -1525,6 +1544,7 @@ class WallpaperViewModel: PlaylistPlayback {
     private func cancelPendingProperties(for key: DisplayKey) {
         playbackCommands.cancel(key: key)
         positionCommands.cancel(key: key)
+        colorCommands.cancel(key: key)
         positionCaptureWorkItems.removeValue(forKey: key)?.cancel()
         propertyCommands.cancel(key: key)
         pendingPropertyCommands[key] = nil
@@ -1563,6 +1583,23 @@ class WallpaperViewModel: PlaylistPlayback {
             result[key.rawValue] = state.runtime.position
         }
         return result
+    }
+
+    func setColorAdjustment(_ adjustment: WallpaperColorAdjustment, for key: DisplayKey) {
+        guard let state = displayStates[key], state.runtime.colorAdjustment != adjustment.normalized else { return }
+        let wallpaperID = state.wallpaper.id
+        mutateRuntime(for: key) { $0.colorAdjustment = adjustment.normalized }
+        colorCommands.submit(key: key) { [weak self] in
+            guard let self, let current = self.displayStates[key], current.wallpaper.id == wallpaperID,
+                  let displayID = DisplayRegistry.shared.displayID(for: key) else { return }
+            var assignments: Set<UUID> = [self.ensureCommittedAssignmentID(for: key)]
+            for proposal in self.pendingAssignmentProposals[displayID] ?? []
+            where proposal.key == key && proposal.state.wallpaper.id == wallpaperID { assignments.insert(proposal.id) }
+            for assignmentID in assignments {
+                self.renderer.setColorAdjustment(current.runtime.colorAdjustment, onDisplay: displayID, assignmentID: assignmentID)
+            }
+        }
+        schedulePositionCapture(for: key, wallpaperID: wallpaperID)
     }
 
     func setPosition(_ position: WallpaperPosition) {
@@ -1776,6 +1813,7 @@ class WallpaperViewModel: PlaylistPlayback {
         propertyCommands.flush(key: key)
         playbackCommands.flush(key: key)
         positionCommands.flush(key: key)
+        colorCommands.flush(key: key)
     }
 
     func reapplyVolume() {

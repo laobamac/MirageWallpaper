@@ -104,6 +104,77 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
     return VRWriteImage(image, path, (__bridge CFStringRef)UTTypeJPEG.identifier);
 }
 
+static float VRColorValue(id raw) {
+    float value = [raw isKindOfClass:NSNumber.class] ? [raw floatValue] : 1.0f;
+    return isfinite(value) ? fminf(2, fmaxf(0, value)) : 1.0f;
+}
+
+VRColorAdjustment VRColorAdjustmentFromDictionary(NSDictionary *dictionary) {
+    if (![dictionary isKindOfClass:NSDictionary.class]) return { 1, 1, 1 };
+    return { VRColorValue(dictionary[@"brightness"]), VRColorValue(dictionary[@"contrast"]), VRColorValue(dictionary[@"saturation"]) };
+}
+
+static BOOL VRColorIdentity(VRColorAdjustment value) {
+    return value.brightness == 1 && value.contrast == 1 && value.saturation == 1;
+}
+
+@interface VRColorState : NSObject
+@property (nonatomic, strong) NSLock *lock;
+@property (nonatomic, assign) VRColorAdjustment value;
+@property (nonatomic, assign) BOOL hdr;
+- (void)update:(VRColorAdjustment)value;
+- (VRColorAdjustment)read;
+@end
+@implementation VRColorState
+- (instancetype)init { if ((self=[super init])) { _lock=[NSLock new]; _value={1,1,1}; } return self; }
+- (void)update:(VRColorAdjustment)value { [self.lock lock]; _value=value; [self.lock unlock]; }
+- (VRColorAdjustment)read { [self.lock lock]; VRColorAdjustment result=_value; [self.lock unlock]; return result; }
+@end
+
+static CIImage *VRColorClamp(CIImage *image) {
+    return [image imageByApplyingFilter:@"CIColorClamp" withInputParameters:@{
+        @"inputMinComponents": [CIVector vectorWithX:0 Y:0 Z:0 W:0],
+        @"inputMaxComponents": [CIVector vectorWithX:1 Y:1 Z:1 W:1]
+    }];
+}
+
+static CIImage *VRColorImage(CIImage *image, VRColorAdjustment value, BOOL hdr) {
+    CGFloat s=value.saturation;
+    image=[image imageByApplyingFilter:@"CIColorMatrix" withInputParameters:@{
+        @"inputRVector": [CIVector vectorWithX:0.213+0.787*s Y:0.715-0.715*s Z:0.072-0.072*s W:0],
+        @"inputGVector": [CIVector vectorWithX:0.213-0.213*s Y:0.715+0.285*s Z:0.072-0.072*s W:0],
+        @"inputBVector": [CIVector vectorWithX:0.213-0.213*s Y:0.715-0.715*s Z:0.072+0.928*s W:0]
+    }];
+    if (!hdr) image=VRColorClamp(image);
+    CGFloat c=value.contrast;
+    image=[image imageByApplyingFilter:@"CIColorMatrix" withInputParameters:@{
+        @"inputRVector": [CIVector vectorWithX:c Y:0 Z:0 W:0],
+        @"inputGVector": [CIVector vectorWithX:0 Y:c Z:0 W:0],
+        @"inputBVector": [CIVector vectorWithX:0 Y:0 Z:c W:0],
+        @"inputBiasVector": [CIVector vectorWithX:0.5*(1-c) Y:0.5*(1-c) Z:0.5*(1-c) W:0]
+    }];
+    if (!hdr) image=VRColorClamp(image);
+    CGFloat b=value.brightness;
+    image=[image imageByApplyingFilter:@"CIColorMatrix" withInputParameters:@{
+        @"inputRVector": [CIVector vectorWithX:b Y:0 Z:0 W:0],
+        @"inputGVector": [CIVector vectorWithX:0 Y:b Z:0 W:0],
+        @"inputBVector": [CIVector vectorWithX:0 Y:0 Z:b W:0]
+    }];
+    return hdr ? image : VRColorClamp(image);
+}
+
+static CIContext *VRColorContext() {
+    static CIContext *context;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        CGColorSpaceRef space=CGColorSpaceCreateWithName(kCGColorSpaceExtendedSRGB);
+        context=[CIContext contextWithOptions:@{ kCIContextWorkingColorSpace: (__bridge id)space,
+            kCIContextWorkingFormat: @(kCIFormatRGBAh), kCIContextCacheIntermediates: @NO }];
+        CGColorSpaceRelease(space);
+    });
+    return context;
+}
+
 @interface VRVideoRendererEngine ()
 @property (nonatomic, strong) VRVideoRendererEngine *playbackOwner;
 @property (nonatomic, strong) AVQueuePlayer *player;
@@ -123,6 +194,11 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
 @property (nonatomic, assign) BOOL autoplay;
 @property (nonatomic, assign) BOOL loadFromMemory;
 @property (nonatomic, assign) BOOL hdrEnabled;
+@property (nonatomic, assign) VRColorAdjustment colorAdjustment;
+@property (nonatomic, strong) VRColorState *colorState;
+@property (nonatomic, strong) AVVideoComposition *colorComposition;
+@property (nonatomic, strong) AVPlayerItem *colorTemplateItem;
+@property (nonatomic, assign) BOOL colorPreparing;
 @property (nonatomic, strong) VRMemoryAssetLoader *memoryAssetLoader;
 @property (nonatomic, strong) NSMutableArray<id> *itemEndObservers;
 @property (nonatomic, strong) id itemFailedObserver;
@@ -181,6 +257,7 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
 + (VRVideoEngineConfig)defaultConfig {
     VRVideoEngineConfig config;
     config.fillMode = VRVideoFillModeCover;
+    config.colorAdjustment = { 1, 1, 1 };
     config.positionX = 0.5;
     config.positionY = 0.5;
     config.initialVolume = 1.0f;
@@ -228,6 +305,9 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
         _hostPaused = !config.autoplay;
         _loadFromMemory = config.loadFromMemory;
         _hdrEnabled = config.hdrEnabled;
+        _colorAdjustment = config.colorAdjustment;
+        _colorState = [VRColorState new];
+        [_colorState update:config.colorAdjustment];
         _itemEndObservers = [NSMutableArray array];
         _systemPowerObservers = [NSMutableArray array];
         _resumeTime = kCMTimeInvalid;
@@ -403,6 +483,9 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
     self.memoryAssetLoader = nil;
     self.frameProbe = nil;
     self.snapshotOutput = nil;
+    self.colorComposition = nil;
+    self.colorTemplateItem = nil;
+    self.colorPreparing = NO;
     self.loaded = NO;
     self.failureReported = NO;
     self.firstFrameReported = NO;
@@ -775,7 +858,27 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
     AVURLAsset *asset = [AVURLAsset URLAssetWithURL:assetURL options:assetOptions];
     [self.memoryAssetLoader attachToAsset:asset];
     AVPlayerItem *item = [AVPlayerItem playerItemWithAsset:asset];
+    self.colorTemplateItem = item;
+    if (!VRColorIdentity(self.colorAdjustment)) {
+        self.playingURL = url;
+        const uint64_t generation = self.openGeneration;
+        __weak VRVideoRendererEngine *weakSelf = self;
+        [self prepareColorCompositionForAsset:asset completion:^(AVVideoComposition *composition, NSError *failure) {
+            VRVideoRendererEngine *engine = weakSelf;
+            if (!engine || engine.openGeneration != generation || engine.systemSleeping) return;
+            if (!composition) { [engine reportPlaybackFailure:failure fallback:@"video color composition failed"]; return; }
+            engine.colorComposition = composition;
+            item.videoComposition = VRColorIdentity(engine.colorAdjustment) ? nil : composition;
+            NSError *startError = nil;
+            if (![engine startPlayerItem:item URL:url error:&startError])
+                [engine reportPlaybackFailure:startError fallback:@"video could not be queued"];
+        }];
+        return YES;
+    }
+    return [self startPlayerItem:item URL:url error:error];
+}
 
+- (BOOL)startPlayerItem:(AVPlayerItem *)item URL:(NSURL *)url error:(NSError **)error {
     if (![self.player canInsertItem:item afterItem:nil]) {
         if (error != NULL) {
             *error = VRVideoEngineError(VRVideoEngineErrorCannotQueueItem,
@@ -1034,7 +1137,7 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
 
     CIImage *ciImage = [CIImage imageWithCVPixelBuffer:buffer];
     AVAssetTrack *track = [item.asset tracksWithMediaType:AVMediaTypeVideo].firstObject;
-    if (track != nil) {
+    if (track != nil && item.videoComposition == nil) {
         const CGAffineTransform transform = track.preferredTransform;
         const CGAffineTransform imageTransform = CGAffineTransformMake(
             transform.a, -transform.b, -transform.c, transform.d, transform.tx, -transform.ty);
@@ -1089,6 +1192,57 @@ static BOOL VREncodeSnapshot(CGImageRef image, NSString *path) {
     _positionX = VRClampPosition(x);
     _positionY = VRClampPosition(y);
     [self updateVideoLayout];
+}
+
+- (void)prepareColorCompositionForAsset:(AVAsset *)asset
+                            completion:(void (^)(AVVideoComposition *, NSError *))completion {
+    VRColorState *state = self.colorState;
+    [AVVideoComposition videoCompositionWithAsset:asset applyingCIFiltersWithHandler:^(AVAsynchronousCIImageFilteringRequest *request) {
+        CIImage *image = VRColorImage(request.sourceImage, [state read], state.hdr);
+        [request finishWithImage:[image imageByCroppingToRect:request.sourceImage.extent] context:VRColorContext()];
+    } completionHandler:^(AVVideoComposition *composition, NSError *error) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            AVAssetTrack *track = [asset tracksWithMediaType:AVMediaTypeVideo].firstObject;
+            state.hdr = [track hasMediaCharacteristic:AVMediaCharacteristicContainsHDRVideo];
+            AVMutableVideoComposition *result = [composition mutableCopy];
+            CMFormatDescriptionRef format = (__bridge CMFormatDescriptionRef)track.formatDescriptions.firstObject;
+            if (format) {
+                NSDictionary *extensions = (__bridge NSDictionary *)CMFormatDescriptionGetExtensions(format);
+                result.colorPrimaries = extensions[(__bridge NSString *)kCMFormatDescriptionExtension_ColorPrimaries];
+                result.colorTransferFunction = extensions[(__bridge NSString *)kCMFormatDescriptionExtension_TransferFunction];
+                result.colorYCbCrMatrix = extensions[(__bridge NSString *)kCMFormatDescriptionExtension_YCbCrMatrix];
+            }
+            completion(result, error);
+        });
+    }];
+}
+
+- (void)applyColorComposition {
+    AVVideoComposition *composition = VRColorIdentity(self.colorAdjustment) ? nil : self.colorComposition;
+    self.colorTemplateItem.videoComposition = composition;
+    for (AVPlayerItem *item in self.looper.loopingPlayerItems) item.videoComposition = [composition copy];
+    self.player.currentItem.videoComposition = [composition copy];
+}
+
+- (void)setColorAdjustment:(VRColorAdjustment)value {
+    value = { VRColorValue(@(value.brightness)), VRColorValue(@(value.contrast)), VRColorValue(@(value.saturation)) };
+    _colorAdjustment = value;
+    if (self.playbackOwner) return;
+    [self.colorState update:value];
+    if (self.colorComposition || VRColorIdentity(value)) { [self applyColorComposition]; return; }
+    AVPlayerItem *item = self.player.currentItem;
+    if (!item || self.colorPreparing) return;
+    self.colorPreparing = YES;
+    const uint64_t generation = self.openGeneration;
+    __weak VRVideoRendererEngine *weakSelf = self;
+    [self prepareColorCompositionForAsset:item.asset completion:^(AVVideoComposition *composition, NSError *error) {
+        VRVideoRendererEngine *engine = weakSelf;
+        if (!engine || engine.openGeneration != generation) return;
+        engine.colorPreparing = NO;
+        if (!composition) { [engine reportPlaybackFailure:error fallback:@"video color composition failed"]; return; }
+        engine.colorComposition = composition;
+        [engine applyColorComposition];
+    }];
 }
 
 - (void)setHDREnabled:(BOOL)enabled {

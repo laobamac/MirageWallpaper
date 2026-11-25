@@ -271,6 +271,18 @@ struct WallpaperPreview: SubviewOfContentView {
                         positionControls
                     }
 
+                    sectionHeader("画面调节")
+                    VStack(spacing: 16) {
+                        colorSlider("亮度", keyPath: \.brightness)
+                        colorSlider("对比度", keyPath: \.contrast)
+                        colorSlider("饱和度", keyPath: \.saturation)
+                        Button("重置画面调节") {
+                            wallpaperViewModel.setColorAdjustment(.init(), for: displayKey)
+                            wallpaperViewModel.flushInteractiveChanges(for: displayKey)
+                        }
+                        .disabled(wallpaperViewModel.controlState.colorAdjustment.isIdentity)
+                    }
+
                     sectionHeader("壁纸属性")
                     if propertyRows.isEmpty {
                         PropertyEmptyState()
@@ -389,6 +401,27 @@ struct WallpaperPreview: SubviewOfContentView {
             Button("取消", role: .cancel) { }
         } message: { _ in
             Text("取消订阅后，Mirage 会停止下载并删除 Mirage 下载目录中的副本。Steam 内容目录中的文件不会被删除。")
+        }
+    }
+
+    private func colorSlider(_ title: LocalizedStringKey, keyPath: WritableKeyPath<WallpaperColorAdjustment, Float>) -> some View {
+        let displayKey = wallpaperViewModel.selectedDisplayKey
+        return HStack {
+            Text(title)
+            Spacer()
+            MirageSlider(value: Binding(
+                get: { wallpaperViewModel.controlState.colorAdjustment[keyPath: keyPath] },
+                set: { value in
+                    var adjustment = wallpaperViewModel.controlState.colorAdjustment
+                    adjustment[keyPath: keyPath] = value
+                    wallpaperViewModel.setColorAdjustment(adjustment, for: displayKey)
+                }), in: 0...2, step: 0.01,
+                onEditingChanged: { editing in
+                    if !editing { wallpaperViewModel.flushInteractiveChanges(for: displayKey) }
+                })
+                .frame(width: 100)
+            Text(String(format: "%.0f%%", wallpaperViewModel.controlState.colorAdjustment[keyPath: keyPath] * 100))
+                .frame(width: 45)
         }
     }
 

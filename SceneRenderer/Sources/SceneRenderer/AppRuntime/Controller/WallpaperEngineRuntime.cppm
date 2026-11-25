@@ -66,6 +66,7 @@ struct SceneWallpaperConfig {
     bool                                    muted { false };
     FillMode                                fill_mode { FillMode::ASPECTCROP };
     WallpaperPosition                       position;
+    std::array<float, 3>                     color_adjustment { 1.0f, 1.0f, 1.0f };
     float                                   speed { 1.0f };
     bool                                    graphviz { false };
     bool                                    spectrum_enabled { true };
@@ -109,6 +110,7 @@ public:
     void setMuted(bool);
     void setFillMode(FillMode);
     void setPosition(WallpaperPosition);
+    void setColorAdjustment(std::array<float, 3>);
     void setSpeed(float);
     void setMediaStatus(MediaStatus);
     void setAudioSpectrum(std::array<float, 64>, std::array<float, 64>);

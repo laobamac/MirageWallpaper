@@ -1451,3 +1451,11 @@
 /* Editor download concurrency */
 "文件进度：%d / %d" = "Files: %d / %d";
 "正在并行下载 %d 个文件（%d 个分块）" = "Downloading %d files in parallel (%d chunks)";
+
+"画面调节" = "Image adjustments";
+"亮度" = "Brightness";
+"对比度" = "Contrast";
+"饱和度" = "Saturation";
+"重置画面调节" = "Reset image adjustments";
+
+"视频壁纸加载失败" = "Failed to load video wallpaper";

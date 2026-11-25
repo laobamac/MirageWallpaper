@@ -23,6 +23,7 @@ private struct MirageSaverConfiguration {
     let enableHDRVideo: Bool
     let loadFromMemory: Bool
     let language: String
+    let colorAdjustment: WallpaperColorAdjustment
     let speed: Float
     let scriptStorage: [String: String]
     let hostApplicationPath: String?
@@ -51,7 +52,7 @@ private struct MirageSaverConfiguration {
         if let displayKey,
            let snapshots = decoded["runtimeByDisplay"] as? [String: [String: Any]],
            let snapshot = snapshots[displayKey] {
-            for key in ["rawProperties", "fillMode", "position", "speed", "scriptStorage"] {
+            for key in ["rawProperties", "fillMode", "position", "speed", "scriptStorage", "colorAdjustment"] {
                 if let value = snapshot[key] { object[key] = value }
             }
         }
@@ -98,6 +99,7 @@ private struct MirageSaverConfiguration {
             enableHDRVideo: object["enableHDRVideo"] as? Bool ?? false,
             loadFromMemory: object["loadFromMemory"] as? Bool ?? false,
             language: object["language"] as? String ?? Locale.preferredLanguages.first ?? "en",
+            colorAdjustment: WallpaperColorAdjustment(dictionary: object["colorAdjustment"] as? [String: Any]),
             speed: speed,
             scriptStorage: object["scriptStorage"] as? [String: String] ?? [:],
             hostApplicationPath: object["hostApplicationPath"] as? String,
@@ -264,7 +266,8 @@ private final class MirageSaverSceneSession {
         let data = (try? JSONSerialization.data(withJSONObject: configuration.rawProperties, options: .sortedKeys)) ?? Data("{}".utf8)
         let properties = String(data: data, encoding: .utf8) ?? "{}"
         let runtimeData = try? JSONSerialization.data(withJSONObject: [
-            "speed": configuration.speed, "scriptStorage": configuration.scriptStorage
+            "speed": configuration.speed, "scriptStorage": configuration.scriptStorage,
+            "colorAdjustment": configuration.colorAdjustment.dictionary
         ], options: .sortedKeys)
         let runtimeJSON = runtimeData.flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
         Self.queue.async { [weak self] in
@@ -627,11 +630,27 @@ final class MirageScreenSaverView: ScreenSaverView {
                 return
             }
             guard !Task.isCancelled else { return }
+            let tracks = (try? await asset.loadTracks(withMediaType: .video)) ?? []
+            let sourceHDR = tracks.contains { $0.hasMediaCharacteristic(.containsHDRVideo) }
+            let item = AVPlayerItem(asset: asset)
+            let colored = await withCheckedContinuation { continuation in
+                WallpaperVideoColor.apply(configuration.colorAdjustment, to: item, hdr: sourceHDR) {
+                    continuation.resume(returning: $0)
+                }
+            }
+            guard !Task.isCancelled else { return }
+            guard colored else {
+                await MainActor.run { [weak self] in
+                    guard let self, self.videoLoadID == loadID else { return }
+                    self.videoLoadTask = nil
+                    self.showMessage(self.localized("视频壁纸加载失败"))
+                }
+                return
+            }
             await MainActor.run { [weak self, playableLoader] in
                 guard let self, self.videoLoadID == loadID,
                       self.isAnimatingWallpaper, self.window != nil else { return }
                 self.videoLoadTask = nil
-                let item = AVPlayerItem(asset: asset)
                 let player = AVQueuePlayer()
                 player.automaticallyWaitsToMinimizeStalling = true
                 player.isMuted = true
