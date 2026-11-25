@@ -47,11 +47,25 @@ final class DesktopOverrideService {
         static let verifiedBackups = "DesktopOverrideVerifiedBackups"
         static let ownedCacheHashes = "DesktopOverrideOwnedCacheHashes"
         static let cacheBookmark = "DesktopOverrideCacheBookmark"
+        static let originalSnapshots = "DesktopOverrideOriginalSnapshots"
+    }
+
+    private struct CaptureGeometry: Codable, Equatable {
+        let frame: CGRect
+        let backingScaleFactor: CGFloat
+        let topInset: CGFloat
+    }
+
+    private struct OriginalSnapshot: Codable {
+        let url: URL
+        let wallpaperID: String?
+        let geometry: CaptureGeometry
     }
 
     private struct CaptureRequest: Equatable {
         let id: UUID
-        let wallpaperID: String
+        let wallpaperID: String?
+        let geometry: CaptureGeometry
     }
 
     /// Not `.cachesDirectory`: the system may purge caches at any time, and a
@@ -63,16 +77,20 @@ final class DesktopOverrideService {
     private var pendingCapture: [CGDirectDisplayID: DispatchWorkItem] = [:]
     private var captureRequests: [CGDirectDisplayID: CaptureRequest] = [:]
     private var deferredCaptures: [CGDirectDisplayID: WEWallpaper] = [:]
+    private var notchRefreshDisplays: Set<CGDirectDisplayID> = []
+    private var captureGeometries: [CGDirectDisplayID: CaptureGeometry] = [:]
+    private var screenParametersObserver: NSObjectProtocol?
     private var installedByScreen: [CGDirectDisplayID: URL] = [:]
     private static let captureRetryDelays: [TimeInterval] = [1.0, 2.0, 4.0, 6.0, 8.0, 10.0]
     private var pendingTargets: Set<URL> = [] {
         didSet {
             fileLifecycleLock.lock()
-            protectedCaptureTargets = pendingTargets
+            protectedCaptureTargets = pendingTargets.union(snapshotSourceLeases.keys)
             fileLifecycleLock.unlock()
         }
     }
     private var protectedCaptureTargets: Set<URL> = []
+    private var snapshotSourceLeases: [URL: Int] = [:]
     private var unpublishedTargets: Set<URL> = []
     private var pendingPrune: DispatchWorkItem?
     private var cacheAccessPromptShown = false
@@ -88,6 +106,15 @@ final class DesktopOverrideService {
             .appending(path: "Mirage/DesktopOverride")
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         self.directory = base
+        screenParametersObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
+        ) { [weak self] _ in self?.screenParametersDidChange() }
+    }
+
+    deinit {
+        if let screenParametersObserver {
+            NotificationCenter.default.removeObserver(screenParametersObserver)
+        }
     }
 
     private var mode: Mode {
@@ -135,6 +162,7 @@ final class DesktopOverrideService {
             pruneAllExcept([])
             cleanSystemCacheIfEnabled()
         }
+        didChangeNotchOptimization()
     }
 
     private func repairDanglingDesktopPointer() {
@@ -169,16 +197,21 @@ final class DesktopOverrideService {
 
     func scheduleCapture(forDisplay displayID: CGDirectDisplayID, wallpaper: WEWallpaper) {
         if isTerminating || isRestoring || UserDefaults.standard.bool(forKey: "Mirage.DynamicLockScreen.Locked") { return }
-        guard wallpaper.isValid, wallpaper.kind != .unsupported else { return }
+        guard wallpaper.isValid, wallpaper.kind != .unsupported,
+              let screen = screen(for: displayID) else { return }
+        let geometry = captureGeometry(for: screen)
+        captureGeometries[displayID] = geometry
         pendingCapture[displayID]?.cancel()
         if preserveForDynamicLockScreen && !isEnabled {
             captureRequests[displayID] = nil
+            pendingCapture[displayID] = nil
+            notchRefreshDisplays.remove(displayID)
             Task { @MainActor in
                 DynamicLockScreenManager.shared.restoreSystemDesktopFallbacks()
             }
             return
         }
-        let request = CaptureRequest(id: UUID(), wallpaperID: wallpaper.id)
+        let request = CaptureRequest(id: UUID(), wallpaperID: wallpaper.id, geometry: geometry)
         captureRequests[displayID] = request
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.captureRequests[displayID] == request else { return }
@@ -222,11 +255,52 @@ final class DesktopOverrideService {
         }
     }
 
+    private func captureGeometry(for screen: NSScreen) -> CaptureGeometry {
+        let enabled = AppDelegate.shared.globalSettingsViewModel.settings.shouldOptimizeNotch
+        return CaptureGeometry(frame: screen.frame, backingScaleFactor: screen.backingScaleFactor,
+                               topInset: enabled ? screen.safeAreaInsets.top : 0)
+    }
+
+    private func screenParametersDidChange() {
+        let connected = Set(NSScreen.screens.compactMap { displayID(for: $0) })
+        for displayID in Array(captureGeometries.keys) where !connected.contains(displayID) {
+            pendingCapture.removeValue(forKey: displayID)?.cancel()
+            captureRequests[displayID] = nil
+            deferredCaptures[displayID] = nil
+            captureGeometries[displayID] = nil
+            notchRefreshDisplays.remove(displayID)
+        }
+        for screen in NSScreen.screens {
+            guard let displayID = displayID(for: screen),
+                  let previous = captureGeometries[displayID],
+                  previous != captureGeometry(for: screen) else { continue }
+            refreshNotchWallpaper(forDisplay: displayID)
+        }
+    }
+
+    private func isCurrentCapture(_ request: CaptureRequest, forDisplay displayID: CGDirectDisplayID) -> Bool {
+        guard captureRequests[displayID] == request, !isTerminating, !isRestoring,
+              !UserDefaults.standard.bool(forKey: "Mirage.DynamicLockScreen.Locked"),
+              !preserveForDynamicLockScreen || isEnabled,
+              let screen = screen(for: displayID), captureGeometry(for: screen) == request.geometry else { return false }
+        return AppDelegate.shared.wallpaperViewModel.renderer
+            .currentWallpaper(onDisplay: displayID)?.id == request.wallpaperID
+    }
+
     private func capture(forDisplay displayID: CGDirectDisplayID, wallpaper: WEWallpaper,
                          request: CaptureRequest, attempt: Int = 0) {
-        guard captureRequests[displayID] == request, !isTerminating, !isRestoring else { return }
+        guard captureRequests[displayID] == request, !isTerminating, !isRestoring,
+              !UserDefaults.standard.bool(forKey: "Mirage.DynamicLockScreen.Locked") else { return }
+        guard AppDelegate.shared.wallpaperViewModel.renderer.currentWallpaper(onDisplay: displayID)?.id == wallpaper.id else {
+            captureRequests[displayID] = nil
+            return
+        }
         guard let screen = screen(for: displayID) else {
             captureRequests[displayID] = nil
+            return
+        }
+        guard request.geometry == captureGeometry(for: screen) else {
+            scheduleCapture(forDisplay: displayID, wallpaper: wallpaper)
             return
         }
         if !preserveForDynamicLockScreen {
@@ -240,6 +314,16 @@ final class DesktopOverrideService {
                 captureRequests[displayID] = nil
                 return
             }
+        }
+        if notchRefreshDisplays.remove(displayID) != nil,
+           let original = storedOriginalSnapshots()[backupKey(for: displayID)],
+           original.wallpaperID == wallpaper.id,
+           original.geometry.frame == request.geometry.frame,
+           original.geometry.backingScaleFactor == request.geometry.backingScaleFactor,
+           isUsablePicture(original.url) {
+            processSnapshot(original, forDisplay: displayID, wallpaper: wallpaper,
+                            request: request, ownsSource: false, attempt: attempt)
+            return
         }
         let target = directory.appending(path: "override-\(UUID().uuidString).heic")
         pendingTargets.insert(target)
@@ -264,23 +348,10 @@ final class DesktopOverrideService {
                 }
                 if ok, FileManager.default.fileExists(atPath: target.path) {
                     NSLog("[Mirage] 已捕获壁纸实时画面 (显示器=\(displayID))")
-                    if self.preserveForDynamicLockScreen {
-                        self.installDynamicLockScreenFallback(
-                            target, forDisplay: displayID, request: request)
-                        return
-                    }
-                    let canonical = self.canonicalizeSnapshot(at: target)
-                    if self.installedURL(for: displayID)?.resolvingSymlinksInPath()
-                        == canonical.resolvingSymlinksInPath(),
-                       let uuid = self.displayUUID(for: displayID),
-                       DesktopWallpaperStore.read()?.matches(canonical, for: uuid) == true {
-                        self.pendingTargets.remove(canonical)
-                        self.captureRequests[displayID] = nil
-                        self.schedulePrune()
-                        self.cleanSystemCacheIfEnabled()
-                        return
-                    }
-                    self.install(canonical, forDisplay: displayID, request: request)
+                    let original = OriginalSnapshot(url: target, wallpaperID: wallpaper.id,
+                                                    geometry: request.geometry)
+                    self.processSnapshot(original, forDisplay: displayID, wallpaper: wallpaper,
+                                         request: request, ownsSource: true, attempt: attempt)
                     return
                 }
                 self.removeCaptureArtifacts(for: target)
@@ -298,14 +369,135 @@ final class DesktopOverrideService {
         }
     }
 
+    private func processSnapshot(_ original: OriginalSnapshot, forDisplay displayID: CGDirectDisplayID,
+                                 wallpaper: WEWallpaper?, request: CaptureRequest,
+                                 ownsSource: Bool, attempt: Int = 0) {
+        let source = original.url
+        guard isCurrentCapture(request, forDisplay: displayID) else {
+            if ownsSource {
+                removeCaptureArtifacts(for: source)
+                pendingTargets.remove(source)
+            }
+            if captureRequests[displayID] == request {
+                captureRequests[displayID] = nil
+                rescheduleCapture(forDisplay: displayID, wallpaper: wallpaper)
+            }
+            return
+        }
+        guard request.geometry.topInset > 0 else {
+            finishSnapshot(original, output: source, forDisplay: displayID, wallpaper: wallpaper,
+                           request: request, ownsSource: ownsSource, attempt: attempt)
+            return
+        }
+        let target = directory.appending(path: "override-\(UUID().uuidString).png")
+        pendingTargets.insert(target)
+        unpublishedTargets.insert(target)
+        retainSnapshotSource(source)
+        ioQueue.async { [weak self] in
+            let output = autoreleasepool {
+                try? DesktopWallpaperNotchMask.write(
+                    from: source, to: target, screenHeight: request.geometry.frame.height,
+                    topInset: request.geometry.topInset)
+            }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                defer { self.releaseSnapshotSource(source) }
+                self.finishSnapshot(original, output: output, forDisplay: displayID, wallpaper: wallpaper,
+                                    request: request, ownsSource: ownsSource, attempt: attempt, target: target)
+            }
+        }
+    }
+
+    private func retainSnapshotSource(_ url: URL) {
+        fileLifecycleLock.lock()
+        defer { fileLifecycleLock.unlock() }
+        snapshotSourceLeases[url, default: 0] += 1
+        protectedCaptureTargets = pendingTargets.union(snapshotSourceLeases.keys)
+    }
+
+    private func releaseSnapshotSource(_ url: URL) {
+        fileLifecycleLock.lock()
+        defer { fileLifecycleLock.unlock() }
+        if let count = snapshotSourceLeases[url], count > 1 {
+            snapshotSourceLeases[url] = count - 1
+        } else {
+            snapshotSourceLeases[url] = nil
+        }
+        protectedCaptureTargets = pendingTargets.union(snapshotSourceLeases.keys)
+    }
+
+    private func finishSnapshot(_ original: OriginalSnapshot, output: URL?, forDisplay displayID: CGDirectDisplayID,
+                                wallpaper: WEWallpaper?, request: CaptureRequest, ownsSource: Bool,
+                                attempt: Int, target: URL? = nil) {
+        guard isCurrentCapture(request, forDisplay: displayID), let output else {
+            if let target {
+                removeCaptureArtifacts(for: target)
+                pendingTargets.remove(target)
+            }
+            if ownsSource {
+                removeCaptureArtifacts(for: original.url)
+                pendingTargets.remove(original.url)
+            }
+            guard captureRequests[displayID] == request else { return }
+            if !isCurrentCapture(request, forDisplay: displayID) {
+                captureRequests[displayID] = nil
+                rescheduleCapture(forDisplay: displayID, wallpaper: wallpaper)
+                return
+            }
+            guard let wallpaper else {
+                captureRequests[displayID] = nil
+                return
+            }
+            let delay = Self.captureRetryDelays[min(attempt, Self.captureRetryDelays.count - 1)]
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self, self.captureRequests[displayID] == request else { return }
+                self.capture(forDisplay: displayID, wallpaper: wallpaper, request: request, attempt: attempt + 1)
+            }
+            return
+        }
+        let source = ownsSource ? canonicalizeSnapshot(at: original.url) : original.url
+        var originals = storedOriginalSnapshots()
+        originals[backupKey(for: displayID)] = OriginalSnapshot(
+            url: source, wallpaperID: original.wallpaperID, geometry: request.geometry)
+        saveOriginalSnapshots(originals)
+        pendingTargets.remove(source)
+        let canonical = output == original.url ? source : canonicalizeSnapshot(at: output)
+        if preserveForDynamicLockScreen {
+            installDynamicLockScreenFallback(canonical, forDisplay: displayID, request: request)
+            return
+        }
+        if installedURL(for: displayID)?.resolvingSymlinksInPath() == canonical.resolvingSymlinksInPath(),
+           let uuid = displayUUID(for: displayID),
+           DesktopWallpaperStore.read()?.matches(canonical, for: uuid) == true {
+            pendingTargets.remove(canonical)
+            captureRequests[displayID] = nil
+            schedulePrune()
+            cleanSystemCacheIfEnabled()
+            return
+        }
+        install(canonical, forDisplay: displayID, request: request)
+    }
+
+    private func rescheduleCapture(forDisplay displayID: CGDirectDisplayID, wallpaper: WEWallpaper?) {
+        if let wallpaper {
+            guard AppDelegate.shared.wallpaperViewModel.renderer.currentWallpaper(onDisplay: displayID)?.id == wallpaper.id
+            else { return }
+            scheduleCapture(forDisplay: displayID, wallpaper: wallpaper)
+        } else {
+            refreshNotchWallpaper(forDisplay: displayID)
+        }
+    }
+
     private func installDynamicLockScreenFallback(
         _ url: URL,
         forDisplay displayID: CGDirectDisplayID,
         request: CaptureRequest
     ) {
         Task { @MainActor [weak self] in
-            guard let self, self.captureRequests[displayID] == request else {
+            guard let self, self.isCurrentCapture(request, forDisplay: displayID) else {
                 self?.removeCaptureArtifacts(for: url)
+                self?.pendingTargets.remove(url)
+                if self?.captureRequests[displayID] == request { self?.captureRequests[displayID] = nil }
                 return
             }
             if !self.preserveForDynamicLockScreen {
@@ -332,9 +524,10 @@ final class DesktopOverrideService {
                          request: CaptureRequest) {
         fileLifecycleLock.lock()
         defer { fileLifecycleLock.unlock() }
-        guard captureRequests[displayID] == request, !isTerminating, !isRestoring else {
+        guard isCurrentCapture(request, forDisplay: displayID) else {
             pendingTargets.remove(url)
             removeCaptureArtifacts(for: url)
+            if captureRequests[displayID] == request { captureRequests[displayID] = nil }
             return
         }
         if preserveForDynamicLockScreen {
@@ -431,6 +624,7 @@ final class DesktopOverrideService {
         pendingPrune = nil
         captureRequests.removeAll()
         deferredCaptures.removeAll()
+        notchRefreshDisplays.removeAll()
     }
 
     private func restore(completion: (() -> Void)? = nil) {
@@ -509,6 +703,27 @@ final class DesktopOverrideService {
         outstanding.remove(key)
         saveOverrideDisplayKeys(outstanding)
         installedByScreen.removeValue(forKey: displayID)
+        var originals = storedOriginalSnapshots()
+        originals.removeValue(forKey: key)
+        saveOriginalSnapshots(originals)
+    }
+
+    private func storedOriginalSnapshots() -> [String: OriginalSnapshot] {
+        guard let data = defaults.data(forKey: Key.originalSnapshots),
+              let originals = try? JSONDecoder().decode([String: OriginalSnapshot].self, from: data)
+        else { return [:] }
+        return originals.filter { isGeneratedOverride($0.value.url) }
+    }
+
+    private func saveOriginalSnapshots(_ originals: [String: OriginalSnapshot]) {
+        fileLifecycleLock.lock()
+        defer { fileLifecycleLock.unlock() }
+        if originals.isEmpty {
+            defaults.removeObject(forKey: Key.originalSnapshots)
+        } else if let data = try? JSONEncoder().encode(originals) {
+            defaults.set(data, forKey: Key.originalSnapshots)
+        }
+        defaults.synchronize()
     }
 
     private func storedBackupRecords() -> [String: DesktopWallpaperBackup] {
@@ -709,7 +924,7 @@ final class DesktopOverrideService {
         defer { fileLifecycleLock.unlock() }
         guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else { return url }
         let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-        let canonical = directory.appending(path: "override-\(digest).heic")
+        let canonical = directory.appending(path: "override-\(digest).\(url.pathExtension)")
         pendingTargets.remove(url)
         if canonical != url {
             if FileManager.default.fileExists(atPath: canonical.path) {
@@ -767,11 +982,13 @@ final class DesktopOverrideService {
         protected.formUnion(storedInstalledOverrides().values.map { $0.resolvingSymlinksInPath() })
         protected.formUnion(storedPendingOverrides().values.map { $0.resolvingSymlinksInPath() })
         protected.formUnion(installedByScreen.values.map { $0.resolvingSymlinksInPath() })
+        protected.formUnion(storedOriginalSnapshots().values.map { $0.url.resolvingSymlinksInPath() })
         protected.formUnion(NSScreen.screens.compactMap {
             NSWorkspace.shared.desktopImageURL(for: $0)?.resolvingSymlinksInPath()
         })
         if includeCaptures {
             protected.formUnion(pendingTargets.map { $0.resolvingSymlinksInPath() })
+            protected.formUnion(snapshotSourceLeases.keys.map { $0.resolvingSymlinksInPath() })
         }
         return protected
     }
@@ -788,6 +1005,7 @@ final class DesktopOverrideService {
             let allProtected = references.union(keep).union(workspaceURLs)
                 .union(self.storedInstalledOverrides().values.map { $0.resolvingSymlinksInPath() })
                 .union(self.storedPendingOverrides().values.map { $0.resolvingSymlinksInPath() })
+                .union(self.storedOriginalSnapshots().values.map { $0.url.resolvingSymlinksInPath() })
                 .union(self.protectedCaptureTargets.map { $0.resolvingSymlinksInPath() })
             guard let urls = try? FileManager.default.contentsOfDirectory(
                 at: self.directory, includingPropertiesForKeys: nil) else { return }
@@ -1131,6 +1349,8 @@ final class DesktopOverrideService {
                 self.cleanSystemCacheIfEnabled()
                 if let wallpaper = self.deferredCaptures.removeValue(forKey: displayID) {
                     self.scheduleCapture(forDisplay: displayID, wallpaper: wallpaper)
+                } else if self.notchRefreshDisplays.contains(displayID) {
+                    self.refreshNotchWallpaper(forDisplay: displayID)
                 }
                 Task { @MainActor in
                     DynamicLockScreenManager.shared.refreshDesktopFallback(forDisplay: displayID)
@@ -1142,6 +1362,48 @@ final class DesktopOverrideService {
     }
 
     // MARK: - Settings changes
+
+    func didChangeNotchOptimization() {
+        let originals = storedOriginalSnapshots()
+        for screen in NSScreen.screens {
+            guard let displayID = displayID(for: screen),
+                  screen.safeAreaInsets.top > 0 || (originals[backupKey(for: displayID)]?.geometry.topInset ?? 0) > 0
+            else { continue }
+            refreshNotchWallpaper(forDisplay: displayID)
+        }
+    }
+
+    private func refreshNotchWallpaper(forDisplay displayID: CGDirectDisplayID) {
+        guard !isTerminating, !isRestoring,
+              !UserDefaults.standard.bool(forKey: "Mirage.DynamicLockScreen.Locked"),
+              let screen = screen(for: displayID) else { return }
+        notchRefreshDisplays.insert(displayID)
+        if let wallpaper = AppDelegate.shared.wallpaperViewModel.renderer.currentWallpaper(onDisplay: displayID) {
+            scheduleCapture(forDisplay: displayID, wallpaper: wallpaper)
+            return
+        }
+        guard mode == .persistent,
+              let installed = installedURL(for: displayID),
+              let uuid = displayUUID(for: displayID),
+              DesktopWallpaperStore.read()?.matches(installed, for: uuid) == true else { return }
+        let geometry = captureGeometry(for: screen)
+        let original = storedOriginalSnapshots()[backupKey(for: displayID)]
+            ?? (installed.pathExtension == "heic" && isGeneratedOverride(installed)
+                ? OriginalSnapshot(url: installed, wallpaperID: nil, geometry: geometry) : nil)
+        guard let original, isUsablePicture(original.url) else { return }
+        guard original.geometry.frame == geometry.frame,
+              original.geometry.backingScaleFactor == geometry.backingScaleFactor else { return }
+        pendingCapture.removeValue(forKey: displayID)?.cancel()
+        let request = CaptureRequest(id: UUID(), wallpaperID: nil, geometry: geometry)
+        captureRequests[displayID] = request
+        captureGeometries[displayID] = geometry
+        if let pending = storedPendingOverrides()[backupKey(for: displayID)] {
+            verifyDesktopImage(pending, forDisplay: displayID)
+            return
+        }
+        notchRefreshDisplays.remove(displayID)
+        processSnapshot(original, forDisplay: displayID, wallpaper: nil, request: request, ownsSource: false)
+    }
 
     /// ON  → keep overriding forever (and take a still right now).
     /// OFF → keep overriding for the rest of this run for tint consistency,

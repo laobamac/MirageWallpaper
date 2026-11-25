@@ -51,6 +51,9 @@ extension AppDelegate: NSMenuDelegate, NSMenuItemValidation {
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         guard menu === statusItem?.menu else { return }
+        if let item = menu.items.first(where: { $0.action == #selector(toggleNotchOptimization) }) {
+            item.state = globalSettingsViewModel.settings.shouldOptimizeNotch ? .on : .off
+        }
         let displays = wallpaperViewModel.connectedDisplays
         for direction in [PlaylistDirection.previous, .next] {
             let identifier = NSUserInterfaceItemIdentifier(
@@ -84,6 +87,12 @@ extension AppDelegate: NSMenuDelegate, NSMenuItemValidation {
 
     @objc func coverAllScreens() {
         wallpaperViewModel.applyToAllScreens()
+    }
+
+    @objc func toggleNotchOptimization() {
+        globalSettingsViewModel.settings.notchOptimization =
+            !globalSettingsViewModel.settings.shouldOptimizeNotch
+        globalSettingsViewModel.save()
     }
 
     @objc func stopWallpaperMenu() {
@@ -137,6 +146,9 @@ extension AppDelegate: NSMenuDelegate, NSMenuItemValidation {
 
             .init(title: L("覆盖到所有显示器"), systemImage: "rectangle.on.rectangle",
                   action: #selector(coverAllScreens), keyEquivalent: ""),
+
+            .init(title: L("刘海屏优化"), systemImage: "menubar.rectangle",
+                  action: #selector(toggleNotchOptimization), keyEquivalent: ""),
 
             .init(title: L("停止壁纸"), systemImage: "stop.fill",
                   action: #selector(stopWallpaperMenu), keyEquivalent: ""),

@@ -1459,3 +1459,6 @@
 "重置画面调节" = "Reset image adjustments";
 
 "视频壁纸加载失败" = "Failed to load video wallpaper";
+
+"刘海屏优化" = "Notch Optimization";
+"将 Mirage 生成的静态桌面图片顶部刘海区域设为黑色，不改变动态壁纸的布局。仅对带刘海的显示器生效。" = "Make the notch area at the top of Mirage’s static desktop image black without changing the dynamic wallpaper layout. Only affects displays with a notch.";

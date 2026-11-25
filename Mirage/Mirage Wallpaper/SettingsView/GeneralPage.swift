@@ -236,6 +236,14 @@ struct GeneralPage: SettingsPage {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
+                Toggle("刘海屏优化", isOn: Binding(
+                    get: { viewModel.settings.shouldOptimizeNotch },
+                    set: { viewModel.settings.notchOptimization = $0 }
+                ))
+                Text("将 Mirage 生成的静态桌面图片顶部刘海区域设为黑色，不改变动态壁纸的布局。仅对带刘海的显示器生效。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
                 if #available(macOS 26, *) {
                     Toggle("自动清理 macOS 壁纸缓存", isOn: Binding(
                         get: { viewModel.settings.shouldAutomaticallyCleanWallpaperCache },

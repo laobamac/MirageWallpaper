@@ -162,9 +162,14 @@ struct GlobalSettings: Codable, Equatable {
     // before the desktop-override section existed.
     var overrideWallpaper: Bool? = false
     var automaticWallpaperCacheCleaning: Bool? = true
+    var notchOptimization: Bool? = false
 
     var shouldOverrideWallpaper: Bool {
         overrideWallpaper ?? false
+    }
+
+    var shouldOptimizeNotch: Bool {
+        notchOptimization ?? false
     }
 
     var shouldAutomaticallyCleanWallpaperCache: Bool {
@@ -287,6 +292,7 @@ class GlobalSettingsViewModel {
     var didChangeDeveloperModeCancellable: Cancellable?
     var didChangeOverrideWallpaperCancellable: Cancellable?
     var didChangeWallpaperCacheCleaningCancellable: Cancellable?
+    var didChangeNotchOptimizationCancellable: Cancellable?
     var didChangeWindowBackgroundCancellable: Cancellable?
     var playbackPolicySettingsCancellable: Cancellable?
     
@@ -348,6 +354,7 @@ class GlobalSettingsViewModel {
         didChangeDeveloperModeCancellable?.cancel()
         didChangeOverrideWallpaperCancellable?.cancel()
         didChangeWallpaperCacheCleaningCancellable?.cancel()
+        didChangeNotchOptimizationCancellable?.cancel()
         didChangeWindowBackgroundCancellable?.cancel()
         playbackPolicySettingsCancellable?.cancel()
         playbackEvalTimer?.invalidate()
@@ -408,6 +415,12 @@ class GlobalSettingsViewModel {
             }
             .map { $0.shouldAutomaticallyCleanWallpaperCache }
             .sink { DesktopOverrideService.shared.didChangeCacheCleaningEnabled($0) }
+
+        didChangeNotchOptimizationCancellable = settingsChanges
+            .map { $0.shouldOptimizeNotch }
+            .removeDuplicates()
+            .dropFirst()
+            .sink { _ in DesktopOverrideService.shared.didChangeNotchOptimization() }
 
         didChangeWindowBackgroundCancellable = settingsChanges
             .map { $0.shouldBlurMainWindow }
