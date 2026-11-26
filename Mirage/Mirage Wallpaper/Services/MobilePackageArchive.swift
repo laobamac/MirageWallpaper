@@ -76,7 +76,7 @@ enum MobilePackageArchive {
                 }
             }
         }
-        guard headerSize + payloadSize <= UInt64(UInt32.max) else {
+        guard headerSize <= 16 * 1024 * 1024, headerSize + payloadSize <= UInt64(UInt32.max) else {
             throw MobileMPKGExportError.wallpaperTooLarge
         }
 

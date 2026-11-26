@@ -10,38 +10,53 @@
 import AVFoundation
 import Accelerate
 import Compression
+import CoreFoundation
 import Foundation
 import ImageIO
 
 enum SceneMobileMPKGExporter {
     private static let textureFormatRGBA8: Int32 = 0
+    private static let textureFormatRGB8: Int32 = 1
     private static let textureFormatBC3: Int32 = 4
     private static let textureFormatETC2RGBA8: Int32 = 5
     private static let textureFormatBC2: Int32 = 6
     private static let textureFormatBC1: Int32 = 7
     private static let textureFormatRG8: Int32 = 8
     private static let textureFormatR8: Int32 = 9
+    private static let textureFormatBC7: Int32 = 12
+    private static let desktopBlockFormats: [Int32: String] = [
+        textureFormatBC1: "DXT1", textureFormatBC2: "DXT3", textureFormatBC3: "DXT5",
+    ]
     private static let spriteFlag: UInt32 = 1 << 2
     private static let rawMobileFlag: UInt32 = 1 << 3
     private static let streamingTextureFlag: UInt32 = 1 << 5
     private static let effort = 10
     // Use ImageIO for small mips and FFmpeg's threaded decoder for large PNGs.
     private static let maximumNativePNGDimension = 512
-    private static let excludedMobileSuffixes: Set<String> = [
-        "flac", "m4a", "mp3", "ogg", "wav",
-    ]
-
-    private struct PackageEntry {
-        let name: String
-        let absoluteOffset: UInt64
-        let size: UInt64
-    }
+    private static let maximumProjectBytes = 1024 * 1024
+    private static let maximumSceneBytes = 16 * 1024 * 1024
+    private static let maximumShaderBytes = 4 * 1024 * 1024
 
     private struct StagedEntry {
         let name: String
         let url: URL
         let offset: UInt64
         let size: UInt64
+
+        func read(limit: Int = .max) throws -> Data {
+            guard size <= UInt64(limit) else { throw SceneMobileExportError.wallpaperTooLarge }
+            let handle = try FileHandle(forReadingFrom: url)
+            defer { try? handle.close() }
+            try handle.seek(toOffset: offset)
+            return try readExactly(Int(size), from: handle)
+        }
+    }
+
+    private struct SceneSource {
+        let version: String
+        let entries: [String: StagedEntry]
+        let scene: StagedEntry
+        let projectData: Data
     }
 
     private struct TextureMip {
@@ -99,89 +114,36 @@ enum SceneMobileMPKGExporter {
                                                   snapshot: snapshot, progress: progress)
             return
         }
-        guard wallpaper.wallpaperDirectory.standardizedFileURL
-            == wallpaper.renderDirectory.standardizedFileURL else {
-            throw SceneMobileExportError.scenePresetNotSupported
-        }
-
-        let projectURL = wallpaper.wallpaperDirectory.appending(path: "project.json")
-        let packageURL = wallpaper.renderDirectory.appending(path: "scene.pkg")
-        let projectData = try Data(contentsOf: projectURL)
-        guard let project = try JSONSerialization.jsonObject(with: projectData) as? [String: Any],
-              (project["type"] as? String)?.lowercased() == "scene",
-              let sceneName = project["file"] as? String,
-              isSafeEntryName(sceneName),
-              let previewName = project["preview"] as? String,
-              let previewURL = containedFile(previewName, in: wallpaper.wallpaperDirectory) else {
-            throw SceneMobileExportError.invalidProject
-        }
-
-        let package = try readPackage(at: packageURL)
-        guard package.entries.contains(where: { $0.name.caseInsensitiveCompare(sceneName) == .orderedSame }) else {
-            throw SceneMobileExportError.invalidProject
-        }
-        let mobileVersion = try mobileVersion(for: package.version)
         let fileManager = FileManager.default
         let staging = fileManager.temporaryDirectory
             .appending(path: "Mirage-Mobile-Scene-\(UUID().uuidString)", directoryHint: .isDirectory)
         try fileManager.createDirectory(at: staging, withIntermediateDirectories: true)
         defer { try? fileManager.removeItem(at: staging) }
-
-        let packageHandle = try FileHandle(forReadingFrom: packageURL)
-        defer { try? packageHandle.close() }
-        var stagedNames = Set(package.entries.map { $0.name.lowercased() })
-        guard stagedNames.insert("project.json").inserted,
-              stagedNames.insert(previewName.lowercased()).inserted else {
-            throw SceneMobileExportError.unsafeProjectPath
-        }
-        var stagedEntries: [StagedEntry] = []
-        var textureEntries: [(index: Int, entry: PackageEntry)] = []
-        var processed = 0
-        let conversionCount = max(package.entries.count + 2, 1)
         progress?(0)
+        let source = try sceneSource(for: wallpaper, in: staging)
+        let entries = source.entries.values.sorted(by: stagedEntryOrder)
+        var stagedEntries: [StagedEntry] = []
+        var textureEntries: [(index: Int, entry: StagedEntry)] = []
+        var processed = 0
+        let conversionCount = entries.count + 1
 
-        for (index, entry) in package.entries.enumerated() {
-            let suffix = URL(fileURLWithPath: entry.name).pathExtension.lowercased()
-            if excludedMobileSuffixes.contains(suffix) {
-                processed += 1
-                progress?(Double(processed) / Double(conversionCount) * 0.9)
-                continue
-            }
-
+        for (index, entry) in entries.enumerated() {
+            let suffix = (entry.name as NSString).pathExtension.lowercased()
             if suffix == "tex" {
-                let target = staging.appending(path: entry.name)
-                try fileManager.createDirectory(
-                    at: target.deletingLastPathComponent(),
-                    withIntermediateDirectories: true
-                )
                 textureEntries.append((index, entry))
                 continue
             }
 
-            let isScene = entry.name.caseInsensitiveCompare(sceneName) == .orderedSame
-            if suffix != "vert" && suffix != "frag" && !isScene {
-                stagedEntries.append(StagedEntry(
-                    name: entry.name,
-                    url: packageURL,
-                    offset: entry.absoluteOffset,
-                    size: entry.size
-                ))
-                processed += 1
-                progress?(Double(processed) / Double(conversionCount) * 0.9)
-                continue
+            if entry.name == source.scene.name {
+                let data = try options.sceneData(entry.read(limit: maximumSceneBytes))
+                stagedEntries.append(try stage(data, named: entry.name, in: staging))
+            } else if suffix == "vert" || suffix == "frag" ||
+                        (["geom", "h"].contains(suffix) && entry.name.lowercased().hasPrefix("shaders/")) {
+                let data = try shaderSource(for: entry, in: source.entries)
+                stagedEntries.append(try stage(rewriteMobileShader(data, label: entry.name), named: entry.name, in: staging))
+            } else {
+                stagedEntries.append(entry)
             }
-
-            try packageHandle.seek(toOffset: entry.absoluteOffset)
-            guard entry.size <= UInt64(Int.max) else {
-                throw SceneMobileExportError.wallpaperTooLarge
-            }
-            let source = try packageHandle.read(upToCount: Int(entry.size)) ?? Data()
-            guard source.count == Int(entry.size) else {
-                throw SceneMobileExportError.truncatedPackage
-            }
-
-            let data = try isScene ? options.sceneData(source) : rewriteMobileShader(source, label: entry.name)
-            stagedEntries.append(try stage(data, named: entry.name, in: staging))
             processed += 1
             progress?(Double(processed) / Double(conversionCount) * 0.9)
         }
@@ -211,14 +173,13 @@ enum SceneMobileMPKGExporter {
                 guard !shouldStop else { return }
                 do {
                     let staged = try autoreleasepool {
-                        let source = try readPackageEntry(item.entry, from: packageURL)
-                        guard let data = try mobileTexture(source, label: item.entry.name, options: options, jobs: encoderJobs) else {
-                            // Unchanged masks/mobile textures can be streamed
-                            // straight from the source package by the writer.
-                            return StagedEntry(name: item.entry.name, url: packageURL,
-                                               offset: item.entry.absoluteOffset, size: item.entry.size)
+                        if try isEmbeddedVideoTexture(item.entry) { return item.entry }
+                        let data = try item.entry.read()
+                        guard let converted = try mobileTexture(data, label: item.entry.name, options: options, jobs: encoderJobs) else {
+                            // Unchanged textures can be streamed from their source by the writer.
+                            return item.entry
                         }
-                        return try stage(data, named: item.entry.name, in: staging)
+                        return try stage(converted, named: item.entry.name, in: staging)
                     }
                     resultLock.lock()
                     textureResults[item.index] = staged
@@ -238,18 +199,194 @@ enum SceneMobileMPKGExporter {
         if let firstError { throw firstError }
         stagedEntries.append(contentsOf: textureResults.keys.sorted().compactMap { textureResults[$0] })
 
-        stagedEntries.append(try stage(projectData, named: "project.json", in: staging))
-        processed += 1
-        progress?(Double(processed) / Double(conversionCount) * 0.9)
-        stagedEntries.append(try sourceEntry(named: previewName, at: previewURL))
-        processed += 1
-        progress?(Double(processed) / Double(conversionCount) * 0.9)
-
-        let entries = stagedEntries.sorted(by: stagedEntryOrder)
-        try writeArchive(entries: entries, version: mobileVersion, to: outputURL) { fraction in
+        stagedEntries.append(try stage(source.projectData, named: "project.json", in: staging))
+        progress?(0.9)
+        try writeArchive(entries: stagedEntries.sorted(by: stagedEntryOrder), version: source.version, to: outputURL) { fraction in
             progress?(0.9 + fraction * 0.1)
         }
         progress?(1)
+    }
+
+    private static func sceneSource(for wallpaper: WEWallpaper, in staging: URL) throws -> SceneSource {
+        let roots = [wallpaper.renderDirectory] + wallpaper.assetOverlayDirectories.reversed()
+        var entries: [String: StagedEntry] = [:]
+        var version = "PKGM0014"
+        var projects: [[String: Any]] = []
+        var originalProjectData = Data()
+        var seenRoots = Set<URL>()
+
+        // Resolved Workshop presets supply the base directory and overlays in priority order.
+        for root in roots {
+            let root = root.standardizedFileURL.resolvingSymlinksInPath()
+            guard seenRoots.insert(root).inserted else { throw SceneMobileExportError.invalidProject }
+            guard let projectURL = containedFile("project.json", in: root) else {
+                throw SceneMobileExportError.invalidProject
+            }
+            let data = try sourceEntry(named: "project.json", at: projectURL).read(limit: maximumProjectBytes)
+            guard let project = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                throw SceneMobileExportError.invalidProject
+            }
+            if projects.isEmpty {
+                guard (project["type"] as? String)?.lowercased() == "scene" else {
+                    throw SceneMobileExportError.invalidProject
+                }
+                originalProjectData = data
+            } else if !(project["preset"] is [String: Any]) {
+                // Published presets can omit both `type` and `file` and inherit them from the base.
+                throw SceneMobileExportError.invalidProject
+            }
+            projects.append(project)
+
+            let file = project["file"] as? String ?? ""
+            guard file.isEmpty || isSafeEntryName(file) else { throw SceneMobileExportError.unsafeProjectPath }
+            let candidate: String
+            if file.isEmpty {
+                candidate = "scene.pkg"
+            } else if (file as NSString).pathExtension.lowercased() == "pkg" {
+                candidate = file
+            } else {
+                candidate = (file as NSString).deletingPathExtension + ".pkg"
+            }
+            let packageURL = containedFile(candidate, in: root) ?? containedFile("scene.pkg", in: root)
+            if let packageURL {
+                let package = try readPackage(at: packageURL)
+                version = max(version, try mobileVersion(for: package.version))
+                for entry in package.entries { entries[entry.name.lowercased()] = entry }
+            }
+            for entry in try looseEntries(in: root, excluding: packageURL) {
+                entries[entry.name.lowercased()] = entry
+            }
+        }
+        entries = entries.filter { name, _ in
+            name != "project.json" && !(name.hasPrefix("shaders/blobssm40/") && name.hasSuffix(".dxs"))
+        }
+
+        guard var project = projects.first else { throw SceneMobileExportError.invalidProject }
+        let sceneName = sceneEntryName(project["file"] as? String ?? "scene.json")
+        guard let scene = entries[sceneName.lowercased()] ?? entries["scene.json"],
+              (scene.name as NSString).pathExtension.lowercased() == "json" else {
+            throw SceneMobileExportError.invalidProject
+        }
+        for preset in projects.dropFirst() { applyPreset(preset, to: &project) }
+        if let preset = projects.dropFirst().last {
+            // Workshop presets often omit their own ID in the downloaded manifest.
+            if preset["workshopid"] == nil || preset["workshopid"] is NSNull {
+                project["workshopid"] = wallpaper.project.workshopid?.rawValue
+            }
+            if preset["workshopurl"] == nil || preset["workshopurl"] is NSNull {
+                project.removeValue(forKey: "workshopurl")
+            }
+        }
+
+        let previewCandidates = projects.reversed().compactMap { $0["preview"] as? String }
+            + ["preview.jpg", "preview.png", "preview.gif", "preview.webp"]
+        let preview: StagedEntry
+        if let existing = previewCandidates.lazy.compactMap({ entries[$0.lowercased()] }).first {
+            preview = existing
+        } else {
+            var name = "mirage-preview.png"
+            while entries.keys.contains(where: { $0 == name || $0.hasPrefix(name + "/") }) { name = "_" + name }
+            // A transparent 1×1 PNG for scenes that ship without a preview.
+            let placeholder = Data([
+                0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D,
+                0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+                0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00,
+                0x0B, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x60, 0x00, 0x02, 0x00,
+                0x00, 0x05, 0x00, 0x01, 0x7A, 0x5E, 0xAB, 0x3F, 0x00, 0x00, 0x00, 0x00,
+                0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+            ])
+            preview = try stage(placeholder, named: name, in: staging)
+            entries[name] = preview
+        }
+
+        if projects.count == 1, project["dependency"] == nil, project["preset"] == nil,
+           project["file"] as? String == scene.name, project["preview"] as? String == preview.name {
+            return SceneSource(version: version, entries: entries, scene: scene, projectData: originalProjectData)
+        }
+        project.removeValue(forKey: "dependency")
+        project.removeValue(forKey: "preset")
+        project["file"] = scene.name
+        project["preview"] = preview.name
+        let data = try JSONSerialization.data(withJSONObject: project, options: [.sortedKeys, .withoutEscapingSlashes])
+        guard data.count <= maximumProjectBytes else { throw SceneMobileExportError.invalidProject }
+        return SceneSource(version: version, entries: entries, scene: scene, projectData: data)
+    }
+
+    private static func sceneEntryName(_ manifestFile: String) -> String {
+        (manifestFile as NSString).pathExtension.lowercased() == "pkg" ? "scene.json" : manifestFile
+    }
+
+    private static func applyPreset(_ preset: [String: Any], to project: inout [String: Any]) {
+        // Keep keys unknown to WEProject, including settings on the original property definitions.
+        if let overrides = preset["preset"] as? [String: Any], !overrides.isEmpty {
+            var general = project["general"] as? [String: Any] ?? [:]
+            var properties = general["properties"] as? [String: Any] ?? [:]
+            for (key, value) in overrides where !(value is NSNull) {
+                var property = properties[key] as? [String: Any] ?? [:]
+                if property.isEmpty {
+                    if let number = value as? NSNumber {
+                        property["type"] = CFGetTypeID(number) == CFBooleanGetTypeID() ? "bool" : "slider"
+                    } else {
+                        property["type"] = "textinput"
+                    }
+                }
+                property["value"] = value
+                properties[key] = property
+            }
+            general["properties"] = properties
+            project["general"] = general
+        }
+        for key in ["title", "author", "approved", "contentrating", "description", "tags",
+                    "visibility", "workshopid", "workshopurl"] {
+            if let value = preset[key], !(value is NSNull) { project[key] = value }
+        }
+    }
+
+    private static func looseEntries(in root: URL, excluding packageURL: URL?) throws -> [StagedEntry] {
+        let keys: Set<URLResourceKey> = [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]
+        var enumerationError: Error?
+        guard let enumerator = FileManager.default.enumerator(
+            at: root, includingPropertiesForKeys: Array(keys), options: [.skipsHiddenFiles],
+            errorHandler: { _, error in enumerationError = error; return false }
+        ) else { throw SceneMobileExportError.invalidProject }
+        let prefix = root.path + "/"
+        var names = Set<String>()
+        var entries: [StagedEntry] = []
+        for case let url as URL in enumerator {
+            let values = try url.resourceValues(forKeys: keys)
+            guard values.isSymbolicLink != true else { throw SceneMobileExportError.unsafeProjectPath }
+            guard values.isRegularFile == true, let size = values.fileSize else { continue }
+            // The enumerator may return /private/var for a root supplied as /var.
+            let file = url.standardizedFileURL.resolvingSymlinksInPath()
+            guard file.path.hasPrefix(prefix) else { throw SceneMobileExportError.unsafeProjectPath }
+            let name = String(file.path.dropFirst(prefix.count))
+            let key = name.lowercased()
+            if key == "project.json" || key == "scene.pkg" || key.hasSuffix(".mpkg") || file == packageURL { continue }
+            guard isSafeEntryName(name), names.insert(key).inserted else {
+                throw SceneMobileExportError.unsafeProjectPath
+            }
+            entries.append(StagedEntry(name: name, url: file, offset: 0, size: UInt64(size)))
+            guard entries.count <= 100_000 else { throw SceneMobileExportError.wallpaperTooLarge }
+        }
+        if let enumerationError { throw enumerationError }
+        return entries
+    }
+
+    private static func shaderSource(for shader: StagedEntry, in entries: [String: StagedEntry]) throws -> Data {
+        let parts = shader.name.lowercased().split(separator: "/")
+        let suffix = (shader.name as NSString).pathExtension.lowercased()
+        if parts.count == 5, parts[0] == "shaders", parts[1] == "workshop", ["vert", "frag"].contains(suffix) {
+            for prefix in ["assets/zcompat/scene/shaders/", "zcompat/scene/shaders/"] {
+                let directory = prefix + parts[2] + "/"
+                guard let config = entries[directory + "config.json"], config.size <= 64 * 1024,
+                      let object = try? JSONSerialization.jsonObject(with: config.read()) as? [String: Any],
+                      let path = object[suffix] as? String, isSafeEntryName(path),
+                      let replacement = entries[directory + path.lowercased()],
+                      replacement.size <= UInt64(maximumShaderBytes) else { continue }
+                return try replacement.read()
+            }
+        }
+        return try shader.read(limit: maximumShaderBytes)
     }
 
     static func sourceResolution(_ wallpaper: WEWallpaper) throws -> MobileScreenResolution {
@@ -258,9 +395,11 @@ enum SceneMobileMPKGExporter {
         if source.pathExtension.lowercased() == "pkg" {
             let package = try readPackage(at: source)
             guard let entry = package.entries.first(where: {
-                $0.name.caseInsensitiveCompare(wallpaper.project.file) == .orderedSame
-            }), entry.size <= 8 * 1024 * 1024 else { throw SceneMobileExportError.invalidProject }
-            data = try readPackageEntry(entry, from: source)
+                $0.name.caseInsensitiveCompare(sceneEntryName(wallpaper.project.file)) == .orderedSame
+            }) ?? package.entries.first(where: { $0.name.lowercased() == "scene.json" }) else {
+                throw SceneMobileExportError.invalidProject
+            }
+            data = try entry.read(limit: maximumSceneBytes)
         } else {
             guard let size = try source.resourceValues(forKeys: [.fileSizeKey]).fileSize,
                   size <= 8 * 1024 * 1024 else { throw SceneMobileExportError.invalidProject }
@@ -302,7 +441,7 @@ enum SceneMobileMPKGExporter {
             else { candidates = ["materials/\(name).tex"] }
             for candidate in candidates {
                 if let entry = entries[candidate.lowercased()] {
-                    return .init(url: source, offset: entry.absoluteOffset, size: entry.size)
+                    return .init(url: entry.url, offset: entry.offset, size: entry.size)
                 }
                 for root in roots {
                     if let file = containedFile(candidate, in: root),
@@ -337,7 +476,7 @@ enum SceneMobileMPKGExporter {
             let duration = CMTimeGetSeconds(AVURLAsset(url: url).duration)
             if duration.isFinite, duration > 0 { loops.append(duration) }
         }
-        var pending = [wallpaper.project.file], visited = Set<String>()
+        var pending = [sceneEntryName(wallpaper.project.file)], visited = Set<String>()
         var inspected = Set<SceneMobileTiming.TextureSource>()
         while !pending.isEmpty, visited.count < 2048 {
             let name = pending.removeLast()
@@ -370,7 +509,7 @@ enum SceneMobileMPKGExporter {
         return SceneMobileTiming.duration(loops: loops, oneShots: oneShots, fps: fps, speed: speed)
     }
 
-    private static func readPackage(at url: URL) throws -> (version: String, entries: [PackageEntry]) {
+    private static func readPackage(at url: URL) throws -> (version: String, entries: [StagedEntry]) {
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
         let values = try url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
@@ -386,15 +525,18 @@ enum SceneMobileMPKGExporter {
             throw SceneMobileExportError.invalidPackage
         }
         let count = Int(try readUInt32(from: handle))
-        guard count <= 100_000 else { throw SceneMobileExportError.invalidPackage }
+        guard (1...100_000).contains(count) else { throw SceneMobileExportError.invalidPackage }
 
         var directory: [(String, UInt64, UInt64)] = []
         var foldedNames = Set<String>()
         for _ in 0..<count {
             let nameLength = Int(try readUInt32(from: handle))
             guard (1...1024).contains(nameLength),
-                  let name = String(data: try readExactly(nameLength, from: handle), encoding: .utf8),
-                  isSafeEntryName(name),
+                  let rawName = String(data: try readExactly(nameLength, from: handle), encoding: .utf8) else {
+                throw SceneMobileExportError.invalidPackage
+            }
+            let name = rawName.replacingOccurrences(of: "\\", with: "/")
+            guard isSafeEntryName(name),
                   foldedNames.insert(name.lowercased()).inserted else {
                 throw SceneMobileExportError.invalidPackage
             }
@@ -403,10 +545,11 @@ enum SceneMobileMPKGExporter {
                 UInt64(try readUInt32(from: handle)),
                 UInt64(try readUInt32(from: handle))
             ))
+            guard handle.offsetInFile <= 16 * 1024 * 1024 else { throw SceneMobileExportError.invalidPackage }
         }
 
         let dataOffset = handle.offsetInFile
-        var entries: [PackageEntry] = []
+        var entries: [StagedEntry] = []
         var ranges: [(UInt64, UInt64)] = []
         for (name, offset, size) in directory {
             let start = dataOffset + offset
@@ -414,8 +557,8 @@ enum SceneMobileMPKGExporter {
             guard start >= dataOffset, end <= UInt64(fileSize) else {
                 throw SceneMobileExportError.invalidPackage
             }
-            entries.append(PackageEntry(name: name, absoluteOffset: start, size: size))
-            ranges.append((start, end))
+            entries.append(StagedEntry(name: name, url: url, offset: start, size: size))
+            if size > 0 { ranges.append((start, end)) }
         }
         ranges.sort { $0.0 < $1.0 }
         for pair in zip(ranges, ranges.dropFirst()) where pair.1.0 < pair.0.1 {
@@ -445,6 +588,70 @@ enum SceneMobileMPKGExporter {
         return String(format: "PKGM%04d", mobile)
     }
 
+    /// TEXB4 video mips have a condition field before the dimensions. Copy the validated entry as-is.
+    private static func isEmbeddedVideoTexture(_ entry: StagedEntry) throws -> Bool {
+        let headerLength = 67
+        guard entry.size >= UInt64(headerLength) else { return false }
+        let handle = try FileHandle(forReadingFrom: entry.url)
+        defer { try? handle.close() }
+        try handle.seek(toOffset: entry.offset)
+        let header = try readExactly(headerLength, from: handle)
+        guard header.starts(with: Data("TEXV0005\0TEXI0001\0".utf8)),
+              header[46..<55].elementsEqual("TEXB0004\0".utf8) else { return false }
+        var reader = BinaryReader(data: header, label: entry.name, offset: 55)
+        let slots = try reader.readUInt32()
+        let imageType = try reader.readInt32()
+        let videoFlag = try reader.readInt32()
+        guard imageType == 35 || (imageType == -1 && videoFlag == 1) else { return false }
+
+        let end = entry.offset + entry.size
+        let invalid = SceneMobileExportError.invalidTexture(entry.name)
+        func read(_ count: Int) throws -> Data {
+            guard handle.offsetInFile <= end, UInt64(count) <= end - handle.offsetInFile else { throw invalid }
+            return try readExactly(count, from: handle)
+        }
+        func word() throws -> UInt32 {
+            try read(4).withUnsafeBytes { $0.loadUnaligned(as: UInt32.self).littleEndian }
+        }
+        func skipCondition() throws {
+            let start = handle.offsetInFile
+            let maximum = min(end, start + 64 * 1024 + 1)
+            while handle.offsetInFile < maximum {
+                let offset = handle.offsetInFile
+                let bytes = try read(Int(min(1024, maximum - offset)))
+                if let terminator = bytes.firstIndex(of: 0) {
+                    try handle.seek(toOffset: offset + UInt64(terminator) + 1)
+                    return
+                }
+            }
+            throw invalid
+        }
+        guard (1...4096).contains(slots) else { throw invalid }
+        for _ in 0..<slots {
+            let mips = try word()
+            guard (1...64).contains(mips) else { throw invalid }
+            for _ in 0..<mips {
+                guard try word() == 1, try word() == 2 else { throw invalid }
+                try skipCondition()
+                guard try word() == 1, (1...16384).contains(try word()), (1...16384).contains(try word()) else {
+                    throw invalid
+                }
+                _ = try word() // Compression flag
+                guard try word() <= UInt32(Int32.max) else { throw invalid }
+                let size = UInt64(try word())
+                let start = handle.offsetInFile
+                guard size > 0, size <= end - start else { throw invalid }
+                try handle.seek(toOffset: start + size)
+            }
+        }
+        if handle.offsetInFile < end {
+            let flags = header.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 22, as: UInt32.self).littleEndian }
+            guard flags & spriteFlag != 0,
+                  try read(9).starts(with: Data("TEXS".utf8)), try word() > 0 else { throw invalid }
+        }
+        return true
+    }
+
     private static func mobileTexture(
         _ source: Data,
         label: String,
@@ -454,10 +661,14 @@ enum SceneMobileMPKGExporter {
         let asset = try parseTexture(source, label: label)
         // Masks and streaming/native mobile textures must retain their layout and sampling data.
         if asset.flags & streamingTextureFlag != 0
-            || [textureFormatETC2RGBA8, textureFormatRG8, textureFormatR8].contains(asset.format) {
+            || ((asset.imageType ?? -1) < 0 && [textureFormatETC2RGBA8, textureFormatRG8, textureFormatR8].contains(asset.format)) {
             return nil
         }
-        guard [textureFormatRGBA8, textureFormatBC1, textureFormatBC2, textureFormatBC3].contains(asset.format) else {
+        let plainRGB = asset.format == textureFormatRGB8 && (asset.imageType ?? -1) < 0
+        let forceETC2 = ["materials", "materials/masks"].contains((label.lowercased() as NSString).deletingLastPathComponent)
+        if plainRGB, !forceETC2, !options.pixelArtOptimization { return nil }
+        guard (asset.imageType ?? -1) >= 0 || [textureFormatRGBA8, textureFormatRGB8, textureFormatBC7].contains(asset.format) ||
+                desktopBlockFormats[asset.format] != nil else {
             throw SceneMobileExportError.unsupportedTextureFormat(asset.format, label)
         }
         guard asset.spriteData != nil || asset.slots.count == 1,
@@ -468,6 +679,7 @@ enum SceneMobileMPKGExporter {
         // BC textures have already been compressed by the author and still require ETC2 on mobile.
         let preserveRGBA = asset.format == textureFormatRGBA8
             && (options.pixelArtOptimization || asset.flags == 0 || preservesMobileRGBA8(label: label, asset: asset))
+            || asset.format == textureFormatRGB8 && (options.pixelArtOptimization || !forceETC2)
         let useMapSize = asset.spriteData == nil || (preserveRGBA && asset.slots.count == 1)
         let temporary = FileManager.default.temporaryDirectory
             .appending(path: "Mirage-Scene-Texture-\(UUID().uuidString)", directoryHint: .isDirectory)
@@ -699,22 +911,21 @@ enum SceneMobileMPKGExporter {
             // Large inputs retain FFmpeg's default decoder parallelism.
             arguments += ["-threads", "1", "-filter_threads", "1"]
         }
-        if let suffix = imageSuffix(body) {
+        if let pixels = try decodeBC7(body, asset: asset, mip: mip, label: label) {
+            source = temporary.appending(path: "source.rgba")
+            try pixels.write(to: source)
+            arguments += ["-f", "rawvideo", "-pixel_format", "rgba", "-video_size", "\(mip.width)x\(mip.height)", "-i", source.path]
+        } else if let suffix = imageSuffix(body) {
             source = temporary.appending(path: "source\(suffix)")
             try body.write(to: source)
             arguments += ["-i", source.path]
-        } else if [textureFormatBC1, textureFormatBC2, textureFormatBC3].contains(asset.format) {
+        } else if let fourCC = desktopBlockFormats[asset.format] {
             let blockBytes = asset.format == textureFormatBC1 ? 8 : 16
             let expected = ((Int(mip.width) + 3) / 4) * ((Int(mip.height) + 3) / 4) * blockBytes
             guard body.count == expected else {
                 throw SceneMobileExportError.invalidTexture(label)
             }
             source = temporary.appending(path: "source.dds")
-            let fourCC: String = [
-                textureFormatBC1: "DXT1",
-                textureFormatBC2: "DXT3",
-                textureFormatBC3: "DXT5",
-            ][asset.format]!
             var dds = ddsHeader(
                 width: Int(mip.width),
                 height: Int(mip.height),
@@ -724,16 +935,18 @@ enum SceneMobileMPKGExporter {
             dds.append(body)
             try dds.write(to: source)
             arguments += ["-i", source.path]
-        } else if asset.format == textureFormatRGBA8 {
-            let expected = try rgbaByteCount(width: Int(mip.width), height: Int(mip.height), label: label)
+        } else if [textureFormatRGBA8, textureFormatRGB8].contains(asset.format) {
+            let rgba = asset.format == textureFormatRGBA8
+            let rgbaSize = try rgbaByteCount(width: Int(mip.width), height: Int(mip.height), label: label)
+            let expected = rgba ? rgbaSize : rgbaSize / 4 * 3
             guard body.count == expected else {
                 throw SceneMobileExportError.invalidTexture(label)
             }
-            source = temporary.appending(path: "source.rgba")
-            try body.prefix(expected).write(to: source)
+            source = temporary.appending(path: rgba ? "source.rgba" : "source.rgb")
+            try body.write(to: source)
             arguments += [
                 "-f", "rawvideo",
-                "-pixel_format", "rgba",
+                "-pixel_format", rgba ? "rgba" : "rgb24",
                 "-video_size", "\(mip.width)x\(mip.height)",
                 "-i", source.path,
             ]
@@ -753,6 +966,36 @@ enum SceneMobileMPKGExporter {
             throw SceneMobileExportError.toolFailed("FFmpeg \(label)")
         }
         return (outputWidth, outputHeight)
+    }
+
+    private static func decodeBC7(_ body: Data, asset: TextureAsset, mip: TextureMip, label: String) throws -> Data? {
+        let width = Int(mip.width), height = Int(mip.height)
+        let blocks: Data
+        if body.starts(with: Data("DDS ".utf8)) {
+            guard body.count >= 148, body[84..<88].elementsEqual("DX10".utf8) else { return nil }
+            func word(at offset: Int) -> UInt32 {
+                body.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: offset, as: UInt32.self).littleEndian }
+            }
+            guard [98, 99].contains(word(at: 128)) else { return nil }
+            guard word(at: 12) == mip.height, word(at: 16) == mip.width, word(at: 140) == 1 else {
+                throw SceneMobileExportError.invalidTexture(label)
+            }
+            blocks = body.dropFirst(148)
+        } else {
+            guard asset.format == textureFormatBC7, (asset.imageType ?? -1) < 0 else { return nil }
+            blocks = body
+        }
+        let size = try rgbaByteCount(width: width, height: height, label: label)
+        let expected = ((width + 3) / 4) * ((height + 3) / 4) * 16
+        guard blocks.count >= expected else { throw SceneMobileExportError.invalidTexture(label) }
+        var pixels = Data(count: size)
+        blocks.withUnsafeBytes { source in
+            pixels.withUnsafeMutableBytes { output in
+                mirage_decode_bc7(source.bindMemory(to: UInt8.self).baseAddress!,
+                                  output.bindMemory(to: UInt8.self).baseAddress!, mip.width, mip.height)
+            }
+        }
+        return pixels
     }
 
     private static func selectMobileMip(
@@ -857,7 +1100,7 @@ enum SceneMobileMPKGExporter {
         let mip = selection.mip
         let body = try decodedMip(mip, label: label)
         let sourceSize = try rgbaByteCount(width: Int(mip.width), height: Int(mip.height), label: label)
-        if body.count == sourceSize, imageSuffix(body) == nil,
+        if asset.format == textureFormatRGBA8, body.count == sourceSize, imageSuffix(body) == nil,
            selection.sourceWidth == Int(mip.width), selection.sourceHeight == Int(mip.height),
            selection.outputWidth == Int(mip.width), selection.outputHeight == Int(mip.height) {
             return body
@@ -991,6 +1234,7 @@ enum SceneMobileMPKGExporter {
         if data.starts(with: [0xFF, 0xD8, 0xFF]) { return ".jpg" }
         if data.starts(with: Data("GIF87a".utf8)) || data.starts(with: Data("GIF89a".utf8)) { return ".gif" }
         if data.starts(with: Data("BM".utf8)) { return ".bmp" }
+        if data.starts(with: Data("DDS ".utf8)) { return ".dds" }
         return nil
     }
 
@@ -1047,7 +1291,10 @@ enum SceneMobileMPKGExporter {
     }
 
     private static func rewriteMobileShader(_ source: Data, label: String) -> Data {
-        guard let text = String(data: source, encoding: .utf8) else { return source }
+        // Preserve the original bytes of comments in legacy shaders as well as UTF-8 sources.
+        let utf8 = String(data: source, encoding: .utf8)
+        let encoding: String.Encoding = utf8 == nil ? .isoLatin1 : .utf8
+        guard let text = utf8 ?? String(data: source, encoding: encoding) else { return source }
         // Keep comments, directives, strings and complete numeric literals intact.
         let pattern = #"^[ \t]*#(?:[^\r\n\\]|\\[^\r\n]|\\\r?\n)*|//[^\r\n]*|/\*.*?\*/|\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|[A-Za-z_]\w*|0[xX][0-9a-fA-F]+[uU]?|(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?[fFuU]?|\S"#
         guard let regex = try? NSRegularExpression(
@@ -1060,6 +1307,15 @@ enum SceneMobileMPKGExporter {
             !isComment(tokens[$0]) && !tokens[$0].trimmingCharacters(in: .whitespaces).hasPrefix("#")
         }
         var replacements: [Int: String] = [:]
+        for index in tokens.indices where tokens[index].trimmingCharacters(in: .whitespaces).hasPrefix("#") {
+            var token = tokens[index]
+            if let version = token.range(of: #"^[ \t]*#[ \t]*version[ \t]+120(?=[ \t]*(?:$|//))"#,
+                                         options: .regularExpression) {
+                let digits = token.index(version.upperBound, offsetBy: -3)..<version.upperBound
+                token.replaceSubrange(digits, with: "100")
+                replacements[index] = token
+            }
+        }
         let floatCalls: Set<String> = [
             "vec2", "vec3", "vec4", "mat2", "mat3", "mat4",
             "mix", "min", "max", "clamp", "pow", "step", "smoothstep", "mod",
@@ -1171,6 +1427,39 @@ enum SceneMobileMPKGExporter {
         }
         var rewritten = result as String
         let normalized = label.replacingOccurrences(of: "\\", with: "/").lowercased()
+        let filename = (normalized as NSString).lastPathComponent
+        let effect = (filename as NSString).deletingPathExtension
+        let sampler = "uniform sampler2D g_Texture0;"
+        if rewritten.hasPrefix("#include \"common_blur.h\"") {
+            rewritten = sampler + "\n" + rewritten.replacingOccurrences(of: sampler, with: "")
+        }
+        switch effect {
+        case "foliagesway":
+            if rewritten.contains("offset = saturate((offset - v_Bounds.x) * v_Bounds.y);"),
+               !rewritten.contains("varying vec2 v_Bounds;") {
+                replaceFirst("uniform sampler2D g_Texture1;",
+                             with: "varying vec2 v_Bounds;\nuniform sampler2D g_Texture1;", in: &rewritten)
+            }
+        case "blend":
+            rewritten = rewritten.replacingOccurrences(of: #"step\(0(?:\.0)?, uv\) \* step\(uv, 1(?:\.0)?\)"#,
+                                                       with: "step(CAST2(0.0), uv) * step(uv, CAST2(1.0))",
+                                                       options: .regularExpression)
+        case "shift_hue":
+            rewritten = rewritten.replacingOccurrences(of: "albedo.rgb = mix(albedo, newAlbedo, mask)",
+                                                       with: "albedo.rgb = mix(albedo.rgb, newAlbedo, mask)")
+        case "skew":
+            let resolution = "uniform vec4 g_Texture0Resolution;"
+            let scale = "uniform float g_TextureReductionScale;"
+            let assignment = "vec2 textureScale = g_Texture0Resolution.zw;"
+            if rewritten.contains(resolution), rewritten.contains(assignment) {
+                if !rewritten.contains(scale) {
+                    replaceFirst(resolution, with: resolution + "\n" + scale, in: &rewritten)
+                }
+                replaceFirst(assignment, with: "vec2 textureScale = g_Texture0Resolution.zw * g_TextureReductionScale;",
+                             in: &rewritten)
+            }
+        default: break
+        }
         if normalized.hasSuffix("xray.frag") || normalized.hasSuffix("xray.vert") {
             let pointerVarying = "varying float v_PointerScale;"
             let pointerUniform = "uniform vec4 g_PointerState;"
@@ -1214,7 +1503,7 @@ enum SceneMobileMPKGExporter {
                 }
             }
         }
-        return Data(rewritten.utf8)
+        return rewritten.data(using: encoding) ?? source
     }
 
     private static func replaceFirst(_ target: String, with replacement: String, in value: inout String) {
@@ -1321,11 +1610,7 @@ enum SceneMobileMPKGExporter {
         guard isSafeEntryName(name) else {
             throw SceneMobileExportError.unsafeProjectPath
         }
-        let target = directory.appending(path: name)
-        try FileManager.default.createDirectory(
-            at: target.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
+        let target = directory.appending(path: UUID().uuidString)
         try data.write(to: target)
         return StagedEntry(name: name, url: target, offset: 0, size: UInt64(data.count))
     }
@@ -1353,20 +1638,6 @@ enum SceneMobileMPKGExporter {
         return min(cpuBound, memoryBound)
     }
 
-    private static func readPackageEntry(_ entry: PackageEntry, from packageURL: URL) throws -> Data {
-        guard entry.size <= UInt64(Int.max) else {
-            throw SceneMobileExportError.wallpaperTooLarge
-        }
-        let handle = try FileHandle(forReadingFrom: packageURL)
-        defer { try? handle.close() }
-        try handle.seek(toOffset: entry.absoluteOffset)
-        let source = try handle.read(upToCount: Int(entry.size)) ?? Data()
-        guard source.count == Int(entry.size) else {
-            throw SceneMobileExportError.truncatedPackage
-        }
-        return source
-    }
-
     private static func writeArchive(
         entries: [StagedEntry],
         version: String,
@@ -1382,12 +1653,8 @@ enum SceneMobileMPKGExporter {
     }
 
     private static func containedFile(_ name: String, in directory: URL) -> URL? {
-        guard isSafeEntryName(name) else { return nil }
-        let root = directory.standardizedFileURL.resolvingSymlinksInPath()
-        let candidate = directory.appending(path: name).standardizedFileURL.resolvingSymlinksInPath()
-        let prefix = root.path.hasSuffix("/") ? root.path : root.path + "/"
-        guard candidate.path.hasPrefix(prefix),
-              FileManager.default.fileExists(atPath: candidate.path) else { return nil }
+        guard isSafeEntryName(name), let candidate = PathContainment.containedURL(name, in: directory),
+              (try? candidate.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { return nil }
         return candidate
     }
 
@@ -1454,7 +1721,6 @@ enum SceneMobileMPKGExporter {
 
 enum SceneMobileExportError: LocalizedError {
     case unsupportedWallpaperType(WallpaperKind)
-    case scenePresetNotSupported
     case invalidProject
     case unsafeProjectPath
     case invalidPackage
@@ -1472,8 +1738,6 @@ enum SceneMobileExportError: LocalizedError {
         switch self {
         case .unsupportedWallpaperType(let kind):
             return L("暂不支持将%@壁纸转换到移动设备。", kind.displayName)
-        case .scenePresetNotSupported:
-            return L("暂不支持直接转换场景预设，请发送基础场景壁纸。")
         case .invalidProject:
             return L("场景壁纸的 project.json 无效。")
         case .unsafeProjectPath:
