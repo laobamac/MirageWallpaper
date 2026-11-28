@@ -626,6 +626,11 @@
 				ENABLE_RESOURCE_ACCESS_PHOTO_LIBRARY = NO;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/../SceneRenderer/Vendor",
+					"$(SRCROOT)/../SceneRenderer/Vendor/nlohmann_json/single_include",
+				);
 				INFOPLIST_FILE = "Mirage-Wallpaper-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = Mirage;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
@@ -639,6 +644,10 @@
 				MACOSX_DEPLOYMENT_TARGET = 14.2;
 				MARKETING_VERSION = 1.1.6;
 				ONLY_ACTIVE_ARCH = NO;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-lcompression",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = cn.laobamac.Mirage.Development;
 				PRODUCT_MODULE_NAME = "$(PRODUCT_NAME:c99extidentifier)";
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -679,6 +688,11 @@
 				ENABLE_RESOURCE_ACCESS_PHOTO_LIBRARY = NO;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/../SceneRenderer/Vendor",
+					"$(SRCROOT)/../SceneRenderer/Vendor/nlohmann_json/single_include",
+				);
 				INFOPLIST_FILE = "Mirage-Wallpaper-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = Mirage;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
@@ -691,6 +705,10 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.2;
 				MARKETING_VERSION = 1.1.6;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-lcompression",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = cn.laobamac.Mirage;
 				PRODUCT_MODULE_NAME = "$(PRODUCT_NAME:c99extidentifier)";
 				PRODUCT_NAME = "$(TARGET_NAME)";

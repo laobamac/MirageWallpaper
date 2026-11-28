@@ -30,7 +30,7 @@ case "$OUTPUT" in
     *) echo "[ffmpeg] output must be $ROOT/Mirage/build/ffmpeg/$ARCH" >&2; exit 1 ;;
 esac
 [ ! -L "$OUTPUT" ] && [ ! -L "$WORK" ] || { echo "[ffmpeg] symlink build directories are not supported" >&2; exit 1; }
-if [ -f "$STAMP" ] && [ "$(cat "$STAMP")" = "$BUILD_ID" ] && [ -f "$OUTPUT/lib/pkgconfig/libavcodec.pc" ] && [ -x "$OUTPUT/bin/ffmpeg" ]; then
+if [ -f "$STAMP" ] && [ "$(cat "$STAMP")" = "$BUILD_ID" ] && [ -f "$OUTPUT/lib/pkgconfig/libavcodec.pc" ]; then
     echo "[ffmpeg] up to date: $OUTPUT"
     exit 0
 fi
@@ -123,54 +123,6 @@ for library in avcodec avformat avutil swscale swresample; do
     lipo "$STAGED/lib/lib$library.dylib" -verify_arch "$ARCH"
 done
 
-CLI_WORK="$WORK/cli"
-mkdir -p "$CLI_WORK"
-tar -xJf "$ARCHIVE" -C "$CLI_WORK"
-CLI_SOURCE="$CLI_WORK/ffmpeg-$VERSION"
-CLI_CONFIGURE_ARGS=(
-    --arch="$ARCH"
-    --cc="$CC"
-    --host-cc="$CC"
-    --sysroot="$SDK"
-    --extra-cflags="-isysroot $SDK -mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET -arch $ARCH"
-    --extra-ldflags="-isysroot $SDK -mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET -arch $ARCH"
-    --enable-static
-    --disable-shared
-    --disable-ffplay
-    --disable-ffprobe
-    --disable-doc
-    --disable-debug
-    --disable-avdevice
-    --disable-swresample
-    --disable-network
-    --disable-autodetect
-    --disable-everything
-    --enable-zlib
-    --enable-protocol=file
-    --enable-demuxer=image2,rawvideo,gif,image_png_pipe,image_jpeg_pipe,image_gif_pipe,image_bmp_pipe,image_dds_pipe
-    --enable-decoder=png,mjpeg,gif,bmp,dds,rawvideo
-    --enable-parser=png,mjpeg,gif,bmp
-    --enable-encoder=png,rawvideo
-    --enable-muxer=image2,rawvideo
-    --enable-filter=buffer,buffersink,crop,scale,format,null
-)
-if [ "$ARCH" = "x86_64" ]; then
-    CLI_CONFIGURE_ARGS+=(--x86asmexe="$(command -v nasm)")
-fi
-echo "[ffmpeg] configuring image conversion CLI for $ARCH"
-(cd "$CLI_SOURCE" && ./configure "${CLI_CONFIGURE_ARGS[@]}" > "$CLI_WORK/configure.log" 2>&1) || {
-    tail -40 "$CLI_WORK/configure.log" >&2
-    exit 1
-}
-(cd "$CLI_SOURCE" && make -j"$JOBS" ffmpeg > "$CLI_WORK/build.log" 2>&1) || { tail -60 "$CLI_WORK/build.log" >&2; exit 1; }
-lipo "$CLI_SOURCE/ffmpeg" -verify_arch "$ARCH"
-if otool -L "$CLI_SOURCE/ffmpeg" | tail -n +2 | awk '{print $1}' | grep -vE '^(/usr/lib/|/System/)'; then
-    echo "[ffmpeg] image conversion CLI links non-system libraries" >&2
-    exit 1
-fi
-mkdir -p "$STAGED/bin"
-cp -f "$CLI_SOURCE/ffmpeg" "$STAGED/bin/ffmpeg"
-strip -x "$STAGED/bin/ffmpeg"
 rm -rf "$OUTPUT"
 mv "$STAGED" "$OUTPUT"
 mkdir -p "$OUTPUT/Licenses"
@@ -182,8 +134,6 @@ cp -f "$SOURCE/LICENSE.md" "$OUTPUT/Licenses/FFmpeg-LICENSE.md"
     echo "sha256: $SHA256"
     echo "configure:"
     printf '  %s\n' "${CONFIGURE_ARGS[@]}"
-    echo "image conversion CLI configure:"
-    printf '  %s\n' "${CLI_CONFIGURE_ARGS[@]}"
 } > "$OUTPUT/Licenses/FFmpeg-BUILD.txt"
 rm -rf "$OUTPUT/share"
 find "$OUTPUT/lib" -type f -name '*.dylib' -exec strip -x {} +
