@@ -302,6 +302,10 @@ jobs:
         shell: bash
         run: python3 Mirage/Tests/run_scene_diagnostics.py
 
+      - name: Test native mobile scene converter
+        shell: bash
+        run: python3 Mirage/Tests/run_scene_mobile_converter.py
+
       - name: Build controlled diagnostic libraries
         if: github.event_name == 'workflow_dispatch' && inputs.scene_diagnostics
         shell: bash
@@ -310,7 +314,6 @@ jobs:
       - name: Build app bundle
         shell: bash
         env:
-          MIRAGE_ALLOW_NETWORK_FETCH: "1"
           MIRAGE_ARCH: ${{ matrix.arch }}
           MIRAGE_STEAM_WEB_API_KEY: ${{ secrets.MIRAGE_STEAM_WEB_API_KEY }}
           MIRAGE_GIT_COMMIT: ${{ github.sha }}
